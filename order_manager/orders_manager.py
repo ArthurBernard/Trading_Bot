@@ -60,7 +60,7 @@ class SetOrder:
         :kwargs: parameters for ordering, refer to API documentation of the 
         plateform used.
         """
-        id_order = _set_id_order()
+        id_order = self._set_id_order()
         pass
 
     def _set_id_order(self):
@@ -76,7 +76,6 @@ class SetOrder:
         id_user = self._get_id_user()
         id_order = int(str(id_user)+str(self.id_strat))
         return id_order
-
 
     def _get_id_user(self):
         """
