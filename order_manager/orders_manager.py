@@ -4,6 +4,9 @@
 from pickle import Pickler, Unpickler
 import time
 
+# Import external package(s)
+import krakenex
+
 """
 TODO list:
     - Finish the method 'order'
@@ -28,7 +31,7 @@ class SetOrder:
 
     Methods
     -------
-    - order : Request an order.
+    - order : Request an order (with krakenex in first order).
     - decode_id_order : Takes an id order and returns the corresponding id 
     strategy and timestamp.
 
