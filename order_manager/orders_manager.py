@@ -1,11 +1,12 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
+# Import built-in packages
 from pickle import Pickler, Unpickler
 import time
 
 # Import external package(s)
-import krakenex
+from krakenex import API
 
 """
 TODO list:
@@ -25,7 +26,7 @@ class SetOrder:
 
     An id order is a signed integer smaller than 32-bit, three last number
     correspond to the id strategy and the other numbers correspond to an id
-    user. The id user is in face an id time, it corresponding at the number
+    user. The id user is in fact an id time, it corresponding at the number
     of minutes since a starting point saved in the file 'id_timestamp'. The
     file 'id_timestamp' will be reset every almost three years.
 
@@ -40,9 +41,11 @@ class SetOrder:
     :id_strat: int (signed and max 32-bit)
         Number to link an order with a strategy.
     :id_max: int
-        Number max for an id_order.
+        Number max for an id_order (32-bit).
+    :path: str
+        Path where API key and secret are saved.
     """
-    def __init__(self, id_strat):
+    def __init__(self, id_strat, path):
         """
         Set the order class.
 
@@ -50,21 +53,43 @@ class SetOrder:
         ----------
         :id_strat: int (unsigned and 32-bit)
             Number to link an order with a strategy.
+        :path: str
+            Path where API key and secret are saved.
         """
         self.id_strat = id_strat
         self.id_max = 2147483647
+        self.path = path
+        # Use krakenex API while i am lazy to do myself
+        self.K = API()
+        self.K.load_key(path)
 
     def order(self, **kwargs):
         """
         Request an order following defined parameters.
 
+        /! To verify ConnectionResetError exception. /!
+
         Parameters
         ----------
         :kwargs: parameters for ordering, refer to API documentation of the 
         plateform used.
+
+        Return
+        ------
+        :out: json
+            Output of the request.
         """
         id_order = self._set_id_order()
-        pass
+        # /! Append a method to verify if the volume is available. /!
+        try:
+            out = self.K.query_private('AddOrder', {**kwargs, 'userref': id_order})
+        except timeout:
+            print('timeout error')
+            out = self.order(**kwargs)
+        except ConnectionResetError:
+            self = SetOrder(self.id_strat, self.path) # Verify if it's working
+            out = self.order(**kwargs)
+        return out
 
     def _set_id_order(self):
         """ 
