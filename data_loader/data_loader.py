@@ -6,7 +6,8 @@ import time
 
 """
 TODO list:
-    - 
+    - To create method: Load data;
+    - To create method: Get ready data;
 """
 
 class DataLoader:
@@ -16,10 +17,7 @@ class DataLoader:
 
     Methods
     -------
-    todo: - Load data;
-          - Sort and clean data;
-          - Get ready data;
-          - to finish: transform date to timestampe;
+    
 
     Attributes
     ----------
