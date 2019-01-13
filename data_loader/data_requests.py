@@ -11,7 +11,10 @@ import json
 
 """
 TODO list:
-    - 
+    - To create method: Differents kind of requests; 
+    - To create method: Save data;
+    - To finish method: Special iterative method;
+    - To create method: sort and clean data;
 """
 
 class DataRequests:
@@ -20,10 +23,7 @@ class DataRequests:
 
     Methods
     -------
-    todo: - differents kind of requests; 
-          - save data;
-          - iter method;
-          - sort and clean data;
+    
 
     Attributes
     ----------
