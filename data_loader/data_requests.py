@@ -59,11 +59,24 @@ class DataRequests:
 
         request => sort and clean => save data => REPEAT
         """
-        if self.condition is True:
+        if self._condition():
             raise StopIteration
         self.sort_data(self.resquest_API(**self.request_params))
         self.save()
         return self
+
+    def _condition(self):
+        """
+        TODO:
+
+        Verify if script have to stop.
+
+        Return
+        ------
+        Boolean.
+        """
+        pass
+
 
     def request_API(self, **kwargs):
         """
