@@ -26,7 +26,12 @@ class StrategyManager:
 
     Attributes
     ----------
-
+    :timestep: int
+        Number of seconds between two samples.
+    :underlying: str or list ?
+        Name of the underlying or list of data needed.
+    :strategy: function ? str ? callable ?
+        Strategy function.
     """
     def __init__(self, timestep, underlying, strategy):
         """
