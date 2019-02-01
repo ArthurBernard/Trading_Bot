@@ -80,7 +80,7 @@ class SetOrder:
             Output of the request.
         """
         id_order = self._set_id_order()
-        # /! Append a method to verify if the volume is available. /!
+        # TODO : Append a method to verify if the volume is available.
         try:
             out = self.K.query_private('AddOrder', {**kwargs, 'userref': id_order})
         except timeout:
