@@ -28,7 +28,8 @@ By order of priority:
     - To create method: Special iterative method (loop following a timestep);
     - To create method: Load data method (use LoaderData object);
     - To create method: other methods ?;
-- `instruction.sh` shell script to verify that all scripts run fine.
+- `bot.sh` shell script to run and verify that all strategies run fine.
+- `bot_manager.sh` shell script to run and verify that all bots run fine. 
 - `data_requests.py`:
     - To create method: Differents kind of requests; 
     - To create method: Save data;
