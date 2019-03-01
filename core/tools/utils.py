@@ -26,7 +26,7 @@ def load_config_params(path):
     Examples
     --------
     >>> load_config_params('strategies/example_function.cfg')
-    {'strat_manager_instance': {'strat_name': 'example_function', 'underlying': 'example_coin', 'frequency': 60, 'path': '/home/user/path/folder/subfolder/'}, 'extra_instance': {'time_exec': 0, 'request_data_on_the_flye': True}, 'args_params': ['para1', 'para2'], 'kwargs_params': {'para1': 0, 'para2': 1}}
+    {'strat_manager_instance': {'strat_name': 'example_function', 'underlying': 'example_coin', 'frequency': 60, 'volume': 0}, 'extra_instance': {'time_exec': 0, 'request_data_on_the_flye': True}, 'args_params': ['para1', 'para2'], 'kwargs_params': {'para1': 0, 'para2': 1}}
 
     """
     with open(path, 'r') as f:
