@@ -53,8 +53,8 @@ def test_StrategyManager(set_variables):
         sm.STOP = 3
         print('{} th iteration is ok'.format(t))
         t1 = int(time.time())
-        assert t0 + frequency + 2 > t1
-        assert t0 + frequency - 2 < t1
+        assert t0 + frequency + 3 > t1
+        assert t0 + frequency - 3 < t1
         t0 = t1
 
     # Test another method
