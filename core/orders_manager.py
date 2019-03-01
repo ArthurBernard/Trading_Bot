@@ -8,6 +8,8 @@ import time
 # Import external package(s)
 from krakenex import API
 
+__all__ = ['SetOrder']
+
 """
 TODO list:
     - Finish the method 'order'

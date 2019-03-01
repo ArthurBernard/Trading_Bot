@@ -10,6 +10,8 @@ import fynance as fy
 
 # Import local packages
 
+__all__ = ['StrategyManager']
+
 """
 TODO list:
     - Create a class strategy manager (or a bot object).
@@ -82,32 +84,33 @@ class StrategyManager:
     def __iter__(self):
         """ Initialize iterative method. """
         self.t = 0
-        if time_exec == 'now':
+        if self.time_exec == 'now':
             self.TS = time.time()
         else:
-            self.TS = time.time() // self.timestep * self.timestep 
-            self.TS = self.time_exec
+            self.TS = int(time.time()) // self.timestep * self.timestep 
+            self.TS += self.time_exec
         self.next = self.TS + self.timestep
+        # TODO : DEFINE self.STOP
+        self.STOP = 3
         return self
 
     def __next__(self):
         """ Iterative method """
         t = self.t
-        # TODO : Define self.STOP
         if t >= self.STOP:
             raise StopIteration
-        self.TS = time.time()
+        self.TS = int(time.time())
         # Sleep until ready
         if self.next > self.TS:
-            time.wait(self.next - self.TS)
+            time.sleep(self.next - self.TS)
         # Update data
         # TODO : get_data
         # Compute signal
         # TODO : get_signal
-        self.compute_signal()
+        # self.compute_signal()
         # Execute order
         # TODO : set_order
-        self.next += timestep
+        self.next += self.timestep
         self.t += 1
         return t
 
@@ -115,9 +118,11 @@ class StrategyManager:
         last=None):
         """ Instanciate data loader object """
         if data_request_on_the_fly:
-            self.data_loader = DataRequests(??)
+            # TODO : set parameters
+            self.data_loader = DataRequests()
         else:
-            self.data_loader = DataLoader(??)
+            # TODO : set parameters
+            self.data_loader = DataLoader()
         return self
 
     def get_data(self):
@@ -143,10 +148,10 @@ class StrategyManager:
         """ Compute signal strategy.
 
         """
-        self.signal = self.strategy(*self.args, **self.kwargs)
-        if self.iso_vol:
-            self._isovol()
-        pass
+        #self.signal = self.strategy(*self.args, **self.kwargs)
+        #if self.iso_vol:
+        #    self._isovol()
+        #pass
 
     def _isovol(self):
         """ Iso-volatility method

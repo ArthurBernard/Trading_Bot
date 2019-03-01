@@ -9,6 +9,8 @@ import time
 import requests
 import json
 
+__all__ = ['DataRequests']
+
 """
 TODO list:
     - To create method: Differents kind of requests; 
