@@ -7,8 +7,10 @@ strategies/momentum_ethusd_7200.py
 *.ipynb_checkpoints
 
 # Folders to ignore
+*.egg-info/
 env/
 build/
 __pycache__/
 .pytest_cache/
 strategies/
+errors/
