@@ -10,8 +10,8 @@ import numpy as np
 import pytest
 
 # Internal packages
-from .strategy_manager import StrategyManager
-from .tools.utils import load_config_params
+from strategy_manager.manager import StrategyManager
+from strategy_manager.tools.utils import load_config_params
 
 @pytest.fixture()
 def set_variables():
@@ -23,33 +23,30 @@ def set_variables():
 def test_StrategyManager(set_variables):
     # Set parameters
     data_cfg = set_variables
+    
+    # Set StrategyManager parameters
+    start_manager_parameters = data_cfg['strat_manager_instance']
     underlying = data_cfg['strat_manager_instance']['underlying']
     frequency = data_cfg['strat_manager_instance']['frequency']
     strat_name = data_cfg['strat_manager_instance']['strat_name']
-    volume = data_cfg['strat_manager_instance']['volume']
 
-    extra_instance = data_cfg['extra_instance']
+    # Set parameters for strategy function
+    strat_args = data_cfg['strategy_instance']['args_params']
+    strat_kwargs = data_cfg['strategy_instance']['kwargs_params']
 
-    args = data_cfg['args_params']
-    kwargs = data_cfg['kwargs_params']
+    sm = StrategyManager(STOP=2, **start_manager_parameters)
 
-    sm = StrategyManager(timestep=frequency, underlying=underlying, 
-        strategy=strat_name, volume=volume, STOP=3, **extra_instance)
-    
     # Test initialisation
-    assert sm.strategy == strat_name
-    assert sm.timestep == frequency
+    assert sm.strat_name == strat_name
+    assert sm.frequency == frequency
     assert sm.underlying == underlying
-    assert sm.volume == volume
 
     # Test __call__ method
-    assert isinstance(sm(*args, **kwargs), StrategyManager)
+    assert isinstance(sm(*strat_args, **strat_kwargs), StrategyManager)
 
     # Test __iter__ method
-    time.sleep(int(time.time()) % frequency)
     t0 = int(time.time())
-    #time.sleep(frequency)
-    for t in sm(*args, **kwargs):
+    for t in sm(*strat_args, **strat_kwargs):
         print('{} th iteration is ok'.format(t))
         t1 = int(time.time())
         assert t0 + frequency + 3 > t1
@@ -57,6 +54,16 @@ def test_StrategyManager(set_variables):
         t0 = t1
 
     # Test get_data
+    # Get parameters for data requests
+    data_requests_params = data_cfg['get_data_instance']
+    data_requests_args = data_requests_params.pop('args_params')
+    data_requests_kwargs = data_requests_params.pop('kwargs_params')
+    # Set data requests configuration
+    sm.set_data_loader(
+        *data_requests_args, 
+        **data_requests_params, 
+        **data_requests_kwargs
+    )
 
     # Test another method
     pass
