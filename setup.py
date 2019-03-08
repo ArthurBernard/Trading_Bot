@@ -1,11 +1,11 @@
 #!/usr/bin/env python
-# -*- coding: utf-8 -*-
+# coding: utf-8
 
-from setuptools import find_packages
+from setuptools import find_packages, setup
 
 setup(
-    name='Strategy_Manager',
-    version='0.1',
+    name='strategy_manager',
+    version='0.0.1',
     description='Manager of financial algorithmic strategies [In progress]',
     url='https://github.com/ArthurBernard/Strategy_Manager',
     author=['Arthur Bernard'],
