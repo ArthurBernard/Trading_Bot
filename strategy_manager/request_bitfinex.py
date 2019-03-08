@@ -9,7 +9,7 @@ import sys
 # Import external packages
 import requests
 
-__all__ ['ReqBitfinex']
+__all__ = ['ReqBitfinex']
 
 class ReqBitfinex:
     """ Class to request data from Bitfinex exchange with REST public API.

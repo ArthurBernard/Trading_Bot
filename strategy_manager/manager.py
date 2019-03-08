@@ -44,7 +44,7 @@ class StrategyManager:
 
     """
     def __init__(self, timestep, underlying, strategy, volume,
-        time_exec=0, data_request_on_the_fly=True):
+        time_exec=0, data_request_on_the_fly=True, STOP=None):
         """
         Parameters
         ----------
@@ -63,6 +63,9 @@ class StrategyManager:
         data_request_on_the_fly : bool, optional
             Request data on the fly if true, else request a data base. 
             Defaut is True. 
+        STOP : int, optional
+            Number of iteration before stoping, if `None` iteration will stop 
+            every 24 hours. Default is None.
 
         """
         self.timestep = timestep
@@ -71,6 +74,10 @@ class StrategyManager:
         self.volume = volume
         self.time_exec = time_exec
         self.data_request_on_the_fly = data_request_on_the_fly
+        if STOP is None:
+            self.STOP = 86400 // timestep
+        else:
+            self.STOP = STOP
 
     def __call__(self, *args, iso_vol=True, **kwargs):
         """ Set parameters of strategy.
@@ -90,8 +97,6 @@ class StrategyManager:
             self.TS = int(time.time()) // self.timestep * self.timestep 
             self.TS += self.time_exec
         self.next = self.TS + self.timestep
-        # TODO : DEFINE self.STOP
-        self.STOP = 3
         return self
 
     def __next__(self):

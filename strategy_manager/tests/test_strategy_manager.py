@@ -34,7 +34,7 @@ def test_StrategyManager(set_variables):
     kwargs = data_cfg['kwargs_params']
 
     sm = StrategyManager(timestep=frequency, underlying=underlying, 
-        strategy=strat_name, volume=volume, **extra_instance)
+        strategy=strat_name, volume=volume, STOP=3, **extra_instance)
     
     # Test initialisation
     assert sm.strategy == strat_name
@@ -50,12 +50,13 @@ def test_StrategyManager(set_variables):
     t0 = int(time.time())
     #time.sleep(frequency)
     for t in sm(*args, **kwargs):
-        sm.STOP = 3
         print('{} th iteration is ok'.format(t))
         t1 = int(time.time())
         assert t0 + frequency + 3 > t1
         assert t0 + frequency - 3 < t1
         t0 = t1
+
+    # Test get_data
 
     # Test another method
     pass
