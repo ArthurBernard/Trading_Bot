@@ -9,9 +9,9 @@ import sys
 # Import external packages
 import requests
 
-__all__ = ['DataRequest']
+__all__ = ['DataRequests']
 
-class DataRequest:
+class DataRequests:
     """ Class to request data from an exchange with REST public API.
     
     Methods
@@ -45,13 +45,16 @@ class DataRequest:
         self.stop_step = stop_step
         self.last_ts = last_ts
         
-    def get_data(self, **params):
+    def get_data(self, *args, **kwargs):
         """ Request data to public REST API from an Exchange.
 
         Parameters
         ----------
-        params : dict 
-            Cf documentation of the exchange API.
+        args : tuple
+            Each element of the tuple is added to the url separated with `/`.
+        kwargs : dict 
+            Each key words is append to parameters at the requests. 
+            Cf documentation of the exchange API for more details.
 
         Returns
         -------
@@ -67,11 +70,11 @@ class DataRequest:
         """
         # Set timestamp of the observation
         self.last_ts = int(time.time())
+        url = self.url + self.request
+        for arg in args:
+            url += arg + '/'
         # Requests data
-        ans = requests.get(
-            self.url + self.request, 
-            params
-        )
+        ans = requests.get(url, kwargs)
         # Returns result
         try:
             return json.loads(ans.text)
@@ -85,7 +88,7 @@ class DataRequest:
             with open('errors/{}.log'.format(sys.argv[0]), 'a') as f:
                 f.write(txt)
             time.sleep(1)
-            return self.get_data(**params)
+            return self.get_data(**kwargs)
     
     def __iter__(self):
         return self
@@ -99,12 +102,12 @@ class DataRequest:
             time.sleep(self.last_ts + self.time_step - time.time())
         # Run 
         self.t += 1
-        return self.get_data(**self.params)
+        return self.get_data(**self.kwargs)
     
-    def __call__(self, time_step=2, **params):
+    def __call__(self, time_step=2, **kwargs):
         # Set timestep and request's parameters
         self.time_step = time_step
-        self.params = params
+        self.kwargs = kwargs
         return self
 
 if __name__ == '__main__':
