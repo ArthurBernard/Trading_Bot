@@ -14,18 +14,18 @@ from . import StrategyManager
 __all__ = ['run_bot']
 
 def run_bot(strat_id, path='../strategies/'):
-	""" Run a bot for specified configuration file.
+    """ Run a bot for specified configuration file.
 
-	Parameters
-	----------
-	strat_id : str
-	    A strat id is the name of the corresonding configuration file.
-	path : str
-	    Path where is the configuration file.
+    Parameters
+    ----------
+    strat_id : str
+        A strat id is the name of the corresonding configuration file.
+    path : str
+        Path where is the configuration file.
 
-	"""
-	if path[-1] != '/':
-		path += '/'
+    """
+    if path[-1] != '/':
+        path += '/'
     data_cfg = load_config_params(path + strat_id + '.cfg')
     
     # Get parameters for strategy manager object
@@ -38,9 +38,10 @@ def run_bot(strat_id, path='../strategies/'):
     
     # Get parameters for data requests
     data_requests_params = data_cfg['get_data_instance']
+    data_requests_args = data_requests_params.pop('args_params')
     data_requests_kwargs = data_requests_params.pop('kwargs_params')
     # Set data requests configuration
-    strat_manager.set_data_loader(**data_requests_params, **data_requests_kwargs)
+    data_req = DataRequest(**data_requests_params)
     
     # Get parameters for pre order configuration
     pre_order_params = data_cfg['pre_order_instance']
@@ -57,20 +58,22 @@ def run_bot(strat_id, path='../strategies/'):
     # The bot start to run
     try:
         for t in strat_manager(*strat_args, **strat_kwargs):
-        	print('{}th iteration'.format(t))
-        	# TODO : compute, print and save some statistics
+            print('{}th iteration'.format(t))
+            data = data_req.get_data(*data_requests_args, **data_requests_kwargs)
+            # TODO : clean data
+            # TODO : compute, print and save some statistics
         else:
             print('All is good')
 
     except Exception as error:
-    	# TODO : how manage unknown error
-    	time_str = time.strftime('%y-%m-%d %H:%M:%S', time.gmtime(time.time()))
-    	txt = '\nUNKNOWN ERROR\n'
-    	txt += 'In {} script '.format(sys.argv[0])
-    	txt += 'for {} strat id '.format(strat_id)
-    	txt += 'at {} UTC, '.format(time_str)
-    	txt += 'the following error occurs:\n'
-    	txt += '{}: {}\n'.format(str(type(error)), str(error))
+        # TODO : how manage unknown error
+        time_str = time.strftime('%y-%m-%d %H:%M:%S', time.gmtime(time.time()))
+        txt = '\nUNKNOWN ERROR\n'
+        txt += 'In {} script '.format(sys.argv[0])
+        txt += 'for {} strat id '.format(strat_id)
+        txt += 'at {} UTC, '.format(time_str)
+        txt += 'the following error occurs:\n'
+        txt += '{}: {}\n'.format(str(type(error)), str(error))
         print(txt)
         with open('errors/{}.log'.format(sys.argv[0]), 'a') as f:
             f.write(txt)
@@ -80,4 +83,4 @@ def run_bot(strat_id, path='../strategies/'):
         print('\nBot stoped\nSee you soon')
 
 if __name__ == '__main__':
-	run_bot(sys.argv[1])
+    run_bot(sys.argv[1])

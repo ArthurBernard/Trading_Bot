@@ -9,6 +9,7 @@ import time
 import fynance as fy
 
 # Import local packages
+from .data_requests import DataRequests
 
 __all__ = ['StrategyManager']
 
@@ -35,51 +36,38 @@ class StrategyManager:
 
     Attributes
     ----------
-    timestep : int
+    frequency : int
         Number of seconds between two samples.
     underlying : str or list ?
         Name of the underlying or list of data needed.
-    strategy : function ? str ? callable ?
-        Strategy function.
+    strat_name : function ? str ? callable ?
+        strat_name function.
 
     """
-    def __init__(self, timestep, underlying, strategy, volume,
-        time_exec=0, data_request_on_the_fly=True, STOP=None):
+    def __init__(self, frequency, underlying, strat_name, STOP=None):
         """
         Parameters
         ----------
-        timestep : int
+        frequency : int
             Number of seconds between two samples.
         underlying : str or list ?
             Name of the underlying or list of data needed.
-        strategy : function ? str ? callable ?
-            Strategy function.
-        volume : float
-            Quantity to trade.
-        iso_vol : bool, optional
-            If true apply iso-volatility filter to signal, default is True.
-        time_exec : int or str, optional
-            TODO : description
-        data_request_on_the_fly : bool, optional
-            Request data on the fly if true, else request a data base. 
-            Defaut is True. 
+        strat_name : function ? str ? callable ?
+            strat_name function.
         STOP : int, optional
             Number of iteration before stoping, if `None` iteration will stop 
             every 24 hours. Default is None.
 
         """
-        self.timestep = timestep
+        self.frequency = frequency
         self.underlying = underlying
-        self.strategy = strategy
-        self.volume = volume
-        self.time_exec = time_exec
-        self.data_request_on_the_fly = data_request_on_the_fly
+        self.strat_name = strat_name
         if STOP is None:
-            self.STOP = 86400 // timestep
+            self.STOP = 86400 // frequency
         else:
             self.STOP = STOP
 
-    def __call__(self, *args, iso_vol=True, **kwargs):
+    def __call__(self, *args, **kwargs):
         """ Set parameters of strategy.
          
         """
@@ -91,12 +79,8 @@ class StrategyManager:
     def __iter__(self):
         """ Initialize iterative method. """
         self.t = 0
-        if self.time_exec == 'now':
-            self.TS = time.time()
-        else:
-            self.TS = int(time.time()) // self.timestep * self.timestep 
-            self.TS += self.time_exec
-        self.next = self.TS + self.timestep
+        self.TS = int(time.time())
+        self.next = self.TS + self.frequency
         return self
 
     def __next__(self):
@@ -115,27 +99,15 @@ class StrategyManager:
         # self.compute_signal()
         # Execute order
         # TODO : set_order
-        self.next += self.timestep
+        self.next += self.frequency
         self.t += 1
         return t
 
-    def set_data_loader(self, timestep, underlying, sample_size=None, since=None, 
-        last=None):
-        """ Instanciate data loader object """
-        if data_request_on_the_fly:
-            # TODO : set parameters
-            self.data_loader = DataRequests()
-        else:
-            # TODO : set parameters
-            self.data_loader = DataLoader()
+    def set_data(self, data):
+        """ """
+        # TODO : Set data, something like that
+        self.data.append(data)
         return self
-
-    def get_data(self):
-        """ Get Data method.
-
-        """
-        # TODO : request data
-        return self.data_loader.get_data()
 
     def get_signal(self):
         """
@@ -153,7 +125,7 @@ class StrategyManager:
         """ Compute signal strategy.
 
         """
-        #self.signal = self.strategy(*self.args, **self.kwargs)
+        #self.signal = self.strat_name(*self.args, **self.kwargs)
         #if self.iso_vol:
         #    self._isovol()
         #pass
