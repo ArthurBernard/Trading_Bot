@@ -142,6 +142,10 @@ def data_base_requests(assets, ohlcv, frequency=60, start=None, end=None,
     Examples
     --------
     >>> data_base_requests(['example', 'other_example'], ['c', 'l', 'h', 'v'])
+                c  l  h  ...  l_other_example h_other_example v_other_example
+    1552155180  0  0  0  ...                0               0             150
+    <BLANKLINE>
+    [1 rows x 8 columns]
 
     See Also
     --------
@@ -149,13 +153,25 @@ def data_base_requests(assets, ohlcv, frequency=60, start=None, end=None,
     """
     if end is None:
         end = int(time.time()) // 60 * 60
-    # TODO : Not good instanciation of dataframe ! 
-    data = pd.DataFrame()
+    # TODO : heavy instanciation
+    asset = assets.pop(0)
+    if start is None:
+        date = time.strftime('%y-%m-%d', time.gmtime(time.time()))
+        path_file = path + asset + '/' + date + '.dat'
+        df = _data_base_requests(path_file, slice(None), ohlcv).iloc[-1:, :]
+    else:
+        df = pd.DataFrame()
+        for row_slice in _set_row_slice(start, end, frequency):
+            date = time.strftime('%y-%m-%d', time.gmtime(row_slice[0]))
+            path_file = path + asset + '/' + date + '.dat'
+            subdf = _data_base_requests(path_file, row_slice, ohlcv)
+            df.append(subdf)
+    data = df
     for asset in assets:
         if start is None:
             date = time.strftime('%y-%m-%d', time.gmtime(time.time()))
             path_file = path + asset + '/' + date + '.dat'
-            df = _data_base_requests(path_file, slice(None), ohlcv).iloc[-1, :]
+            df = _data_base_requests(path_file, slice(None), ohlcv).iloc[-1:, :]
         else:
             df = pd.DataFrame()
             for row_slice in _set_row_slice(start, end, frequency):
