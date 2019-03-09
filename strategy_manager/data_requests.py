@@ -25,14 +25,12 @@ class DataRequests:
 
     
     """
-    def __init__(self, request, public_api_url, stop_step=1, last_ts=0):
+    def __init__(self, public_api_url, stop_step=1, last_ts=0):
         """ Set kind of request, time step in second between two requests, 
         and if necessary from when (timestamp).
 
         Parameters
         ----------
-        request : str
-            Kind of REST public API request.
         public_api_url : str
             Url of an exchange public API REST.
         stop_step : int, optional
@@ -42,7 +40,6 @@ class DataRequests:
         
         """
         self.url = public_api_url
-        self.request = request
         self.t = 0
         self.stop_step = stop_step
         self.last_ts = last_ts
@@ -65,16 +62,16 @@ class DataRequests:
 
         Examples
         --------
-        >>> req = ReqKraken('OHLC', "https://api.kraken.com/0/public/", stop_step=1)
-        >>> req.get_data(pair='ETHUSD')['error']
+        >>> req = DataRequests("https://api.kraken.com/0/public", stop_step=1)
+        >>> req.get_data('OHLC', pair='ETHUSD')['error']
         []
 
         """
         # Set timestamp of the observation
         self.last_ts = int(time.time())
-        url = self.url + self.request
+        url = self.url
         for arg in args:
-            url += arg + '/'
+            url += '/' + arg
         # Requests data
         ans = requests.get(url, kwargs)
         # Returns result
@@ -113,7 +110,8 @@ class DataRequests:
         return self
 
 
-def data_base_requests(assets, ohlcv, frequency=60, start=None, end=None):
+def data_base_requests(assets, ohlcv, frequency=60, start=None, end=None,
+    path='data_base/'):
     """ Function to request in the data base one or several ohlcv data assets
     from a specified date to an other specified data and at a specified 
     frequency. 
@@ -133,6 +131,8 @@ def data_base_requests(assets, ohlcv, frequency=60, start=None, end=None):
     end : int, optional
         Timestamp to end data request, default end request at last data 
         available.
+    path : str
+        Path to load data.
 
     Returns
     -------
@@ -141,6 +141,7 @@ def data_base_requests(assets, ohlcv, frequency=60, start=None, end=None):
 
     Examples
     --------
+    >>> data_base_requests(['example', 'other_example'], ['c', 'l', 'h', 'v'])
 
     See Also
     --------
@@ -148,20 +149,21 @@ def data_base_requests(assets, ohlcv, frequency=60, start=None, end=None):
     """
     if end is None:
         end = int(time.time()) // 60 * 60
+    # TODO : Not good instanciation of dataframe ! 
     data = pd.DataFrame()
     for asset in assets:
         if start is None:
             date = time.strftime('%y-%m-%d', time.gmtime(time.time()))
-            path = '../data_base/' + asset + '/' + date
-            df = _data_base_requests(path, slice(None), ohlcv).iloc[-1, :]
+            path_file = path + asset + '/' + date + '.dat'
+            df = _data_base_requests(path_file, slice(None), ohlcv).iloc[-1, :]
         else:
             df = pd.DataFrame()
             for row_slice in _set_row_slice(start, end, frequency):
                 date = time.strftime('%y-%m-%d', time.gmtime(row_slice[0]))
-                path = '../data_base/' + asset + '/' + date
-                subdf = _data_base_requests(path, row_slice, ohlcv)
+                path_file = path + asset + '/' + date + '.dat'
+                subdf = _data_base_requests(path_file, row_slice, ohlcv)
                 df.append(subdf)
-        data = data.join(df, rsuffix=asset)
+        data = data.join(df, rsuffix='_' + asset)
 
     return data
 
@@ -178,9 +180,12 @@ def _set_row_slice(start, end, frequency):
     i = 0
     row_slices = []
     end += frequency
-    while i < (end - start) // 86400:
-        row_slice += [range(start, min(start + 86400, end), frequency)]
-        start += 86400
+    STOP = (end - start) // 86400
+    while i <= STOP:
+        last = (start // 86400 + 1) * 86400 
+        row_slice += [range(start, min(last, end), frequency)]
+        start += last
+        i += 1
     return row_slice
 
 
