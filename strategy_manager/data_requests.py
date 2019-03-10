@@ -6,6 +6,7 @@ import json
 import time
 import sys
 from pickle import Unpickler
+from os import listdir
 
 # Import external packages
 import requests
@@ -146,6 +147,13 @@ def data_base_requests(assets, ohlcv, frequency=60, start=None, end=None,
     1552155180  0  0  0  ...                0               0             150
     <BLANKLINE>
     [1 rows x 8 columns]
+    >>> df = data_base_requests('example', 'c', start=1552089600, end=1552155180)
+    >>> df.iloc[0:1, :]
+                c
+    1552089600  0
+    >>> df.iloc[-1:,:]
+                c
+    1552155180  0
 
     See Also
     --------
@@ -153,35 +161,37 @@ def data_base_requests(assets, ohlcv, frequency=60, start=None, end=None,
     """
     if end is None:
         end = int(time.time()) // 60 * 60
+    if isinstance(assets, str):
+        assets = [assets]
+    if isinstance(ohlcv, str):
+        ohlcv = [ohlcv]
     # TODO : heavy instanciation
     asset = assets.pop(0)
+    data = _subdata_base_requests(asset, ohlcv, frequency, start, end, path)
+    for asset in assets:
+        df = _subdata_base_requests(asset, ohlcv, frequency, start, end, path)
+        data = data.join(df, rsuffix='_' + asset)
+
+    return data
+
+
+def _subdata_base_requests(asset, ohlcv, frequency, start, end, path):
     if start is None:
-        date = time.strftime('%y-%m-%d', time.gmtime(time.time()))
-        path_file = path + asset + '/' + date + '.dat'
+        #date = time.strftime('%y-%m-%d', time.gmtime(time.time()))
+        path_file = _get_last_file(path + asset) # + '/' + date + '.dat'
         df = _data_base_requests(path_file, slice(None), ohlcv).iloc[-1:, :]
     else:
-        df = pd.DataFrame()
-        for row_slice in _set_row_slice(start, end, frequency):
+        row_slices = _set_row_slice(start, end, frequency)
+        row_slice = row_slices.pop(0)
+        date = time.strftime('%y-%m-%d', time.gmtime(row_slice[0]))
+        path_file = path + asset + '/' + date + '.dat'
+        df = _data_base_requests(path_file, row_slice, ohlcv)
+        for row_slice in row_slices:
             date = time.strftime('%y-%m-%d', time.gmtime(row_slice[0]))
             path_file = path + asset + '/' + date + '.dat'
             subdf = _data_base_requests(path_file, row_slice, ohlcv)
             df.append(subdf)
-    data = df
-    for asset in assets:
-        if start is None:
-            date = time.strftime('%y-%m-%d', time.gmtime(time.time()))
-            path_file = path + asset + '/' + date + '.dat'
-            df = _data_base_requests(path_file, slice(None), ohlcv).iloc[-1:, :]
-        else:
-            df = pd.DataFrame()
-            for row_slice in _set_row_slice(start, end, frequency):
-                date = time.strftime('%y-%m-%d', time.gmtime(row_slice[0]))
-                path_file = path + asset + '/' + date + '.dat'
-                subdf = _data_base_requests(path_file, row_slice, ohlcv)
-                df.append(subdf)
-        data = data.join(df, rsuffix='_' + asset)
-
-    return data
+    return df
 
 
 def _data_base_requests(path, row_slice, col_slice):
@@ -194,7 +204,7 @@ def _data_base_requests(path, row_slice, col_slice):
 
 def _set_row_slice(start, end, frequency):
     i = 0
-    row_slices = []
+    row_slice = []
     end += frequency
     STOP = (end - start) // 86400
     while i <= STOP:
@@ -203,6 +213,11 @@ def _set_row_slice(start, end, frequency):
         start += last
         i += 1
     return row_slice
+
+
+def _get_last_file(path):
+    files = listdir(path)
+    return path + '/' + max(files)
 
 
 if __name__ == '__main__':
