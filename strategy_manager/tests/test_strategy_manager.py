@@ -47,7 +47,7 @@ def test_StrategyManager(set_variables):
     # Test __iter__ method
     t0 = int(time.time())
     for t in sm(*strat_args, **strat_kwargs):
-        print('{} th iteration is ok'.format(t))
+        print(r'${}^{th}$ iteration is ok'.format(t))
         t1 = int(time.time())
         assert t0 + frequency + 3 > t1
         assert t0 + frequency - 3 < t1
