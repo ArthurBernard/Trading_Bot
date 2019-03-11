@@ -12,7 +12,7 @@ from os import listdir
 import requests
 import pandas as pd
 
-__all__ = ['DataRequests']
+__all__ = ['DataRequests', 'data_base_requests']
 
 class DataRequests:
     """ Class to request data from an exchange with REST public API.
@@ -142,7 +142,7 @@ def data_base_requests(assets, ohlcv, frequency=60, start=None, end=None,
 
     Examples
     --------
-    >>> data_base_requests(['example', 'other_example'], ['c', 'l', 'h', 'v'])
+    >>> data_base_requests(['example', 'other_example'], 'clhv')
                 c  l  h  ...  l_other_example h_other_example v_other_example
     1552155180  0  0  0  ...                0               0             150
     <BLANKLINE>
@@ -160,14 +160,18 @@ def data_base_requests(assets, ohlcv, frequency=60, start=None, end=None,
 
     """
     if end is None:
-        end = int(time.time()) // 60 * 60
+        end = int(time.time()) // frequency * frequency
+    
     if isinstance(assets, str):
         assets = [assets]
+    
     if isinstance(ohlcv, str):
-        ohlcv = [ohlcv]
-    # TODO : heavy instanciation
+        ohlcv = [i for i in ohlcv]
+    
+    # Set data by asset
     asset = assets.pop(0)
     data = _subdata_base_requests(asset, ohlcv, frequency, start, end, path)
+    
     for asset in assets:
         df = _subdata_base_requests(asset, ohlcv, frequency, start, end, path)
         data = data.join(df, rsuffix='_' + asset)
@@ -177,8 +181,7 @@ def data_base_requests(assets, ohlcv, frequency=60, start=None, end=None,
 
 def _subdata_base_requests(asset, ohlcv, frequency, start, end, path):
     if start is None:
-        #date = time.strftime('%y-%m-%d', time.gmtime(time.time()))
-        path_file = _get_last_file(path + asset) # + '/' + date + '.dat'
+        path_file = _get_last_file(path + asset)
         df = _data_base_requests(path_file, slice(None), ohlcv).iloc[-1:, :]
     else:
         row_slices = _set_row_slice(start, end, frequency)
@@ -205,7 +208,7 @@ def _data_base_requests(path, row_slice, col_slice):
 def _set_row_slice(start, end, frequency):
     i = 0
     row_slice = []
-    end += frequency
+    #end += frequency
     STOP = (end - start) // 86400
     while i <= STOP:
         last = (start // 86400 + 1) * 86400 
@@ -218,6 +221,15 @@ def _set_row_slice(start, end, frequency):
 def _get_last_file(path):
     files = listdir(path)
     return path + '/' + max(files)
+
+
+def _aggregate_data(df, frequency):
+    win = frequency // 60
+    _slice = range(df.index.min, df.index.max + 1, frequency)
+    db = df.loc[_slice, :].copy()
+    db.loc[:, 'h']
+    # TODO : finish aggregated data function
+    pass
 
 
 if __name__ == '__main__':
