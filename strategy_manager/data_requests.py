@@ -251,10 +251,10 @@ def aggregate_data(df, window):
         Aggregated data.
 
     """
-    df.loc[:, 'h'] = df.loc[:, 'h'].rolling(window, min_periods=0).max()
-    df.loc[:, 'l'] = df.loc[:, 'l'].rolling(window, min_periods=0).min()
+    df.loc[::-1, 'h'] = df.loc[::-1, 'h'].rolling(window, min_periods=0).max()
+    df.loc[::-1, 'l'] = df.loc[::-1, 'l'].rolling(window, min_periods=0).min()
     df.loc[:, 'c'] = df.loc[:, 'c'].shift(-window).fillna(method='ffill')
-    df.loc[:, 'v'] = df.loc[:, 'v'].rolling(window, min_periods=0).sum()
+    df.loc[::-1, 'v'] = df.loc[::-1, 'v'].rolling(window, min_periods=0).sum()
     return df
     
 
