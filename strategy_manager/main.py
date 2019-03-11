@@ -40,8 +40,8 @@ def run_bot(strat_id, path='../strategies/'):
     data_requests_params = data_cfg['get_data_instance']
     data_requests_args = data_requests_params.pop('args_params')
     data_requests_kwargs = data_requests_params.pop('kwargs_params')
-    # Set data requests configuration
-    data_req = DataRequest(**data_requests_params)
+    # TODO : Set or verify data requests manager configuration
+    # data_manager = DataManager(**data_requests_params)
     
     # Get parameters for pre order configuration
     pre_order_params = data_cfg['pre_order_instance']
@@ -59,7 +59,8 @@ def run_bot(strat_id, path='../strategies/'):
     try:
         for t in strat_manager(*strat_args, **strat_kwargs):
             print('{}th iteration'.format(t))
-            data = data_req.get_data(*data_requests_args, **data_requests_kwargs)
+            # TODO : request data_base
+            # data = data_manager.get_data(*data_requests_args, **data_requests_kwargs)
             # TODO : clean data
             # TODO : compute, print and save some statistics
         else:
