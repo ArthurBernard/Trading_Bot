@@ -11,6 +11,7 @@ from os import listdir
 # Import external packages
 import requests
 import pandas as pd
+import numpy as np
 
 __all__ = ['DataRequests', 'data_base_requests']
 
@@ -182,22 +183,34 @@ def data_base_requests(assets, ohlcv, frequency=60, start=None, end=None,
 def _subdata_base_requests(asset, ohlcv, frequency, start, end, path):
     if start is None:
         path_file = _get_last_file(path + asset)
-        df = _data_base_requests(path_file, slice(None), ohlcv).iloc[-1:, :]
+        df = _data_base_requests(path_file, slice(None), ohlcv, frequency)
+        return df.iloc[-1:, :]
     else:
         row_slices = _set_row_slice(start, end, frequency)
         row_slice = row_slices.pop(0)
         date = time.strftime('%y-%m-%d', time.gmtime(row_slice[0]))
         path_file = path + asset + '/' + date + '.dat'
-        df = _data_base_requests(path_file, row_slice, ohlcv)
+        df = _data_base_requests(path_file, row_slice, ohlcv, frequency)
         for row_slice in row_slices:
             date = time.strftime('%y-%m-%d', time.gmtime(row_slice[0]))
             path_file = path + asset + '/' + date + '.dat'
             subdf = _data_base_requests(path_file, row_slice, ohlcv)
             df.append(subdf)
-    return df
+        return df
 
 
-def _data_base_requests(path, row_slice, col_slice):
+def _data_base_requests(path, row_slice, col_slice, frequency):
+    # Load data base
+    with open(path, 'rb') as f:
+        df = Unpickler(f).load()
+    # Aggregate data
+    if frequency > 60:
+        df = aggregate_data(df, frequency // 60)
+    # Return specified data
+    return df.loc[row_slice, col_slice]
+
+
+def _data_base_requests2(path, row_slice, col_slice):
     # Load data base
     with open(path, 'rb') as f:
         df = Unpickler(f).load()
@@ -208,7 +221,6 @@ def _data_base_requests(path, row_slice, col_slice):
 def _set_row_slice(start, end, frequency):
     i = 0
     row_slice = []
-    #end += frequency
     STOP = (end - start) // 86400
     while i <= STOP:
         last = (start // 86400 + 1) * 86400 
@@ -223,13 +235,28 @@ def _get_last_file(path):
     return path + '/' + max(files)
 
 
-def _aggregate_data(df, frequency):
-    win = frequency // 60
-    _slice = range(df.index.min, df.index.max + 1, frequency)
-    db = df.loc[_slice, :].copy()
-    db.loc[:, 'h']
-    # TODO : finish aggregated data function
-    pass
+def aggregate_data(df, window):
+    """ Aggregate OHLCV data frame. 
+
+    Parameters
+    ----------
+    df : pandas.DataFrame
+        OHLCV data.
+    window : int
+        Number of periods to aggregate.
+
+    Returns
+    -------
+    df : pandas.DataFrame
+        Aggregated data.
+
+    """
+    df.loc[:, 'h'] = df.loc[:, 'h'].rolling(window, min_periods=0).max()
+    df.loc[:, 'l'] = df.loc[:, 'l'].rolling(window, min_periods=0).min()
+    df.loc[:, 'c'] = df.loc[:, 'c'].shift(-window).fillna(method='ffill')
+    df.loc[:, 'v'] = df.loc[:, 'v'].rolling(window, min_periods=0).sum()
+    return df
+    
 
 
 if __name__ == '__main__':
