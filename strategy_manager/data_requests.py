@@ -181,6 +181,7 @@ def data_base_requests(assets, ohlcv, frequency=60, start=None, end=None,
 
 
 def _subdata_base_requests(asset, ohlcv, frequency, start, end, path):
+    # TODO : Fix aggregate with several dataframe 
     if start is None:
         path_file = _get_last_file(path + asset)
         df = _data_base_requests(path_file, slice(None), ohlcv, frequency)
@@ -235,14 +236,14 @@ def _get_last_file(path):
     return path + '/' + max(files)
 
 
-def aggregate_data(df, window):
+def aggregate_data(df, win):
     """ Aggregate OHLCV data frame. 
 
     Parameters
     ----------
     df : pandas.DataFrame
         OHLCV data.
-    window : int
+    win : int
         Number of periods to aggregate.
 
     Returns
@@ -251,12 +252,16 @@ def aggregate_data(df, window):
         Aggregated data.
 
     """
-    df.loc[::-1, 'h'] = df.loc[::-1, 'h'].rolling(window, min_periods=0).max()
-    df.loc[::-1, 'l'] = df.loc[::-1, 'l'].rolling(window, min_periods=0).min()
-    df.loc[:, 'c'] = df.loc[:, 'c'].shift(-window).fillna(method='ffill')
-    df.loc[::-1, 'v'] = df.loc[::-1, 'v'].rolling(window, min_periods=0).sum()
+    for c in df.columns:
+        if c == 'h':
+            df.loc[::-1, c] = df.loc[::-1, c].rolling(win, min_periods=0).max()
+        elif c == 'l':
+            df.loc[::-1, c] = df.loc[::-1, c].rolling(win, min_periods=0).min()
+        elif c == 'c':
+            df.loc[:, c] = df.loc[:, c].shift(-win).fillna(method='ffill')
+        elif c == 'v':
+            df.loc[::-1, c] = df.loc[::-1, c].rolling(win, min_periods=0).sum()
     return df
-    
 
 
 if __name__ == '__main__':
