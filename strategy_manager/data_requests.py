@@ -20,10 +20,19 @@ class DataRequests:
     
     Methods
     -------
-    - get_data : return data in list or dict.
+    get_data(*args, **kwargs) 
+        Return data in list or dict.
 
     Attributes
     ----------
+    url : str
+        Url of an exchange public API REST.
+    stop_step : int
+        Max number of request.
+    last_ts : int
+        Timestamp of last observation if exist else 0.
+    t : int
+        The `t` th request.
 
     
     """
@@ -158,6 +167,7 @@ def data_base_requests(assets, ohlcv, frequency=60, start=None, end=None,
 
     See Also
     --------
+    aggregate_data, DataRequests
 
     """
     if end is None:
@@ -243,6 +253,10 @@ def aggregate_data(df, win):
     -------
     df : pandas.DataFrame
         Aggregated data.
+
+    See Also
+    --------
+    data_base_requests
 
     """
     for c in df.columns:
