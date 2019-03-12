@@ -184,7 +184,7 @@ def data_base_requests(assets, ohlcv, frequency=60, start=None, end=None,
 def _subdata_base_requests(asset, ohlcv, frequency, start, end, path):
     if start is None:
         path_file = _get_last_file(path + asset)
-        df = _data_base_requests(path_file, slice(None), ohlcv, frequency)
+        df = _data_base_requests(path_file, slice(None), ohlcv)
         if frequency > 60:
             df = aggregate_data(df, frequency // 60)
         return df.iloc[-1:, :]
@@ -193,7 +193,7 @@ def _subdata_base_requests(asset, ohlcv, frequency, start, end, path):
         row_slice = row_slices.pop(0)
         date = time.strftime('%y-%m-%d', time.gmtime(row_slice[0]))
         path_file = path + asset + '/' + date + '.dat'
-        df = _data_base_requests(path_file, row_slice, ohlcv, frequency)
+        df = _data_base_requests(path_file, row_slice, ohlcv)
         for row_slice in row_slices:
             date = time.strftime('%y-%m-%d', time.gmtime(row_slice[0]))
             path_file = path + asset + '/' + date + '.dat'
