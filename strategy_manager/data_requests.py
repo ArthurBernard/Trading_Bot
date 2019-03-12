@@ -175,16 +175,18 @@ def data_base_requests(assets, ohlcv, frequency=60, start=None, end=None,
     
     for asset in assets:
         df = _subdata_base_requests(asset, ohlcv, frequency, start, end, path)
+
         data = data.join(df, rsuffix='_' + asset)
 
     return data
 
 
 def _subdata_base_requests(asset, ohlcv, frequency, start, end, path):
-    # TODO : Fix aggregate with several dataframe 
     if start is None:
         path_file = _get_last_file(path + asset)
         df = _data_base_requests(path_file, slice(None), ohlcv, frequency)
+        if frequency > 60:
+            df = aggregate_data(df, frequency // 60)
         return df.iloc[-1:, :]
     else:
         row_slices = _set_row_slice(start, end, frequency)
@@ -197,21 +199,12 @@ def _subdata_base_requests(asset, ohlcv, frequency, start, end, path):
             path_file = path + asset + '/' + date + '.dat'
             subdf = _data_base_requests(path_file, row_slice, ohlcv)
             df.append(subdf)
+        if frequency > 60: 
+            df = aggregate_data(df, frequency // 60)
         return df
 
 
-def _data_base_requests(path, row_slice, col_slice, frequency):
-    # Load data base
-    with open(path, 'rb') as f:
-        df = Unpickler(f).load()
-    # Aggregate data
-    if frequency > 60:
-        df = aggregate_data(df, frequency // 60)
-    # Return specified data
-    return df.loc[row_slice, col_slice]
-
-
-def _data_base_requests2(path, row_slice, col_slice):
+def _data_base_requests(path, row_slice, col_slice):
     # Load data base
     with open(path, 'rb') as f:
         df = Unpickler(f).load()
