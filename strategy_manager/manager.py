@@ -2,28 +2,28 @@
 # coding: utf-8
 
 # Import built-in packages
-from pickle import Pickler, Unpickler
 import time
 
 # Import external packages
 import fynance as fy
 
 # Import local packages
-from .data_requests import DataRequests
+from .data_requests import DataRequests, data_base_requests
 
 __all__ = ['StrategyManager']
 
 """
 TODO list:
     - Create a class strategy manager (or a bot object).
-    - Init parameters: underlying, strategy function, step time, value allow 
+    - Init parameters: underlying, strategy function, step time, value allow
     to this strategy.
     - Methods: ... ?
 """
 
+
 class StrategyManager:
     """ Main object to load data, compute signals and execute orders.
-    
+
     Methods
     -------
     get_data : TODO
@@ -55,7 +55,7 @@ class StrategyManager:
         strat_name : function ? str ? callable ?
             strat_name function.
         STOP : int, optional
-            Number of iteration before stoping, if `None` iteration will stop 
+            Number of iteration before stoping, if `None` iteration will stop
             every 24 hours. Default is None.
 
         """
@@ -69,7 +69,7 @@ class StrategyManager:
 
     def __call__(self, *args, **kwargs):
         """ Set parameters of strategy.
-         
+
         """
         self.args = args
         self.kwargs = kwargs
@@ -125,14 +125,34 @@ class StrategyManager:
         """ Compute signal strategy.
 
         """
-        #self.signal = self.strat_name(*self.args, **self.kwargs)
-        #if self.iso_vol:
-        #    self._isovol()
-        #pass
+        pass
 
     def _isovol(self):
         """ Iso-volatility method
-        
+
         """
         fy.iso_vol()
         pass
+
+
+class DataManager:
+    """ Description.
+
+    """
+    def __init__(self, assets, ohlcv, frequency=60, path='data_base/',
+                 request=False, url=''):
+        """ Initialize parameters """
+        self.assets = assets
+        self.ohlcv = ohlcv
+        self.freq = frequency
+        self.request = request
+        self.url = url
+
+    def get_data(self, *args, **kwargs):
+        """ Get data """
+        if self.request:
+            return DataRequests(self.url).get_data(*args, **kwargs)
+        else:
+            return data_base_requests(
+                self.assets, self.ohlcv, self.freq, *args, **kwargs
+            )
