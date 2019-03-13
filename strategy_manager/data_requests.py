@@ -2,7 +2,7 @@
 # coding: utf-8
 
 # Import built-in packages
-import json 
+import json
 import time
 import sys
 from pickle import Unpickler
@@ -10,17 +10,16 @@ from os import listdir
 
 # Import external packages
 import requests
-import pandas as pd
-import numpy as np
 
 __all__ = ['DataRequests', 'data_base_requests']
 
+
 class DataRequests:
     """ Class to request data from an exchange with REST public API.
-    
+
     Methods
     -------
-    get_data(*args, **kwargs) 
+    get_data(*args, **kwargs)
         Return data in list or dict.
 
     Attributes
@@ -34,10 +33,10 @@ class DataRequests:
     t : int
         The `t` th request.
 
-    
+
     """
     def __init__(self, public_api_url, stop_step=1, last_ts=0):
-        """ Set kind of request, time step in second between two requests, 
+        """ Set kind of request, time step in second between two requests,
         and if necessary from when (timestamp).
 
         Parameters
@@ -48,13 +47,13 @@ class DataRequests:
             Max number of request, default is 1.
         last_ts : int, optional
             Timestamp of last observation if exist else 0. Default is 0.
-        
+
         """
         self.url = public_api_url
         self.t = 0
         self.stop_step = stop_step
         self.last_ts = last_ts
-        
+
     def get_data(self, *args, **kwargs):
         """ Request data to public REST API from an Exchange.
 
@@ -62,8 +61,8 @@ class DataRequests:
         ----------
         args : tuple
             Each element of the tuple is added to the url separated with `/`.
-        kwargs : dict 
-            Each key words is append to parameters at the requests. 
+        kwargs : dict
+            Each key words is append to parameters at the requests.
             Cf documentation of the exchange API for more details.
 
         Returns
@@ -90,30 +89,32 @@ class DataRequests:
             return json.loads(ans.text)
         except Exception as error:
             txt = '\nUNKNOWN ERROR\n'
-            txt += 'In {} script, at {}, the following error occurs: {}\n'.format(
-                sys.argv[0], 
-                time.strftime('%y-%m-%d %H:%M:%S', time.gmtime(time.time())), 
+            txt += 'In {} script, at {}, '.format(
+                sys.argv[0],
+                time.strftime('%y-%m-%d %H:%M:%S', time.gmtime(time.time())),
+            )
+            txt += 'the following error occurs: {}\n'.format(
                 str(error)
             )
             with open('errors/{}.log'.format(sys.argv[0]), 'a') as f:
                 f.write(txt)
             time.sleep(1)
             return self.get_data(**kwargs)
-    
+
     def __iter__(self):
         return self
-    
+
     def __next__(self):
-        # Stop iteration 
+        # Stop iteration
         if self.t >= self.stop_step:
             raise StopIteration
         # Sleep
         elif self.last_ts + self.time_step > time.time():
             time.sleep(self.last_ts + self.time_step - time.time())
-        # Run 
+        # Run
         self.t += 1
         return self.get_data(**self.kwargs)
-    
+
     def __call__(self, time_step=2, **kwargs):
         # Set timestep and request's parameters
         self.time_step = time_step
@@ -122,25 +123,25 @@ class DataRequests:
 
 
 def data_base_requests(assets, ohlcv, frequency=60, start=None, end=None,
-    path='data_base/'):
+                       path='data_base/'):
     """ Function to request in the data base one or several ohlcv data assets
-    from a specified date to an other specified data and at a specified 
-    frequency. 
+    from a specified date to an other specified data and at a specified
+    frequency.
 
     Parameters
     ----------
     assets : str or list of str
         Id(s) of the asset(s) to requests.
     ohlcv : str or list of str
-        Kind of price data to requests, following are available 'o' to open, 
+        Kind of price data to requests, following are available 'o' to open,
         'h' to high, 'l' to low, 'c' to close and 'v' to volume.
     frequency : int, optional
         Number of second between two data observations (> 60).
     start : int, optional
-        Timestamp to start data request, default start request at last data 
+        Timestamp to start data request, default start request at last data
         availabe.
     end : int, optional
-        Timestamp to end data request, default end request at last data 
+        Timestamp to end data request, default end request at last data
         available.
     path : str
         Path to load data.
@@ -157,7 +158,8 @@ def data_base_requests(assets, ohlcv, frequency=60, start=None, end=None,
     1552155180  0  0  0  ...                0               0             150
     <BLANKLINE>
     [1 rows x 8 columns]
-    >>> df = data_base_requests('example', 'c', start=1552089600, end=1552155180)
+    >>> start, end = 1552089600, 1552155180
+    >>> df = data_base_requests('example', 'c', start=start, end=end)
     >>> df.iloc[0:1, :]
                 c
     1552089600  0
@@ -172,17 +174,17 @@ def data_base_requests(assets, ohlcv, frequency=60, start=None, end=None,
     """
     if end is None:
         end = int(time.time()) // frequency * frequency
-    
+
     if isinstance(assets, str):
         assets = [assets]
-    
+
     if isinstance(ohlcv, str):
         ohlcv = [i for i in ohlcv]
-    
+
     # Set data by asset
     asset = assets.pop(0)
     data = _subdata_base_requests(asset, ohlcv, frequency, start, end, path)
-    
+
     for asset in assets:
         df = _subdata_base_requests(asset, ohlcv, frequency, start, end, path)
 
@@ -209,7 +211,7 @@ def _subdata_base_requests(asset, ohlcv, frequency, start, end, path):
             path_file = path + asset + '/' + date + '.dat'
             subdf = _data_base_requests(path_file, row_slice, ohlcv)
             df.append(subdf)
-        if frequency > 60: 
+        if frequency > 60:
             df = aggregate_data(df, frequency // 60)
         return df
 
@@ -227,7 +229,7 @@ def _set_row_slice(start, end, frequency):
     row_slice = []
     STOP = (end - start) // 86400
     while i <= STOP:
-        last = (start // 86400 + 1) * 86400 
+        last = (start // 86400 + 1) * 86400
         row_slice += [range(start, min(last, end), frequency)]
         start += last
         i += 1
@@ -240,7 +242,7 @@ def _get_last_file(path):
 
 
 def aggregate_data(df, win):
-    """ Aggregate OHLCV data frame. 
+    """ Aggregate OHLCV data frame.
 
     Parameters
     ----------
