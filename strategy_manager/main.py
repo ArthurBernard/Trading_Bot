@@ -8,7 +8,7 @@ import sys
 # Import external packages
 
 # Import internal packages
-from .manager import StrategyManager, DataManager
+from .manager import StrategyManager, DataManager, OrderManager
 from .tools.utils import load_config_params
 
 __all__ = ['run_bot']
@@ -47,14 +47,12 @@ def run_bot(strat_id, path='../strategies/'):
     # Get parameters for pre order configuration
     pre_order_params = data_cfg['pre_order_instance']
     # Set pre order configuration
-    strat_manager.set_pre_order(**pre_order_params)
+    order_manager = OrderManager(**pre_order_params)
 
     # Get order parameters
     order_params = data_cfg['order_instance']
-    order_args = order_params.pop('args_params')
+    # order_args = order_params.pop('args_params')
     # order_kwargs = order_params.pop('kwargs_params')
-    # Set order configuration
-    strat_manager.set_order(*order_args, **order_params)
 
     # The bot start to run
     try:
@@ -65,7 +63,13 @@ def run_bot(strat_id, path='../strategies/'):
                 *data_requests_args, **data_requests_kwargs
             )
             # TODO : clean data or data is already cleaned ?
+            # TODO : compute signal
+            signal = 0
+            # Set order
+            ans = order_manager.set_order(signal, **order_params)
+            # ans = order_manager.set_order(*order_args, **order_params)
             # TODO : compute, print and save some statistics
+            print(ans)
         else:
             print('All is good')
 
