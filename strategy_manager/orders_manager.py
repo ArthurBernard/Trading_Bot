@@ -22,8 +22,7 @@ TODO list:
 
 
 class SetOrder:
-    """
-    Class to set and manage orders. Verify the intigrity of the new orders 
+    """ Class to set and manage orders. Verify the intigrity of the new orders
     with past orders and suffisant funds.
 
     An id order is a signed integer smaller than 32-bit, three last number
@@ -34,88 +33,115 @@ class SetOrder:
 
     Methods
     -------
-    - order : Request an order (with krakenex in first order).
-    - decode_id_order : Takes an id order and returns the corresponding id 
-    strategy and timestamp.
+    order(**kwargs)
+        Request an order (with krakenex in first order).
+    decode_id_order(id_order)
+        Takes an id order and returns the corresponding id strategy and
+        timestamp.
+    # TODO : check open and pending orders/position
+    # TODO : cancel orders/position if too far of mid
+    # TODO : replace limit order/position
+    # TODO : market order/position if time is over
 
     Attributs
     ---------
-    :id_strat: int (signed and max 32-bit)
+    id_strat : int (signed and max 32-bit)
         Number to link an order with a strategy.
-    :id_max: int
+    id_max : int
         Number max for an id_order (32-bit).
-    :path: str
+    path : str
         Path where API key and secret are saved.
+
     """
-    def __init__(self, id_strat, path):
+
+    def __init__(self, id_strat, path, current_pos=0, exchange='kraken'):
         """
         Set the order class.
 
         Parameters
         ----------
-        :id_strat: int (unsigned and 32-bit)
+        id_strat : int (unsigned and 32-bit)
             Number to link an order with a strategy.
-        :path: str
+        path : str
             Path where API key and secret are saved.
+        current_pos : int, {1 : long, 0 : None, -1 : short}
+            Current position of the account.
+        exchange : str, optional
+            Name of the exchange (default is `'kraken'`).
+
         """
         self.id_strat = id_strat
         self.id_max = 2147483647
         self.path = path
-        # Use krakenex API while i am lazy to do myself
-        self.K = API()
-        self.K.load_key(path)
+        self.current_pos = current_pos
+        if exchange.lower() == 'kraken':
+            # Use krakenex API while I am lazy to do myself
+            self.K = API()
+            self.K.load_key(path)
+        else:
+            raise ValueError(str(exchange) + ' not allowed.')
 
-    def order(self, **kwargs):
-        """
-        Request an order following defined parameters.
+    def order(self, id_order=None, **kwargs):
+        """ Request an order following defined parameters.
 
         /! To verify ConnectionResetError exception. /!
 
         Parameters
         ----------
-        :kwargs: parameters for ordering, refer to API documentation of the 
-        plateform used.
+        kwargs : dict
+            Parameters for ordering, refer to API documentation of the
+            plateform used.
 
         Return
         ------
-        :out: json
+        out : json
             Output of the request.
+
         """
-        id_order = self._set_id_order()
+        if id_order is None:
+            id_order = self._set_id_order()
         # TODO : Append a method to verify if the volume is available.
         try:
-            out = self.K.query_private('AddOrder', {**kwargs, 'userref': id_order})
-        except timeout:
-            print('timeout error')
-            out = self.order(**kwargs)
-        except ConnectionResetError:
-            self = SetOrder(self.id_strat, self.path) # Verify if it's working
-            out = self.order(**kwargs)
+            out = self.K.query_private(
+                'AddOrder', {**kwargs, 'userref': id_order}
+            )
+        except Error as e:
+            print(str(type(e)), str(e), ' error !')
+            if e in [timeout]:
+                status = self.get_status_order(id_order)
+                if status not in ['open', 'close', 'pending']:
+                    out = self.order(id_order=id_order, **kwargs)
+            elif e in [ConnectionResetError]:
+                self.K = API()
+                self.K.load_key(self.path)
+                out = self.order(id_order=id_order, **kwargs)
+            else:
+                raise ValueError('Error unknown ', type(e), e)
         return out
 
     def _set_id_order(self):
-        """ 
-        Set an identifier for an order according with the strategy 
+        """ Set an identifier for an order according with the strategy
         reference, time and optional id parameters.
 
         Returns
         -------
-        :id_order: int (signed and 32-bit)
+        id_order : int (signed and 32-bit)
             Number to link an order with strategy, time and other.
+
         """
         id_user = self._get_id_user()
-        id_order = int(str(id_user)+str(self.id_strat))
+        id_order = int(str(id_user) + str(self.id_strat))
         return id_order
 
     def _get_id_user(self):
-        """
-        Get id user in function of a time starting point (in minutes). Time 
-        starting point restart from 0 every almost 3 years. 
+        """ Get id user in function of a time starting point (in minutes).
+        Time starting point restart from 0 every almost 3 years.
 
         Returns
         -------
-        :id_user: int (signed and less than 32-bit)
+        id_user : int (signed and less than 32-bit)
             Number to link an order with a time.
+
         """
         try:
             f = open('id_timestamp', 'rb')
@@ -124,30 +150,60 @@ class SetOrder:
         except FileNotFoundError:
             TS = 0
         now = int(time.time())
-        id_user = (now - TS) // 60 
+        id_user = (now - TS) // 60
         if id_user > self.id_max // 1000:
             f = open('id_timestamp', 'wb')
             Pickler(f).dump(now)
             f.close()
             id_user = self._get_id_user()
         return id_user
-    
-    def decode_id_order(self, id_order):
-        """
-        From an id order decode the time (in minute) and the strategy 
-        corresponding to the order.
-        
+
+    def set_order(self, signal, **kwargs):
+        """ Set parameters to order.
+
         Parameters
         ----------
-        :id_order: int (signed and 32-bit)
+        signal : int, {1 : long, 0 : None, -1 : short}
+            Signal of strategy.
+        kwargs : dict
+            Parameters for ordering.
+
+        Returns
+        -------
+        out : list
+            Orders answere.
+
+        """
+        if signal < 0:
+            kwargs['type'] = 'sell'
+        elif signal > 0:
+            kwargs['type'] = 'buy'
+        else:
+            pass
+        out = []
+        while self.current_pos != signal:
+            # TODO : Set short position with leverage !
+            # TODO : Cut short position with leverage !
+            out += [self.order(**kwargs)]
+            self.current_pos - signal
+        return out
+
+    def decode_id_order(self, id_order):
+        """ From an id order decode the time (in minute) and the strategy
+        corresponding to the order.
+
+        Parameters
+        ----------
+        id_order : int (signed and 32-bit)
             Number to link an order with strategy, time and other.
 
         Returns
         -------
-        :TS: int (signed)
+        TS : int (signed)
             Timestamp at the passing order.
-        :id_strat: int (unsigned and 32-bit)
+        id_strat : int (unsigned and 32-bit)
             Number to link an order with a strategy.
+
         """
         id_user = id_order // 1000
         id_strat = id_order % 1000
@@ -155,3 +211,33 @@ class SetOrder:
         TS = Unpickler(f).load() + id_user * 60
         f.close()
         return TS, id_strat
+
+    def get_status_order(self, id_order):
+        """ Return status of a specified id order.
+
+        Parameters
+        ----------
+        id_order : int (signed and 32-bit)
+            Number to link an order with strategy, time and other.
+
+        Returns
+        -------
+        str
+            Status of specified order.
+
+        """
+        try:
+            ans = self.K.query_private(
+                'QueryOrders', {'trades': True, 'userref': id_order}
+            )
+        except Error as e:
+            print(str(type(e)), str(e), ' error !')
+            if e in [timeout]:
+                return self.get_status_order(id_user)
+            elif e in [ConnectionResetError]:
+                self.K = API()
+                self.K.load_key(self.path)
+                return self.get_status_order(id_user)
+            else:
+                raise ValueError('Error unknown: ', type(e), e)
+        return ans['status']
