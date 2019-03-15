@@ -103,7 +103,7 @@ class SetOrder:
         # TODO : Append a method to verify if the volume is available.
         try:
             out = self.K.query_private(
-                'AddOrder', {**kwargs, 'userref': id_order}
+                'AddOrder', {'userref': id_order, **kwargs}
             )
         except Error as e:
             print(str(type(e)), str(e), ' error !')
@@ -179,11 +179,18 @@ class SetOrder:
         elif signal > 0:
             kwargs['type'] = 'buy'
         else:
-            pass
+            return []
         out = []
+        leverage = kwargs['leverage']
         while self.current_pos != signal:
-            # TODO : Set short position with leverage !
-            # TODO : Cut short position with leverage !
+            if self.current_pos < 0 and signal > 0:
+                # Leverage to cut short position with Kraken /!
+                kwargs['leverage'] = 2 if leverage is None else leverage + 1
+            elif self.current_pos <= 0 and signal < 0:
+                # Leverage to set short position with Kraken /!
+                kwargs['leverage'] = 2 if leverage is None else leverage + 1
+            else: 
+                kwargs['leverage'] = leverage
             out += [self.order(**kwargs)]
             self.current_pos - signal
         return out
