@@ -81,7 +81,7 @@ class SetOrder:
         else:
             raise ValueError(str(exchange) + ' not allowed.')
 
-    def order(self, id_order=None, **kwargs):
+    def order(self, **kwargs):
         """ Request an order following defined parameters.
 
         /! To verify ConnectionResetError exception. /!
@@ -98,10 +98,10 @@ class SetOrder:
             Output of the request.
 
         """
-        if id_order is None:
-            id_order = self._set_id_order()
+        id_order = self._set_id_order()
         # TODO : Append a method to verify if the volume is available.
         try:
+            # Send order
             out = self.K.query_private(
                 'AddOrder', {'userref': id_order, **kwargs}
             )
@@ -110,13 +110,17 @@ class SetOrder:
             if e in [timeout]:
                 status = self.get_status_order(id_order)
                 if status not in ['open', 'close', 'pending']:
-                    out = self.order(id_order=id_order, **kwargs)
+                    out = self.order(**kwargs)
             elif e in [ConnectionResetError]:
                 self.K = API()
                 self.K.load_key(self.path)
-                out = self.order(id_order=id_order, **kwargs)
+                out = self.order(**kwargs)
             else:
                 raise ValueError('Error unknown ', type(e), e)
+        # Check if order is ordered correctly
+        status = self.get_status_order(id_order)
+        if status not in ['open', 'close', 'pending']:
+            out = self.order(**kwargs)
         return out
 
     def _set_id_order(self):
@@ -181,18 +185,26 @@ class SetOrder:
         else:
             return []
         out = []
-        leverage = kwargs['leverage']
+        leverage, volume = kwargs['leverage'], kwargs['volume']
         while self.current_pos != signal:
             if self.current_pos < 0 and signal > 0:
-                # Leverage to cut short position with Kraken /!
+                # Leverage and volume to cut short position with Kraken /!
                 kwargs['leverage'] = 2 if leverage is None else leverage + 1
+                kwargs['volume'] = volume * np.abs(self.current_pos)
             elif self.current_pos <= 0 and signal < 0:
-                # Leverage to set short position with Kraken /!
+                # Leverage and volume to set short position with Kraken /!
                 kwargs['leverage'] = 2 if leverage is None else leverage + 1
-            else: 
+                kwargs['volume'] = volume * np.abs(signal)
+            elif self.current_pos > 0 and signal < 0:
+                # Leverage and volume to cut long position with Kraken /!
+                kwargs['volume'] = volume * np.abs(self.current_pos) 
+                kwargs['leverage'] = leverage
+            else:
+                # Leverage and volume to set long position with kraken
+                kwargs['volume'] = volume * np.abs(signal) 
                 kwargs['leverage'] = leverage
             out += [self.order(**kwargs)]
-            self.current_pos - signal
+            self.current_pos -= signal
         return out
 
     def decode_id_order(self, id_order):
