@@ -8,13 +8,31 @@ import sys
 # Import external packages
 
 # Import internal packages
-from .manager import StrategyManager, DataManager, OrderManager
-from .tools.utils import load_config_params
+from manager import StrategyManager
+from data_requests import DataManager
+from tools.utils import load_config_params
+from orders_manager import SetOrder
+from results_manager import print_results
 
 __all__ = ['run_bot']
 
 
-def run_bot(strat_id, path='../strategies/'):
+def check(*args, **kwargs):
+    """ Helper to debug, it prints args and kwargs and ask you if you want
+    to quit.
+
+    """
+    for arg in args:
+        print(arg)
+    for key, arg in kwargs.items():
+        print('{} : {}'.format(str(key), str(arg)))
+    a = input('press q to quit else continue')
+    if a.lower() == 'q':
+        sys.exit()
+    return 0
+
+
+def run_bot(id_strat, path='strategy_manager/strategies/'):
     """ Run a bot for specified configuration file.
 
     Parameters
@@ -27,49 +45,64 @@ def run_bot(strat_id, path='../strategies/'):
     """
     if path[-1] != '/':
         path += '/'
-    data_cfg = load_config_params(path + strat_id + '.cfg')
+    check(path)
+    data_cfg = load_config_params(path + id_strat + '.cfg')
+    check(**data_cfg)
 
     # Get parameters for strategy manager object
     strat_manager_params = data_cfg['strat_manager_instance']
-    # Get parameters for strategy function
-    strat_args = data_cfg['strategy_instance']['args_params']
-    strat_kwargs = data_cfg['strategy_instance']['kwargs_params']
-    # Init strategy manager
+    # Set strategy manager configuration
     strat_manager = StrategyManager(**strat_manager_params)
+    check(strat_manager)
 
     # Get parameters for data requests
     data_requests_params = data_cfg['get_data_instance']
-    data_requests_args = data_requests_params.pop('args_params')
-    data_requests_kwargs = data_requests_params.pop('kwargs_params')
-    # TODO : Set or verify data requests manager configuration
+    # Set data requests manager configuration
     data_manager = DataManager(**data_requests_params)
+    check(data_manager)
 
     # Get parameters for pre order configuration
     pre_order_params = data_cfg['pre_order_instance']
     # Set pre order configuration
-    order_manager = OrderManager(**pre_order_params)
+    order_manager = SetOrder(**pre_order_params)
+    check(order_manager)
 
     # Get order parameters
     order_params = data_cfg['order_instance']
-    # order_args = order_params.pop('args_params')
-    # order_kwargs = order_params.pop('kwargs_params')
+
+    # Get parameters for strategy function
+    strat_args = data_cfg['strategy_instance']['args_params']
+    strat_kwargs = data_cfg['strategy_instance']['kwargs_params']
 
     # The bot start to run
     try:
         for t in strat_manager(*strat_args, **strat_kwargs):
-            print(r'${}^{th}$ iteration'.format(t))
-            # TODO : request data_base
-            data_manager = data_manager.get_data(
-                *data_requests_args, **data_requests_kwargs
-            )
-            # TODO : clean data or data is already cleaned ?
-            # TODO : compute signal
-            signal = 0
+            print('{}th iteration'.format(t))
+            # Get data from data base
+            data = data_manager.get_data()
+            check(data)
+
+            # Compute and get signal' strategy
+            signal = strat_manager.get_signal(data)
+            check(signal)
+
             # Set order
             ans = order_manager.set_order(signal, **order_params)
-            # ans = order_manager.set_order(*order_args, **order_params)
+            check(ans)
+
+            # Check to verify and debug
+            id_order = ans['userref']
+            status = order_manager.get_status_order(id_order)
+            check(status)
+
             # TODO : compute, print and save some statistics
-            print(ans)
+            print_results(ans)
+
+            # Get current pos
+            current_pos = order_manager.current_pos
+            print(current_pos)
+            # TODO : check if current position is ok
+            pass
         else:
             print('All is good')
 
@@ -78,7 +111,7 @@ def run_bot(strat_id, path='../strategies/'):
         time_str = time.strftime('%y-%m-%d %H:%M:%S', time.gmtime(time.time()))
         txt = '\nUNKNOWN ERROR\n'
         txt += 'In {} script '.format(sys.argv[0])
-        txt += 'for {} strat id '.format(strat_id)
+        txt += 'for {} strat id '.format(id_strat)
         txt += 'at {} UTC, '.format(time_str)
         txt += 'the following error occurs:\n'
         txt += '{}: {}\n'.format(str(type(error)), str(error))
@@ -88,8 +121,11 @@ def run_bot(strat_id, path='../strategies/'):
 
     finally:
         # TODO : ending with save some statistics and others
-        print('\nBot stoped\nSee you soon')
+        # TODO : save current position
+        print('\nBot stopped. See you soon !\n')
 
 
 if __name__ == '__main__':
+    # print(sys.argv[2])
+    # sys.exit()
     run_bot(sys.argv[1])
