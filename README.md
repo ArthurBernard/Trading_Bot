@@ -8,27 +8,25 @@ Initially `Strategy Manager` can be used with the Kraken crypto-currency platfor
 
 ## Installation
 
-Clone the repository and at the root of the folder:
+At the root of a folder, clone the repository and install it with `pip`:
 
-> $ pip install strategy_manager   
+> $ git clone https://github.com/ArthurBernard/Strategy_Manager.git
+> $ pip install -e strategy_manager   
 
 With linux you can use crontab to schedule automatic exectution.   
 
 Exemple:   
 > $ crontab -e   
->> 0 0 * * * python running_strat_manager.py  
+>> 0 0 * * * python3 /path/Strategies_Manager/strategies_manager/main.py   
 
 ## TODO 
 
 By order of priority:
 
 - `strategy_manager.py`:   
-    - To finish method: Special callable method (set signal strategy);   
-    - To create method: Iso-volatility (apply a coefficient following the volatility of underlying);   
-    - To create method: Special iterative method (loop following a timestep);
-    - To create method: Load data method (use LoaderData object);
-    - To create method: other methods ?;
-- `bot.sh` shell script to run and verify that all strategies run fine.
+    - Unit tests.
+- `bot_download_data.sh` shell to request data and verify that it runs fine.
+- `bot_strategies.sh` shell script to run and verify that all strategies run fine.
 - `bot_manager.sh` shell script to run and verify that all bots run fine. 
 - `data_requests.py`:
     - To create method: Differents kind of requests; 
@@ -39,9 +37,7 @@ By order of priority:
     - To create method: Load data;
     - To create method: Get ready data;
 - `orders_manager.py`:
-    - To finish method: Order;
     - To create method: Set history orders;
-    - To create method: Get pending orders;
     - To create method: Get available funds;
     - To create method: Verify integrity of new orders;
     - To create method: (future) split orders for a better scalability;
