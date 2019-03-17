@@ -3,22 +3,14 @@
 
 # Import built-in packages
 import time
+import importlib
 
 # Import external packages
 import fynance as fy
 
 # Import local packages
-from .data_requests import DataRequests, data_base_requests
 
 __all__ = ['StrategyManager']
-
-"""
-TODO list:
-    - Create a class strategy manager (or a bot object).
-    - Init parameters: underlying, strategy function, step time, value allow
-    to this strategy.
-    - Methods: ... ?
-"""
 
 
 class StrategyManager:
@@ -26,49 +18,69 @@ class StrategyManager:
 
     Methods
     -------
-    get_data : TODO
-    get_signal : TODO
-    set_order : TODO
-
-    tofinish: - Init;
-              - Call;
-              - Isovol;
+    get_signal(data)
+        Computes and returns signal' strategy.
+    __call__(*args, **kwargs)
+        Set parameters to pass into function' strategy.
+    set_iso_vol(series, target_vol=0.2, leverage=1., period=252, half_life=11)
+        Computes and returns iso-volatility coefficient.
 
     Attributes
     ----------
     frequency : int
         Number of seconds between two samples.
-    underlying : str or list ?
+    underlying : str
         Name of the underlying or list of data needed.
-    strat_name : function ? str ? callable ?
-        strat_name function.
+    _get_signal : function
+        Function to get signal' strategy.
 
     """
-    def __init__(self, frequency, underlying, strat_name, STOP=None):
+    def __init__(self, frequency, underlying, script_name, STOP=None,
+                 iso_volatility=True):
         """
         Parameters
         ----------
         frequency : int
             Number of seconds between two samples.
-        underlying : str or list ?
+        underlying : str
             Name of the underlying or list of data needed.
-        strat_name : function ? str ? callable ?
-            strat_name function.
+        script_name : str
+            Name of script to load function strategy (named `get_signal`).
         STOP : int, optional
-            Number of iteration before stoping, if `None` iteration will stop
-            every 24 hours. Default is None.
+            Number of iteration before stoping, if `None` iteration will
+            stop every 24 hours. Default is `None`.
+        iso_volatility : bool, optional
+            If true apply a coefficient of money management computed from
+            underlying volatility. Default is `True`.
 
         """
+        # strat = __import__(script_name, fromlist=['strategies'])
+        strat = importlib.import_module('strategy_manager.strategies.' + script_name)
+        print(type(strat))
+        print(strat)
+        self.get_signal = strat.get_signal
         self.frequency = frequency
         self.underlying = underlying
-        self.strat_name = strat_name
         if STOP is None:
             self.STOP = 86400 // frequency
         else:
             self.STOP = STOP
+        self.iso_vol = iso_volatility
 
     def __call__(self, *args, **kwargs):
         """ Set parameters of strategy.
+
+        Parameters
+        ----------
+        args : tuple, optional
+            Any arguments to pass into function' strategy.
+        kwargs : dict, optionl
+            Any keyword arguments to pass into function' strategy.
+
+        Returns
+        -------
+        StrategyManager
+            Object to manage strategy computations.
 
         """
         self.args = args
@@ -84,7 +96,7 @@ class StrategyManager:
         return self
 
     def __next__(self):
-        """ Iterative method """
+        """ Iterative method. """
         t = self.t
         if t >= self.STOP:
             raise StopIteration
@@ -92,67 +104,60 @@ class StrategyManager:
         # Sleep until ready
         if self.next > self.TS:
             time.sleep(self.next - self.TS)
-        # Update data
-        # TODO : get_data
-        # Compute signal
-        # TODO : get_signal
-        # self.compute_signal()
-        # Execute order
-        # TODO : set_order
         self.next += self.frequency
         self.t += 1
         return t
 
-    def set_data(self, data):
-        """ """
-        # TODO : Set data, something like that
-        self.data.append(data)
-        return self
+    def get_signal(self, data):
+        """ Function to compute signal.
 
-    def get_signal(self):
-        """
-        """
-        # TODO
-        return signal
+        Parameters
+        ----------
+        data : pandas.DataFrame
+            Data to compute signal' strategy.
 
-    def set_order(self):
-        """
-        """
-        # TODO
-        return order
-
-    def compute_signal(self):
-        """ Compute signal strategy.
+        Returns
+        -------
+        signal : foat
+            Signal' strategy between -1 and 1.
 
         """
-        pass
+        if self.iso_vol:
+            if 'c' in data.columns:
+                series = data.loc[:, 'c']
+            elif 'o' in data.columns:
+                series = data.loc[:, 'o']
+            else:
+                series = data.iloc[:, 0]
+            iv = self.set_iso_vol(series.values, *self.args, **self.kwargs)
+        signal = self._get_signal(data, *self.args, **self.kwargs)
+        return signal * iv
 
-    def _isovol(self):
-        """ Iso-volatility method
+    def set_iso_vol(self, series, *args, target_vol=0.20, leverage=1.,
+                    period=252, half_life=11, **kwargs):
+        """ Compute iso-volatility coefficient such that to target a
+        specified volatility of underlying.
+
+        Parameters
+        ----------
+        series : np.ndarray[ndim=1, dtype=np.float64]
+            Series of prices of underlying.
+        target_vol : float, optional
+            Volatility to target, default is `0.20` (20 %).
+        leverage : float, optional
+            Maximum of the iso-volatility coefficient, default is `1.`.
+        period : int, optional
+            Number of trading day per year, default is `252`.
+        half_life : int, optional
+            Number of day to compute exponential volatility, default is `11`.
+
+        Returns
+        -------
+        iv_coef : float
+            Iso-volatility coefficient between `0` and `leverage`.
 
         """
-        fy.iso_vol()
-        pass
-
-
-class DataManager:
-    """ Description.
-
-    """
-    def __init__(self, assets, ohlcv, frequency=60, path='data_base/',
-                 request=False, url=''):
-        """ Initialize parameters """
-        self.assets = assets
-        self.ohlcv = ohlcv
-        self.freq = frequency
-        self.request = request
-        self.url = url
-
-    def get_data(self, *args, **kwargs):
-        """ Get data """
-        if self.request:
-            return DataRequests(self.url).get_data(*args, **kwargs)
-        else:
-            return data_base_requests(
-                self.assets, self.ohlcv, self.freq, *args, **kwargs
-            )
+        period = int(period * 86400 / self.frequency)
+        iv_series = fy.iso_vol(series, target_vol=target_vol, leverage=leverage,
+                               period=period, half_life=half_life)
+        return iv_series[-1]
