@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# coding: utf-8 
+# coding: utf-8
 
 # Built-in packages
 import time
@@ -13,17 +13,18 @@ import pytest
 from strategy_manager.manager import StrategyManager
 from strategy_manager.tools.utils import load_config_params
 
+
 @pytest.fixture()
 def set_variables():
     # Get configuration parameters
     data_cfg = load_config_params('./strategies/example_function.cfg')
     return data_cfg
-    
+
 
 def test_StrategyManager(set_variables):
     # Set parameters
     data_cfg = set_variables
-    
+
     # Set StrategyManager parameters
     start_manager_parameters = data_cfg['strat_manager_instance']
     underlying = data_cfg['strat_manager_instance']['underlying']
@@ -60,8 +61,8 @@ def test_StrategyManager(set_variables):
     data_requests_kwargs = data_requests_params.pop('kwargs_params')
     # Set data requests configuration
     sm.set_data_loader(
-        *data_requests_args, 
-        **data_requests_params, 
+        *data_requests_args,
+        **data_requests_params,
         **data_requests_kwargs
     )
 
