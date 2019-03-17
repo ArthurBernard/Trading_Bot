@@ -11,7 +11,9 @@ from os import listdir
 # Import external packages
 import requests
 
-__all__ = ['DataRequests', 'data_base_requests']
+__all__ = [
+    'DataRequests', 'data_base_requests', 'aggregate_data', 'DataManager'
+]
 
 
 class DataRequests:
@@ -29,7 +31,7 @@ class DataRequests:
     stop_step : int
         Max number of request.
     last_ts : int
-        Timestamp of last observation if exist else 0.
+        Timestamp of last observation if exist else `0`.
     t : int
         The `t` th request.
 
@@ -44,9 +46,9 @@ class DataRequests:
         public_api_url : str
             Url of an exchange public API REST.
         stop_step : int, optional
-            Max number of request, default is 1.
+            Max number of request, default is `1`.
         last_ts : int, optional
-            Timestamp of last observation if exist else 0. Default is 0.
+            Timestamp of last observation if exist else `0`. Default is `0`.
 
         """
         self.url = public_api_url
@@ -271,6 +273,79 @@ def aggregate_data(df, win):
         elif c == 'v':
             df.loc[::-1, c] = df.loc[::-1, c].rolling(win, min_periods=0).sum()
     return df
+
+
+class DataManager:
+    """ Object to manage requests to data base.
+
+    Attributes
+    ----------
+    assets : str or list of str
+        Id(s) of the asset(s) to requests.
+    ohlcv : str or list of str
+        Kind of price data to requests, following are available 'o' to open,
+        'h' to high, 'l' to low, 'c' to close and 'v' to volume.
+    frequency : int, optional
+        Number of second between two data observations (> 60).
+    path : str
+        Database's path to load data.
+    n_min_obs : int, optional
+        Minimal number of historic data to compute signal, default is 1.
+
+    Methods
+    -------
+    get_data(start=None, last=None)
+        Request specified data in the data base.
+
+    """
+
+    def __init__(self, assets, ohlcv, frequency=60, path='data_base/',
+                 n_min_obs=1):
+        """ Set the data manager class.
+
+        Parameters
+        ----------
+        assets : str or list of str
+            Id(s) of the asset(s) to requests.
+        ohlcv : str or list of str
+            Kind of price data to requests, following are available 'o' to
+            open, 'h' to high, 'l' to low, 'c' to close and 'v' to volume.
+        frequency : int, optional
+            Number of second between two data observations (> 60).
+        path : str
+            Database's path to load data.
+        n_min_obs : int, optional
+            Minimal number of historic data to compute signal, default is 1.
+
+        """
+        self.assets = assets
+        self.ohlcv = ohlcv
+        self.frequency = frequency
+        self.path = path
+        self.n_min_obs = n_min_obs
+
+    def get_data(self, start=None, last=None):
+        """ Get data from data base.
+
+        Parameters
+        ----------
+        start : int, optional
+            First observation to request, default is `None`.
+        last : int, optional
+            Last observation to request, default is `None`.
+
+        Returns
+        -------
+        data : pd.DataFrame
+            A data frame with the data requested.
+
+        """
+        if last is None:
+            last = int(time.time() // self.frequency)
+        if start is None:
+            start = last - self.frequency * (self.n_min_obs + 1)
+        return data_base_requests(self.assets, self.ohlcv, self.frequency,
+                                  start=start, end=last, path=self.path)
 
 
 if __name__ == '__main__':
