@@ -12,9 +12,7 @@ __all__ = ['SetOrder']
 
 """
 TODO list:
-    - Finish the method 'order'
     - New method : set history orders
-    - New method : get pending orders
     - New method : get available funds
     - New method : verify integrity of new orders
     - New method : (future) split orders for a better scalability
@@ -38,7 +36,8 @@ class SetOrder:
     decode_id_order(id_order)
         Takes an id order and returns the corresponding id strategy and
         timestamp.
-    # TODO : check open and pending orders/position
+    get_status_order(id_order)
+        Return status of a specified order or position.
     # TODO : cancel orders/position if too far of mid
     # TODO : replace limit order/position
     # TODO : market order/position if time is over
@@ -51,12 +50,15 @@ class SetOrder:
         Number max for an id_order (32-bit).
     path : str
         Path where API key and secret are saved.
+    K : API
+        Object to query orders on Kraken exchange.
+    current_pos : float
+        The currently position, {-1: short, 0: neutral, 1: long}.
 
     """
 
-    def __init__(self, id_strat, path, current_pos=0, exchange='kraken'):
-        """
-        Set the order class.
+    def __init__(self, id_strat, path_log, current_pos=0, exchange='kraken'):
+        """ Set the order class.
 
         Parameters
         ----------
@@ -72,12 +74,12 @@ class SetOrder:
         """
         self.id_strat = id_strat
         self.id_max = 2147483647
-        self.path = path
+        self.path = path_log
         self.current_pos = current_pos
         if exchange.lower() == 'kraken':
             # Use krakenex API while I am lazy to do myself
             self.K = API()
-            self.K.load_key(path)
+            self.K.load_key(path_log)
         else:
             raise ValueError(str(exchange) + ' not allowed.')
 
@@ -191,18 +193,22 @@ class SetOrder:
                 # Leverage and volume to cut short position with Kraken /!
                 kwargs['leverage'] = 2 if leverage is None else leverage + 1
                 kwargs['volume'] = volume * np.abs(self.current_pos)
+                pos_taken = self.current_pos * np.sign(signal)
             elif self.current_pos <= 0 and signal < 0:
                 # Leverage and volume to set short position with Kraken /!
                 kwargs['leverage'] = 2 if leverage is None else leverage + 1
                 kwargs['volume'] = volume * np.abs(signal)
+                pos_taken = signal
             elif self.current_pos > 0 and signal < 0:
                 # Leverage and volume to cut long position with Kraken /!
-                kwargs['volume'] = volume * np.abs(self.current_pos) 
+                kwargs['volume'] = volume * np.abs(self.current_pos)
                 kwargs['leverage'] = leverage
+                pos_taken = self.current_pos * np.sign(signal)
             else:
                 # Leverage and volume to set long position with kraken
-                kwargs['volume'] = volume * np.abs(signal) 
+                kwargs['volume'] = volume * np.abs(signal)
                 kwargs['leverage'] = leverage
+                pos_taken = signal
             out += [self.order(**kwargs)]
             self.current_pos -= signal
         return out
