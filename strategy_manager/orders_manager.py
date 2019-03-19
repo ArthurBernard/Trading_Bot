@@ -7,6 +7,7 @@ import time
 
 # Import external package(s)
 from krakenex import API
+import numpy as np
 
 __all__ = ['SetOrder']
 
@@ -101,12 +102,15 @@ class SetOrder:
 
         """
         id_order = self._set_id_order()
+        if kwargs['leverage'] == 1:
+            kwargs['leverage'] = None
         # TODO : Append a method to verify if the volume is available.
         try:
             # Send order
             out = self.K.query_private(
                 'AddOrder', {'userref': id_order, **kwargs}
             )
+            print(out)
         except Error as e:
             print(str(type(e)), str(e), ' error !')
             if e in [timeout]:
@@ -121,6 +125,7 @@ class SetOrder:
                 raise ValueError('Error unknown ', type(e), e)
         # Check if order is ordered correctly
         status = self.get_status_order(id_order)
+        print(status)
         if status not in ['open', 'close', 'pending']:
             out = self.order(**kwargs)
         return out
@@ -265,4 +270,5 @@ class SetOrder:
                 return self.get_status_order(id_user)
             else:
                 raise ValueError('Error unknown: ', type(e), e)
+        print(ans)
         return ans['status']

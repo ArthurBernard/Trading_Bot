@@ -58,7 +58,7 @@ class StrategyManager:
         strat = importlib.import_module('strategy_manager.strategies.' + script_name)
         print(type(strat))
         print(strat)
-        self.get_signal = strat.get_signal
+        self._get_signal = strat.get_signal
         self.frequency = frequency
         self.underlying = underlying
         if STOP is None:
