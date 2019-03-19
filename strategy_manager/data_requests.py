@@ -342,6 +342,8 @@ class DataManager:
         """
         if last is None:
             last = int(time.time() // self.frequency * self.frequency)
+        else:
+            last += self.frequency  # 60 is may be enought ?
         if start is None:
             start = last - self.frequency * (self.n_min_obs + 1)
         return data_base_requests(self.assets, self.ohlcv, self.frequency,
