@@ -57,6 +57,14 @@ def run_bot(id_strat, path='strategy_manager/strategies/'):
 
     # Get parameters for data requests
     data_requests_params = data_cfg['get_data_instance']
+    if 'start' in data_requests_params.keys():
+        start = data_requests_params.pop('start')
+    else:
+        start = None
+    if 'last' in data_requests_params.keys():
+        last = data_requests_params.pop('last')
+    else:
+        last = None
     # Set data requests manager configuration
     data_manager = DataManager(**data_requests_params)
     check(data_manager)
@@ -79,15 +87,18 @@ def run_bot(id_strat, path='strategy_manager/strategies/'):
         for t in strat_manager(*strat_args, **strat_kwargs):
             print('{}th iteration'.format(t))
             # Get data from data base
-            data = data_manager.get_data()
+            data = data_manager.get_data(start=start, last=last)
             check(data)
 
             # Compute and get signal' strategy
             signal = strat_manager.get_signal(data)
             check(signal)
 
+            # Get close price
+            # TODO : get closed price of the underlying
+
             # Set order
-            ans = order_manager.set_order(signal, **order_params)
+            ans = order_manager.set_order(signal, price=price, **order_params)
             check(ans)
 
             # Check to verify and debug
@@ -116,7 +127,7 @@ def run_bot(id_strat, path='strategy_manager/strategies/'):
         txt += 'the following error occurs:\n'
         txt += '{}: {}\n'.format(str(type(error)), str(error))
         print(txt)
-        with open('errors/{}.log'.format(sys.argv[0]), 'a') as f:
+        with open('{}.log'.format(sys.argv[0][:-3]), 'a') as f:
             f.write(txt)
 
     finally:
