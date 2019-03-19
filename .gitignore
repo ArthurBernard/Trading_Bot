@@ -5,6 +5,7 @@ strategies/momentum_ethusd_7200.py
 *.so
 *.html
 *.ipynb_checkpoints
+*.log
 
 # Folders to ignore
 *.egg-info/
