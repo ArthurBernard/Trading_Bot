@@ -37,6 +37,7 @@ class DataRequests:
 
 
     """
+
     def __init__(self, public_api_url, stop_step=1, last_ts=0):
         """ Set kind of request, time step in second between two requests,
         and if necessary from when (timestamp).
@@ -346,8 +347,10 @@ class DataManager:
             last += self.frequency  # 60 is may be enought ?
         if start is None:
             start = last - self.frequency * (self.n_min_obs + 1)
-        return data_base_requests(self.assets, self.ohlcv, self.frequency,
-                                  start=start, end=last, path=self.path)
+        return data_base_requests(
+            self.assets.copy(), self.ohlcv, self.frequency,
+            start=start, end=last, path=self.path
+        )
 
 
 if __name__ == '__main__':
