@@ -91,20 +91,19 @@ def run_bot(id_strat, path='strategy_manager/strategies/'):
             check(data)
 
             # Compute and get signal' strategy
-            signal = strat_manager.get_signal(data)
-            check(signal)
-
-            # Get close price
-            # TODO : get closed price of the underlying
+            s, p, v = strat_manager.get_order_params(data)
+            check(s, p, v)
 
             # Set order
-            ans = order_manager.set_order(signal, price=price, **order_params)
+            ans = order_manager.set_order(s, price=p, volume=v, **order_params)
             check(ans)
 
             # Check to verify and debug
-            id_order = ans['userref']
-            status = order_manager.get_status_order(id_order)
-            check(status)
+            if not order_params['validate']:
+                for res in ans:
+                    id_order = res['userref']
+                    status = order_manager.get_status_order(id_order)
+                    check(status)
 
             # TODO : compute, print and save some statistics
             print_results(ans)
