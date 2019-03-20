@@ -6,7 +6,6 @@ import time
 import importlib
 
 # Import external packages
-import fynance as fy
 
 # Import local packages
 
@@ -35,6 +34,7 @@ class StrategyManager:
         Function to get signal' strategy.
 
     """
+
     def __init__(self, frequency, underlying, script_name, STOP=None,
                  iso_volatility=True):
         """
@@ -55,10 +55,10 @@ class StrategyManager:
 
         """
         # strat = __import__(script_name, fromlist=['strategies'])
-        strat = importlib.import_module('strategy_manager.strategies.' + script_name)
-        print(type(strat))
-        print(strat)
-        self._get_signal = strat.get_signal
+        strat = importlib.import_module(
+            'strategy_manager.strategies.' + script_name
+        )
+        self._get_order_params = strat.get_order_params
         self.frequency = frequency
         self.underlying = underlying
         if STOP is None:
@@ -108,8 +108,8 @@ class StrategyManager:
         self.t += 1
         return t
 
-    def get_signal(self, data):
-        """ Function to compute signal.
+    def get_order_params(self, data):
+        """ Function to compute signal, price and volume.
 
         Parameters
         ----------
@@ -118,46 +118,8 @@ class StrategyManager:
 
         Returns
         -------
-        signal : foat
-            Signal' strategy between -1 and 1.
+        signal, price, volume : foat
+            Signal, price and volume strategy.
 
         """
-        if self.iso_vol:
-            if 'c' in data.columns:
-                series = data.loc[:, 'c']
-            elif 'o' in data.columns:
-                series = data.loc[:, 'o']
-            else:
-                series = data.iloc[:, 0]
-            iv = self.set_iso_vol(series.values, *self.args, **self.kwargs)
-        signal = self._get_signal(data, *self.args, **self.kwargs)
-        return signal * iv
-
-    def set_iso_vol(self, series, *args, target_vol=0.20, leverage=1.,
-                    period=252, half_life=11, **kwargs):
-        """ Compute iso-volatility coefficient such that to target a
-        specified volatility of underlying.
-
-        Parameters
-        ----------
-        series : np.ndarray[ndim=1, dtype=np.float64]
-            Series of prices of underlying.
-        target_vol : float, optional
-            Volatility to target, default is `0.20` (20 %).
-        leverage : float, optional
-            Maximum of the iso-volatility coefficient, default is `1.`.
-        period : int, optional
-            Number of trading day per year, default is `252`.
-        half_life : int, optional
-            Number of day to compute exponential volatility, default is `11`.
-
-        Returns
-        -------
-        iv_coef : float
-            Iso-volatility coefficient between `0` and `leverage`.
-
-        """
-        period = int(period * 86400 / self.frequency)
-        iv_series = fy.iso_vol(series, target_vol=target_vol, leverage=leverage,
-                               period=period, half_life=half_life)
-        return iv_series[-1]
+        return self._get_order_params(data, *self.args, **self.kwargs)
