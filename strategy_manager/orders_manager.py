@@ -37,7 +37,7 @@ class SetOrder:
     decode_id_order(id_order)
         Takes an id order and returns the corresponding id strategy and
         timestamp.
-    get_status_order(id_order)
+    get_query_order(id_order)
         Return status of a specified order or position.
     # TODO : cancel orders/position if too far of mid
     # TODO : replace limit order/position
@@ -110,12 +110,15 @@ class SetOrder:
             out = self.K.query_private(
                 'AddOrder', {'userref': id_order, **kwargs}
             )
+
+            # TO DEBUG
             print(out)
+
         except Error as e:
             print(str(type(e)), str(e), ' error !')
             if e in [timeout]:
-                status = self.get_status_order(id_order)
-                if status not in ['open', 'close', 'pending']:
+                query = self.get_status_order(id_order)
+                if query['status'] not in ['open', 'close', 'pending']:
                     out = self.order(**kwargs)
             elif e in [ConnectionResetError]:
                 self.K = API()
@@ -124,9 +127,14 @@ class SetOrder:
             else:
                 raise ValueError('Error unknown ', type(e), e)
         # Check if order is ordered correctly
-        status = self.get_status_order(id_order)
-        print(status)
-        if status not in ['open', 'close', 'pending']:
+        query = self.get_query_order(id_order)
+
+        # TO DEBUG
+        print(query)
+
+        if kwargs['validate']:
+            return out
+        elif query['status'] not in ['open', 'close', 'pending']:
             out = self.order(**kwargs)
         return out
 
@@ -192,30 +200,39 @@ class SetOrder:
         else:
             return []
         out = []
-        leverage, volume = kwargs['leverage'], kwargs['volume']
+        leverage = kwargs['leverage']
         while self.current_pos != signal:
-            if self.current_pos < 0 and signal > 0:
+
+            # TO DEBUG
+            print(self.current_pos)
+
+            # TODO : Debug error with signal and current position,
+            #        all possibilities are not covered.
+            if self.current_pos < 0 and signal >= 0:
                 # Leverage and volume to cut short position with Kraken /!
                 kwargs['leverage'] = 2 if leverage is None else leverage + 1
-                kwargs['volume'] = volume * np.abs(self.current_pos)
-                pos_taken = self.current_pos * np.sign(signal)
+                pos_taken = self.current_pos + signal
             elif self.current_pos <= 0 and signal < 0:
                 # Leverage and volume to set short position with Kraken /!
                 kwargs['leverage'] = 2 if leverage is None else leverage + 1
-                kwargs['volume'] = volume * np.abs(signal)
                 pos_taken = signal
-            elif self.current_pos > 0 and signal < 0:
+            elif self.current_pos > 0 and signal <= 0:
                 # Leverage and volume to cut long position with Kraken /!
-                kwargs['volume'] = volume * np.abs(self.current_pos)
                 kwargs['leverage'] = leverage
-                pos_taken = self.current_pos * np.sign(signal)
-            else:
+                pos_taken = self.current_pos + signal
+            elif self.current_pos >= 0 and signal > 0:
                 # Leverage and volume to set long position with kraken
-                kwargs['volume'] = volume * np.abs(signal)
                 kwargs['leverage'] = leverage
                 pos_taken = signal
+            else:
+                print('error with signal or current position')
+                raise Error
+
+            # TO DEBUG
+            print(pos_taken)
+
             out += [self.order(**kwargs)]
-            self.current_pos -= signal
+            self.current_pos += signal
         return out
 
     def decode_id_order(self, id_order):
@@ -242,8 +259,8 @@ class SetOrder:
         f.close()
         return TS, id_strat
 
-    def get_status_order(self, id_order):
-        """ Return status of a specified id order.
+    def get_query_order(self, id_order):
+        """ Return query order of a specified id order.
 
         Parameters
         ----------
@@ -253,7 +270,7 @@ class SetOrder:
         Returns
         -------
         str
-            Status of specified order.
+            Query of specified order.
 
         """
         try:
@@ -270,5 +287,4 @@ class SetOrder:
                 return self.get_status_order(id_user)
             else:
                 raise ValueError('Error unknown: ', type(e), e)
-        print(ans)
-        return ans['status']
+        return ans
