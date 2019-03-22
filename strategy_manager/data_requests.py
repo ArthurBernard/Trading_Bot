@@ -15,6 +15,14 @@ __all__ = [
     'DataRequests', 'data_base_requests', 'aggregate_data', 'DataManager'
 ]
 
+"""
+TODO:
+   - get ohlcv data
+   - update data base
+   - save data base
+
+"""
+
 
 class DataRequests:
     """ Class to request data from an exchange with REST public API.
