@@ -7,7 +7,7 @@ import time
 
 # Import external package(s)
 from krakenex import API
-import numpy as np
+from requests import HTTPError
 
 __all__ = ['SetOrder']
 
@@ -108,15 +108,15 @@ class SetOrder:
         try:
             # Send order
             out = self.K.query_private(
-                'AddOrder', {'userref': id_order, **kwargs}
+                'AddOrder', data={'userref': id_order, **kwargs}, timeout=30
             )
 
             # TO DEBUG
             print(out)
 
-        except Error as e:
+        except Exception as e:
             print(str(type(e)), str(e), ' error !')
-            if e in [timeout]:
+            if e in [HTTPError]:
                 query = self.get_status_order(id_order)
                 if query['status'] not in ['open', 'close', 'pending']:
                     out = self.order(**kwargs)
@@ -277,14 +277,14 @@ class SetOrder:
             ans = self.K.query_private(
                 'QueryOrders', {'trades': True, 'userref': id_order}
             )
-        except Error as e:
+        except Exception as e:
             print(str(type(e)), str(e), ' error !')
-            if e in [timeout]:
-                return self.get_status_order(id_user)
+            if e in [HTTPError]:
+                return self.get_status_order(id_order)
             elif e in [ConnectionResetError]:
                 self.K = API()
                 self.K.load_key(self.path)
-                return self.get_status_order(id_user)
+                return self.get_status_order(id_order)
             else:
                 raise ValueError('Error unknown: ', type(e), e)
         return ans
