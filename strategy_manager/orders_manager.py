@@ -193,47 +193,47 @@ class SetOrder:
             Orders answere.
 
         """
-        if signal < 0:
-            kwargs['type'] = 'sell'
-        elif signal > 0:
-            kwargs['type'] = 'buy'
-        else:
-            return []
         out = []
-        leverage = kwargs['leverage']
-        while self.current_pos != signal:
-
-            # TO DEBUG
-            print(self.current_pos)
-
-            # TODO : Debug error with signal and current position,
-            #        all possibilities are not covered.
-            if self.current_pos < 0 and signal >= 0:
-                # Leverage and volume to cut short position with Kraken /!
-                kwargs['leverage'] = 2 if leverage is None else leverage + 1
-                pos_taken = self.current_pos + signal
-            elif self.current_pos <= 0 and signal < 0:
-                # Leverage and volume to set short position with Kraken /!
-                kwargs['leverage'] = 2 if leverage is None else leverage + 1
-                pos_taken = signal
-            elif self.current_pos > 0 and signal <= 0:
-                # Leverage and volume to cut long position with Kraken /!
-                kwargs['leverage'] = leverage
-                pos_taken = self.current_pos + signal
-            elif self.current_pos >= 0 and signal > 0:
-                # Leverage and volume to set long position with kraken
-                kwargs['leverage'] = leverage
-                pos_taken = signal
-            else:
-                print('error with signal or current position')
-                raise Error
-
-            # TO DEBUG
-            print(pos_taken)
-
-            out += [self.order(**kwargs)]
-            self.current_pos += signal
+        # Don't move
+        if self.current_pos == signal:
+            return out
+        # Up move
+        elif self.current_pos <= 0 and signal >= 0:
+            kwargs['type'] = 'buy'
+            out += [self.cut_short(signal, **kwargs.copy())]
+            out += [self.set_long(signal, **kwargs)]
+        # Down move
+        elif self.current_pos >= 0 and signal <= 0:
+            kwargs['type'] = 'sell'
+            out += [self.cut_long(signal, **kwargs.copy())]
+            out += [self.set_short(signal, **kwargs)]
+        # Update current position
+        self.current_pos = signal
         return out
+
+    def cut_short(self, signal, **kwargs):
+        """ Cut short position """
+        if self.current_pos < 0:
+            leverage = kwargs.pop('leverage')
+            leverage = 2 if leverage is None else leverage + 1
+            return self.order(leverage=leverage, **kwargs)
+
+    def set_long(self, signal, **kwargs):
+        """ Set long order """
+        if signal > 0:
+            return self.order(**kwargs)
+
+    def cut_long(self, signal, **kwargs):
+        """ Cut long position """
+        if self.current_pos > 0:
+            return self.order(**kwargs)
+
+    def set_short(self, signal, **kwargs):
+        """ Set short order """
+        if signal < 0:
+            leverage = kwargs.pop('leverage')
+            leverage = 2 if leverage is None else leverage + 1
+            return self.order(leverage=leverage, **kwargs)
 
     def decode_id_order(self, id_order):
         """ From an id order decode the time (in minute) and the strategy
