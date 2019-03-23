@@ -5,7 +5,7 @@
 import json
 import time
 import sys
-from pickle import Unpickler
+from pickle import Pickler, Unpickler
 from os import listdir
 
 # Import external packages
@@ -15,7 +15,7 @@ import numpy as np
 
 __all__ = [
     'DataRequests', 'data_base_requests', 'aggregate_data', 'DataManager',
-    'set_dataframe', 'get_ohlcv', 'get_ohlcv_kraken',
+    'set_dataframe', 'get_ohlcv', 'get_ohlcv_kraken', 'save_data',
 ]
 
 """
@@ -466,6 +466,29 @@ def get_ohlcv_kraken(asset, since=None, frequency=60):
         drop=[5, 7]
     )
     return data
+
+
+def save_data(data, asset, path='data_base/'):
+    """ Save data to the specified file.
+
+    Parameters
+    ----------
+    data : pandas.DataFrame
+        Data to save.
+    asset : str
+        Asset name of data.
+    path : str, optional
+        Path to save the data file.
+
+    """
+    if path[-1] != '/':
+        path += '/'
+    day = (data.index // 86400)
+    files = range(day.min(), day.max() + 1)
+    for file in files:
+        name = time.strftime('%y-%m-%d', time.gmtime(file * 86400))
+        with open(path + asset + '/' + name + '.dat', 'wb') as f:
+            Pickler(f).dump(data.loc[data.index // 86400 == file])
 
 
 if __name__ == '__main__':
