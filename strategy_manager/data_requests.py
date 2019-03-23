@@ -13,9 +13,13 @@ import requests
 import pandas as pd
 import numpy as np
 
+# Import internal packages
+from .tools.time_tools import now
+
 __all__ = [
     'DataRequests', 'data_base_requests', 'aggregate_data', 'DataManager',
     'set_dataframe', 'get_ohlcv', 'get_ohlcv_kraken', 'save_data',
+    'update_data',
 ]
 
 """
@@ -489,6 +493,33 @@ def save_data(data, asset, path='data_base/'):
         name = time.strftime('%y-%m-%d', time.gmtime(file * 86400))
         with open(path + asset + '/' + name + '.dat', 'wb') as f:
             Pickler(f).dump(data.loc[data.index // 86400 == file])
+
+
+def update_data(exchange, asset, path='data_base/'):
+    """ Update a minutely OHLCV data base for a specified exchange and asset.
+
+    Parameters
+    ----------
+    exchange : str
+        Name of exchange to request data.
+    asset : str
+        Code name of asset to request data.
+    path : str, optional
+        Path to load and save data.
+
+    """
+    since = now(freq=86400)
+    try:
+        df = data_base_requests(asset, 'ohlcv', start=since, frequency=60)
+        since = df.index[-1]
+    except FileNotFoundError:
+        df = pd.DataFrame()
+    if exchange.lower() == 'kraken':
+        data = get_ohlcv_kraken(asset, since=since, frequency=60)
+    else:
+        raise ValueError('Unknow exchange', exchange)
+    df = df.append(data).drop_duplicates()
+    save_data(df, asset, path=path)
 
 
 if __name__ == '__main__':
