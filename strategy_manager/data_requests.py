@@ -15,7 +15,7 @@ import numpy as np
 
 __all__ = [
     'DataRequests', 'data_base_requests', 'aggregate_data', 'DataManager',
-    'set_dataframe',
+    'set_dataframe', 'get_ohlcv',
 ]
 
 """
@@ -234,6 +234,8 @@ def _data_base_requests(path, row_slice, col_slice):
     with open(path, 'rb') as f:
         df = Unpickler(f).load()
     # Return specified data
+    if isinstance(row_slice, tuple):
+        row_slice = slice(*row_slice)
     return df.loc[row_slice, col_slice]
 
 
@@ -243,7 +245,10 @@ def _set_row_slice(start, end, frequency):
     STOP = (end - start) // 86400
     while i <= STOP:
         last = (start // 86400 + 1) * 86400
-        row_slice += [range(start, min(last, end), frequency)]
+        if frequency <= 60:
+            row_slice += [(start, min(last, end))]
+        else:
+            row_slice += [range(start, min(last, end), frequency)]
         start += last
         i += 1
     return row_slice
