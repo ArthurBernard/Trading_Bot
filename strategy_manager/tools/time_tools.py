@@ -4,7 +4,7 @@
 # Import built-in packages
 import time
 
-__all__ = ['date_to_TS', 'TS_to_date']
+__all__ = ['date_to_TS', 'TS_to_date', 'now']
 
 """
 Some functions to manage date, timestamp and other time format.
