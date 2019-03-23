@@ -440,6 +440,34 @@ def get_ohlcv(exchange, pair, since=None, frequency=60):
     return data
 
 
+def get_ohlcv_kraken(asset, since=None, frequency=60):
+    """ Request OHLCV data from kraken and set as dataframe.
+
+    Parameters
+    ----------
+    asset : str
+        Code name of the asset on kraken exchange.
+    since : int, optional
+        Timestamp of the first observation to request.
+    frequency : int, optional
+        Time interval in second between to frequency, minimum is 60.
+
+    Returns
+    -------
+    data : pandas.DataFrame
+        OHLCV dataframe from kraken exchange
+
+    """
+    data = get_ohlcv('kraken', asset, since=since, frequency=frequency)
+    data = set_dataframe(
+        data['result'][asset],
+        rename={0: 'TS', 1: 'o', 2: 'h', 3: 'l', 4: 'c', 6: 'v'},
+        index='TS',
+        drop=[5, 7]
+    )
+    return data
+
+
 if __name__ == '__main__':
     import doctest
     doctest.testmod()
