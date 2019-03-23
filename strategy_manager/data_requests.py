@@ -15,7 +15,7 @@ import numpy as np
 
 __all__ = [
     'DataRequests', 'data_base_requests', 'aggregate_data', 'DataManager',
-    'set_dataframe', 'get_ohlcv',
+    'set_dataframe', 'get_ohlcv', 'get_ohlcv_kraken',
 ]
 
 """
