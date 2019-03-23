@@ -10,14 +10,16 @@ from os import listdir
 
 # Import external packages
 import requests
+import pandas as pd
+import numpy as np
 
 __all__ = [
-    'DataRequests', 'data_base_requests', 'aggregate_data', 'DataManager'
+    'DataRequests', 'data_base_requests', 'aggregate_data', 'DataManager',
+    'set_dataframe',
 ]
 
 """
 TODO:
-   - get ohlcv data
    - update data base
    - save data base
 
@@ -359,6 +361,78 @@ class DataManager:
             self.assets.copy(), self.ohlcv, self.frequency,
             start=start, end=last, path=self.path
         )
+
+
+def set_dataframe(data, rename={}, index=None, drop=None):
+    """ Set raw data to data frame.
+
+    Parameters
+    ----------
+    data : list of list
+        Raw data.
+    rename : dict
+        Keys are original column names and values are the new names.
+    index : str
+        If index is not `None` set index with `index` column name.
+    drop : str or list
+        Columns to drop.
+
+    Returns
+    -------
+    df : pandas.DataFrame
+        A dataframe.
+
+    Examples
+    --------
+    >>> data = [[0, 10, 12], [1, 7, 12], [2, 9, 12]]
+    >>> set_dataframe(
+            data, rename={0: 'index', 1: 'price'}, index='index', drop=2
+        )
+           price
+    index       
+    0       10.0
+    1        7.0
+    2        9.0
+
+    """
+    df = pd.DataFrame(np.array(data, dtype=np.float64))
+    df.rename(columns=rename, inplace=True)
+    if index is not None:
+        df.set_index(index, inplace=True)
+        df.index = df.index.astype(int)
+    if drop is not None:
+        df.drop(columns=drop, inplace=True)
+    return df
+
+
+def get_ohlcv(exchange, pair, since=None, frequency=60):
+    """ Requests ohlcv data from a specified exchange.
+
+    Parameters
+    ----------
+    exchange : str
+        Name of the exchange to request ohlcv data. Currently only kraken
+        exchange allowed.
+    pair : str
+        Exchange's code of the pair requested.
+    since : int, optional
+        Timestamp of the first observation to request.
+    frequency : int, optional
+        Time interval in second between to frequency, minimum is 60.
+
+    Returns
+    -------
+    data : dict
+        Raw data.
+
+    """
+    if exchange.lower() == 'kraken':
+        data = DataRequests('https://api.kraken.com/0/public/').get_data(
+            'OHLC', pair=pair, interval=int(frequency / 60), since=since
+        )
+    else:
+        raise ValueError('Unknow exchange: ', exchange)
+    return data
 
 
 if __name__ == '__main__':
