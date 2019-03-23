@@ -13,18 +13,40 @@ TODO:
     - Finish date_to_TS and TS_to_date functions
 """
 
-def date_to_TS(date, format='%d-%m-%y %H:%M:%S'):
-    """
+
+def now(freq=60):
+    """ Return timestamp of the beging period `freq`.
+
     Parameters
     ----------
-    :date: int, str, date, etc ?
+    freq :  int, optional
+        Number of second of one period, default is 60 (minutely).
+
+    Returns
+    -------
+    int
+        Timestamp of the current period.
+
+    """
+    return int(time.time() // freq * freq)
+
+
+def date_to_TS(date, format='%d-%m-%y %H:%M:%S'):
+    """ Convert date to timestamp.
+    TODO : To finish !
+
+    Parameters
+    ----------
+    date : int, str or date
         Date to convert to timestamp
-    :format: str
+    format : str
         Format of input date.
 
     Return
     ------
-    Timestamp of the date.
+    int
+        Timestamp of the date.
+
     """
     if isinstance(date, int):
         return date
@@ -33,26 +55,31 @@ def date_to_TS(date, format='%d-%m-%y %H:%M:%S'):
         pass
     else:
         print('Date format not allowed')
-        raise Error
+        raise ValueError('Unknow format', type(date))
+
 
 def TS_to_date(TS, format='%d-%m-%y %H:%M:%S'):
-    """
+    """ Convert timestamp to date.
+    TODO : To finish !
+
     Parameters
     ----------
-    :TS: int, str, date, etc ?
+    TS : int, str or date
         Timestamp to convert to date.
-    :format: str
+    format : str
         Format of output date.
 
     Return
     ------
-    Date of the timestamp.
+    date
+        Date of the timestamp.
+
     """
-    if isinstance(date, int):
+    if isinstance(TS, int):
         # TODO
         pass
-    elif isinstance(date, str):
+    elif isinstance(TS, str):
         return TS
     else:
         print('Timestamp format not recognized')
-        raise Error
+        raise ValueError('Unknow format', type(TS))
