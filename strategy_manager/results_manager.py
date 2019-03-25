@@ -5,10 +5,12 @@
 import time
 
 # External packages
+import pandas as pd
 
 # Internal packages
+from tools.utils import get_df, save_df
 
-__all__ = ['print_results']
+__all__ = ['set_order_result', 'set_order_hist']
 
 """
 TODO:
@@ -59,6 +61,29 @@ def print_results(out):
 def set_statistic():
     # TODO : set stats, profit and loss, etc
     pass
+
+
+def set_order_hist(order_result):
+    """ Set dataframe of historic order.
+
+    Parameters
+    ----------
+    order_result : dict or list of dict
+        Cleaned result of one or several output order.
+
+    Returns
+    -------
+    df_hist : pandas.DataFrame
+        Order result as dataframe.
+
+    """
+
+    df_hist = pd.DataFrame(order_result, columns=[
+        'timestamp', 'txid', 'userref', 'price', 'volume',
+        'type', 'pair', 'ordertype', 'leverage'
+    ])
+
+    return df_hist
 
 
 def get_historic(path):
