@@ -14,7 +14,7 @@ import pandas as pd
 import numpy as np
 
 # Import internal packages
-from .tools.time_tools import now
+from tools.time_tools import now
 
 __all__ = [
     'DataRequests', 'data_base_requests', 'aggregate_data', 'DataManager',
@@ -23,9 +23,7 @@ __all__ = [
 ]
 
 """
-TODO:
-   - update data base
-   - save data base
+TODO list:
 
 """
 
@@ -462,14 +460,17 @@ def get_ohlcv_kraken(asset, since=None, frequency=60):
         OHLCV dataframe from kraken exchange
 
     """
+    # Get raw data
     data = get_ohlcv('kraken', asset, since=since, frequency=frequency)
+    # Set data in a dataframe
     data = set_dataframe(
         data['result'][asset],
         rename={0: 'TS', 1: 'o', 2: 'h', 3: 'l', 4: 'c', 6: 'v'},
         index='TS',
         drop=[5, 7]
     )
-    return data
+    # Return without the current observation
+    return data.drop(index=now())
 
 
 def save_data(data, asset, path='data_base/'):
@@ -509,6 +510,7 @@ def update_data(exchange, asset, path='data_base/'):
 
     """
     since = now(freq=86400)
+    # Load data
     try:
         df = data_base_requests(asset, 'ohlcv', start=since, frequency=60)
         since = df.index[-1]
@@ -518,7 +520,9 @@ def update_data(exchange, asset, path='data_base/'):
         data = get_ohlcv_kraken(asset, since=since, frequency=60)
     else:
         raise ValueError('Unknow exchange', exchange)
+    # Update data
     df = df.append(data).drop_duplicates()
+    # Save updated data
     save_data(df, asset, path=path)
 
 
