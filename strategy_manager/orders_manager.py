@@ -110,6 +110,7 @@ class SetOrder:
             out = self.K.query_private(
                 'AddOrder', data={'userref': id_order, **kwargs}, timeout=30
             )
+            out['result']['userref'] = id_order
 
             # TO DEBUG
             print(out)
@@ -117,7 +118,7 @@ class SetOrder:
         except Exception as e:
             print(str(type(e)), str(e), ' error !')
             if e in [HTTPError]:
-                query = self.get_status_order(id_order)
+                query = self.get_query_order(id_order)
                 if query['status'] not in ['open', 'close', 'pending']:
                     out = self.order(**kwargs)
             elif e in [ConnectionResetError]:
