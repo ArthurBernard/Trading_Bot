@@ -10,7 +10,7 @@ import pandas as pd
 # Internal packages
 from tools.utils import get_df, save_df
 
-__all__ = ['set_order_result', 'set_order_hist']
+__all__ = ['set_order_result', 'set_order_hist', 'update_order_hist']
 
 """
 TODO:
@@ -84,6 +84,24 @@ def set_order_hist(order_result):
     ])
 
     return df_hist
+
+
+def update_order_hist(order_result, name, path='.'):
+    """ Update the historic order dataframe.
+
+    Parameters
+    ----------
+    order_result : dict or list of dict
+        Cleaned result of one or several output order.
+
+    """
+    # Get order historic dataframe
+    df_hist = get_df(path, name + '_ord_hist', '.dat')
+    # Set new order historic dataframe
+    df_hist = df_hist.append(set_order_hist(order_result))
+    df_hist = df_hist.reset_index(drop=True)
+    # Save order historic dataframe
+    save_df(df_hist, path, name + '_ord_hist', '.dat')
 
 
 def get_historic(path):
