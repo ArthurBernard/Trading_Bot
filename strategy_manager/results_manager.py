@@ -10,14 +10,18 @@ import pandas as pd
 # Internal packages
 from tools.utils import get_df, save_df
 
-__all__ = ['set_order_result', 'set_order_hist', 'update_order_hist']
+__all__ = [
+    'set_order_result', 'set_order_results', 'set_order_hist',
+    'update_order_hist',
+]
 
 """
 TODO:
-    - Function to save historic (signal, prices, volume, time interval, ?)
     - Print stats about strategy
-    - Profit and loss
+    - Profit and loss histo
+    - Print profit and loss
     - Plot strategy graph vs underlying
+    - Extract order historic (to allow statistic by date, pair, all, etc.)
 
 """
 
@@ -49,6 +53,27 @@ def set_order_result(order_result):
     }
 
     return order_result
+
+
+def set_order_results(order_results):
+    """ Clean the output of set orders method.
+
+    Parameters
+    ----------
+    order_results : list of dict
+        Output of set order.
+
+    Returns
+    -------
+    clean_order_results : list of dict
+        Cleaned results of output orders.
+
+    """
+    clean_order_result = []
+    for result in order_results:
+        clean_order_result += [set_order_result(result)]
+    else:
+        return clean_order_result
 
 
 def print_results(out):
@@ -95,6 +120,8 @@ def update_order_hist(order_result, name, path='.'):
         Cleaned result of one or several output order.
 
     """
+    # TODO : Save by year ? month ? day ?
+    # TODO : Don't save per strategy ? 
     # Get order historic dataframe
     df_hist = get_df(path, name + '_ord_hist', '.dat')
     # Set new order historic dataframe
@@ -102,16 +129,3 @@ def update_order_hist(order_result, name, path='.'):
     df_hist = df_hist.reset_index(drop=True)
     # Save order historic dataframe
     save_df(df_hist, path, name + '_ord_hist', '.dat')
-
-
-def get_historic(path):
-    try:
-        # TODO : load data
-        pass
-    except FileNotFoundError:
-        # TODO : set data file
-        pass
-
-
-def set_historic(path):
-    pass
