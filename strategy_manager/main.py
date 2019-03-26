@@ -11,8 +11,9 @@ import sys
 from manager import StrategyManager
 from data_requests import DataManager
 from tools.utils import load_config_params
+from tools.time_tools import now
 from orders_manager import SetOrder
-from results_manager import print_results
+from results_manager import print_results, set_order_results, update_order_hist
 
 __all__ = ['run_bot']
 
@@ -90,35 +91,46 @@ def run_bot(id_strat, path='strategy_manager/strategies/'):
             data = data_manager.get_data(start=start, last=last)
             check(data)
 
-            # Compute and get signal' strategy
+            # Compute and get signal, price and volume coefficient
             s, p, v = strat_manager.get_order_params(data)
             check(s, p, v)
 
             # Set order
-            ans = order_manager.set_order(s, price=p, volume=v, **order_params)
-            check(ans)
+            order_params['volume'] *= v
+            outputs = order_manager.set_order(s, price=p, **order_params)
+            check(outputs)
 
             # Check to verify and debug
             if not order_params['validate']:
-                for res in ans:
-                    id_order = res['userref']
+                for output in outputs:
+                    id_order = output['userref']
                     status = order_manager.get_status_order(id_order)
                     check(status)
 
             # TODO : compute, print and save some statistics
-            print_results(ans)
+            # Clean outputs
+            outputs = set_order_results(outputs)
+
+            # Update order historic
+            update_order_hist(
+                outputs, id_strat, path='strategy_manager/strategies'
+            )
+
+            # TODO : Print results
+            print_results(outputs)
 
             # Get current pos
             current_pos = order_manager.current_pos
             print(current_pos)
             # TODO : check if current position is ok
+            # TODO : check if current volume is ok
             pass
         else:
             print('All is good')
 
     except Exception as error:
         # TODO : how manage unknown error
-        time_str = time.strftime('%y-%m-%d %H:%M:%S', time.gmtime(time.time()))
+        time_str = time.strftime('%y-%m-%d %H:%M:%S', time.gmtime(now()))
         txt = '\nUNKNOWN ERROR\n'
         txt += 'In {} script '.format(sys.argv[0])
         txt += 'for {} strat id '.format(id_strat)
@@ -126,16 +138,17 @@ def run_bot(id_strat, path='strategy_manager/strategies/'):
         txt += 'the following error occurs:\n'
         txt += '{}: {}\n'.format(str(type(error)), str(error))
         print(txt)
-        with open('{}.log'.format(sys.argv[0][:-3]), 'a') as f:
+        with open('strategies/{}.log'.format(sys.argv[1]), 'a') as f:
             f.write(txt)
 
     finally:
         # TODO : ending with save some statistics and others
-        # TODO : save current position
+        # TODO : save current position and volume
         print('\nBot stopped. See you soon !\n')
 
 
 if __name__ == '__main__':
-    # print(sys.argv[2])
-    # sys.exit()
+    txt = '\nStrategy {} starts to run !\n'.format(sys.argv[1])
+    txt += '-' * (len(txt) - 2) + '\n'
+    print(txt)
     run_bot(sys.argv[1])
