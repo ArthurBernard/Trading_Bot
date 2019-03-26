@@ -5,9 +5,12 @@
 from pickle import Pickler, Unpickler
 import time
 
-# Import external package(s)
+# Import external packages
 from krakenex import API
 from requests import HTTPError
+
+# Import internal packages
+from tools.time_tools import now
 
 __all__ = ['SetOrder']
 
@@ -58,7 +61,8 @@ class SetOrder:
 
     """
 
-    def __init__(self, id_strat, path_log, current_pos=0, exchange='kraken'):
+    def __init__(self, id_strat, path_log, current_pos=0, current_vol=0,
+                 exchange='kraken'):
         """ Set the order class.
 
         Parameters
@@ -77,6 +81,7 @@ class SetOrder:
         self.id_max = 2147483647
         self.path = path_log
         self.current_pos = current_pos
+        self.current_vol = current_vol
         if exchange.lower() == 'kraken':
             # Use krakenex API while I am lazy to do myself
             self.K = API()
@@ -110,7 +115,9 @@ class SetOrder:
             out = self.K.query_private(
                 'AddOrder', data={'userref': id_order, **kwargs}, timeout=30
             )
+            # Set infos
             out['result']['userref'] = id_order
+            out['result']['timestamp'] = now()
 
             # TO DEBUG
             print(out)
@@ -202,7 +209,7 @@ class SetOrder:
         elif self.current_pos <= 0 and signal >= 0:
             kwargs['type'] = 'buy'
             out += [self.cut_short(signal, **kwargs.copy())]
-            out += [self.set_long(signal, **kwargs)]
+            out += [self.set_long(signal, **kwargs.copy())]
         # Down move
         elif self.current_pos >= 0 and signal <= 0:
             kwargs['type'] = 'sell'
@@ -215,25 +222,39 @@ class SetOrder:
     def cut_short(self, signal, **kwargs):
         """ Cut short position """
         if self.current_pos < 0:
+            # Set leverage to cut short
             leverage = kwargs.pop('leverage')
             leverage = 2 if leverage is None else leverage + 1
+            # Set volume to cut short
+            kwargs['volume'] = self.current_vol
+            # Set current volume
+            self.current_vol = 0.
             return self.order(leverage=leverage, **kwargs)
 
     def set_long(self, signal, **kwargs):
         """ Set long order """
         if signal > 0:
+            # Set current volume
+            self.current_vol = kwargs['volume']
             return self.order(**kwargs)
 
     def cut_long(self, signal, **kwargs):
         """ Cut long position """
         if self.current_pos > 0:
+            # Set volume to cut long
+            kwargs['volume'] = self.current_vol
+            # Set current volume
+            self.current_vol = 0.
             return self.order(**kwargs)
 
     def set_short(self, signal, **kwargs):
         """ Set short order """
         if signal < 0:
+            # Set leverage to short
             leverage = kwargs.pop('leverage')
             leverage = 2 if leverage is None else leverage + 1
+            # Set current volume
+            self.current_vol = - kwargs['volume']
             return self.order(leverage=leverage, **kwargs)
 
     def decode_id_order(self, id_order):
