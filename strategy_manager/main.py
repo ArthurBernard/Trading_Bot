@@ -10,7 +10,7 @@ import sys
 # Import internal packages
 from manager import StrategyManager
 from data_requests import DataManager
-from tools.utils import load_config_params
+from tools.utils import load_config_params, get_df
 from tools.time_tools import now
 from orders_manager import SetOrder
 from results_manager import print_results, set_order_results, update_order_hist
@@ -27,7 +27,7 @@ def check(*args, **kwargs):
         print(arg)
     for key, arg in kwargs.items():
         print('{} : {}'.format(str(key), str(arg)))
-    a = input('press q to quit else continue')
+    a = input('\npress q to quit else continue\n')
     if a.lower() == 'q':
         sys.exit()
     return 0
@@ -89,7 +89,7 @@ def run_bot(id_strat, path='strategy_manager/strategies/'):
             print('{}th iteration'.format(t))
             # Get data from data base
             data = data_manager.get_data(start=start, last=last)
-            check(data)
+            check(data.head())
 
             # Compute and get signal, price and volume coefficient
             s, p, v = strat_manager.get_order_params(data)
@@ -103,13 +103,14 @@ def run_bot(id_strat, path='strategy_manager/strategies/'):
             # Check to verify and debug
             if not order_params['validate']:
                 for output in outputs:
-                    id_order = output['userref']
+                    id_order = output['result']['userref']
                     status = order_manager.get_status_order(id_order)
                     check(status)
 
             # TODO : compute, print and save some statistics
             # Clean outputs
             outputs = set_order_results(outputs)
+            check(outputs)
 
             # Update order historic
             update_order_hist(
@@ -129,6 +130,8 @@ def run_bot(id_strat, path='strategy_manager/strategies/'):
             print('All is good')
 
     except Exception as error:
+        # DEBUG
+        raise error
         # TODO : how manage unknown error
         time_str = time.strftime('%y-%m-%d %H:%M:%S', time.gmtime(now()))
         txt = '\nUNKNOWN ERROR\n'
@@ -138,10 +141,12 @@ def run_bot(id_strat, path='strategy_manager/strategies/'):
         txt += 'the following error occurs:\n'
         txt += '{}: {}\n'.format(str(type(error)), str(error))
         print(txt)
-        with open('strategies/{}.log'.format(sys.argv[1]), 'a') as f:
+        with open('strategy_manager/strategies/{}.log'.format(sys.argv[1]), 'a') as f:
             f.write(txt)
 
     finally:
+        # DEGUG
+        print(get_df('strategy_manager/strategies', id_strat + '_ord_hist', '.dat'))
         # TODO : ending with save some statistics and others
         # TODO : save current position and volume
         print('\nBot stopped. See you soon !\n')
