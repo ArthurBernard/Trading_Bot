@@ -9,8 +9,11 @@ from . import data_requests
 from .data_requests import *
 from . import manager
 from .manager import *
+from . import results_manager
+from .results_manager import *
 
 __all__ = tools.__all__
 __all__ += data_requests.__all__
 __all__ += orders_manager.__all__
 __all__ += manager.__all__
+__all__ += results_manager.__all__
