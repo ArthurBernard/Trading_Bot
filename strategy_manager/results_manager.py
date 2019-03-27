@@ -40,19 +40,20 @@ def set_order_result(order_result):
         Cleaned result of an output order.
 
     """
-    list_ord = order_result.pop('descr')['order'].split(' ')
-
-    order_result = {
-        'type': list_ord[0],
-        'volume': float(list_ord[1]),
-        'pair': list_ord[2],
-        'ordertype': list_ord[4],
-        'price': float(list_ord[5]),
-        'leverage': 1 if len(list_ord) == 6 else list_ord[7][0],
-        **order_result
-    }
-
-    return order_result
+    descr = order_result.pop('descr')
+    if descr is not None:
+        list_ord = descr['order'].split(' ')
+        order_result.update({
+            'type': list_ord[0],
+            'volume': float(list_ord[1]),
+            'pair': list_ord[2],
+            'ordertype': list_ord[4],
+            'price': float(list_ord[5]),
+            'leverage': 1 if len(list_ord) == 6 else list_ord[7][0],
+        })
+        return order_result
+    else:
+        return order_result
 
 
 def set_order_results(order_results):
@@ -71,9 +72,7 @@ def set_order_results(order_results):
     """
     clean_order_result = []
     for result in order_results:
-        if result is None:
-            continue
-        clean_order_result += [set_order_result(result)]
+        clean_order_result += [set_order_result(result['result'])]
     else:
         return clean_order_result
 
@@ -109,6 +108,7 @@ def set_order_hist(order_result):
         'timestamp', 'txid', 'userref', 'price', 'volume',
         'type', 'pair', 'ordertype', 'leverage'
     ])
+    print(df_hist.head())
 
     return df_hist
 
