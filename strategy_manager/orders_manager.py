@@ -234,11 +234,12 @@ class SetOrder:
             out['result']['current_volume'] = 0.
             out['result']['current_position'] = 0.
         else:
-            out = {
+            out = {'result': {
                 'timestamp': now(),
                 'current_volume': self.current_vol,
-                'current_position': self.current_pos
-            }
+                'current_position': self.current_pos,
+                'descr': None,
+            }}
         return out
 
     def set_long(self, signal, **kwargs):
@@ -250,11 +251,12 @@ class SetOrder:
             out['result']['current_volume'] = self.current_vol
             out['result']['current_position'] = signal
         else:
-            out = {
+            out = {'result': {
                 'timestamp': now(),
                 'current_volume': self.current_vol,
-                'current_position': self.current_pos
-            }
+                'current_position': self.current_pos,
+                'descr': None,
+            }}
         return out
 
     def cut_long(self, signal, **kwargs):
@@ -268,11 +270,12 @@ class SetOrder:
             out['result']['current_volume'] = 0.
             out['result']['current_position'] = 0.
         else:
-            out = {
+            out = {'result': {
                 'timestamp': now(),
                 'current_volume': self.current_vol,
-                'current_position': self.current_pos
-            }
+                'current_position': self.current_pos,
+                'descr': None,
+            }}
         return out
 
     def set_short(self, signal, **kwargs):
@@ -284,14 +287,15 @@ class SetOrder:
             out = self.order(leverage=leverage, **kwargs)
             # Set current volume
             self.current_vol = - kwargs['volume']
-            out['result']['current_volume'] = self.current_volume
+            out['result']['current_volume'] = self.current_vol
             out['result']['current_position'] = signal
         else:
-            out = {
+            out = {'result': {
                 'timestamp': now(),
                 'current_volume': self.current_vol,
-                'current_position': self.current_pos
-            }
+                'current_position': self.current_pos,
+                'descr': None,
+            }}
         return out
 
     def decode_id_order(self, id_order):
