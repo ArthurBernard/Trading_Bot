@@ -10,7 +10,7 @@ from krakenex import API
 from requests import HTTPError
 
 # Import internal packages
-from tools.time_tools import now
+from strategy_manager.tools.time_tools import now
 
 __all__ = ['SetOrder']
 
@@ -227,25 +227,53 @@ class SetOrder:
             leverage = 2 if leverage is None else leverage + 1
             # Set volume to cut short
             kwargs['volume'] = self.current_vol
-            # Set current volume
+            # Query order
+            out = self.order(leverage=leverage, **kwargs)
+            # Set current volume and position
             self.current_vol = 0.
-            return self.order(leverage=leverage, **kwargs)
+            out['result']['current_volume'] = 0.
+            out['result']['current_position'] = 0.
+        else:
+            out = {
+                'timestamp': now(),
+                'current_volume': self.current_vol,
+                'current_position': self.current_pos
+            }
+        return out
 
     def set_long(self, signal, **kwargs):
         """ Set long order """
         if signal > 0:
+            out = self.order(**kwargs)
             # Set current volume
             self.current_vol = kwargs['volume']
-            return self.order(**kwargs)
+            out['result']['current_volume'] = self.current_vol
+            out['result']['current_position'] = signal
+        else:
+            out = {
+                'timestamp': now(),
+                'current_volume': self.current_vol,
+                'current_position': self.current_pos
+            }
+        return out
 
     def cut_long(self, signal, **kwargs):
         """ Cut long position """
         if self.current_pos > 0:
             # Set volume to cut long
             kwargs['volume'] = self.current_vol
+            out = self.order(**kwargs)
             # Set current volume
             self.current_vol = 0.
-            return self.order(**kwargs)
+            out['result']['current_volume'] = 0.
+            out['result']['current_position'] = 0.
+        else:
+            out = {
+                'timestamp': now(),
+                'current_volume': self.current_vol,
+                'current_position': self.current_pos
+            }
+        return out
 
     def set_short(self, signal, **kwargs):
         """ Set short order """
@@ -253,9 +281,18 @@ class SetOrder:
             # Set leverage to short
             leverage = kwargs.pop('leverage')
             leverage = 2 if leverage is None else leverage + 1
+            out = self.order(leverage=leverage, **kwargs)
             # Set current volume
             self.current_vol = - kwargs['volume']
-            return self.order(leverage=leverage, **kwargs)
+            out['result']['current_volume'] = self.current_volume
+            out['result']['current_position'] = signal
+        else:
+            out = {
+                'timestamp': now(),
+                'current_volume': self.current_vol,
+                'current_position': self.current_pos
+            }
+        return out
 
     def decode_id_order(self, id_order):
         """ From an id order decode the time (in minute) and the strategy
