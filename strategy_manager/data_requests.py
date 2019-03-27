@@ -14,7 +14,7 @@ import pandas as pd
 import numpy as np
 
 # Import internal packages
-from tools.time_tools import now
+from strategy_manager.tools.time_tools import now
 
 __all__ = [
     'DataRequests', 'data_base_requests', 'aggregate_data', 'DataManager',
