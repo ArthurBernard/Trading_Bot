@@ -13,7 +13,8 @@ from data_requests import DataManager
 from tools.utils import load_config_params, get_df
 from tools.time_tools import now
 from orders_manager import SetOrder
-from results_manager import print_results, set_order_results, update_order_hist
+from results_manager import print_results, set_order_results
+from results_manager import update_order_hist, update_result_hist
 
 __all__ = ['run_bot']
 
@@ -112,6 +113,11 @@ def run_bot(id_strat, path='strategy_manager/strategies/'):
             # Clean outputs
             outputs = set_order_results(outputs)
             check(*outputs)
+
+            # Update result historic
+            update_result_hist(
+                outputs, id_strat, path='strategy_manager/strategies'
+            )
 
             # Update order historic
             update_order_hist(
