@@ -73,7 +73,8 @@ def run_bot(id_strat, path='strategy_manager/strategies/'):
     # Get parameters for pre order configuration
     pre_order_params = data_cfg['pre_order_instance']
     # Set pre order configuration
-    order_manager = SetOrder(**pre_order_params)
+    order_manager = SetOrder(frequency=strat_manager_params['frequency'],
+                             **pre_order_params)
     check(order_manager)
 
     # Get order parameters
@@ -98,7 +99,7 @@ def run_bot(id_strat, path='strategy_manager/strategies/'):
             # Set order
             order_params['volume'] *= v
             outputs = order_manager.set_order(s, price=p, **order_params)
-            check(outputs)
+            check(*outputs)
 
             # Check to verify and debug
             if not order_params['validate']:
@@ -110,7 +111,7 @@ def run_bot(id_strat, path='strategy_manager/strategies/'):
             # TODO : compute, print and save some statistics
             # Clean outputs
             outputs = set_order_results(outputs)
-            check(outputs)
+            check(*outputs)
 
             # Update order historic
             update_order_hist(
