@@ -212,17 +212,17 @@ class SetOrder:
         if self.current_pos == signal:
             return [self.set_output(kwargs['price'])]
         # Up move
-        elif self.current_pos <= 0 and signal >= 0:
+        elif self.current_pos <= 0. and signal >= 0:
             kwargs['type'] = 'buy'
             out += [self.cut_short(signal, **kwargs.copy())]
             out += [self.set_long(signal, **kwargs.copy())]
         # Down move
-        elif self.current_pos >= 0 and signal <= 0:
+        elif self.current_pos >= 0. and signal <= 0:
             kwargs['type'] = 'sell'
             out += [self.cut_long(signal, **kwargs.copy())]
             out += [self.set_short(signal, **kwargs)]
         # Update current position
-        self.current_pos = signal
+        # self.current_pos = signal
         return out
 
     def cut_short(self, signal, **kwargs):
@@ -237,8 +237,9 @@ class SetOrder:
             out = self.order(leverage=leverage, **kwargs)
             # Set current volume and position
             self.current_vol = 0.
+            self.current_pos = 0
             out['result']['current_volume'] = 0.
-            out['result']['current_position'] = 0.
+            out['result']['current_position'] = 0
         else:
             out = self.set_output(kwargs['price'])
         return out
@@ -249,6 +250,7 @@ class SetOrder:
             out = self.order(**kwargs)
             # Set current volume
             self.current_vol = kwargs['volume']
+            self.current_pos = signal
             out['result']['current_volume'] = self.current_vol
             out['result']['current_position'] = signal
         else:
@@ -263,8 +265,9 @@ class SetOrder:
             out = self.order(**kwargs)
             # Set current volume
             self.current_vol = 0.
+            self.current_pos = 0
             out['result']['current_volume'] = 0.
-            out['result']['current_position'] = 0.
+            out['result']['current_position'] = 0
         else:
             out = self.set_output(kwargs['price'])
         return out
@@ -278,6 +281,7 @@ class SetOrder:
             out = self.order(leverage=leverage, **kwargs)
             # Set current volume
             self.current_vol = - kwargs['volume']
+            self.current_pos = signal
             out['result']['current_volume'] = self.current_vol
             out['result']['current_position'] = signal
         else:
