@@ -133,8 +133,20 @@ def update_order_hist(order_result, name, path='.'):
     save_df(df_hist, path, name + '_ord_hist', '.dat')
 
 
-def aggregate_results(order_results):
-    """ Aggregate order results. """
+def set_results(order_results):
+    """ Aggregate and set results.
+
+    Parameters
+    ----------
+    order_result : list of dict
+        Cleaned result of one or several output order.
+
+    Returns
+    -------
+    aggr_res : pd.DataFrame
+        Strategy result as dataframe.
+
+    """
     aggr_res = {}
     for result in order_results:
         ts = result['timestamp']
@@ -144,11 +156,23 @@ def aggregate_results(order_results):
         aggr_res[ts]['position'] += result['current_position']
         aggr_res[ts]['price'] = result['price']
     else:
-        return aggr_res
+        return pd.DataFrame(aggr_res).T
 
 
 def get_result_hist(name, path='.'):
-    """ Load result historic. """
+    """ Load result historic strategy.
+
+    Parameters
+    ----------
+    path, name : str
+        Path and name of the file to load.
+
+    Returns
+    -------
+    df : pandas.DataFrame
+        A dataframe of results strategy.
+
+    """
     df = get_df(path, name + '_res_hist', '.dat')
     if df.empty:
         return pd.DataFrame(columns=['price', 'volume', 'position', 'return'])
@@ -157,10 +181,19 @@ def get_result_hist(name, path='.'):
 
 
 def update_result_hist(order_results, name, path='.'):
-    """ Load, merge and save result historic. """
+    """ Load, merge and save result historic strategy.
+
+    Parameters
+    ----------
+    order_results : list of dict
+        Cleaned result of one or several output order.
+    path, name : str
+        Path and name of the file to load.
+
+    """
     # Get result historic
     hist = get_result_hist(name, path=path)
-    df = pd.DataFrame(aggregate_results(order_results))
+    df = set_results(order_results)
     # Merge result historics
     hist = hist.append(df)
     idx = hist.index
