@@ -131,3 +131,41 @@ def update_order_hist(order_result, name, path='.'):
     df_hist = df_hist.reset_index(drop=True)
     # Save order historic dataframe
     save_df(df_hist, path, name + '_ord_hist', '.dat')
+
+
+def aggregate_results(order_results):
+    """ Aggregate order results. """
+    aggr_res = {}
+    for result in order_results:
+        ts = result['timestamp']
+        if ts not in aggr_res.keys():
+            aggr_res[ts] = {'volume': 0, 'position': 0, 'price': 0}
+        aggr_res[ts]['volume'] += result['current_volume']
+        aggr_res[ts]['position'] += result['current_position']
+        aggr_res[ts]['price'] = result['price']
+    else:
+        return aggr_res
+
+
+def get_result_hist(name, path='.'):
+    """ Load result historic. """
+    df = get_df(path, name + '_res_hist', '.dat')
+    if df.empty:
+        return pd.DataFrame(columns=['price', 'volume', 'position', 'return'])
+    else:
+        return df
+
+
+def update_result_hist(order_results, name, path='.'):
+    """ Load, merge and save result historic. """
+    # Get result historic
+    hist = get_result_hist(name, path=path)
+    df = pd.DataFrame(aggregate_results(order_results))
+    # Merge result historics
+    hist = hist.append(df)
+    idx = hist.index
+    prices = hist.loc[:, 'price'].values
+    volumes = hist.loc[:, 'volume'].values
+    hist.loc[idx[1]:, 'return'] = (prices[1:] - prices[:-1]) * volumes[:-1]
+    # Save order historic dataframe
+    save_df(hist, path, name + '_res_hist', '.dat')
