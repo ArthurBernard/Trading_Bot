@@ -62,19 +62,23 @@ class SetOrder:
     """
 
     def __init__(self, id_strat, path_log, current_pos=0, current_vol=0,
-                 exchange='kraken'):
+                 exchange='kraken', frequency=1):
         """ Set the order class.
 
         Parameters
         ----------
         id_strat : int (unsigned and 32-bit)
             Number to link an order with a strategy.
-        path : str
+        path_log : str
             Path where API key and secret are saved.
         current_pos : int, {1 : long, 0 : None, -1 : short}
             Current position of the account.
+        current_vol : float
+            Current volume position.
         exchange : str, optional
             Name of the exchange (default is `'kraken'`).
+        frequency : int, optional
+            Frequency to round timestamp.
 
         """
         self.id_strat = id_strat
@@ -82,6 +86,7 @@ class SetOrder:
         self.path = path_log
         self.current_pos = current_pos
         self.current_vol = current_vol
+        self.frequency = frequency
         if exchange.lower() == 'kraken':
             # Use krakenex API while I am lazy to do myself
             self.K = API()
@@ -113,11 +118,13 @@ class SetOrder:
         try:
             # Send order
             out = self.K.query_private(
-                'AddOrder', data={'userref': id_order, **kwargs}, timeout=30
+                'AddOrder',
+                data={'userref': id_order, **kwargs},
+                timeout=30,
             )
             # Set infos
             out['result']['userref'] = id_order
-            out['result']['timestamp'] = now()
+            out['result']['timestamp'] = now(self.frequency)
 
             # TO DEBUG
             print(out)
@@ -176,11 +183,10 @@ class SetOrder:
             f.close()
         except FileNotFoundError:
             TS = 0
-        now = int(time.time())
-        id_user = (now - TS) // 60
+        id_user = (now(1) - TS) // 60
         if id_user > self.id_max // 1000:
             f = open('id_timestamp', 'wb')
-            Pickler(f).dump(now)
+            Pickler(f).dump(now(1))
             f.close()
             id_user = self._get_id_user()
         return id_user
@@ -204,7 +210,7 @@ class SetOrder:
         out = []
         # Don't move
         if self.current_pos == signal:
-            return out
+            return [self.set_output(kwargs['price'])]
         # Up move
         elif self.current_pos <= 0 and signal >= 0:
             kwargs['type'] = 'buy'
@@ -234,12 +240,7 @@ class SetOrder:
             out['result']['current_volume'] = 0.
             out['result']['current_position'] = 0.
         else:
-            out = {'result': {
-                'timestamp': now(),
-                'current_volume': self.current_vol,
-                'current_position': self.current_pos,
-                'descr': None,
-            }}
+            out = self.set_output(kwargs['price'])
         return out
 
     def set_long(self, signal, **kwargs):
@@ -251,12 +252,7 @@ class SetOrder:
             out['result']['current_volume'] = self.current_vol
             out['result']['current_position'] = signal
         else:
-            out = {'result': {
-                'timestamp': now(),
-                'current_volume': self.current_vol,
-                'current_position': self.current_pos,
-                'descr': None,
-            }}
+            out = self.set_output(kwargs['price'])
         return out
 
     def cut_long(self, signal, **kwargs):
@@ -270,12 +266,7 @@ class SetOrder:
             out['result']['current_volume'] = 0.
             out['result']['current_position'] = 0.
         else:
-            out = {'result': {
-                'timestamp': now(),
-                'current_volume': self.current_vol,
-                'current_position': self.current_pos,
-                'descr': None,
-            }}
+            out = self.set_output(kwargs['price'])
         return out
 
     def set_short(self, signal, **kwargs):
@@ -290,12 +281,18 @@ class SetOrder:
             out['result']['current_volume'] = self.current_vol
             out['result']['current_position'] = signal
         else:
-            out = {'result': {
-                'timestamp': now(),
-                'current_volume': self.current_vol,
-                'current_position': self.current_pos,
-                'descr': None,
-            }}
+            out = self.set_output(kwargs['price'])
+        return out
+
+    def set_output(self, price):
+        """ Set output when no orders query """
+        out = {'result': {
+            'price': price,
+            'timestamp': now(self.frequency),
+            'current_volume': self.current_vol,
+            'current_position': self.current_pos,
+            'descr': None,
+        }}
         return out
 
     def decode_id_order(self, id_order):
