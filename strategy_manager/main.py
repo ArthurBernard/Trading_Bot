@@ -10,7 +10,7 @@ import sys
 # Import internal packages
 from manager import StrategyManager
 from data_requests import DataManager
-from tools.utils import load_config_params, get_df
+from tools.utils import load_config_params, dump_config_params, get_df
 from tools.time_tools import now
 from orders_manager import SetOrder
 from results_manager import print_results, set_order_results
@@ -25,9 +25,9 @@ def check(*args, **kwargs):
 
     """
     for arg in args:
-        print(arg)
+        print(arg, '\n')
     for key, arg in kwargs.items():
-        print('{} : {}'.format(str(key), str(arg)))
+        print('{} : {}\n'.format(str(key), str(arg)))
     a = input('\npress q to quit else continue\n')
     if a.lower() == 'q':
         sys.exit()
@@ -54,11 +54,11 @@ def run_bot(id_strat, path='strategy_manager/strategies/'):
     # Get parameters for strategy manager object
     strat_manager_params = data_cfg['strat_manager_instance']
     # Set strategy manager configuration
-    strat_manager = StrategyManager(**strat_manager_params)
+    strat_manager = StrategyManager(**strat_manager_params.copy())
     check(strat_manager)
 
     # Get parameters for data requests
-    data_requests_params = data_cfg['get_data_instance']
+    data_requests_params = data_cfg['get_data_instance'].copy()
     if 'start' in data_requests_params.keys():
         start = data_requests_params.pop('start')
     else:
@@ -68,18 +68,18 @@ def run_bot(id_strat, path='strategy_manager/strategies/'):
     else:
         last = None
     # Set data requests manager configuration
-    data_manager = DataManager(**data_requests_params)
+    data_manager = DataManager(**data_requests_params.copy())
     check(data_manager)
 
     # Get parameters for pre order configuration
     pre_order_params = data_cfg['pre_order_instance']
     # Set pre order configuration
-    order_manager = SetOrder(frequency=strat_manager_params['frequency'],
-                             **pre_order_params)
-    check(order_manager)
+    ord_man = SetOrder(frequency=strat_manager_params['frequency'],
+                       **pre_order_params.copy())
+    check(ord_man)
 
     # Get order parameters
-    order_params = data_cfg['order_instance']
+    order_params = data_cfg['order_instance'].copy()
 
     # Get parameters for strategy function
     strat_args = data_cfg['strategy_instance']['args_params']
@@ -87,7 +87,7 @@ def run_bot(id_strat, path='strategy_manager/strategies/'):
 
     # The bot start to run
     try:
-        for t in strat_manager(*strat_args, **strat_kwargs):
+        for t in strat_manager(*strat_args.copy(), **strat_kwargs.copy()):
             print('{}th iteration'.format(t))
             # Get data from data base
             data = data_manager.get_data(start=start, last=last)
@@ -98,15 +98,15 @@ def run_bot(id_strat, path='strategy_manager/strategies/'):
             check(s, p, v)
 
             # Set order
-            order_params['volume'] *= v
-            outputs = order_manager.set_order(s, price=p, **order_params)
+            order_params['volume'] *= float(v)
+            outputs = ord_man.set_order(s, price=p, **order_params.copy())
             check(*outputs)
 
             # Check to verify and debug
             if not order_params['validate']:
                 for output in outputs:
                     id_order = output['result']['userref']
-                    status = order_manager.get_status_order(id_order)
+                    status = ord_man.get_status_order(id_order)
                     check(status)
 
             # TODO : compute, print and save some statistics
@@ -128,10 +128,12 @@ def run_bot(id_strat, path='strategy_manager/strategies/'):
             print_results(outputs)
 
             # Get current pos
-            current_pos = order_manager.current_pos
+            current_pos = ord_man.current_pos
             print(current_pos)
             # TODO : check if current position is ok
+            data_cfg['pre_order_instance']['current_pos'] = float(ord_man.current_pos)
             # TODO : check if current volume is ok
+            data_cfg['pre_order_instance']['current_vol'] = float(ord_man.current_vol)
             pass
         else:
             print('All is good')
@@ -140,6 +142,7 @@ def run_bot(id_strat, path='strategy_manager/strategies/'):
         # DEBUG
         raise error
         # TODO : how manage unknown error
+        # Report error TODO : Improve
         time_str = time.strftime('%y-%m-%d %H:%M:%S', time.gmtime(now()))
         txt = '\nUNKNOWN ERROR\n'
         txt += 'In {} script '.format(sys.argv[0])
@@ -153,9 +156,14 @@ def run_bot(id_strat, path='strategy_manager/strategies/'):
 
     finally:
         # DEGUG
-        print(get_df('strategy_manager/strategies', id_strat + '_ord_hist', '.dat'))
+        print('\n')
+        print(get_df('strategy_manager/strategies', id_strat + '_ord_hist', '.dat').head())
+        print('\n')
+        print(get_df('strategy_manager/strategies', id_strat + '_res_hist', '.dat').head())
+        print('\n')
         # TODO : ending with save some statistics and others
-        # TODO : save current position and volume
+        # Save current position and volume
+        dump_config_params(data_cfg, path + id_strat + '.cfg')
         print('\nBot stopped. See you soon !\n')
 
 
