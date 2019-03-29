@@ -127,7 +127,7 @@ def update_order_hist(order_result, name, path='.'):
     # Get order historic dataframe
     df_hist = get_df(path, name + '_ord_hist', '.dat')
     # Set new order historic dataframe
-    df_hist = df_hist.append(set_order_hist(order_result))
+    df_hist = df_hist.append(set_order_hist(order_result), sort=False)
     df_hist = df_hist.reset_index(drop=True)
     # Save order historic dataframe
     save_df(df_hist, path, name + '_ord_hist', '.dat')
@@ -194,11 +194,15 @@ def update_result_hist(order_results, name, path='.'):
     # Get result historic
     hist = get_result_hist(name, path=path)
     df = set_results(order_results)
+    print(df.head())
     # Merge result historics
-    hist = hist.append(df)
+    hist = hist.append(df, sort=False)
     idx = hist.index
-    prices = hist.loc[:, 'price'].values
-    volumes = hist.loc[:, 'volume'].values
-    hist.loc[idx[1]:, 'return'] = (prices[1:] - prices[:-1]) * volumes[:-1]
+    if idx.size <= 1:
+        hist.loc[idx[0], 'return'] = 0
+    else:
+        prices = hist.loc[:, 'price'].values
+        volumes = hist.loc[:, 'volume'].values
+        hist.loc[idx[1]:, 'return'] = (prices[1:] - prices[:-1]) * volumes[:-1]
     # Save order historic dataframe
     save_df(hist, path, name + '_res_hist', '.dat')
