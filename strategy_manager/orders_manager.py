@@ -122,9 +122,18 @@ class SetOrder:
                 data={'userref': id_order, **kwargs},
                 timeout=30,
             )
-            # Set infos
-            out['result']['userref'] = id_order
-            out['result']['timestamp'] = now(self.frequency)
+            # TO DEBUG
+            try:
+                # Set infos
+                out['result']['userref'] = id_order
+                out['result']['timestamp'] = now(self.frequency)
+            except KeyError:
+                print('+----------------------------------+')
+                print('|/!\\ KeyError in OrderManager ! /!\\|')
+                print('+----------------------------------+')
+                print('out : ', out)
+                print('type : ', type(out))
+                print('params : ', kwargs)
 
             # TO DEBUG
             print(out)
