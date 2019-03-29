@@ -36,6 +36,21 @@ def load_config_params(path):
     return data
 
 
+def dump_config_params(data_cfg, path):
+    """ Function to dump configuration parameters for strategy manager.
+
+    Parameters
+    ----------
+    data : list or dict
+        Data configuration to dump in yaml format.
+    path : str
+        File's path to dump configuration parameters.
+
+    """
+    with open(path, 'w') as f:
+        yaml.dump(data_cfg, f)
+
+
 def get_df(path, name, ext=''):
     """ Load a dataframe as binnary file.
 
