@@ -2,7 +2,7 @@
 # coding: utf-8
 
 # Import built-in packages
-import yaml
+from ruamel.yaml import YAML
 from pickle import Pickler, Unpickler
 
 # Import external packages
@@ -31,6 +31,7 @@ def load_config_params(path):
     {'strat_manager_instance': {'strat_name': 'example_function', 'underlying': 'example_coin', 'frequency': 60, 'volume': 0}, 'extra_instance': {'time_exec': 0, 'request_data_on_the_flye': True}, 'args_params': ['para1', 'para2'], 'kwargs_params': {'para1': 0, 'para2': 1}}
 
     """
+    yaml = YAML()
     with open(path, 'r') as f:
         data = yaml.load(f)
     return data
@@ -47,6 +48,7 @@ def dump_config_params(data_cfg, path):
         File's path to dump configuration parameters.
 
     """
+    yaml = YAML()
     with open(path, 'w') as f:
         yaml.dump(data_cfg, f)
 
