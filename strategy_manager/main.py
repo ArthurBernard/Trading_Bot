@@ -115,14 +115,10 @@ def run_bot(id_strat, path='strategy_manager/strategies/'):
             check(*outputs)
 
             # Update result historic
-            update_result_hist(
-                outputs, id_strat, path='strategy_manager/strategies'
-            )
+            update_result_hist(outputs, id_strat, path=path)
 
             # Update order historic
-            update_order_hist(
-                outputs, id_strat, path='strategy_manager/strategies'
-            )
+            update_order_hist(outputs, id_strat, path=path)
 
             # TODO : Print results
             print_results(outputs)
@@ -131,9 +127,13 @@ def run_bot(id_strat, path='strategy_manager/strategies/'):
             current_pos = ord_man.current_pos
             print(current_pos)
             # TODO : check if current position is ok
-            data_cfg['pre_order_instance']['current_pos'] = float(ord_man.current_pos)
+            data_cfg['pre_order_instance']['current_pos'] = float(
+                ord_man.current_pos
+            )
             # TODO : check if current volume is ok
-            data_cfg['pre_order_instance']['current_vol'] = float(ord_man.current_vol)
+            data_cfg['pre_order_instance']['current_vol'] = abs(float(
+                ord_man.current_vol
+            ))
             pass
         else:
             print('All is good')
@@ -151,16 +151,15 @@ def run_bot(id_strat, path='strategy_manager/strategies/'):
         txt += 'the following error occurs:\n'
         txt += '{}: {}\n'.format(str(type(error)), str(error))
         print(txt)
-        with open('strategy_manager/strategies/{}.log'.format(sys.argv[1]), 'a') as f:
+
+        with open(path + sys.argv[1] + '.log', 'a') as f:
             f.write(txt)
 
     finally:
         # DEGUG
-        print('\n')
-        print(get_df('strategy_manager/strategies', id_strat + '_ord_hist', '.dat').head())
-        print('\n')
-        print(get_df('strategy_manager/strategies', id_strat + '_res_hist', '.dat').head())
-        print('\n')
+        df_ord = get_df(path, id_strat + '_ord_hist', '.dat')
+        df_res = get_df(path, id_strat + '_res_hist', '.dat')
+        print(df_ord.head(), df_res.head(), sep='\n')
         # TODO : ending with save some statistics and others
         # Save current position and volume
         dump_config_params(data_cfg, path + id_strat + '.cfg')
