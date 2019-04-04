@@ -2,10 +2,10 @@
 # coding: utf-8
 
 # Import built-in packages
-from ruamel.yaml import YAML
 from pickle import Pickler, Unpickler
 
 # Import external packages
+from ruamel.yaml import YAML
 import pandas as pd
 
 
@@ -24,11 +24,6 @@ def load_config_params(path):
     -------
     dict
         Parameters.
-
-    Examples
-    --------
-    >>> load_config_params('strategies/example_function.cfg')
-    {'strat_manager_instance': {'strat_name': 'example_function', 'underlying': 'example_coin', 'frequency': 60, 'volume': 0}, 'extra_instance': {'time_exec': 0, 'request_data_on_the_flye': True}, 'args_params': ['para1', 'para2'], 'kwargs_params': {'para1': 0, 'para2': 1}}
 
     """
     yaml = YAML()
