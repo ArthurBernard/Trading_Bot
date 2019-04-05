@@ -8,6 +8,7 @@ import importlib
 # Import external packages
 
 # Import local packages
+from strategy_manager import DataManager
 
 __all__ = ['StrategyManager']
 
@@ -97,16 +98,23 @@ class StrategyManager:
 
     def __next__(self):
         """ Iterative method. """
-        t = self.t
-        if t >= self.STOP:
+        if self.t >= self.STOP:
             raise StopIteration
+
         self.TS = int(time.time())
         # Sleep until ready
         if self.next > self.TS:
             time.sleep(self.next - self.TS)
+
         self.next += self.frequency
         self.t += 1
-        return t
+
+        # TODO : Debug/find solution to request data correctly.
+        #        Need to choose between request a database, server,
+        #        exchange API or other.
+        data = None  # self.DM.get_data(start=self.start, last=self.last)
+
+        return self.get_order_params(data)
 
     def get_order_params(self, data):
         """ Function to compute signal, price and volume.
@@ -123,3 +131,27 @@ class StrategyManager:
 
         """
         return self._get_order_params(data, *self.args, **self.kwargs)
+
+    def set_data_manager(self, **kwargs):
+        """ Set `DataManager` object.
+
+        Parameters
+        ----------
+        kwargs : dict
+            Cf `DataManager` constructor.
+
+        """
+
+        if 'start' in kwargs.keys():
+            self.start = kwargs.pop('start')
+        else:
+            self.start = None
+
+        if 'last' in kwargs.keys():
+            self.last = kwargs.pop('last')
+        else:
+            self.last = None
+
+        self.DM = DataManager(**kwargs)
+
+        return self
