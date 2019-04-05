@@ -47,66 +47,48 @@ def run_bot(id_strat, path='strategy_manager/strategies/'):
     """
     if path[-1] != '/':
         path += '/'
-    check(path)
+
     data_cfg = load_config_params(path + id_strat + '.cfg')
     check(**data_cfg)
 
     # Get parameters for strategy manager object
-    strat_manager_params = data_cfg['strat_manager_instance']
+    SM_params = data_cfg['SM_instance']
     # Set strategy manager configuration
-    strat_manager = StrategyManager(**strat_manager_params.copy())
-    check(strat_manager)
+    SM = StrategyManager(**SM_params.copy())
 
     # Get parameters for data requests
     data_requests_params = data_cfg['get_data_instance'].copy()
-    if 'start' in data_requests_params.keys():
-        start = data_requests_params.pop('start')
-    else:
-        start = None
-    if 'last' in data_requests_params.keys():
-        last = data_requests_params.pop('last')
-    else:
-        last = None
     # Set data requests manager configuration
-    data_manager = DataManager(**data_requests_params.copy())
-    check(data_manager)
+    SM.set_data_manager(**data_requests_params.copy())
 
     # Get parameters for pre order configuration
-    pre_order_params = data_cfg['pre_order_instance']
+    pre_order_params = data_cfg['pre_order_instance'].copy()
     # Set pre order configuration
-    ord_man = SetOrder(frequency=strat_manager_params['frequency'],
-                       **pre_order_params.copy())
-    check(ord_man)
+    OM = SetOrder(frequency=SM_params['frequency'], **pre_order_params)
 
     # Get order parameters
-    order_params = data_cfg['order_instance'].copy()
-
+    order_params = data_cfg['order_instance']
     # Get parameters for strategy function
-    strat_args = data_cfg['strategy_instance']['args_params']
-    strat_kwargs = data_cfg['strategy_instance']['kwargs_params']
+    args = data_cfg['strategy_instance']['args_params']
+    kwargs = data_cfg['strategy_instance']['kwargs_params']
 
     # The bot start to run
     try:
-        for t in strat_manager(*strat_args.copy(), **strat_kwargs.copy()):
-            print('{}th iteration'.format(t))
-            # Get data from data base
-            data = data_manager.get_data(start=start, last=last)
-            check(data.head())
+        for s, p, v in SM(*args.copy(), **kwargs.copy()):
+            print('{}th iteration'.format(SM.t))
 
-            # Compute and get signal, price and volume coefficient
-            s, p, v = strat_manager.get_order_params(data)
             check(s, p, v)
 
             # Set order
             order_params['volume'] *= float(v)
-            outputs = ord_man.set_order(s, price=p, **order_params.copy())
+            outputs = OM.set_order(s, price=p, **order_params.copy())
             check(*outputs)
 
             # Check to verify and debug
             if not order_params['validate']:
                 for output in outputs:
                     id_order = output['result']['userref']
-                    status = ord_man.get_status_order(id_order)
+                    status = OM.get_status_order(id_order)
                     check(status)
 
             # TODO : compute, print and save some statistics
@@ -124,15 +106,15 @@ def run_bot(id_strat, path='strategy_manager/strategies/'):
             print_results(outputs)
 
             # Get current pos
-            current_pos = ord_man.current_pos
-            print(current_pos)
+            current_pos = OM.current_pos
+            print('Current position is:', current_pos)
             # TODO : check if current position is ok
             data_cfg['pre_order_instance']['current_pos'] = float(
-                ord_man.current_pos
+                OM.current_pos
             )
             # TODO : check if current volume is ok
             data_cfg['pre_order_instance']['current_vol'] = abs(float(
-                ord_man.current_vol
+                OM.current_vol
             ))
             pass
         else:
@@ -159,7 +141,7 @@ def run_bot(id_strat, path='strategy_manager/strategies/'):
         # DEGUG
         df_ord = get_df(path, id_strat + '_ord_hist', '.dat')
         df_res = get_df(path, id_strat + '_res_hist', '.dat')
-        print(df_ord.head(), df_res.head(), sep='\n')
+        print('Historic:', '--------', df_ord.head(), df_res.head(), sep='\n')
         # TODO : ending with save some statistics and others
         # Save current position and volume
         dump_config_params(data_cfg, path + id_strat + '.cfg')
