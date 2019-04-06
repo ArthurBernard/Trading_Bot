@@ -8,7 +8,7 @@ import importlib
 # Import external packages
 
 # Import local packages
-from strategy_manager import DataManager
+from strategy_manager import DataBaseManager, DataExchangeManager
 
 __all__ = ['StrategyManager']
 
@@ -112,7 +112,7 @@ class StrategyManager:
         # TODO : Debug/find solution to request data correctly.
         #        Need to choose between request a database, server,
         #        exchange API or other.
-        data = None  # self.DM.get_data(start=self.start, last=self.last)
+        data = self.DM.get_data(*self.args_data, **self.kwargs_data)
 
         return self.get_order_params(data)
 
@@ -142,16 +142,19 @@ class StrategyManager:
 
         """
 
-        if 'start' in kwargs.keys():
-            self.start = kwargs.pop('start')
+        if 'args' in kwargs.keys():
+            self.args_data = kwargs.pop('args')
         else:
-            self.start = None
+            self.args_data = ()
 
-        if 'last' in kwargs.keys():
-            self.last = kwargs.pop('last')
+        if 'kwargs' in kwargs.keys():
+            self.kwargs_data = kwargs.pop('kwargs')
         else:
-            self.last = None
+            self.kwargs_data = {}
 
-        self.DM = DataManager(**kwargs)
+        if kwargs.pop('request_data').lower() == 'exchange':
+            self.DM = DataExchangeManager(**kwargs)
+        elif kwargs.pop('request_data').lower() == 'database':
+            self.DM = DataBaseManager(**kwargs)
 
         return self
