@@ -9,7 +9,7 @@ import sys
 
 # Import internal packages
 from manager import StrategyManager
-from data_requests import DataManager
+# from data_requests import DataManager
 from tools.utils import load_config_params, dump_config_params, get_df
 from tools.time_tools import now
 from orders_manager import SetOrder
@@ -49,10 +49,11 @@ def run_bot(id_strat, path='strategy_manager/strategies/'):
         path += '/'
 
     data_cfg = load_config_params(path + id_strat + '.cfg')
+    print('\n Check cfg:\n', '-' * 9)
     check(**data_cfg)
 
     # Get parameters for strategy manager object
-    SM_params = data_cfg['SM_instance']
+    SM_params = data_cfg['strat_manager_instance']
     # Set strategy manager configuration
     SM = StrategyManager(**SM_params.copy())
 
@@ -77,11 +78,13 @@ def run_bot(id_strat, path='strategy_manager/strategies/'):
         for s, p, v in SM(*args.copy(), **kwargs.copy()):
             print('{}th iteration'.format(SM.t))
 
+            print('\n Check spv:\n', '-' * 9)
             check(s, p, v)
 
             # Set order
             order_params['volume'] *= float(v)
             outputs = OM.set_order(s, price=p, **order_params.copy())
+            print('\n Check out:\n', '-' * 9)
             check(*outputs)
 
             # Check to verify and debug
@@ -94,6 +97,7 @@ def run_bot(id_strat, path='strategy_manager/strategies/'):
             # TODO : compute, print and save some statistics
             # Clean outputs
             outputs = set_order_results(outputs)
+            print('\n Check output:\n', '-' * 12)
             check(*outputs)
 
             # Update result historic
@@ -141,7 +145,7 @@ def run_bot(id_strat, path='strategy_manager/strategies/'):
         # DEGUG
         df_ord = get_df(path, id_strat + '_ord_hist', '.dat')
         df_res = get_df(path, id_strat + '_res_hist', '.dat')
-        print('Historic:', '--------', df_ord.head(), df_res.head(), sep='\n')
+        print('Historic:', '-' * 9, df_ord.head(), df_res.head(), sep='\n')
         # TODO : ending with save some statistics and others
         # Save current position and volume
         dump_config_params(data_cfg, path + id_strat + '.cfg')
