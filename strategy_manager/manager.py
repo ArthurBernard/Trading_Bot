@@ -8,6 +8,7 @@ import importlib
 # Import external packages
 
 # Import local packages
+from strategy_manager.tools.time_tools import now
 from strategy_manager import DataBaseManager, DataExchangeManager
 
 __all__ = ['StrategyManager']
@@ -92,7 +93,7 @@ class StrategyManager:
     def __iter__(self):
         """ Initialize iterative method. """
         self.t = 0
-        self.TS = int(time.time())
+        self.TS = now(self.frequency)  # int(time.time())
         self.next = self.TS + self.frequency
         return self
 
@@ -152,9 +153,14 @@ class StrategyManager:
         else:
             self.kwargs_data = {}
 
-        if kwargs.pop('request_data').lower() == 'exchange':
+        request_from = kwargs.pop('request_data').lower()
+
+        if request_from == 'exchange':
             self.DM = DataExchangeManager(**kwargs)
-        elif kwargs.pop('request_data').lower() == 'database':
+        elif request_from == 'database':
             self.DM = DataBaseManager(**kwargs)
+        else:
+            raise ValueError('request_data must be exchange or database.'
+                             'Not {}'.format(request_from))
 
         return self
