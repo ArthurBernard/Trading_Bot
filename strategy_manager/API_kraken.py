@@ -18,10 +18,12 @@ __all__ = ['KrakenClient']
 
 
 class KrakenClient:
-    def __init__(self):
+    def __init__(self, key=None, secret=None):
         self.uri = "https://api.kraken.com/"
+        self.key = key
+        self.secret = secret
 
-    def load(self, path):
+    def load_key(self, path):
         with open(path, 'r') as f:
             self.key = f.readline().strip()
             self.secret = f.readline().strip()
@@ -31,25 +33,24 @@ class KrakenClient:
         Returns a nonce
         Used in authentication
         """
-        return str(int(time.time() * 1000))
+        return int(time.time() * 1000)
 
-    def _headers(self, path, nonce, body):
-        signature = '/' + path + nonce + body
+    def _headers(self, path, data):
+        message = '/' + path + json.dumps(data)
         h = hmac.new(
             base64.b64decode(self.secret),
-            signature.encode('utf8'),
-            hashlib.sha384
+            message.encode(),
+            hashlib.sha512
         )
-        signature = h.hexdigest()
+
+        signature = base64.b64encode(h.digest()).decode()
 
         return {
-            "bfx-nonce": nonce,
-            "bfx-apikey": self.key,
-            "bfx-signature": signature,
-            "content-type": "application/json"
+            'API-Key': self.key,
+            'API-sign': signature,
         }
 
-    def set_request(self, method, **kwargs):
+    def query_private(self, method, timeout=30, **kwargs):
         """ Set a request.
 
         Parameters
@@ -66,13 +67,14 @@ class KrakenClient:
 
         """
         nonce = self._nonce()
-        body = json.dumps(kwargs)
+        kwargs['nonce'] = nonce
         path = '0/private/' + method
-        headers = self._headers(path, nonce, body)
+        headers = self._headers(path, kwargs)
+        url = self.uri + path
 
-        r = requests.post(self.uri + path, headers=headers, data=body)
+        r = requests.post(url, headers=headers, data=kwargs, timeout=timeout)
 
-        if r.status_code == 200:
+        if r.status_code in [200, 201, 202]:
             return r.json()
         else:
             raise ValueError(r.status_code, r)
