@@ -585,25 +585,36 @@ class DataExchangeManager:
 
     def get_data(self, *args, **kwargs):
         data = self._get_data(*args, **kwargs)
-        data = self.clean_data(data)
+        return self.clean_data(data)
 
     # TODO : to finish
     def _get_data(self, *args, **kwargs):
-        data = self.req.get_data(*args, **kwargs)['result']
-        return data
+        data = self.req.get_data(*args, **kwargs)
+        try:
+            return data['result']
+        except Exception as e:
+            print('UNKNOWN ERROR !\n' + '-' * 15 + '\n')
+            # print('Error is', e, type(e))
+            print('Answere is', data)
+            print('Args are', args)
+            print('Kwargs are', kwargs)
+            raise e
 
     def clean_data(self, data):
         # TODO : to finish
         # to make copy of asset
         # to loop for several assets
         rename = {0: 'TS', 1: 'o', 2: 'h', 3: 'l', 4: 'c', 6: 'v'}
-        df = set_dataframe(data[self.assets], index='TS',
-                           rename=rename, drop=[5, 7])
+        df = set_dataframe(
+            data[self.assets[0]], index='TS', rename=rename, drop=[5, 7],
+        )
         df = df.loc[df.index % self.frequency == 0, self.ohlcv]
+        # TODO : append several assets
+
         if df.index[-1] < now() - self.frequency:
             raise ValueError('Too old data: ', df.index[-1])
         else:
-            return df.loc.values[-self.n_min_obs:]
+            return df.loc[:, self.ohlcv].values[-self.n_min_obs:]
 
 
 if __name__ == '__main__':
