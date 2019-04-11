@@ -27,8 +27,10 @@ def load_config_params(path):
 
     """
     yaml = YAML()
+
     with open(path, 'r') as f:
         data = yaml.load(f)
+
     return data
 
 
@@ -44,6 +46,7 @@ def dump_config_params(data_cfg, path):
 
     """
     yaml = YAML()
+
     with open(path, 'w') as f:
         yaml.dump(data_cfg, f)
 
@@ -64,13 +67,19 @@ def get_df(path, name, ext=''):
     """
     if path[-1] != '/' and name[0] != '/':
         path += '/'
+
     if len(ext) > 0 and ext[0] != '.':
         ext = '.' + ext
+
     try:
+
         with open(path + name + ext, 'rb') as f:
             df = Unpickler(f).load()
+
             return df
+
     except FileNotFoundError:
+
         return pd.DataFrame()
 
 
@@ -87,8 +96,10 @@ def save_df(df, path, name, ext=''):
     """
     if path[-1] != '/' and name[0] != '/':
         path += '/'
+
     if len(ext) > 0 and ext[0] != '.':
         ext = '.' + ext
+
     with open(path + name + ext, 'wb') as f:
         Pickler(f).dump(df)
 
