@@ -201,8 +201,9 @@ def update_result_hist(order_results, name, path='.'):
     if idx.size <= 1:
         hist.loc[idx[0], 'return'] = 0
     else:
-        prices = hist.loc[:, 'price'].values
-        volumes = hist.loc[:, 'volume'].values
-        hist.loc[idx[1]:, 'return'] = (prices[1:] - prices[:-1]) * volumes[:-1]
+        p = hist.loc[:, 'price'].values
+        vol = hist.loc[:, 'volume'].values
+        pos = hist.loc[:, 'position'].values
+        hist.loc[idx[1]:, 'return'] = (p[1:] - p[:-1]) * vol[:-1] * pos[:-1]
     # Save order historic dataframe
     save_df(hist, path, name + '_res_hist', '.dat')
