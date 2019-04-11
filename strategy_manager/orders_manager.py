@@ -6,11 +6,12 @@ from pickle import Pickler, Unpickler
 import time
 
 # Import external packages
-from krakenex import API
+# from krakenex import API
 from requests import HTTPError
 
 # Import internal packages
 from strategy_manager.tools.time_tools import now
+from strategy_manager.API_kraken import KrakenClient as API
 
 __all__ = ['SetOrder']
 
@@ -119,8 +120,10 @@ class SetOrder:
             # Send order
             out = self.K.query_private(
                 'AddOrder',
-                data={'userref': id_order, **kwargs},
+                # data={'userref': id_order, **kwargs},
+                userref=id_order,
                 timeout=30,
+                **kwargs
             )
             # TO DEBUG
             try:
@@ -289,7 +292,7 @@ class SetOrder:
             leverage = 2 if leverage is None else leverage + 1
             out = self.order(leverage=leverage, **kwargs)
             # Set current volume
-            self.current_vol = - kwargs['volume']
+            self.current_vol = kwargs['volume']
             self.current_pos = signal
             out['result']['current_volume'] = self.current_vol
             out['result']['current_position'] = signal
@@ -348,7 +351,8 @@ class SetOrder:
         """
         try:
             ans = self.K.query_private(
-                'QueryOrders', {'trades': True, 'userref': id_order}
+                'OpenOrders', trades=True, userref=id_order,
+                # {'trades': True, 'userref': id_order}
             )
         except Exception as e:
             print(str(type(e)), str(e), ' error !')
