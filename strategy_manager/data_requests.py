@@ -124,6 +124,8 @@ class DataRequests:
             return self.get_data(**kwargs)
 
     def __iter__(self):
+        """ Set iterative method """
+
         return self
 
     def __next__(self):
@@ -471,6 +473,7 @@ def get_ohlcv(exchange, pair, since=None, frequency=60):
         data = DataRequests('https://api.kraken.com/0/public/').get_data(
             'OHLC', pair=pair, interval=int(frequency / 60), since=since
         )
+
     else:
         raise ValueError('Unknow exchange: ', exchange)
 
@@ -554,11 +557,13 @@ def update_data(exchange, asset, path='data_base/'):
     try:
         df = data_base_requests(asset, 'ohlcv', start=since, frequency=60)
         since = df.index[-1]
+
     except FileNotFoundError:
         df = pd.DataFrame()
 
     if exchange.lower() == 'kraken':
         data = get_ohlcv_kraken(asset, since=since, frequency=60)
+
     else:
         raise ValueError('Unknow exchange', exchange)
 
@@ -585,13 +590,16 @@ class DataExchangeManager:
 
     def get_data(self, *args, **kwargs):
         data = self._get_data(*args, **kwargs)
+
         return self.clean_data(data)
 
     # TODO : to finish
     def _get_data(self, *args, **kwargs):
         data = self.req.get_data(*args, **kwargs)
         try:
+
             return data['result']
+
         except Exception as e:
             print('UNKNOWN ERROR !\n' + '-' * 15 + '\n')
             # print('Error is', e, type(e))
@@ -612,8 +620,11 @@ class DataExchangeManager:
         # TODO : append several assets
 
         if df.index[-1] < now() - self.frequency:
+
             raise ValueError('Too old data: ', df.index[-1])
+
         else:
+
             return df.loc[:, self.ohlcv].values[-self.n_min_obs:]
 
 
