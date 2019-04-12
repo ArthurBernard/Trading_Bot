@@ -56,17 +56,19 @@ class StrategyManager:
             underlying volatility. Default is `True`.
 
         """
-        # strat = __import__(script_name, fromlist=['strategies'])
         strat = importlib.import_module(
-            'strategy_manager.strategies.' + script_name
+            'strategy_manager.strategies.' + script_name + '.strategy'
         )
         self._get_order_params = strat.get_order_params
         self.frequency = frequency
         self.underlying = underlying
+
         if STOP is None:
             self.STOP = 86400 // frequency
+
         else:
             self.STOP = STOP
+
         self.iso_vol = iso_volatility
 
     def __call__(self, *args, **kwargs):
@@ -93,8 +95,9 @@ class StrategyManager:
     def __iter__(self):
         """ Initialize iterative method. """
         self.t = 0
-        self.TS = now(self.frequency)  # int(time.time())
+        self.TS = now(self.frequency)
         self.next = self.TS + self.frequency
+
         return self
 
     def __next__(self):
@@ -103,6 +106,7 @@ class StrategyManager:
             raise StopIteration
 
         self.TS = int(time.time())
+
         # Sleep until ready
         if self.next > self.TS:
             time.sleep(self.next - self.TS)
@@ -131,6 +135,7 @@ class StrategyManager:
             Signal, price and volume strategy.
 
         """
+
         return self._get_order_params(data, *self.args, **self.kwargs)
 
     def set_data_manager(self, **kwargs):
@@ -153,7 +158,7 @@ class StrategyManager:
         else:
             self.kwargs_data = {}
 
-        request_from = kwargs.pop('request_data').lower()
+        request_from = kwargs.pop('source_data').lower()
 
         if request_from == 'exchange':
             self.DM = DataExchangeManager(**kwargs)
