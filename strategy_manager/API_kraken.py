@@ -53,6 +53,7 @@ class KrakenClient:
         """ Returns a nonce used in authentication.
 
         """
+
         return int(time.time() * 1000)
 
     def _headers(self, path, nonce, data):
@@ -98,6 +99,8 @@ class KrakenClient:
         r = requests.post(url, headers=headers, data=kwargs, timeout=timeout)
 
         if r.status_code in [200, 201, 202]:
+
             return r.json()
+
         else:
             raise ValueError(r.status_code, r)
