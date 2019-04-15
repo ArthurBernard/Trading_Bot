@@ -4,6 +4,8 @@
 # Import built-in packages
 import time
 import sys
+import logging
+# from logging.handlers import RotatingFileHandler
 
 # Import external packages
 
@@ -24,14 +26,20 @@ def check(*args, **kwargs):
     to quit.
 
     """
+    txt = ''
+
     for arg in args:
-        print(arg, '\n')
+        txt += str(arg) + '\n'
+
     for key, arg in kwargs.items():
-        print('{} : {}\n'.format(str(key), str(arg)))
+        txt += '{} : {}\n'.format(str(key), str(arg))
+
     a = input('\npress q to quit else continue\n')
+
     if a.lower() == 'q':
         sys.exit()
-    return 0
+
+    return txt
 
 
 def run_bot(id_strat, path='strategy_manager/strategies/'):
@@ -45,12 +53,13 @@ def run_bot(id_strat, path='strategy_manager/strategies/'):
         Path where is the configuration file.
 
     """
+    logger = logging.getLogger('strat_man')
+
     if path[-1] != '/':
         path += '/'
 
-    data_cfg = load_config_params(path + id_strat + '.cfg')
-    print('\n Check cfg:\n', '-' * 9)
-    check(**data_cfg)
+    # Load data configuration
+    data_cfg = load_config_params(path + id_strat + '/configuration.yaml')
 
     # Get parameters for strategy manager object
     SM_params = data_cfg['strat_manager_instance']
@@ -63,96 +72,111 @@ def run_bot(id_strat, path='strategy_manager/strategies/'):
     SM.set_data_manager(**data_requests_params.copy())
 
     # Get parameters for pre order configuration
-    pre_order_params = data_cfg['pre_order_instance'].copy()
+    pre_order_params = data_cfg['pre_order_instance']
     # Set pre order configuration
-    OM = SetOrder(frequency=SM_params['frequency'], **pre_order_params)
+    OM = SetOrder(**pre_order_params)
 
     # Get order parameters
     order_params = data_cfg['order_instance']
+    vol = order_params.pop('volume')
     # Get parameters for strategy function
     args = data_cfg['strategy_instance']['args_params']
     kwargs = data_cfg['strategy_instance']['kwargs_params']
 
     # The bot start to run
     try:
-        for s, p, v in SM(*args.copy(), **kwargs.copy()):
-            print('{}th iteration'.format(SM.t))
 
-            print('\n Check spv:\n', '-' * 9)
-            check(s, p, v)
+        for s, p, v in SM(*args.copy(), **kwargs.copy()):
+            logger.info('{}th iteration'.format(SM.t))
+            logger.info('Signal is {}, price is {} and IV is {}'.format(
+                s, p, v
+            ))
 
             # Set order
-            order_params['volume'] *= float(v)
-            outputs = OM.set_order(s, price=p, **order_params.copy())
-            print('\n Check out:\n', '-' * 9)
-            check(*outputs)
+            outputs = OM.set_order(s, price=p, volume=vol * v, **order_params)
 
             # Check to verify and debug
             if not order_params['validate']:
+
                 for output in outputs:
                     id_order = output['result']['userref']
                     status = OM.get_status_order(id_order)
-                    check(status)
+                    logger.info(check(status))
 
+            # TODO : save new volume to invest if reinvest
             # TODO : compute, print and save some statistics
             # Clean outputs
             outputs = set_order_results(outputs)
-            print('\n Check output:\n', '-' * 12)
-            check(*outputs)
+            txt = 'Check output:\n'
+            txt += check(*outputs)
+            logger.info(txt)
 
             # Update result historic
-            update_result_hist(outputs, id_strat, path=path)
+            update_result_hist(outputs, '', path=path + id_strat)
 
             # Update order historic
-            update_order_hist(outputs, id_strat, path=path)
+            update_order_hist(outputs, '', path=path + id_strat)
 
             # TODO : Print results
             print_results(outputs)
 
             # Get current pos
-            current_pos = OM.current_pos
-            print('Current position is:', current_pos)
+            current_pos = float(OM.current_pos)
+            current_vol = float(OM.current_vol)
+            logger.info('Current position: {:.2f}'.format(current_pos))
+            logger.info('Current volume: {:.2f}'.format(current_vol))
             # TODO : check if current position is ok
-            data_cfg['pre_order_instance']['current_pos'] = float(
-                OM.current_pos
-            )
+            # data_cfg['pre_order_instance']['current_pos'] = float(current_pos)
             # TODO : check if current volume is ok
-            data_cfg['pre_order_instance']['current_vol'] = abs(float(
-                OM.current_vol
-            ))
+            # data_cfg['pre_order_instance']['current_vol'] = float(current_vol)
             pass
+
         else:
-            print('All is good')
+            print('\nAll is good\n')
 
     except Exception as error:
-        # DEBUG
-        raise error
+
         # TODO : how manage unknown error
         # Report error TODO : Improve
-        time_str = time.strftime('%y-%m-%d %H:%M:%S', time.gmtime(now()))
-        txt = '\nUNKNOWN ERROR\n'
-        txt += 'In {} script '.format(sys.argv[0])
-        txt += 'for {} strat id '.format(id_strat)
-        txt += 'at {} UTC, '.format(time_str)
-        txt += 'the following error occurs:\n'
-        txt += '{}: {}\n'.format(str(type(error)), str(error))
-        print(txt)
+        # time_str = time.strftime('%y-%m-%d %H:%M:%S', time.gmtime(now()))
+        # txt = '\nUNKNOWN ERROR\n'
+        # txt += 'In {} script '.format(sys.argv[0])
+        # txt += 'for {} strat id '.format(id_strat)
+        # txt += 'at {} UTC, '.format(time_str)
+        # txt += 'the following error occurs:\n'
+        # txt += '{}: {}\n'.format(str(type(error)), str(error))
+        # print(txt)
+        logger.error('UNKNOWN ERROR', str(type(error)), str(error))
 
-        with open(path + sys.argv[1] + '.log', 'a') as f:
-            f.write(txt)
+        # with open(path + id_strat + '/errors.log', 'a') as f:
+        #    f.write(txt)
+        raise error
 
     finally:
         # DEGUG
-        df_ord = get_df(path, id_strat + '_ord_hist', '.dat')
-        df_res = get_df(path, id_strat + '_res_hist', '.dat')
-        print('Historic:', '-' * 9, df_ord.head(), df_res.head(), sep='\n')
+        df_ord = get_df(path + id_strat, 'orders_hist', '.dat')
+        df_res = get_df(path + id_strat, 'result_hist', '.dat')
+        print('Historic:\n' + '-' * 9 + '\n')
+        print(df_ord.tail(), '\n')
+        print(df_res.tail(), '\n')
         # TODO : ending with save some statistics and others
+        # TODO : save new volume to invest if reinvest
+        # Reset poped parameters
+        order_params['volume'] = vol
         # Save current position and volume
-        dump_config_params(data_cfg, path + id_strat + '.cfg')
-        print('\nBot stopped. See you soon !\n')
+        dump_config_params(data_cfg, path + id_strat + '/configuration.yaml')
+        logger.info('Bot stopped. See you soon !')
 
 
 if __name__ == '__main__':
+
+    import logging.config
+    import yaml
+
+    with open('./strategy_manager/logging.ini', 'rb') as f:
+        config = yaml.safe_load(f.read())
+
+    logging.config.dictConfig(config)
     txt = '\nStrategy {} starts to run !\n'.format(sys.argv[1])
     txt += '-' * (len(txt) - 2) + '\n'
     print(txt)
