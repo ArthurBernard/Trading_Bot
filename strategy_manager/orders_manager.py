@@ -3,7 +3,7 @@
 
 # Import built-in packages
 from pickle import Pickler, Unpickler
-import time
+import logging
 
 # Import external packages
 # from krakenex import API
@@ -11,7 +11,7 @@ from requests import HTTPError
 
 # Import internal packages
 from strategy_manager.tools.time_tools import now
-from strategy_manager.API_kraken import KrakenClient as API
+from strategy_manager.API_kraken import KrakenClient
 
 __all__ = ['SetOrder']
 
@@ -88,12 +88,17 @@ class SetOrder:
         self.current_pos = current_pos
         self.current_vol = current_vol
         self.frequency = frequency
+
+        self.logger = logging.getLogger(__name__)
+
         if exchange.lower() == 'kraken':
-            # Use krakenex API while I am lazy to do myself
-            self.K = API()
+            self.K = KrakenClient()
             self.K.load_key(path_log)
+
         else:
-            raise ValueError(str(exchange) + ' not allowed.')
+
+            self.logger.error('Exchange "{}" not allowed'.format(exchange))
+            raise ValueError(exchange + ' not allowed.')
 
     def order(self, **kwargs):
         """ Request an order following defined parameters.
@@ -113,56 +118,63 @@ class SetOrder:
 
         """
         id_order = self._set_id_order()
+
         if kwargs['leverage'] == 1:
             kwargs['leverage'] = None
+
         # TODO : Append a method to verify if the volume is available.
         try:
             # Send order
             out = self.K.query_private(
                 'AddOrder',
-                # data={'userref': id_order, **kwargs},
                 userref=id_order,
                 timeout=30,
                 **kwargs
             )
+
             # TO DEBUG
             try:
                 # Set infos
                 out['result']['userref'] = id_order
                 out['result']['timestamp'] = now(self.frequency)
+
             except KeyError:
-                print('+----------------------------------+')
-                print('|/!\\ KeyError in OrderManager ! /!\\|')
-                print('+----------------------------------+')
-                print('out : ', out)
-                print('type : ', type(out))
-                print('params : ', kwargs)
+                self.logger.error('KeyError:\n\nout: {}\n\nkwargs:{}\n'.format(
+                    str(out), str(kwargs)
+                ), exc_info=True)
 
             # TO DEBUG
-            print(out)
+            self.logger.debug('Output orders: {}'.format(out))
 
         except Exception as e:
-            print(str(type(e)), str(e), ' error !')
+            # print(str(type(e)), str(e), ' error !')
+
             if e in [HTTPError]:
+                self.logger.error('Catching the following error: {}'.format(e))
+
                 query = self.get_query_order(id_order)
+
                 if query['status'] not in ['open', 'close', 'pending']:
                     out = self.order(**kwargs)
-            elif e in [ConnectionResetError]:
-                self.K = API()
-                self.K.load_key(self.path)
-                out = self.order(**kwargs)
+
             else:
-                raise ValueError('Error unknown ', type(e), e)
+
+                self.logger.error('UNKNOWN ERROR', exc_info=True)
+                raise e  # ValueError('Error unknown ', type(e), e)
+
         # Check if order is ordered correctly
         query = self.get_query_order(id_order)
 
         # TO DEBUG
-        print(query)
+        self.logger.debug(str(query))
 
         if kwargs['validate']:
+
             return out
+
         elif query['status'] not in ['open', 'close', 'pending']:
             out = self.order(**kwargs)
+
         return out
 
     def _set_id_order(self):
@@ -177,6 +189,7 @@ class SetOrder:
         """
         id_user = self._get_id_user()
         id_order = int(str(id_user) + str(self.id_strat))
+
         return id_order
 
     def _get_id_user(self):
@@ -190,17 +203,22 @@ class SetOrder:
 
         """
         try:
-            f = open('id_timestamp', 'rb')
-            TS = Unpickler(f).load()
-            f.close()
+
+            with open('id_timestamp', 'rb') as f:
+                TS = Unpickler(f).load()
+
         except FileNotFoundError:
             TS = 0
+
         id_user = (now(1) - TS) // 60
+
         if id_user > self.id_max // 1000:
-            f = open('id_timestamp', 'wb')
-            Pickler(f).dump(now(1))
-            f.close()
+
+            with open('id_timestamp', 'wb') as f:
+                Pickler(f).dump(now(1))
+
             id_user = self._get_id_user()
+
         return id_user
 
     def set_order(self, signal, **kwargs):
@@ -220,21 +238,24 @@ class SetOrder:
 
         """
         out = []
+
         # Don't move
         if self.current_pos == signal:
+
             return [self.set_output(kwargs['price'])]
+
         # Up move
         elif self.current_pos <= 0. and signal >= 0:
             kwargs['type'] = 'buy'
             out += [self.cut_short(signal, **kwargs.copy())]
             out += [self.set_long(signal, **kwargs.copy())]
+
         # Down move
         elif self.current_pos >= 0. and signal <= 0:
             kwargs['type'] = 'sell'
             out += [self.cut_long(signal, **kwargs.copy())]
             out += [self.set_short(signal, **kwargs)]
-        # Update current position
-        # self.current_pos = signal
+
         return out
 
     def cut_short(self, signal, **kwargs):
@@ -243,30 +264,38 @@ class SetOrder:
             # Set leverage to cut short
             leverage = kwargs.pop('leverage')
             leverage = 2 if leverage is None else leverage + 1
+
             # Set volume to cut short
             kwargs['volume'] = self.current_vol
+
             # Query order
             out = self.order(leverage=leverage, **kwargs)
+
             # Set current volume and position
             self.current_vol = 0.
             self.current_pos = 0
             out['result']['current_volume'] = 0.
             out['result']['current_position'] = 0
+
         else:
             out = self.set_output(kwargs['price'])
+
         return out
 
     def set_long(self, signal, **kwargs):
         """ Set long order """
         if signal > 0:
             out = self.order(**kwargs)
+
             # Set current volume
             self.current_vol = kwargs['volume']
             self.current_pos = signal
             out['result']['current_volume'] = self.current_vol
             out['result']['current_position'] = signal
+
         else:
             out = self.set_output(kwargs['price'])
+
         return out
 
     def cut_long(self, signal, **kwargs):
@@ -275,13 +304,16 @@ class SetOrder:
             # Set volume to cut long
             kwargs['volume'] = self.current_vol
             out = self.order(**kwargs)
+
             # Set current volume
             self.current_vol = 0.
             self.current_pos = 0
             out['result']['current_volume'] = 0.
             out['result']['current_position'] = 0
+
         else:
             out = self.set_output(kwargs['price'])
+
         return out
 
     def set_short(self, signal, **kwargs):
@@ -291,25 +323,29 @@ class SetOrder:
             leverage = kwargs.pop('leverage')
             leverage = 2 if leverage is None else leverage + 1
             out = self.order(leverage=leverage, **kwargs)
+
             # Set current volume
             self.current_vol = kwargs['volume']
             self.current_pos = signal
             out['result']['current_volume'] = self.current_vol
             out['result']['current_position'] = signal
+
         else:
             out = self.set_output(kwargs['price'])
+
         return out
 
     def set_output(self, price):
         """ Set output when no orders query """
-        out = {'result': {
-            'price': price,
-            'timestamp': now(self.frequency),
-            'current_volume': self.current_vol,
-            'current_position': self.current_pos,
-            'descr': None,
-        }}
-        return out
+        return {
+            'result': {
+                'price': price,
+                'timestamp': now(self.frequency),
+                'current_volume': self.current_vol,
+                'current_position': self.current_pos,
+                'descr': None,
+            }
+        }
 
     def decode_id_order(self, id_order):
         """ From an id order decode the time (in minute) and the strategy
@@ -330,9 +366,10 @@ class SetOrder:
         """
         id_user = id_order // 1000
         id_strat = id_order % 1000
-        f = open('id_timestamp', 'rb')
-        TS = Unpickler(f).load() + id_user * 60
-        f.close()
+
+        with open('id_timestamp', 'rb') as f:
+            TS = Unpickler(f).load() + id_user * 60
+
         return TS, id_strat
 
     def get_query_order(self, id_order):
@@ -351,17 +388,22 @@ class SetOrder:
         """
         try:
             ans = self.K.query_private(
-                'OpenOrders', trades=True, userref=id_order,
-                # {'trades': True, 'userref': id_order}
+                'OpenOrders',
+                trades=True,
+                userref=id_order,
             )
+
         except Exception as e:
-            print(str(type(e)), str(e), ' error !')
+            # print(str(type(e)), str(e), ' error !')
+
             if e in [HTTPError]:
+                self.logger.error('Catching the following error: {}'.format(e))
+
                 return self.get_status_order(id_order)
-            elif e in [ConnectionResetError]:
-                self.K = API()
-                self.K.load_key(self.path)
-                return self.get_status_order(id_order)
+
             else:
-                raise ValueError('Error unknown: ', type(e), e)
-        return ans
+                self.logger.error('UNKNOWN ERROR', exc_info=True)
+
+                raise e  # ValueError('Error unknown: ', type(e), e)
+
+        return ans['result']
