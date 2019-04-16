@@ -34,7 +34,7 @@ def check(*args, **kwargs):
     for key, arg in kwargs.items():
         txt += '{} : {}\n'.format(str(key), str(arg))
 
-    a = input('\npress q to quit else continue\n')
+    a = '0'  # input('\npress q to quit else continue\n')
 
     if a.lower() == 'q':
         sys.exit()
@@ -107,9 +107,9 @@ def run_bot(id_strat, path='strategy_manager/strategies/'):
             # TODO : compute, print and save some statistics
             # Clean outputs
             outputs = set_order_results(outputs)
-            txt = 'Check output:\n'
-            txt += check(*outputs)
-            logger.info(txt)
+            # txt = 'Check output:\n'
+            # txt += check(*outputs)
+            # logger.debug(txt)
 
             # Update result historic
             update_result_hist(outputs, '', path=path + id_strat)
@@ -146,7 +146,7 @@ def run_bot(id_strat, path='strategy_manager/strategies/'):
         # txt += 'the following error occurs:\n'
         # txt += '{}: {}\n'.format(str(type(error)), str(error))
         # print(txt)
-        logger.error('UNKNOWN ERROR', str(type(error)), str(error))
+        logger.error('UNKNOWN ERROR'.format(str(type(error)), str(error)))
 
         # with open(path + id_strat + '/errors.log', 'a') as f:
         #    f.write(txt)
