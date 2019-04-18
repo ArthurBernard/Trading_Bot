@@ -5,7 +5,7 @@ strat_manager_instance:
   underlying: ETHUSD
   iso_volatility: true
   frequency: 5
-  STOP: 120
+  STOP: 10
 
 # Parameters for the strategy function
 strategy_instance:
