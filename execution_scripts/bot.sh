@@ -1,22 +1,20 @@
 #!/bin/bash
 #
-# Script to run automatically some python scripts and verify each 
-# second that program doesn't shutdown. 
-# Only one parameters, `name_strategy` to execute. The bot will go
-# to search instruction in a file named `var_name_strategy.sh`.
+# Script to run automatically a Python scripts and verify each 
+# second that program didn't shutdown. 
+# Only one parameters, `name_strategy` to execute the strategy.
 #
 # Example:
 #
 # ./bot.sh example
 #
 
-# TODO : Read parameters in `./var_strat.sh` <=> ./var_$1.sh
-
 # Run `execution_strat.py` python script
-python3 execution_strat.py $STRAT_NAME $UNDERLYING $FREQUENCY $PATH $EXTRA_PARAMS >> bot_$1.log 2>&1 &
+python3 strategy_manager/main.py $1 >> bot_$1.log 2>&1 &
 
 # Check the PID
-script_pid=`ps -f | grep execution_strat.py $STRAT_NAME $UNDERLYING $FREQUENCY | grep -v grep | awk '{print $2}'`
+script_pid=`ps -f | grep main.py\ $1 | grep -v grep | awk '{print $2}'`
+echo "$1 has started, this pid is $script_pid"
 
 # Define curent timestamp
 ts=`date +%s`
@@ -33,12 +31,15 @@ while [ $ts -lt $stop ]; do
     # Check if script is always running
     if ! ps -p $script_pid > /dev/null; then
         # Program shutdown
+        echo 'Program has stopped'
         let "i = i + 1"
+
         # Run `execution_strat.py` python script
-        python3 execution_strat.py $STRAT_NAME $UNDERLYING $FREQUENCY $PATH $EXTRA_PARAMS >> bot_$1.log 2>&1 &
+        python3 strategy_manager/main.py $1 >> bot_$1.log 2>&1 &
 
         # Check the PID
-        script_pid=`ps -f | grep execution_strat.py $STRAT_NAME $UNDERLYING $FREQUENCY | grep -v grep | awk '{print $2}'`
+        script_pid=`ps -f | grep main.py\ $1 | grep -v grep | awk '{print $2}'`
+        echo "$1 has restarted, this new pid is $script_pid"
 
     fi
     # Sleep one second
