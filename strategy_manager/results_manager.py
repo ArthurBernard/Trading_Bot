@@ -141,11 +141,11 @@ def update_order_hist(order_result, name, path='.'):
 
     # Get order historic dataframe
     df_hist = get_df(path, name + 'orders_hist', '.dat')
-    
+
     # Set new order historic dataframe
     df_hist = df_hist.append(set_order_hist(order_result), sort=False)
     df_hist = df_hist.reset_index(drop=True)
-    
+
     # Save order historic dataframe
     save_df(df_hist, path, name + 'orders_hist', '.dat')
 
