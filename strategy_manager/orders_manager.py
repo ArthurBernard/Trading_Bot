@@ -254,7 +254,7 @@ class SetOrder:
         elif self.current_pos >= 0. and signal <= 0:
             kwargs['type'] = 'sell'
             out += [self.cut_long(signal, **kwargs.copy())]
-            out += [self.set_short(signal, **kwargs)]
+            out += [self.set_short(signal, **kwargs.copy())]
 
         return out
 
