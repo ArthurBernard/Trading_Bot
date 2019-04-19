@@ -4,7 +4,7 @@
 
 This project is in progress, eventually it will be able to automatically manage several strategies, signal calculation, order execution, allow history performance, etc.    
 
-Initially `Strategy Manager` can be used with the Kraken crypto-currency platform, but in the long term this project will be extended to other trading platforms (e.g. Bitfinex or Interactive-Brokers).    
+Initially `Strategy Manager` will be used with the Kraken crypto-currency platform, but in the long term this project may be extended to other trading platforms (e.g. Bitfinex or Interactive-Brokers).    
 
 ## Installation
 
@@ -23,21 +23,16 @@ Exemple:
 
 By order of priority:
 
-- `strategy_manager.py`:   
-    - Unit tests.
+- General: 
+     - Clean and standardize different loggers and log files;
+     - Make a documentation;
 - `bot_download_data.sh` shell to request data and verify that it runs fine.
-- `bot_strategies.sh` shell script to run and verify that all strategies run fine.
 - `bot_manager.sh` shell script to run and verify that all bots run fine. 
-- `data_requests.py`:
-    - To create method: Differents kind of requests; 
-    - To create method: Save data;
-    - To finish method: Special iterative method;
-    - To create method: sort and clean data;
-- `data_request.py`: 
-    - To create method: Load data;
-    - To create method: Get ready data;
 - `orders_manager.py`:
-    - To create method: Set history orders;
-    - To create method: Get available funds;
-    - To create method: Verify integrity of new orders;
-    - To create method: (future) split orders for a better scalability;
+    - Method: Set history orders;
+    - Method: Get available funds;
+    - Method: Verify integrity of new orders (if volume to order is available); 
+- `execution_order.py`: Algorithm of execution order (not just 'submit and leaves'). Something like vwap or twap. 
+- `result_manager.py`:
+    - Function: compute performance of a strategy
+    - Object: special logger 
