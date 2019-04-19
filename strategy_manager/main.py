@@ -124,11 +124,11 @@ def run_bot(id_strat, path='strategy_manager/strategies/'):
             current_pos = float(OM.current_pos)
             current_vol = float(OM.current_vol)
             logger.info('Current position: {:.2f}'.format(current_pos))
-            logger.info('Current volume: {:.2f}'.format(current_vol))
+            logger.info('Current volume: {:.2f}\n\n'.format(current_vol))
             # TODO : check if current position is ok
-            # data_cfg['pre_order_instance']['current_pos'] = float(current_pos)
+            data_cfg['pre_order_instance']['current_pos'] = float(current_pos)
             # TODO : check if current volume is ok
-            # data_cfg['pre_order_instance']['current_vol'] = float(current_vol)
+            data_cfg['pre_order_instance']['current_vol'] = float(current_vol)
             pass
 
         else:
