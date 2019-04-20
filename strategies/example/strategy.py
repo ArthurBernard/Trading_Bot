@@ -12,7 +12,7 @@ def get_order_params(data, *args, **kwargs):
     """ Return signal, price and volume """
     signal = get_signal(data, *args, **kwargs)
     price = get_price(data, signal, *args, **kwargs)
-    volume = get_volume(data, *args, **kwargs)
+    coef_vol = get_coef_volume(data, *args, **kwargs)
 
     return signal, price, 1.5 + signal  # volume
 
@@ -23,7 +23,7 @@ def get_signal(data, *args, **kwargs):
     return int(np.random.choice(args))
 
 
-def get_volume(data, volume, *args, **kwargs):
+def get_coef_volume(data, volume, *args, **kwargs):
     """ Compute volume """
     if 'c' in data.columns:
         series = data.loc[:, 'c']
