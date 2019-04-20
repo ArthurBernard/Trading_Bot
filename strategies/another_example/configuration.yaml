@@ -1,0 +1,50 @@
+# Another example of a strategy configuration file
+# Parameters for StrategyManager object
+strat_manager_instance:
+  script_name: another_example          # Name of strategy
+  underlying: XBTUSD                    # Code of underlying
+  iso_volatility: false                 # Money management
+  frequency: 5    # Frequency in seconds e.g daily = 86400
+  STOP: 3         # Optional number of iteration before stopping
+
+# Parameters for the strategy function
+strategy_instance:
+  args_params:          # Optional list of parameters to compute signal.
+  - para1
+  kwargs_params:        # Optional dict of parameters to compute signal
+    target_vol: 0.2     # Correspond to 20% of yearly volatility
+    leverage: 1.        # Correspond to the max leverage allowed
+    helf_life: 11       # Number of period to compute exponential vol
+    period: 525600      # Number of trading period per year
+
+# Parameters for DataRequest object
+get_data_instance:
+  source_data: exchange  # database or exchange available
+  args:                  # Optional list of parameters
+  - OHLC
+  kwargs:                # Optional dict of parameters
+    pair: XBTUSD
+    interval: 60
+  assets:                # List of assets to download 
+  - XXBTZUSD
+  ohlcv: ohlcv           # {o: open, h: high, l: low, c: close, v: volume}
+  frequency: 7200        # Number of second between two data
+  n_min_obs: 50          # Minimal number of observation to compute signal
+  path: https://api.kraken.com/0/public   # Path of the data source
+
+# Parameters for set pre_order
+pre_order_instance:
+  id_strat: 1          # An number id for your strat (< 100).
+  path_log: /home/arthur/Strategies/Data_Server/Untitled_Document2.txt # Path of the file with your logging
+  exchange: kraken     # Name of the exchange to trade.
+  current_pos: 0.0     # Current position of the strategy {1, 0, -1}
+  current_vol: 0.5     # Current volume set to the position
+  frequency: 5         # Similar of the first frequency parameter (useless)
+
+# Parameters for set_order method, check API documentation
+order_instance:
+  pair: XBTUSD       # Symbol of underlying
+  ordertype: market  # Order type e.g. limit or market
+  leverage: 1        # Max leverage
+  validate: true     # /!\ Doesn't push order if True /!\
+  volume: 1.         # Max volume to trade
