@@ -4,13 +4,13 @@
 
 This project is in progress, eventually it will be able to automatically manage several strategies, signal calculation, order execution, allow history performance, etc.    
 
-Initially `Strategy Manager` will be used with the Kraken crypto-currency platform, but in the long term this project may be extended to other trading platforms (e.g. Bitfinex or Interactive-Brokers).    
+Initially `Strategy Manager` will be used with the Kraken crypto-currency exchange platform, but in the long term this project may be extended to other trading platforms (e.g. Bitfinex or Interactive-Brokers).    
 
 ## Installation
 
 At the root of a folder, clone the repository and install it with `pip`:
 
-> $ git clone https://github.com/ArthurBernard/Strategy_Manager.git
+> $ git clone https://github.com/ArthurBernard/Strategy_Manager.git    
 > $ pip install -e strategy_manager   
 
 With linux you can use crontab to schedule automatic exectution.   
