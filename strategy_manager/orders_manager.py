@@ -403,6 +403,12 @@ class SetOrder:
                 return self.get_status_order(id_order)
 
             else:
-                self.logger.error('UNKNOWN ERROR', exc_info=True)
+                self.logger.error(
+                    'UNKNOWN ERROR : {}\nAnswere of query: {}'.format(
+                        type(e),
+                        ans
+                    ),
+                    exc_info=True
+                )
 
                 raise e
