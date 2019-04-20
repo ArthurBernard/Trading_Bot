@@ -57,7 +57,7 @@ class StrategyManager:
 
         """
         strat = importlib.import_module(
-            'strategy_manager.strategies.' + script_name + '.strategy'
+            'strategies.' + script_name + '.strategy'
         )
         self._get_order_params = strat.get_order_params
         self.frequency = frequency
