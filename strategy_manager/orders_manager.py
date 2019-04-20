@@ -89,7 +89,7 @@ class SetOrder:
         self.current_vol = current_vol
         self.frequency = frequency
 
-        self.logger = logging.getLogger(__name__)
+        self.logger = logging.getLogger('strat_man.' + __name__)
 
         if exchange.lower() == 'kraken':
             self.K = KrakenClient()
@@ -393,8 +393,9 @@ class SetOrder:
                 userref=id_order,
             )
 
+            return ans['result']
+
         except Exception as e:
-            # print(str(type(e)), str(e), ' error !')
 
             if e in [HTTPError]:
                 self.logger.error('Catching the following error: {}'.format(e))
@@ -404,6 +405,4 @@ class SetOrder:
             else:
                 self.logger.error('UNKNOWN ERROR', exc_info=True)
 
-                raise e  # ValueError('Error unknown: ', type(e), e)
-
-        return ans['result']
+                raise e
