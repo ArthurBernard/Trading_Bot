@@ -1,0 +1,53 @@
+# Example
+# Parameters for StrategyManager object
+strat_manager_instance:
+  script_name: example
+  underlying: ETHUSD
+  iso_volatility: true
+  frequency: 5
+  STOP: 10
+
+# Parameters for the strategy function
+strategy_instance:
+  args_params:
+  - 1
+  - 0
+  - -1
+  kwargs_params:
+    target_vol: 0.2
+    leverage: 1.
+    half_life: 11
+    period: 525600
+
+# Parameters for DataRequest object
+get_data_instance:
+  source_data: database
+  args: []
+  kwargs:
+    start: 1552089600
+    last: 1552155180
+  assets:
+  - example
+  ohlcv: v
+  frequency: 60
+  n_min_obs: 5
+  path: /home/arthur/GitHub/Strategy_Manager/data_base/
+
+# Parameters for set pre_order
+pre_order_instance:
+  id_strat: 0
+  path_log: /home/arthur/Strategies/Data_Server/Untitled_Document2.txt
+  exchange: kraken
+  current_pos: -1.0
+  current_vol: 0.5
+  frequency: 5
+
+# Parameters for set_order method, check API documentation
+order_instance:
+  pair: ETHUSD
+  ordertype: limit
+  leverage: 1
+  oflags:
+  - post
+  validate: true
+  volume: 1.
