@@ -1,11 +1,13 @@
 # Files to ignore
-strategies/momentum_ethusd_7200.py
+id_timestamp
+
 
 # Extensions to ignore
 *.so
 *.html
 *.ipynb_checkpoints
 *.log
+*.dat
 
 # Folders to ignore
 *.egg-info/
