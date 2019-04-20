@@ -146,7 +146,10 @@ def run_bot(id_strat, path='strategy_manager/strategies/'):
         # txt += 'the following error occurs:\n'
         # txt += '{}: {}\n'.format(str(type(error)), str(error))
         # print(txt)
-        logger.error('UNKNOWN ERROR'.format(str(type(error)), str(error)))
+        logger.error(
+            'UNKNOWN ERROR: {}\n{}'.format(str(type(error)), str(error)),
+            exc_info=True
+        )
 
         # with open(path + id_strat + '/errors.log', 'a') as f:
         #    f.write(txt)
