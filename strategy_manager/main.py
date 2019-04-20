@@ -42,7 +42,7 @@ def check(*args, **kwargs):
     return txt
 
 
-def run_bot(id_strat, path='strategy_manager/strategies/'):
+def run_bot(id_strat, path='strategies/'):
     """ Run a bot for specified configuration file.
 
     Parameters
