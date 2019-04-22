@@ -39,8 +39,8 @@ pre_order_instance:
   id_strat: 0        # An number id for your strat (< 100)
   path_log: /home/arthur/Strategies/Data_Server/Untitled_Document2.txt # Path of the file with your logging
   exchange: kraken   # Name of the exchange to trade
-  current_pos: 1.0   # Current position of the strategy {1, 0, -1}
-  current_vol: 2.5   # Current volume set to the position
+  current_pos: 0.0   # Current position of the strategy {1, 0, -1}
+  current_vol: 0.0   # Current volume set to the position
   frequency: 5       # Similar of the first frequency parameter (useless)
 
 # Parameters for set_order method, check API documentation
