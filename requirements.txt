@@ -1,1 +1,5 @@
-numpy>=1.14.1
+fynance>=1.0.0
+numpy>=1.14.0
+pandas>=0.24.0
+requests>=2.0.0
+ruamel.yaml=>=0.15.0
