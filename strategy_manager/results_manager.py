@@ -45,14 +45,30 @@ def set_order_result(order_result):
 
     if descr is not None:
         list_ord = descr['order'].split(' ')
-        order_result.update({
-            'type': list_ord[0],
-            'volume': float(list_ord[1]),
-            'pair': list_ord[2],
-            'ordertype': list_ord[4],
-            'price': float(list_ord[5]),
-            'leverage': 1 if len(list_ord) == 6 else list_ord[7][0],
-        })
+
+        if list_ord[4] == 'limit':
+            order_result.update({
+                'type': list_ord[0],
+                'volume': float(list_ord[1]),
+                'pair': list_ord[2],
+                'ordertype': list_ord[4],
+                'price': float(list_ord[5]),
+                'leverage': 1 if len(list_ord) == 6 else list_ord[7][0],
+            })
+
+        elif list_ord[4] == 'market':
+            # TODO : /!\ get execution price for market order /!\
+            order_result.update({
+                'type': list_ord[0],
+                'volume': float(list_ord[1]),
+                'pair': list_ord[2],
+                'ordertype': list_ord[4],
+                'price': 0,  # float(list_ord[5]),
+                'leverage': 1 if len(list_ord) == 5 else list_ord[6][0],
+            })
+
+        else:
+            raise ValueError('Unknown order type: {}'.format(list_ord[4]))
 
         return order_result
 
@@ -78,7 +94,9 @@ def set_order_results(order_results):
     clean_order_result = []
 
     for result in order_results:
-        clean_order_result += [set_order_result(result['result'])]
+
+        if result is not None:
+            clean_order_result += [set_order_result(result['result'])]
 
     else:
 
