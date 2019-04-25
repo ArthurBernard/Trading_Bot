@@ -1,20 +1,36 @@
 #!/usr/bin/env python3
 # coding: utf-8
 
+# Import built-in packages
+
+# Import external packages
 import numpy as np
-from strategy_manager.data_requests import DataRequests
 import fynance as fy
+
+# Import internal packages
+from strategy_manager.data_requests import DataRequests
+from tools.utils import load_config_params
 
 __all__ = ['get_signal']
 
 
 def get_order_params(data, *args, **kwargs):
     """ Return signal, price and volume """
-    signal = get_signal(data, *args, **kwargs)
-    price = get_price(data, signal, *args, **kwargs)
-    coef_vol = get_coef_volume(data, *args, **kwargs)
+    # Get parameters
+    data_cfg = load_config_params(
+        './strategies/example/configuration.yaml'
+    )
+    params = data_cfg['order_instance']
 
-    return signal, price, 1.5 + signal  # volume
+    # Set signal
+    signal = get_signal(data, *args, **kwargs)
+
+    # Set paramaters
+    params['price'] = get_price(data, signal, *args, **kwargs)
+    # params['volume'] *= get_coef_volume(data, *args, **kwargs)
+    params['volume'] *= 1.5 + signal
+
+    return signal, params
 
 
 def get_signal(data, *args, **kwargs):
@@ -23,7 +39,7 @@ def get_signal(data, *args, **kwargs):
     return int(np.random.choice(args))
 
 
-def get_coef_volume(data, volume, *args, **kwargs):
+def get_coef_volume(data, *args, **kwargs):
     """ Compute volume """
     if 'c' in data.columns:
         series = data.loc[:, 'c']
@@ -36,7 +52,7 @@ def get_coef_volume(data, volume, *args, **kwargs):
 
     iv = set_iso_vol(series.values, *args, **kwargs)
 
-    return volume * iv
+    return iv
 
 
 def get_price(data, signal, *args, **kwargs):
