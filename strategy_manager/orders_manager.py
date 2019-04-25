@@ -96,8 +96,8 @@ class SetOrder:
             self.K.load_key(path_log)
 
         else:
-
             self.logger.error('Exchange "{}" not allowed'.format(exchange))
+
             raise ValueError(exchange + ' not allowed.')
 
     def order(self, **kwargs):
@@ -133,21 +133,20 @@ class SetOrder:
             )
 
             # TO DEBUG
-            try:
-                # Set infos
-                out['result']['userref'] = id_order
-                out['result']['timestamp'] = now(self.frequency)
+            # try:
+            #    # Set infos
+            #    out['result']['userref'] = id_order
+            #    out['result']['timestamp'] = now(self.frequency)
 
-            except KeyError:
-                self.logger.error('KeyError:\n\nout: {}\n\nkwargs:{}\n'.format(
-                    str(out), str(kwargs)
-                ), exc_info=True)
+            # except KeyError:
+            #    self.logger.error('KeyError:\n\nout: {}\n\nkwargs:{}\n'.format(
+            #        str(out), str(kwargs)
+            #    ), exc_info=True)
 
             # TO DEBUG
-            self.logger.debug('Output orders: {}'.format(out))
+            # self.logger.debug('Output orders: {}'.format(out))
 
         except Exception as e:
-            # print(str(type(e)), str(e), ' error !')
 
             if e in [HTTPError]:
                 self.logger.error('Catching the following error: {}'.format(e))
@@ -158,9 +157,9 @@ class SetOrder:
                     out = self.order(**kwargs)
 
             else:
-
                 self.logger.error('UNKNOWN ERROR', exc_info=True)
-                raise e  # ValueError('Error unknown ', type(e), e)
+
+                raise e
 
         # Check if order is ordered correctly
         query = self.get_query_order(id_order)
@@ -278,7 +277,7 @@ class SetOrder:
             out['result']['current_position'] = 0
 
         else:
-            out = self.set_output(kwargs['price'])
+            out = None  # self.set_output(kwargs['price'])
 
         return out
 
@@ -294,7 +293,7 @@ class SetOrder:
             out['result']['current_position'] = signal
 
         else:
-            out = self.set_output(kwargs['price'])
+            out = None  # self.set_output(kwargs['price'])
 
         return out
 
@@ -312,7 +311,7 @@ class SetOrder:
             out['result']['current_position'] = 0
 
         else:
-            out = self.set_output(kwargs['price'])
+            out = None  # self.set_output(kwargs['price'])
 
         return out
 
@@ -331,12 +330,13 @@ class SetOrder:
             out['result']['current_position'] = signal
 
         else:
-            out = self.set_output(kwargs['price'])
+            out = None  # self.set_output(kwargs['price'])
 
         return out
 
     def set_output(self, price):
         """ Set output when no orders query """
+        # TODO : /!\ get execution price for market order /!\
         return {
             'result': {
                 'price': price,
