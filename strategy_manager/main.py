@@ -98,6 +98,8 @@ def run_bot(id_strat, path='strategies/'):
 
             # TODO : save new volume to invest if reinvest
             # TODO : compute, print and save some statistics
+            print(outputs)
+
             # Clean outputs
             outputs = set_order_results(outputs)
 
