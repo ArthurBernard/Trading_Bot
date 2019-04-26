@@ -6,12 +6,12 @@ from pickle import Pickler, Unpickler
 import logging
 
 # Import external packages
-# from krakenex import API
 from requests import HTTPError
 
 # Import internal packages
 from strategy_manager.tools.time_tools import now
 from strategy_manager.API_kraken import KrakenClient
+from strategy_manager.data_requests import get_close
 
 __all__ = ['SetOrder']
 
@@ -241,7 +241,7 @@ class SetOrder:
         # Don't move
         if self.current_pos == signal:
 
-            return [self.set_output(kwargs['price'])]
+            return [self.set_output(kwargs)]
 
         # Up move
         elif self.current_pos <= 0. and signal >= 0:
@@ -277,7 +277,7 @@ class SetOrder:
             out['result']['current_position'] = 0
 
         else:
-            out = None  # self.set_output(kwargs['price'])
+            out = self.set_output(kwargs)
 
         return out
 
@@ -293,7 +293,7 @@ class SetOrder:
             out['result']['current_position'] = signal
 
         else:
-            out = None  # self.set_output(kwargs['price'])
+            out = self.set_output(kwargs)
 
         return out
 
@@ -311,7 +311,7 @@ class SetOrder:
             out['result']['current_position'] = 0
 
         else:
-            out = None  # self.set_output(kwargs['price'])
+            out = self.set_output(kwargs)
 
         return out
 
@@ -330,22 +330,33 @@ class SetOrder:
             out['result']['current_position'] = signal
 
         else:
-            out = None  # self.set_output(kwargs['price'])
+            out = self.set_output(kwargs)
 
         return out
 
-    def set_output(self, price):
+    def set_output(self, kwargs):
         """ Set output when no orders query """
         # TODO : /!\ get execution price for market order /!\
-        return {
+        out = {
             'result': {
-                'price': price,
                 'timestamp': now(self.frequency),
                 'current_volume': self.current_vol,
                 'current_position': self.current_pos,
                 'descr': None,
             }
         }
+        if kwargs['ordertype'] == 'limit':
+            out['price'] = kwargs['price']
+
+        elif kwargs['ordertype'] == 'market':
+            out['price'] = get_close(kwargs['pair'])
+
+        else:
+            raise ValueError(
+                'Unknown order type: {}'.format(kwargs['ordertype'])
+            )
+
+        return out
 
     def decode_id_order(self, id_order):
         """ From an id order decode the time (in minute) and the strategy
