@@ -628,6 +628,28 @@ class DataExchangeManager:
             return df.loc[:, self.ohlcv].values[-self.n_min_obs:]
 
 
+def get_close(pair, path="https://api.kraken.com/0/public"):
+    """ Get the last close price of `pair`.
+
+    Parameters
+    ----------
+    pair : str
+        Code of the requested pair.
+    path : str
+        Path of the exchange to request.
+
+    Returns
+    -------
+    float
+        Last close price.
+
+    """
+    out = DataRequests(path, stop_step=1).get_data('Ticker', pair=pair)
+    for arg in out['result'].values():
+
+        return float(arg['c'][0])
+
+
 if __name__ == '__main__':
     import doctest
     doctest.testmod()
