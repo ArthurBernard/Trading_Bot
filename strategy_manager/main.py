@@ -15,7 +15,7 @@ from manager import StrategyManager
 from tools.utils import load_config_params, dump_config_params, get_df
 # from tools.time_tools import now
 from orders_manager import SetOrder
-from results_manager import print_results, set_order_results
+from results_manager import print_results, print_stats, set_order_results
 from results_manager import update_order_hist, update_result_hist
 
 __all__ = ['run_bot']
@@ -71,6 +71,8 @@ def run_bot(id_strat, path='strategies/'):
     OM = SetOrder(**data_cfg['pre_order_instance'])
 
     # Get parameters for strategy function
+    pair = data_cfg['order_instance']['pair']
+    order_type = data_cfg['order_instance']['ordertype']
     args = data_cfg['strategy_instance']['args_params']
     kwargs = data_cfg['strategy_instance']['kwargs_params']
 
@@ -89,12 +91,15 @@ def run_bot(id_strat, path='strategies/'):
             # Check to verify and debug
             if not order_params['validate']:
 
+                # TODO : /!\ get execution price for market order /!\
                 for output in outputs:
                     id_order = output['result']['userref']
                     status = OM.get_status_order(id_order)
                     logger.info(check(status))
 
-            # TODO : /!\ get execution price for market order /!\
+            else:
+                # TODO : get price
+                pass
 
             # TODO : save new volume to invest if reinvest
             # TODO : compute, print and save some statistics
@@ -102,6 +107,7 @@ def run_bot(id_strat, path='strategies/'):
 
             # Clean outputs
             outputs = set_order_results(outputs)
+            print(outputs)
 
             # Update result historic
             update_result_hist(outputs, '', path=path + id_strat)
@@ -121,6 +127,8 @@ def run_bot(id_strat, path='strategies/'):
             data_cfg['pre_order_instance']['current_pos'] = float(current_pos)
             # TODO : check if current volume is ok
             data_cfg['pre_order_instance']['current_vol'] = float(current_vol)
+
+            print_stats('', path=path + id_strat)
             pass
 
         else:
