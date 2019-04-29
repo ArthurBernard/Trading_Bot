@@ -43,7 +43,7 @@ pre_order_instance:
 
 # Parameters for set_order method, check API documentation
 order_instance:
-  pair: XBTUSD       # Symbol of underlying
+  pair: XXBTZUSD       # Symbol of underlying
   ordertype: market  # Order type e.g. limit or market
   leverage: 1        # Max leverage
   validate: true     # /!\ Doesn't push order if True /!\
