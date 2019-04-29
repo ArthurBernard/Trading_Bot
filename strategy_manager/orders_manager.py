@@ -336,12 +336,12 @@ class SetOrder:
 
     def set_output(self, kwargs):
         """ Set output when no orders query """
-        # TODO : /!\ get execution price for market order /!\
         out = {
             'result': {
                 'timestamp': now(self.frequency),
                 'current_volume': self.current_vol,
                 'current_position': self.current_pos,
+                'fee': self._get_fees(kwargs['pair'], kwargs['ordetype']),
                 'descr': None,
             }
         }
@@ -423,3 +423,13 @@ class SetOrder:
                 )
 
                 raise e
+
+    def _get_fees(self, pair, order_type):
+        # Get current fee
+        ans = self.K.query_private('TradeVolume', pair=pair)['result']
+        if order_type == 'market':
+            return float(ans['fees'][pair]['fee'])
+        elif order_type == 'limit':
+            return float(ans['fees_maker'][pair]['fee'])
+        else:
+            raise ValueError('Unknown order type: {}'.format(order_type))
