@@ -92,9 +92,7 @@ def set_order_results(order_results):
     clean_order_result = []
 
     for result in order_results:
-
-        if result is not None:
-            clean_order_result += [set_order_result(result['result'])]
+        clean_order_result += [set_order_result(result['result'])]
 
     else:
 
@@ -186,7 +184,7 @@ def set_results(order_results):
         ts = result['timestamp']
 
         if ts not in aggr_res.keys():
-            aggr_res[ts] = {'volume': 0, 'position': 0, 'price': 0}
+            aggr_res[ts] = {'volume': 0, 'position': 0, 'price': 0, 'fee': 0}
 
         aggr_res[ts]['volume'] += result['current_volume']
         aggr_res[ts]['position'] += result['current_position']
@@ -260,3 +258,21 @@ def update_result_hist(order_results, name, path='.', fee=0.0016):
 
     # Save order historic dataframe
     save_df(hist, path, name + 'result_hist', '.dat')
+
+
+def print_stats(name, path='.', volume=1.):
+    """ Print some statistics of result historic strategy.
+
+    Parameters
+    ----------
+    path, name : str
+        Path and name of the file to load.
+
+    """
+    df = get_result_hist(name, path=path)
+    last_ts = df.index[-1]
+    daily_ret = df.loc[df.index >= last_ts - 86400]
+
+
+def set_stats(df):
+    strat_ret = df.return_raw.sum()
