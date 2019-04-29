@@ -139,6 +139,10 @@ class SetOrder:
             # Set infos
             out['result']['userref'] = id_order
             out['result']['timestamp'] = now(self.frequency)
+            out['result']['fee'] = self._get_fees(
+                kwargs['pair'],
+                kwargs['ordertype']
+            )
 
         except Exception as e:
 
