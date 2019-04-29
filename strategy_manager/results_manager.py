@@ -189,6 +189,7 @@ def set_results(order_results):
         aggr_res[ts]['volume'] += result['current_volume']
         aggr_res[ts]['position'] += result['current_position']
         aggr_res[ts]['price'] = result['price']
+        aggr_res[ts]['fee'] = result['fee']
 
     else:
 
@@ -213,7 +214,7 @@ def get_result_hist(name, path='.'):
 
     if df.empty:
 
-        return pd.DataFrame(columns=['price', 'volume', 'position', 'return'])
+        return pd.DataFrame(columns=['price', 'volume', 'position', 'fee'])
 
     else:
 
@@ -242,10 +243,10 @@ def update_result_hist(order_results, name, path='.', fee=0.0016):
     hist = hist.append(df, sort=False)
     idx = hist.index
 
-    if idx.size <= 1:
-        hist.loc[idx[0], 'return'] = 0
+    # if idx.size <= 1:
+    #    hist.loc[idx[0], 'return'] = 0
 
-    else:
+    if False:
         p = hist.loc[:, 'price'].values
         vol = hist.loc[:, 'volume'].values
         pos = hist.loc[:, 'position'].values
@@ -271,8 +272,21 @@ def print_stats(name, path='.', volume=1.):
     """
     df = get_result_hist(name, path=path)
     last_ts = df.index[-1]
-    daily_ret = df.loc[df.index >= last_ts - 86400]
+    ui_perf, strat_perf = set_stats(df.loc[df.index >= last_ts - 86400])
+    txt = '\nUnderlying perf : {}\n'.format(ui_perf)
+    txt += 'Strategy perf : {}\n'.format(strat_perf)
+    print(txt)
 
 
 def set_stats(df):
-    strat_ret = df.return_raw.sum()
+    p = df.loc[:, 'price'].values
+    vol = df.loc[:, 'volume'].values
+    pos = df.loc[:, 'position'].values
+    fee = df.loc[:, 'fee'].values
+    fees = fee[:-1] * (pos[:-1] - pos[1:])
+    ret = (p[1:] - p[:-1]) * vol[:-1] * pos[:-1]
+
+    return p[0] - p[-1], np.sum(ret * (1 - fees))
+    # hist.loc[idx[1]:, 'return_raw'] = ret
+    # hist.loc[idx[1]:, 'return_net'] = ret * (1 - fees)
+    # hist.loc[idx[1]:, 'cum_return'] = np.cumsum(ret * (1 - fees))
