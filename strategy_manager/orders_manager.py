@@ -94,6 +94,10 @@ class SetOrder:
         if exchange.lower() == 'kraken':
             self.K = KrakenClient()
             self.K.load_key(path_log)
+            self.fees_dict = self.K.query_private(
+                'TradeVolume',
+                pair='all'
+            )['result']
 
         else:
             self.logger.error('Exchange "{}" not allowed'.format(exchange))
@@ -341,7 +345,7 @@ class SetOrder:
                 'timestamp': now(self.frequency),
                 'current_volume': self.current_vol,
                 'current_position': self.current_pos,
-                'fee': self._get_fees(kwargs['pair'], kwargs['ordetype']),
+                'fee': self._get_fees(kwargs['pair'], kwargs['ordertype']),
                 'descr': None,
             }
         }
@@ -426,10 +430,14 @@ class SetOrder:
 
     def _get_fees(self, pair, order_type):
         # Get current fee
-        ans = self.K.query_private('TradeVolume', pair=pair)['result']
         if order_type == 'market':
-            return float(ans['fees'][pair]['fee'])
+
+            return float(self.fees_dict['fees'][pair]['fee'])
+
         elif order_type == 'limit':
-            return float(ans['fees_maker'][pair]['fee'])
+
+            return float(self.fees_dict['fees_maker'][pair]['fee'])
+
         else:
+
             raise ValueError('Unknown order type: {}'.format(order_type))
