@@ -350,10 +350,10 @@ class SetOrder:
             }
         }
         if kwargs['ordertype'] == 'limit':
-            out['price'] = kwargs['price']
+            out['result']['price'] = kwargs['price']
 
         elif kwargs['ordertype'] == 'market':
-            out['price'] = get_close(kwargs['pair'])
+            out['result']['price'] = get_close(kwargs['pair'])
 
         else:
             raise ValueError(
