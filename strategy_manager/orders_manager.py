@@ -136,19 +136,9 @@ class SetOrder:
                 **kwargs
             )
 
-            # TO DEBUG
-            # try:
-            #    # Set infos
-            #    out['result']['userref'] = id_order
-            #    out['result']['timestamp'] = now(self.frequency)
-
-            # except KeyError:
-            #    self.logger.error('KeyError:\n\nout: {}\n\nkwargs:{}\n'.format(
-            #        str(out), str(kwargs)
-            #    ), exc_info=True)
-
-            # TO DEBUG
-            # self.logger.debug('Output orders: {}'.format(out))
+            # Set infos
+            out['result']['userref'] = id_order
+            out['result']['timestamp'] = now(self.frequency)
 
         except Exception as e:
 
