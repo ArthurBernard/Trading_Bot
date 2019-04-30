@@ -273,8 +273,13 @@ def print_stats(name, path='.', volume=1.):
     df = get_result_hist(name, path=path)
     last_ts = df.index[-1]
     ui_perf, strat_perf = set_stats(df.loc[df.index >= last_ts - 86400])
-    txt = '\nUnderlying perf : {}\n'.format(ui_perf)
-    txt += 'Strategy perf : {}\n'.format(strat_perf)
+    txt = set_text(
+        'Daily Returns',
+        Strategy=(strat_perf, 0.),
+        Underlying=(ui_perf, 0.)
+    )
+    # txt = '\nUnderlying perf : {}\n'.format(ui_perf)
+    # txt += 'Strategy perf : {}\n'.format(strat_perf)
     print(txt)
 
 
@@ -290,3 +295,12 @@ def set_stats(df):
     # hist.loc[idx[1]:, 'return_raw'] = ret
     # hist.loc[idx[1]:, 'return_net'] = ret * (1 - fees)
     # hist.loc[idx[1]:, 'cum_return'] = np.cumsum(ret * (1 - fees))
+
+
+def set_text(head, **kwargs):
+    bound = '+' + '-' * 22 + ('+' + '-' * 9) * 2 + '+\n'
+    txt = '| {:^20} | {:7} | {:7} |\n'.format(head, 'Return', 'Pct Ret')
+    for key, arg in kwargs.items():
+        txt += '| {:20} | {:7.2f} | {:7.2%} |\n'.format(key, *arg)
+
+    return bound + txt + bound
