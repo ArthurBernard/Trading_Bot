@@ -1,10 +1,16 @@
 #!/usr/bin/env python3
 # coding: utf-8
+# @Author: ArthurBernard
+# @Email: arthur.bernard.92@gmail.com
+# @Date: 2019-03-08 20:19:22
+# @Last modified by: ArthurBernard
+# @Last modified time: 2019-05-02 17:03:40
 
-# Import built-in packages
+# Built-in packages
 from pickle import Pickler, Unpickler
+from os import makedirs
 
-# Import external packages
+# External packages
 from ruamel.yaml import YAML
 import pandas as pd
 
@@ -100,8 +106,15 @@ def save_df(df, path, name, ext=''):
     if len(ext) > 0 and ext[0] != '.':
         ext = '.' + ext
 
-    with open(path + name + ext, 'wb') as f:
-        Pickler(f).dump(df)
+    try:
+        with open(path + name + ext, 'wb') as f:
+            Pickler(f).dump(df)
+
+    except FileNotFoundError:
+        makedirs(path, exist_ok=True)
+
+        with open(path + name + ext, 'wb') as f:
+            Pickler(f).dump(df)
 
 
 if __name__ == '__main__':
