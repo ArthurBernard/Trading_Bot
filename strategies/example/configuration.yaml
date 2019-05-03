@@ -32,7 +32,7 @@ get_data_instance:
   ohlcv: v               # {o: open, h: high, l: low, c: close, v: volume}
   frequency: 60          # Number of second between two data
   n_min_obs: 5           # Minimal number of observation to compute signal
-  path: /home/arthur/GitHub/Strategy_Manager/data_base/  # Path of data source
+  path: ./data_base/  # Path of data source
 
 # Parameters for set pre_order
 pre_order_instance:
@@ -52,3 +52,9 @@ order_instance:
   - post
   validate: true    # /!\ Doesn't push order if True /!\
   volume: 1.        # Max volume to trade
+
+# Parameters to print some statistic of strategy
+result_instance:
+  path: ./strategies/example/  # Path to load and save results
+  period: 1.                   # Number of period 
+  init_vol: 100.               # Initial volume invested
