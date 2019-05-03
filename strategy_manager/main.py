@@ -1,23 +1,20 @@
 #!/usr/bin/env python3
 # coding: utf-8
+# @Author: ArthurBernard
+# @Email: arthur.bernard.92@gmail.com
+# @Date: 2019-05-03 17:36:22
+# @Last modified by: ArthurBernard
+# @Last modified time: 2019-05-03 17:42:45
 
-# Import built-in packages
-# import time
+# Built-in packages
 import sys
 import logging
-# from logging.handlers import RotatingFileHandler
 
-# Import external packages
-
-# Import internal packages
+# Internal packages
 from manager import StrategyManager
-# from data_requests import DataManager
 from tools.utils import load_config_params, dump_config_params, get_df
-# from tools.time_tools import now
 from orders_manager import SetOrder
-# from results_manager import print_results, print_stats, set_order_results
-# from results_manager import update_order_hist, update_result_hist
-from results_manager2 import update_order_hist, ResultManager, set_order_results
+from results_manager import update_order_hist, ResultManager, set_order_results
 
 __all__ = ['run_bot']
 
@@ -74,7 +71,7 @@ def run_bot(id_strat, path='strategies/'):
     kwargs = data_cfg['strategy_instance']['kwargs_params']
 
     # Set result manager configuration
-    RM = ResultManager('', path=path + id_strat, period=1)
+    RM = ResultManager(**data_cfg['result_instance'])
 
     # The bot start to run
     try:
@@ -101,22 +98,17 @@ def run_bot(id_strat, path='strategies/'):
                 pass
 
             # TODO : save new volume to invest if reinvest
-            # TODO : compute, print and save some statistics
-            print(outputs)
 
             # Clean outputs
             outputs = set_order_results(outputs)
             print(outputs)
+
             # Update order historic
             update_order_hist(outputs, '', path=path + id_strat)
 
             # Update result historic
-            # update_result_hist(outputs, '', path=path + id_strat)
             RM.update_result_hist(outputs)
-
-            # TODO : Print results
-            # print_results(outputs)
-            # print_stats('', path=path + id_strat)
+            # Print some statistics
             RM.print_stats()
 
             # Get current pos
@@ -148,6 +140,7 @@ def run_bot(id_strat, path='strategies/'):
         print(df_ord.iloc[:, 1:-1].tail(), '\n')
         # print(df_res.tail(), '\n')
         print(RM.df.tail(), '\n')
+        # Save results
         RM.save_result_hist()
         # TODO : ending with save some statistics and others
         # TODO : save new volume to invest if reinvest
