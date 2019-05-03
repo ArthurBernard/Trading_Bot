@@ -15,8 +15,9 @@ from manager import StrategyManager
 from tools.utils import load_config_params, dump_config_params, get_df
 # from tools.time_tools import now
 from orders_manager import SetOrder
-from results_manager import print_results, print_stats, set_order_results
-from results_manager import update_order_hist, update_result_hist
+# from results_manager import print_results, print_stats, set_order_results
+# from results_manager import update_order_hist, update_result_hist
+from results_manager2 import update_order_hist, ResultManager, set_order_results
 
 __all__ = ['run_bot']
 
@@ -61,24 +62,22 @@ def run_bot(id_strat, path='strategies/'):
     # Load data configuration
     data_cfg = load_config_params(path + id_strat + '/configuration.yaml')
 
-    # Set strategy manager configuration
+    # Set strategy manager and data request configuration
     SM = StrategyManager(**data_cfg['strat_manager_instance'].copy())
-
-    # Set data requests manager configuration
     SM.set_data_manager(**data_cfg['get_data_instance'].copy())
 
     # Set pre order configuration
     OM = SetOrder(**data_cfg['pre_order_instance'])
 
     # Get parameters for strategy function
-    pair = data_cfg['order_instance']['pair']
-    order_type = data_cfg['order_instance']['ordertype']
     args = data_cfg['strategy_instance']['args_params']
     kwargs = data_cfg['strategy_instance']['kwargs_params']
 
+    # Set result manager configuration
+    RM = ResultManager('', path=path + id_strat, period=1)
+
     # The bot start to run
     try:
-
         for signal, order_params in SM(*args.copy(), **kwargs.copy()):
             logger.info('{}th iteration'.format(SM.t))
             logger.info('Signal is {}, order parameters is {}'.format(
@@ -108,15 +107,17 @@ def run_bot(id_strat, path='strategies/'):
             # Clean outputs
             outputs = set_order_results(outputs)
             print(outputs)
-
-            # Update result historic
-            update_result_hist(outputs, '', path=path + id_strat)
-
             # Update order historic
             update_order_hist(outputs, '', path=path + id_strat)
 
+            # Update result historic
+            # update_result_hist(outputs, '', path=path + id_strat)
+            RM.update_result_hist(outputs)
+
             # TODO : Print results
-            print_results(outputs)
+            # print_results(outputs)
+            # print_stats('', path=path + id_strat)
+            RM.print_stats()
 
             # Get current pos
             current_pos = float(OM.current_pos)
@@ -128,30 +129,26 @@ def run_bot(id_strat, path='strategies/'):
             # TODO : check if current volume is ok
             data_cfg['pre_order_instance']['current_vol'] = float(current_vol)
 
-            print_stats('', path=path + id_strat)
-            pass
-
         else:
             print('\nAll is good\n')
 
-    except Exception as error:
+    except Exception as e:
 
         # TODO : how manage unknown error
         # Report error TODO : Improve
-        logger.error(
-            'UNKNOWN ERROR: {}\n{}'.format(str(type(error)), str(error)),
-            exc_info=True
-        )
+        logger.error('Unkownn error: {}'.format(type(e)), exc_info=True)
 
-        raise error
+        raise e
 
     finally:
         # DEGUG
         df_ord = get_df(path + id_strat, 'orders_hist', '.dat')
-        df_res = get_df(path + id_strat, 'result_hist', '.dat')
+        # df_res = get_df(path + id_strat, 'result_hist', '.dat')
         print('Historic:\n' + '-' * 9 + '\n')
-        print(df_ord.tail(), '\n')
-        print(df_res.tail(), '\n')
+        print(df_ord.iloc[:, 1:-1].tail(), '\n')
+        # print(df_res.tail(), '\n')
+        print(RM.df.tail(), '\n')
+        RM.save_result_hist()
         # TODO : ending with save some statistics and others
         # TODO : save new volume to invest if reinvest
         # Save current position and volume
