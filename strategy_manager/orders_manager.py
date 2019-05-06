@@ -1,14 +1,20 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 # coding: utf-8
+# @Author: ArthurBernard
+# @Email: arthur.bernard.92@gmail.com
+# @Date: 2019-04-29 23:42:09
+# @Last modified by: ArthurBernard
+# @Last modified time: 2019-05-06 21:08:40
 
-# Import built-in packages
+# Built-in packages
 from pickle import Pickler, Unpickler
 import logging
 
-# Import external packages
+
+# External packages
 from requests import HTTPError
 
-# Import internal packages
+# Internal packages
 from strategy_manager.tools.time_tools import now
 from strategy_manager.API_kraken import KrakenClient
 from strategy_manager.data_requests import get_close
@@ -25,9 +31,10 @@ TODO list:
 
 
 class SetOrder:
-    """ Class to set and manage orders. Verify the intigrity of the new orders
-    with past orders and suffisant funds.
+    """ Class to set and manage orders.
 
+    Verify the intigrity of the new orders with past orders and suffisant
+    funds.
     An id order is a signed integer smaller than 32-bit, three last number
     correspond to the id strategy and the other numbers correspond to an id
     user. The id user is in fact an id time, it corresponding at the number
@@ -175,7 +182,9 @@ class SetOrder:
         return out
 
     def _set_id_order(self):
-        """ Set an identifier for an order according with the strategy
+        """ Set an identifier.
+
+        Id is set according with the strategy
         reference, time and optional id parameters.
 
         Returns
@@ -190,7 +199,9 @@ class SetOrder:
         return id_order
 
     def _get_id_user(self):
-        """ Get id user in function of a time starting point (in minutes).
+        """ Get id user.
+
+        Id is get in function of a time starting point (in minutes).
         Time starting point restart from 0 every almost 3 years.
 
         Returns
@@ -256,7 +267,7 @@ class SetOrder:
         return out
 
     def cut_short(self, signal, **kwargs):
-        """ Cut short position """
+        """ Cut short position. """
         if self.current_pos < 0:
             # Set leverage to cut short
             leverage = kwargs.pop('leverage')
@@ -280,7 +291,7 @@ class SetOrder:
         return out
 
     def set_long(self, signal, **kwargs):
-        """ Set long order """
+        """ Set long order. """
         if signal > 0:
             out = self.order(**kwargs)
 
@@ -296,7 +307,7 @@ class SetOrder:
         return out
 
     def cut_long(self, signal, **kwargs):
-        """ Cut long position """
+        """ Cut long position. """
         if self.current_pos > 0:
             # Set volume to cut long
             kwargs['volume'] = self.current_vol
@@ -314,7 +325,7 @@ class SetOrder:
         return out
 
     def set_short(self, signal, **kwargs):
-        """ Set short order """
+        """ Set short order. """
         if signal < 0:
             # Set leverage to short
             leverage = kwargs.pop('leverage')
@@ -333,7 +344,7 @@ class SetOrder:
         return out
 
     def set_output(self, kwargs):
-        """ Set output when no orders query """
+        """ Set output when no orders query. """
         out = {
             'result': {
                 'timestamp': now(self.frequency),

@@ -1,16 +1,21 @@
 #!/usr/bin/env python3
 # coding: utf-8
+# @Author: ArthurBernard
+# @Email: arthur.bernard.92@gmail.com
+# @Date: 2019-05-06 20:53:46
+# @Last modified by: ArthurBernard
+# @Last modified time: 2019-05-06 21:16:44
 
-# Import built-in packages
+# Built-in packages
 import hashlib
 import hmac
 import time
 import base64
 
-# Import external packages
+# External packages
 import requests
 
-# Import internal packages
+# Internal packages
 
 
 __all__ = ['KrakenClient']
@@ -18,6 +23,13 @@ __all__ = ['KrakenClient']
 
 class KrakenClient:
     """ Object to connect, request data and query orders to Kraken Client API.
+
+    Methods
+    -------
+    load_key(path)
+        Load from a text file key and secret parameters.
+    query_prive(method, timeout=30, **kwargs)
+        Private request from Kraken API.
 
     """
 
@@ -50,16 +62,11 @@ class KrakenClient:
             self.secret = f.readline().strip()
 
     def _nonce(self):
-        """ Returns a nonce used in authentication.
-
-        """
-
+        """ Return a nonce used in authentication. """
         return int(time.time() * 1000)
 
     def _headers(self, path, nonce, data):
-        """ Set header with signature for authentication.
-
-        """
+        """ Set header with signature for authentication. """
         post_data = [str(key) + '=' + str(arg) for key, arg in data.items()]
         post_data = str(data['nonce']) + '&'.join(post_data)
         message = path.encode() + hashlib.sha256(post_data.encode()).digest()

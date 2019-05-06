@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2019-03-08 20:19:22
 # @Last modified by: ArthurBernard
-# @Last modified time: 2019-05-02 17:03:40
+# @Last modified time: 2019-05-06 20:47:08
 
 # Built-in packages
 from pickle import Pickler, Unpickler
@@ -19,7 +19,7 @@ __all__ = ['load_config_params', 'save_df', 'get_df']
 
 
 def load_config_params(path):
-    """ Function to load configuration parameters for strategy manager.
+    """ Load configuration parameters for strategy manager.
 
     Parameters
     ----------
@@ -41,7 +41,7 @@ def load_config_params(path):
 
 
 def dump_config_params(data_cfg, path):
-    """ Function to dump configuration parameters for strategy manager.
+    """ Dump configuration parameters for strategy manager.
 
     Parameters
     ----------

@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2019-05-02 19:07:38
 # @Last modified by: ArthurBernard
-# @Last modified time: 2019-05-03 17:40:31
+# @Last modified time: 2019-05-06 20:57:25
 
 # Built-in packages
 import time
@@ -117,7 +117,6 @@ def set_order_hist(order_result):
         Order result as dataframe.
 
     """
-
     df_hist = pd.DataFrame(order_result, columns=[
         'timestamp', 'txid', 'userref', 'price', 'volume',
         'type', 'pair', 'ordertype', 'leverage'
@@ -198,13 +197,11 @@ class ResultManager:
         return self
 
     def save_result_hist(self):
-        """ Save result historic """
+        """ Save result historic. """
         save_df(self.df, self.path, 'result_hist', ext='.dat')
 
     def print_stats(self):
-        """ Print some statistics of result historic strategy.
-
-        """
+        """ Print some statistics of result historic strategy. """
         last_ts = self.df.index[-1]
 
         bool_index = self.df.index >= self.df.index[-1] - 86400
@@ -213,7 +210,7 @@ class ResultManager:
         print(txt)
 
     def set_stats_result(self, df, head):
-        """ Compute stats `backward` seconds in past """
+        """ Compute stats `backward` seconds in past. """
         txt = self.set_text2(
             ['-'] * 6,
             [head, 'Return', 'Perf.', 'Sharpe', 'Calmar', 'MaxDD'],
@@ -302,7 +299,7 @@ def set_results(order_results):
 
 
 def set_performance(df):
-    """ Compute performance of a strategy """
+    """ Compute performance of a strategy. """
     p = df.loc[:, 'price'].values
     ret = np.zeros([p.size])
     vol = df.loc[:, 'volume'].values
