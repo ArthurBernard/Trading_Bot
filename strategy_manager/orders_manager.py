@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2019-04-29 23:42:09
 # @Last modified by: ArthurBernard
-# @Last modified time: 2019-05-06 21:08:40
+# @Last modified time: 2019-05-07 08:13:55
 
 # Built-in packages
 from pickle import Pickler, Unpickler
@@ -142,6 +142,7 @@ class SetOrder:
                 timeout=30,
                 **kwargs
             )
+            self.logger.info(out['result']['descr']['order'])
 
             # Set infos
             out['result']['userref'] = id_order
@@ -170,7 +171,7 @@ class SetOrder:
         query = self.get_query_order(id_order)
 
         # TO DEBUG
-        self.logger.debug(str(query))
+        # self.logger.debug(str(query))
 
         if kwargs['validate']:
 
