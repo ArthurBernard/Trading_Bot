@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2019-05-03 17:36:22
 # @Last modified by: ArthurBernard
-# @Last modified time: 2019-05-03 17:42:45
+# @Last modified time: 2019-05-07 08:51:15
 
 # Built-in packages
 import sys
@@ -77,7 +77,7 @@ def run_bot(id_strat, path='strategies/'):
     try:
         for signal, order_params in SM(*args.copy(), **kwargs.copy()):
             logger.info('{}th iteration'.format(SM.t))
-            logger.info('Signal is {}, order parameters is {}'.format(
+            logger.info('Signal is {}, order parameters are {}\n'.format(
                 signal, order_params
             ))
 
@@ -101,7 +101,7 @@ def run_bot(id_strat, path='strategies/'):
 
             # Clean outputs
             outputs = set_order_results(outputs)
-            print(outputs)
+            # print(outputs)
 
             # Update order historic
             update_order_hist(outputs, '', path=path + id_strat)
@@ -122,7 +122,7 @@ def run_bot(id_strat, path='strategies/'):
             data_cfg['pre_order_instance']['current_vol'] = float(current_vol)
 
         else:
-            print('\nAll is good\n')
+            logger.info('\nAll is good\n')
 
     except Exception as e:
 
