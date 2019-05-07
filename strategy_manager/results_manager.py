@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2019-05-02 19:07:38
 # @Last modified by: ArthurBernard
-# @Last modified time: 2019-05-06 20:57:25
+# @Last modified time: 2019-05-07 08:56:08
 
 # Built-in packages
 import time
@@ -203,9 +203,22 @@ class ResultManager:
     def print_stats(self):
         """ Print some statistics of result historic strategy. """
         last_ts = self.df.index[-1]
+        txt = '\n'
 
-        bool_index = self.df.index >= self.df.index[-1] - 86400
-        txt = self.set_stats_result(self.df.loc[bool_index], 'Daily Perf.')
+        day_index = self.df.index >= self.df.index[-1] - 86400
+        txt += self.set_stats_result(self.df.loc[day_index], 'Daily Perf.')
+
+        week_index = self.df.index >= self.df.index[-1] - 86400 * 7
+        txt += self.set_stats_result(self.df.loc[week_index], 'Weekly Perf.')
+
+        month_index = self.df.index >= self.df.index[-1] - 86400 * 30
+        txt += self.set_stats_result(self.df.loc[month_index], 'Monthly Perf.')
+
+        year_index = self.df.index >= self.df.index[-1] - 86400 * 365
+        txt += self.set_stats_result(self.df.loc[year_index], 'Yearly Perf.')
+
+        total_index = self.df.index >= self.df.index[0]
+        txt += self.set_stats_result(self.df.loc[total_index], 'Total Perf.')
 
         print(txt)
 
@@ -220,7 +233,7 @@ class ResultManager:
             ['-'] * 6,
         )
 
-        return txt
+        return txt + '\n'
 
     def set_statistics(self, series):
         perf = series[-1] - series[0]
