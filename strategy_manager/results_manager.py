@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2019-05-02 19:07:38
 # @Last modified by: ArthurBernard
-# @Last modified time: 2019-05-07 08:56:08
+# @Last modified time: 2019-05-08 09:33:23
 
 # Built-in packages
 import time
@@ -202,9 +202,7 @@ class ResultManager:
 
     def print_stats(self):
         """ Print some statistics of result historic strategy. """
-        last_ts = self.df.index[-1]
         txt = '\n'
-
         day_index = self.df.index >= self.df.index[-1] - 86400
         txt += self.set_stats_result(self.df.loc[day_index], 'Daily Perf.')
 
@@ -224,7 +222,7 @@ class ResultManager:
 
     def set_stats_result(self, df, head):
         """ Compute stats `backward` seconds in past. """
-        txt = self.set_text2(
+        txt = self.set_text(
             ['-'] * 6,
             [head, 'Return', 'Perf.', 'Sharpe', 'Calmar', 'MaxDD'],
             ['-'] * 6,
@@ -245,21 +243,7 @@ class ResultManager:
         return rounder(perf, pct, sharpe, calmar, maxdd, dec=2)
 
     def set_text(self, *args):
-        stats = list(zip(*args))
-        n = len(args[0])
-        txt = ''
-
-        for arg in args:
-            txt += '\n| '
-
-            for i in range(n):
-                n_spa = max(len(str(a)) for a in stats[i]) - len(str(arg[i]))
-                txt += str(arg[i]) + ' ' * n_spa + ' |'
-
-        return txt
-
-    def set_text2(self, *args):
-        n, k = max(len(arg) for arg in args), len(args)
+        n = max(len(arg) for arg in args)
         k_list = ['| ' if len(arg[0]) > 1 else '+' for arg in args]
 
         for i in range(n):
