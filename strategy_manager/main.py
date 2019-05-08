@@ -4,7 +4,9 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2019-05-03 17:36:22
 # @Last modified by: ArthurBernard
-# @Last modified time: 2019-05-07 08:51:15
+# @Last modified time: 2019-05-08 09:28:31
+
+""" Run a bot following a configuration file. """
 
 # Built-in packages
 import sys
@@ -19,27 +21,6 @@ from results_manager import update_order_hist, ResultManager, set_order_results
 __all__ = ['run_bot']
 
 
-def check(*args, **kwargs):
-    """ Helper to debug, it prints args and kwargs and ask you if you want
-    to quit.
-
-    """
-    txt = ''
-
-    for arg in args:
-        txt += str(arg) + '\n'
-
-    for key, arg in kwargs.items():
-        txt += '{} : {}\n'.format(str(key), str(arg))
-
-    a = '0'  # input('\npress q to quit else continue\n')
-
-    if a.lower() == 'q':
-        sys.exit()
-
-    return txt
-
-
 def run_bot(id_strat, path='strategies/'):
     """ Run a bot for specified configuration file.
 
@@ -48,7 +29,7 @@ def run_bot(id_strat, path='strategies/'):
     strat_id : str
         A strat id is the name of the corresonding configuration file.
     path : str
-        Path where is the configuration file.
+        Path to load the configuration file.
 
     """
     logger = logging.getLogger('strat_man')
@@ -91,7 +72,7 @@ def run_bot(id_strat, path='strategies/'):
                 for output in outputs:
                     id_order = output['result']['userref']
                     status = OM.get_status_order(id_order)
-                    logger.info(check(status))
+                    logger.info(status)
 
             else:
                 # TODO : get price
@@ -137,7 +118,7 @@ def run_bot(id_strat, path='strategies/'):
         df_ord = get_df(path + id_strat, 'orders_hist', '.dat')
         # df_res = get_df(path + id_strat, 'result_hist', '.dat')
         print('Historic:\n' + '-' * 9 + '\n')
-        print(df_ord.iloc[:, 1:-1].tail(), '\n')
+        print(df_ord.iloc[:, 1:].tail(), '\n')
         # print(df_res.tail(), '\n')
         print(RM.df.tail(), '\n')
         # Save results
