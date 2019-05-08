@@ -4,7 +4,9 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2019-05-06 20:53:46
 # @Last modified by: ArthurBernard
-# @Last modified time: 2019-05-06 21:16:44
+# @Last modified time: 2019-05-08 08:43:21
+
+""" Kraken Client API object. """
 
 # Built-in packages
 import hashlib
