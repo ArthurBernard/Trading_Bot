@@ -4,7 +4,9 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2019-04-29 23:42:09
 # @Last modified by: ArthurBernard
-# @Last modified time: 2019-05-07 08:49:06
+# @Last modified time: 2019-05-08 09:24:01
+
+""" Manage orders execution. """
 
 # Built-in packages
 from pickle import Pickler, Unpickler
@@ -45,9 +47,6 @@ class SetOrder:
     -------
     order(**kwargs)
         Request an order (with krakenex in first order).
-    decode_id_order(id_order)
-        Takes an id order and returns the corresponding id strategy and
-        timestamp.
     get_query_order(id_order)
         Return status of a specified order or position.
     # TODO : cancel orders/position if too far of mid
@@ -57,7 +56,7 @@ class SetOrder:
     Attributs
     ---------
     id_strat : int (signed and max 32-bit)
-        Number to link an order with a strategy.
+        Number to identify an order and link it with a strategy.
     id_max : int
         Number max for an id_order (32-bit).
     path : str
@@ -111,7 +110,7 @@ class SetOrder:
 
             raise ValueError(exchange + ' not allowed.')
 
-    def order(self, **kwargs):
+    def order(self, id_order=None, **kwargs):
         """ Request an order following defined parameters.
 
         /! To verify ConnectionResetError exception. /!
@@ -128,7 +127,8 @@ class SetOrder:
             Output of the request.
 
         """
-        id_order = self._set_id_order()
+        if id_order is None:
+            id_order = self._set_id_order()
 
         if kwargs['leverage'] == 1:
             kwargs['leverage'] = None
@@ -160,7 +160,7 @@ class SetOrder:
                 query = self.get_query_order(id_order)
 
                 if query['status'] not in ['open', 'close', 'pending']:
-                    out = self.order(**kwargs)
+                    out = self.order(id_order=id_order, **kwargs)
 
             else:
                 self.logger.error('UNKNOWN ERROR', exc_info=True)
@@ -178,57 +178,9 @@ class SetOrder:
             return out
 
         elif query['status'] not in ['open', 'close', 'pending']:
-            out = self.order(**kwargs)
+            out = self.order(id_order=id_order, **kwargs)
 
         return out
-
-    def _set_id_order(self):
-        """ Set an identifier.
-
-        Id is set according with the strategy
-        reference, time and optional id parameters.
-
-        Returns
-        -------
-        id_order : int (signed and 32-bit)
-            Number to link an order with strategy, time and other.
-
-        """
-        id_user = self._get_id_user()
-        id_order = int(str(id_user) + str(self.id_strat))
-
-        return id_order
-
-    def _get_id_user(self):
-        """ Get id user.
-
-        Id is get in function of a time starting point (in minutes).
-        Time starting point restart from 0 every almost 3 years.
-
-        Returns
-        -------
-        id_user : int (signed and less than 32-bit)
-            Number to link an order with a time.
-
-        """
-        try:
-
-            with open('id_timestamp', 'rb') as f:
-                TS = Unpickler(f).load()
-
-        except FileNotFoundError:
-            TS = 0
-
-        id_user = (now(1) - TS) // 60
-
-        if id_user > self.id_max // 1000:
-
-            with open('id_timestamp', 'wb') as f:
-                Pickler(f).dump(now(1))
-
-            id_user = self._get_id_user()
-
-        return id_user
 
     def set_order(self, signal, **kwargs):
         """ Set parameters to order.
@@ -368,31 +320,6 @@ class SetOrder:
 
         return out
 
-    def decode_id_order(self, id_order):
-        """ From an id order decode the time (in minute) and the strategy
-        corresponding to the order.
-
-        Parameters
-        ----------
-        id_order : int (signed and 32-bit)
-            Number to link an order with strategy, time and other.
-
-        Returns
-        -------
-        TS : int (signed)
-            Timestamp at the passing order.
-        id_strat : int (unsigned and 32-bit)
-            Number to link an order with a strategy.
-
-        """
-        id_user = id_order // 1000
-        id_strat = id_order % 1000
-
-        with open('id_timestamp', 'rb') as f:
-            TS = Unpickler(f).load() + id_user * 60
-
-        return TS, id_strat
-
     def get_query_order(self, id_order):
         """ Return query order of a specified id order.
 
@@ -447,3 +374,103 @@ class SetOrder:
         else:
 
             raise ValueError('Unknown order type: {}'.format(order_type))
+
+    def _set_id_order(self):
+        """ Set an unique order identifier.
+
+        Returns
+        -------
+        id_order : int (signed and 32-bit)
+            Number to identify an order and link it with a strategy.
+
+        """
+        try:
+
+            with open('id_order.dat', 'rb') as f:
+                id_order = Unpickler(f).load()
+
+        except FileNotFoundError:
+            id_order = 0
+
+        id_order += 1
+        if id_order > self.id_max // 100:
+            id_order = 0
+
+        with open('id_order.dat', 'wb') as f:
+            Pickler(f).dump(id_order)
+
+        return int(str(id_order) + str(self.id_strat))
+
+# Old methods
+    def _set_id_order_old(self):
+        """ Set an identifier.
+
+        Id is set according with the strategy
+        reference, time and optional id parameters.
+
+        Returns
+        -------
+        id_order : int (signed and 32-bit)
+            Number to link an order with strategy, time and other.
+
+        """
+        id_user = self._get_id_user()
+        id_order = int(str(id_user) + str(self.id_strat))
+
+        return id_order
+
+    def _get_id_user(self):
+        """ Get id user.
+
+        Id is get in function of a time starting point (in minutes).
+        Time starting point restart from 0 every almost 3 years.
+
+        Returns
+        -------
+        id_user : int (signed and less than 32-bit)
+            Number to link an order with a time.
+
+        """
+        try:
+
+            with open('id_timestamp', 'rb') as f:
+                TS = Unpickler(f).load()
+
+        except FileNotFoundError:
+            TS = 0
+
+        id_user = (now(1) - TS) // 60
+
+        if id_user > self.id_max // 1000:
+
+            with open('id_timestamp', 'wb') as f:
+                Pickler(f).dump(now(1))
+
+            id_user = self._get_id_user()
+
+        return id_user
+
+    def decode_id_order(self, id_order):
+        """ From an id order decode the time (in minute) and the strategy
+        corresponding to the order.
+
+        Parameters
+        ----------
+        id_order : int (signed and 32-bit)
+            Number to link an order with strategy, time and other.
+
+        Returns
+        -------
+        TS : int (signed)
+            Timestamp at the passing order.
+        id_strat : int (unsigned and 32-bit)
+            Number to link an order with a strategy.
+
+        """
+        id_user = id_order // 1000
+        id_strat = id_order % 1000
+
+        with open('id_timestamp', 'rb') as f:
+            TS = Unpickler(f).load() + id_user * 60
+
+        return TS, id_strat
