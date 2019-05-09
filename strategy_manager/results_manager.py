@@ -4,17 +4,18 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2019-05-02 19:07:38
 # @Last modified by: ArthurBernard
-# @Last modified time: 2019-05-08 09:33:23
+# @Last modified time: 2019-05-09 09:14:56
 
 # Built-in packages
 import time
+import logging
 
 # External packages
 import pandas as pd
 import numpy as np
 import fynance as fy
 
-# Internal packages
+# Local packages
 from strategy_manager.tools.utils import get_df, save_df
 
 __all__ = [
@@ -172,6 +173,7 @@ class ResultManager:
         self.init_vol = init_vol
         self.period = period
         self.df = get_df(path, 'result_hist', ext='.dat')
+        self.logger = logging.getLogger('strat_man.' + __name__)
 
     def update_result_hist(self, order_results):
         """ Load, merge and save result historic strategy.
@@ -202,9 +204,8 @@ class ResultManager:
 
     def print_stats(self):
         """ Print some statistics of result historic strategy. """
-        txt = '\n'
         day_index = self.df.index >= self.df.index[-1] - 86400
-        txt += self.set_stats_result(self.df.loc[day_index], 'Daily Perf.')
+        txt = self.set_stats_result(self.df.loc[day_index], 'Daily Perf.')
 
         week_index = self.df.index >= self.df.index[-1] - 86400 * 7
         txt += self.set_stats_result(self.df.loc[week_index], 'Weekly Perf.')
@@ -217,25 +218,31 @@ class ResultManager:
 
         total_index = self.df.index >= self.df.index[0]
         txt += self.set_stats_result(self.df.loc[total_index], 'Total Perf.')
+        txt += (['-'] * 6,)
 
-        print(txt)
+        txt = 'Statistics of results:\n' + self.set_text(*txt)
+
+        self.logger.info(txt)
 
     def set_stats_result(self, df, head):
         """ Compute stats `backward` seconds in past. """
-        txt = self.set_text(
+        ui = df.price.values
+        si = df.value.values
+
+        return (
             ['-'] * 6,
             [head, 'Return', 'Perf.', 'Sharpe', 'Calmar', 'MaxDD'],
             ['-'] * 6,
-            ('Underlying', *self.set_statistics(df.price.values)),
-            ('Strategy', *self.set_statistics(df.value.values)),
-            ['-'] * 6,
+            ('Underlying', *self.set_statistics(ui, ui[0])),
+            ('Strategy', *self.set_statistics(si, self.init_vol)),
+            # ['-'] * 6,
         )
 
-        return txt + '\n'
+        # return txt + '\n'
 
-    def set_statistics(self, series):
-        perf = series[-1] - series[0]
-        pct = perf / series[0]
+    def set_statistics(self, series, V_0):
+        perf = series[-1] - V_0
+        pct = perf / V_0
         sharpe = fy.sharpe(series, period=self.period)
         calmar = fy.calmar(series, period=self.period)
         maxdd = fy.mdd(series)
