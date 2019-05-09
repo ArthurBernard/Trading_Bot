@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2019-05-03 17:36:22
 # @Last modified by: ArthurBernard
-# @Last modified time: 2019-05-08 09:28:31
+# @Last modified time: 2019-05-09 08:53:20
 
 """ Run a bot following a configuration file. """
 
@@ -32,7 +32,7 @@ def run_bot(id_strat, path='strategies/'):
         Path to load the configuration file.
 
     """
-    logger = logging.getLogger('strat_man')
+    logger = logging.getLogger('strat_man.' + __name__)
 
     if path[-1] != '/':
         path += '/'
@@ -58,9 +58,8 @@ def run_bot(id_strat, path='strategies/'):
     try:
         for signal, order_params in SM(*args.copy(), **kwargs.copy()):
             logger.info('{}th iteration'.format(SM.t))
-            logger.info('Signal is {}, order parameters are {}\n'.format(
-                signal, order_params
-            ))
+            logger.info('Signal is {}.'.format(signal))
+            logger.debug('Order parameters are {}\n'.format(order_params))
 
             # Set order
             outputs = OM.set_order(signal, **order_params)
