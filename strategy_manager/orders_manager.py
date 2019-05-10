@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2019-04-29 23:42:09
 # @Last modified by: ArthurBernard
-# @Last modified time: 2019-05-08 09:24:01
+# @Last modified time: 2019-05-10 19:15:18
 
 """ Manage orders execution. """
 
@@ -144,14 +144,6 @@ class SetOrder:
             )
             self.logger.info(out['result']['descr']['order'])
 
-            # Set infos
-            out['result']['userref'] = id_order
-            out['result']['timestamp'] = now(self.frequency)
-            out['result']['fee'] = self._get_fees(
-                kwargs['pair'],
-                kwargs['ordertype']
-            )
-
         except Exception as e:
 
             if e in [HTTPError]:
@@ -163,15 +155,15 @@ class SetOrder:
                     out = self.order(id_order=id_order, **kwargs)
 
             else:
-                self.logger.error('UNKNOWN ERROR', exc_info=True)
+                self.logger.error('Unknown error: {}'.format(type(e)),
+                                  exc_info=True)
 
                 raise e
 
+        out = self._set_result_output(out, id_order, **kwargs)
+
         # Check if order is ordered correctly
         query = self.get_query_order(id_order)
-
-        # TO DEBUG
-        # self.logger.debug(str(query))
 
         if kwargs['validate']:
 
@@ -179,6 +171,27 @@ class SetOrder:
 
         elif query['status'] not in ['open', 'close', 'pending']:
             out = self.order(id_order=id_order, **kwargs)
+
+        return out
+
+    def _set_result_output(self, out, id_order, **kwargs):
+        """ Add informations to output of query order. """
+        # Set infos
+        out['result']['userref'] = id_order
+        out['result']['timestamp'] = now(self.frequency)
+        out['result']['fee'] = self._get_fees(
+            kwargs['pair'],
+            kwargs['ordertype']
+        )
+        if kwargs['ordertype'] == 'market' and kwargs['validate']:
+            # Get the last price
+            out['result']['price'] = get_close(kwargs['pair'])
+
+        elif kwargs['ordertype'] == 'market' and not kwargs['validate']:
+            # TODO : verify if get the exection market price
+            query = self.get_query_order(id_order)
+            out['result']['price'] = query['price']
+            self.logger.debug('Get execution price is not yet tested')
 
         return out
 
@@ -203,7 +216,7 @@ class SetOrder:
         # Don't move
         if self.current_pos == signal:
 
-            return [self.set_output(kwargs)]
+            return [self._set_output(kwargs)]
 
         # Up move
         elif self.current_pos <= 0. and signal >= 0:
@@ -239,7 +252,7 @@ class SetOrder:
             out['result']['current_position'] = 0
 
         else:
-            out = self.set_output(kwargs)
+            out = self._set_output(kwargs)
 
         return out
 
@@ -255,7 +268,7 @@ class SetOrder:
             out['result']['current_position'] = signal
 
         else:
-            out = self.set_output(kwargs)
+            out = self._set_output(kwargs)
 
         return out
 
@@ -273,7 +286,7 @@ class SetOrder:
             out['result']['current_position'] = 0
 
         else:
-            out = self.set_output(kwargs)
+            out = self._set_output(kwargs)
 
         return out
 
@@ -292,11 +305,11 @@ class SetOrder:
             out['result']['current_position'] = signal
 
         else:
-            out = self.set_output(kwargs)
+            out = self._set_output(kwargs)
 
         return out
 
-    def set_output(self, kwargs):
+    def _set_output(self, kwargs):
         """ Set output when no orders query. """
         out = {
             'result': {
@@ -362,7 +375,21 @@ class SetOrder:
                 raise e
 
     def _get_fees(self, pair, order_type):
-        # Get current fee
+        """ Get current fees of order.
+
+        Parameters
+        ----------
+        pair : str
+            Symbol of the currency pair.
+        order_type : str
+            Type of order.
+
+        Returns
+        -------
+        float
+            Fees of specified pair and order type.
+
+        """
         if order_type == 'market':
 
             return float(self.fees_dict['fees'][pair]['fee'])
@@ -400,77 +427,3 @@ class SetOrder:
             Pickler(f).dump(id_order)
 
         return int(str(id_order) + str(self.id_strat))
-
-# Old methods
-    def _set_id_order_old(self):
-        """ Set an identifier.
-
-        Id is set according with the strategy
-        reference, time and optional id parameters.
-
-        Returns
-        -------
-        id_order : int (signed and 32-bit)
-            Number to link an order with strategy, time and other.
-
-        """
-        id_user = self._get_id_user()
-        id_order = int(str(id_user) + str(self.id_strat))
-
-        return id_order
-
-    def _get_id_user(self):
-        """ Get id user.
-
-        Id is get in function of a time starting point (in minutes).
-        Time starting point restart from 0 every almost 3 years.
-
-        Returns
-        -------
-        id_user : int (signed and less than 32-bit)
-            Number to link an order with a time.
-
-        """
-        try:
-
-            with open('id_timestamp', 'rb') as f:
-                TS = Unpickler(f).load()
-
-        except FileNotFoundError:
-            TS = 0
-
-        id_user = (now(1) - TS) // 60
-
-        if id_user > self.id_max // 1000:
-
-            with open('id_timestamp', 'wb') as f:
-                Pickler(f).dump(now(1))
-
-            id_user = self._get_id_user()
-
-        return id_user
-
-    def decode_id_order(self, id_order):
-        """ From an id order decode the time (in minute) and the strategy
-        corresponding to the order.
-
-        Parameters
-        ----------
-        id_order : int (signed and 32-bit)
-            Number to link an order with strategy, time and other.
-
-        Returns
-        -------
-        TS : int (signed)
-            Timestamp at the passing order.
-        id_strat : int (unsigned and 32-bit)
-            Number to link an order with a strategy.
-
-        """
-        id_user = id_order // 1000
-        id_strat = id_order % 1000
-
-        with open('id_timestamp', 'rb') as f:
-            TS = Unpickler(f).load() + id_user * 60
-
-        return TS, id_strat
