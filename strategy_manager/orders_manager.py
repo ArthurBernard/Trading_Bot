@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2019-04-29 23:42:09
 # @Last modified by: ArthurBernard
-# @Last modified time: 2019-05-10 20:21:05
+# @Last modified time: 2019-05-10 21:21:18
 
 """ Manage orders execution. """
 
@@ -15,6 +15,7 @@ import time
 
 # External packages
 from requests import HTTPError
+import numpy as np
 
 # Internal packages
 from strategy_manager.tools.time_tools import now
@@ -124,8 +125,8 @@ class SetOrder:
 
         Return
         ------
-        out : json
-            Output of the request.
+        dict
+            Result of output of the request.
 
         """
         if id_order is None:
@@ -144,11 +145,16 @@ class SetOrder:
                 **kwargs
             )
             self.logger.info(out['result']['descr']['order'])
+            txid = out['result']['txid']
 
         except Exception as e:
 
-            if e in [HTTPError]:
-                self.logger.error('Catching the following error: {}'.format(e))
+            if type(e) in [HTTPError]:
+                self.logger.error('Following error occurs: {}'.format(type(e)))
+
+            elif type(e) in [NameError, KeyError]:
+                self.logger.error('Error with output: {}'.format(type(e)))
+                txid = 0
 
             else:
                 self.logger.error('Unknown error: {}'.format(type(e)),
@@ -164,7 +170,7 @@ class SetOrder:
 
             return self.order(id_order=id_order, **kwargs)
 
-        return self._set_result_output(out, id_order, **kwargs)
+        return self._set_result_output(txid, id_order, **kwargs)
 
     def verify_post_order(self, id_order):
         """ Verify if an order is well posted.
@@ -193,7 +199,40 @@ class SetOrder:
 
         return False
 
-    def _set_result_output(self, out, id_order, **kwargs):
+    def _set_result_output(self, txid, id_order, **kwargs):
+        """ Add informations to output of query order. """
+        result = {
+            'txid': txid,
+            'userref': id_order,
+            'type': kwargs['type'],
+            'volume': kwargs['volume'],
+            'pair': kwargs['pair'],
+            'ordertype': kwargs['ordertype'],
+            'leverage': kwargs['leverage'],
+            'timestamp': now(self.frequency),
+            'fee': self._get_fees(kwargs['pair'], kwargs['ordertype']),
+        }
+        if kwargs['ordertype'] == 'market' and kwargs['validate']:
+            # Get the last price
+            result['price'] = get_close(kwargs['pair'])
+
+        elif kwargs['ordertype'] == 'market' and not kwargs['validate']:
+            # TODO : verify if get the exection market price
+            closed_order = self.K.query_private('ClosedOrders',
+                                                userref=id_order,
+                                                start=self.start)['result']
+            txids = closed_order['closed'].keys()
+            result['price'] = np.mean([
+                closed_order['closed'][i]['price'] for i in txids
+            ])
+            self.logger.debug('Get execution price is not yet verified')
+
+        elif kwargs['ordertype'] == 'limit':
+            result['price'] = kwargs['price']
+
+        return result
+
+    def _set_result_output2(self, out, id_order, **kwargs):
         """ Add informations to output of query order. """
         # Set infos
         out['result']['userref'] = id_order
@@ -229,8 +268,8 @@ class SetOrder:
 
         Returns
         -------
-        out : list
-            Orders answere.
+        list
+            Orders outputs.
 
         """
         out = []
@@ -265,52 +304,52 @@ class SetOrder:
             kwargs['volume'] = self.current_vol
 
             # Query order
-            out = self.order(leverage=leverage, **kwargs)
+            result = self.order(leverage=leverage, **kwargs)
 
             # Set current volume and position
             self.current_vol = 0.
             self.current_pos = 0
-            out['result']['current_volume'] = 0.
-            out['result']['current_position'] = 0
+            result['current_volume'] = 0.
+            result['current_position'] = 0
 
         else:
-            out = self._set_output(kwargs)
+            result = self._set_output(kwargs)
 
-        return out
+        return result
 
     def set_long(self, signal, **kwargs):
         """ Set long order. """
         if signal > 0:
-            out = self.order(**kwargs)
+            result = self.order(**kwargs)
 
             # Set current volume
             self.current_vol = kwargs['volume']
             self.current_pos = signal
-            out['result']['current_volume'] = self.current_vol
-            out['result']['current_position'] = signal
+            result['current_volume'] = self.current_vol
+            result['current_position'] = signal
 
         else:
-            out = self._set_output(kwargs)
+            result = self._set_output(kwargs)
 
-        return out
+        return result
 
     def cut_long(self, signal, **kwargs):
         """ Cut long position. """
         if self.current_pos > 0:
             # Set volume to cut long
             kwargs['volume'] = self.current_vol
-            out = self.order(**kwargs)
+            result = self.order(**kwargs)
 
             # Set current volume
             self.current_vol = 0.
             self.current_pos = 0
-            out['result']['current_volume'] = 0.
-            out['result']['current_position'] = 0
+            result['current_volume'] = 0.
+            result['current_position'] = 0
 
         else:
-            out = self._set_output(kwargs)
+            result = self._set_output(kwargs)
 
-        return out
+        return result
 
     def set_short(self, signal, **kwargs):
         """ Set short order. """
@@ -318,83 +357,40 @@ class SetOrder:
             # Set leverage to short
             leverage = kwargs.pop('leverage')
             leverage = 2 if leverage is None else leverage + 1
-            out = self.order(leverage=leverage, **kwargs)
+            result = self.order(leverage=leverage, **kwargs)
 
             # Set current volume
             self.current_vol = kwargs['volume']
             self.current_pos = signal
-            out['result']['current_volume'] = self.current_vol
-            out['result']['current_position'] = signal
+            result['current_volume'] = self.current_vol
+            result['current_position'] = signal
 
         else:
-            out = self._set_output(kwargs)
+            result = self._set_output(kwargs)
 
-        return out
+        return result
 
     def _set_output(self, kwargs):
         """ Set output when no orders query. """
-        out = {
-            'result': {
-                'timestamp': now(self.frequency),
-                'current_volume': self.current_vol,
-                'current_position': self.current_pos,
-                'fee': self._get_fees(kwargs['pair'], kwargs['ordertype']),
-                'descr': None,
-            }
+        result = {
+            'timestamp': now(self.frequency),
+            'current_volume': self.current_vol,
+            'current_position': self.current_pos,
+            'fee': self._get_fees(kwargs['pair'], kwargs['ordertype']),
+            'descr': None,
         }
         if kwargs['ordertype'] == 'limit':
-            out['result']['price'] = kwargs['price']
+            result['price'] = kwargs['price']
 
         elif kwargs['ordertype'] == 'market':
-            out['result']['price'] = get_close(kwargs['pair'])
+            result['price'] = get_close(kwargs['pair'])
 
         else:
             raise ValueError(
                 'Unknown order type: {}'.format(kwargs['ordertype'])
             )
 
-        return out
-
-    def get_query_order(self, id_order):
-        """ Return query order of a specified id order.
-
-        Parameters
-        ----------
-        id_order : int (signed and 32-bit)
-            Number to link an order with strategy, time and other.
-
-        Returns
-        -------
-        str
-            Query of specified order.
-
-        """
-        try:
-            ans = self.K.query_private(
-                'OpenOrders',
-                trades=True,
-                userref=id_order,
-            )
-
-            return ans['result']
-
-        except Exception as e:
-
-            if e in [HTTPError]:
-                self.logger.error('Catching the following error: {}'.format(e))
-
-                return self.get_status_order(id_order)
-
-            else:
-                self.logger.error(
-                    'UNKNOWN ERROR : {}\nAnswere of query: {}'.format(
-                        type(e),
-                        ans
-                    ),
-                    exc_info=True
-                )
-
-                raise e
+        return result
 
     def _get_fees(self, pair, order_type):
         """ Get current fees of order.
