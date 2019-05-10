@@ -4,14 +4,14 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2019-04-29 23:42:09
 # @Last modified by: ArthurBernard
-# @Last modified time: 2019-05-10 19:15:18
+# @Last modified time: 2019-05-10 20:15:51
 
 """ Manage orders execution. """
 
 # Built-in packages
 from pickle import Pickler, Unpickler
 import logging
-
+import time
 
 # External packages
 from requests import HTTPError
@@ -94,6 +94,7 @@ class SetOrder:
         self.current_pos = current_pos
         self.current_vol = current_vol
         self.frequency = frequency
+        self.start = int(time.time())
 
         self.logger = logging.getLogger('strat_man.' + __name__)
 
@@ -149,30 +150,48 @@ class SetOrder:
             if e in [HTTPError]:
                 self.logger.error('Catching the following error: {}'.format(e))
 
-                query = self.get_query_order(id_order)
-
-                if query['status'] not in ['open', 'close', 'pending']:
-                    out = self.order(id_order=id_order, **kwargs)
-
             else:
                 self.logger.error('Unknown error: {}'.format(type(e)),
                                   exc_info=True)
 
                 raise e
 
-        out = self._set_result_output(out, id_order, **kwargs)
+        # Verify if order is posted
+        post_order = self.verify_post_order(id_order)
+        if not post_order and not kwargs['validate']:
+            self.logger.info('Order not posted. Bot will retry.')
+            time.sleep(1)
 
-        # Check if order is ordered correctly
-        query = self.get_query_order(id_order)
+            return self.order(id_order=id_order, **kwargs)
 
-        if kwargs['validate']:
+        return self._set_result_output(out, id_order, **kwargs)
 
-            return out
+    def verify_post_order(self, id_order):
+        """ Verify if an order is well posted.
 
-        elif query['status'] not in ['open', 'close', 'pending']:
-            out = self.order(id_order=id_order, **kwargs)
+        Parameters
+        ----------
+        id_order : int
+            User reference of the order to verify.
 
-        return out
+        Returns
+        -------
+        bool :
+            Return true if order is posted else false.
+
+        """
+        open_order = self.K.query_private('OpenOrders', userref=id_order)
+        if open_order['result']['open']:
+
+            return True
+
+        closed_order = self.K.query_private('ClosedOrders',
+                                            userref=id_order, start=self.start)
+        if closed_order['result']['closed']:
+
+            return True
+
+        return False
 
     def _set_result_output(self, out, id_order, **kwargs):
         """ Add informations to output of query order. """
@@ -191,7 +210,7 @@ class SetOrder:
             # TODO : verify if get the exection market price
             query = self.get_query_order(id_order)
             out['result']['price'] = query['price']
-            self.logger.debug('Get execution price is not yet tested')
+            self.logger.debug('Get execution price is not yet verified')
 
         return out
 
