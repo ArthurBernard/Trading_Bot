@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2019-05-03 17:36:22
 # @Last modified by: ArthurBernard
-# @Last modified time: 2019-05-09 08:53:20
+# @Last modified time: 2019-05-10 21:23:27
 
 """ Run a bot following a configuration file. """
 
@@ -16,7 +16,7 @@ import logging
 from manager import StrategyManager
 from tools.utils import load_config_params, dump_config_params, get_df
 from orders_manager import SetOrder
-from results_manager import update_order_hist, ResultManager, set_order_results
+from results_manager import update_order_hist, ResultManager
 
 __all__ = ['run_bot']
 
@@ -64,25 +64,6 @@ def run_bot(id_strat, path='strategies/'):
             # Set order
             outputs = OM.set_order(signal, **order_params)
 
-            # Check to verify and debug
-            if not order_params['validate']:
-
-                # TODO : /!\ get execution price for market order /!\
-                for output in outputs:
-                    id_order = output['result']['userref']
-                    status = OM.get_status_order(id_order)
-                    logger.info(status)
-
-            else:
-                # TODO : get price
-                pass
-
-            # TODO : save new volume to invest if reinvest
-
-            # Clean outputs
-            outputs = set_order_results(outputs)
-            # print(outputs)
-
             # Update order historic
             update_order_hist(outputs, '', path=path + id_strat)
 
@@ -102,7 +83,7 @@ def run_bot(id_strat, path='strategies/'):
             data_cfg['pre_order_instance']['current_vol'] = float(current_vol)
 
         else:
-            logger.info('\nAll is good\n')
+            logger.debug('All is good\n')
 
     except Exception as e:
 
