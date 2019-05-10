@@ -25,7 +25,7 @@ get_data_instance:
   kwargs:                # Optional dict of parameters
     pair: XBTUSD
     interval: 60
-  assets:                # List of assets to download 
+  assets:                # List of assets to load from source_data
   - XXBTZUSD
   ohlcv: ohlcv           # {o: open, h: high, l: low, c: close, v: volume}
   frequency: 7200        # Number of second between two data
@@ -48,3 +48,9 @@ order_instance:
   leverage: 1        # Max leverage
   validate: true     # /!\ Doesn't push order if True /!\
   volume: 1.         # Max volume to trade
+
+# Parameters to print some statistic of strategy
+result_instance:
+  path: ./strategies/another_example/  # Path to load and save results
+  period: 1.                   # Number of period 
+  init_vol: 100.               # Initial volume invested
