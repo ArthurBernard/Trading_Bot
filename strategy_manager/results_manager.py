@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2019-05-02 19:07:38
 # @Last modified by: ArthurBernard
-# @Last modified time: 2019-05-10 21:22:40
+# @Last modified time: 2019-05-10 21:32:59
 
 """ Tools to manager results and display it. """
 
@@ -239,9 +239,9 @@ def set_performance(df):
     pos = df.loc[:, 'position'].values
     fee = df.loc[:, 'fee'].values
     fees = fee[:-1] * (pos[:-1] - pos[1:])
-    ret[1:] = (p[1:] - p[:-1]) * vol[:-1] * pos[:-1]
+    ret[1:] = (p[1:] - p[:-1]) * vol[:-1] * pos[:-1] * (1 - fees)
 
-    return np.cumsum(ret * (1 - fees))
+    return np.cumsum(ret)
 
 
 def rounder(*args, dec=0):
