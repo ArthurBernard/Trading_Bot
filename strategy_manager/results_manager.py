@@ -4,10 +4,11 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2019-05-02 19:07:38
 # @Last modified by: ArthurBernard
-# @Last modified time: 2019-05-09 09:14:56
+# @Last modified time: 2019-05-10 21:22:40
+
+""" Tools to manager results and display it. """
 
 # Built-in packages
-import time
 import logging
 
 # External packages
@@ -30,78 +31,6 @@ TODO:
     - Extract order historic (to allow statistic by date, pair, all, etc.)
 
 """
-
-
-def set_order_result(order_result):
-    """ Clean the output of set order method.
-
-    Parameters
-    ----------
-    order_result : dict
-        Output of set order.
-
-    Returns
-    -------
-    order_result : dict
-        Cleaned result of an output order.
-
-    """
-    descr = order_result.pop('descr')
-
-    if descr is not None:
-        list_ord = descr['order'].split(' ')
-        order_result.update({
-            'type': list_ord[0],
-            'volume': float(list_ord[1]),
-            'pair': list_ord[2],
-            'ordertype': list_ord[4],
-        })
-
-        if order_result['ordertype'] == 'limit':
-            order_result.update({
-                'price': float(list_ord[5]),
-                'leverage': 1 if len(list_ord) == 6 else list_ord[7][0],
-            })
-
-        elif order_result['ordertype'] == 'market':
-            # TODO : /!\ get execution price for market order /!\
-            order_result.update({
-                'price': float(list_ord[5]),  # request execution price
-                'leverage': 1 if len(list_ord) == 5 else list_ord[6][0],
-            })
-
-        else:
-            raise ValueError('Unknown order type: {}'.format(list_ord[4]))
-
-        return order_result
-
-    else:
-
-        return order_result
-
-
-def set_order_results(order_results):
-    """ Clean the output of set orders method.
-
-    Parameters
-    ----------
-    order_results : list of dict
-        Output of set order.
-
-    Returns
-    -------
-    clean_order_results : list of dict
-        Cleaned results of output orders.
-
-    """
-    clean_order_result = []
-
-    for result in order_results:
-        clean_order_result += [set_order_result(result['result'])]
-
-    else:
-
-        return clean_order_result
 
 
 def set_order_hist(order_result):
