@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2019-04-29 23:42:09
 # @Last modified by: ArthurBernard
-# @Last modified time: 2019-05-10 20:15:51
+# @Last modified time: 2019-05-10 20:21:05
 
 """ Manage orders execution. """
 
@@ -208,8 +208,11 @@ class SetOrder:
 
         elif kwargs['ordertype'] == 'market' and not kwargs['validate']:
             # TODO : verify if get the exection market price
-            query = self.get_query_order(id_order)
-            out['result']['price'] = query['price']
+            closed_order = self.K.query_private('ClosedOrders',
+                                                userref=id_order,
+                                                start=self.start)['result']
+            txid = out['result']['txid']
+            out['result']['price'] = closed_order['closed'][txid]['price']
             self.logger.debug('Get execution price is not yet verified')
 
         return out
