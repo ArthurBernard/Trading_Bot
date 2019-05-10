@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 # coding: utf-8
 
+""" Example of random strategy. """
+
 # Import built-in packages
 
 # Import external packages
@@ -15,7 +17,7 @@ __all__ = ['get_signal']
 
 
 def get_order_params(data, *args, **kwargs):
-    """ Return signal, price and volume """
+    """ Return signal, price and volume. """
     # Get parameters
     data_cfg = load_config_params(
         './strategies/example/configuration.yaml'
@@ -34,13 +36,12 @@ def get_order_params(data, *args, **kwargs):
 
 
 def get_signal(data, *args, **kwargs):
-    """ Compute signal """
-
+    """ Compute signal. """
     return int(np.random.choice(args))
 
 
 def get_coef_volume(data, *args, **kwargs):
-    """ Compute volume """
+    """ Compute volume. """
     if 'c' in data.columns:
         series = data.loc[:, 'c']
 
@@ -56,7 +57,7 @@ def get_coef_volume(data, *args, **kwargs):
 
 
 def get_price(data, signal, *args, **kwargs):
-    """ Compute price """
+    """ Compute price. """
     req = DataRequests("https://api.kraken.com/0/public", stop_step=1)
     ans = req.get_data('Ticker', pair='ETHUSD')
     marge = float(np.random.rand(1) - 0.4) / 10.
@@ -77,7 +78,9 @@ def get_price(data, signal, *args, **kwargs):
 
 def set_iso_vol(series, *args, target_vol=0.20, leverage=1.,
                 period=252, half_life=11, **kwargs):
-    """ Compute iso-volatility coefficient such that to target a
+    """ Compute iso-volatility coefficient.
+
+    Iso-volatility coefficient is computed such that to target a
     specified volatility of underlying.
 
     Parameters
