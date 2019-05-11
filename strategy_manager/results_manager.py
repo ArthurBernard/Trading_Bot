@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2019-05-02 19:07:38
 # @Last modified by: ArthurBernard
-# @Last modified time: 2019-05-11 13:32:40
+# @Last modified time: 2019-05-11 14:11:27
 
 """ Tools to manager results and display it. """
 
@@ -146,7 +146,7 @@ class ResultManager:
         pos = self.df.position.iloc[-1]
         # TODO : fix problem with vol equal to 0. when pos is 0
         vol = self.df.volume.iloc[-1]
-        txt = 'Display results\n' + self.set_text(
+        txt = 'Display results\n' + set_text(
             ['-'],
             ['Price of the underlying: {:.2f}'.format(price)],
             ['Current fees: {:.2}%'.format(self.df.fee.iloc[-1])],
@@ -154,7 +154,7 @@ class ResultManager:
         )
 
         txt += '\nCurrent value of the porfolio:\n'
-        txt += self.set_text(['-'] * 3, [
+        txt += set_text(['-'] * 3, [
             'Portfolio',
             '{:.2f} $'.format(value),
             '{:.2f} ?'.format(value / price), ], [
@@ -191,7 +191,7 @@ class ResultManager:
 
         txt_table += (['-'] * (1 + len(self.metrics)),)
 
-        txt += '\nStatistics of results:\n' + self.set_text(*txt_table)
+        txt += '\nStatistics of results:\n' + set_text(*txt_table)
 
         self.logger.info(txt)
 
@@ -205,10 +205,7 @@ class ResultManager:
             [head],
             ['Underlying'] + self.set_statistics(ui),
             ['Strategy'] + self.set_statistics(si),
-            # ['-'] * 6,
         )
-
-        # return txt + '\n'
 
     def set_statistics(self, series):
         metric_values = []
@@ -234,63 +231,37 @@ class ResultManager:
 
         return rounder(*metric_values, dec=2)
 
-    def set_text(self, *args):
-        n = max(len(arg) for arg in args)
-        k_list = ['| ' if len(arg[0]) > 1 else '+' for arg in args]
 
-        for i in range(n):
-            i_args, n_spa = [], 0
-            for arg in args:
-                if len(arg) >= i + 1:
-                    i_args += [arg]
-                    try:
-                        n_spa = max(n_spa, len(str(arg[i])))
-                    except Exception as e:
-                        print(arg)
-                        print(i)
-                        raise e
+def set_text(*args):
+    n = max(len(arg) for arg in args)
+    k_list = ['| ' if len(arg[0]) > 1 else '+' for arg in args]
 
-            # n_spa = max(len(str(arg[i])) for arg in i_args)
-            j = 0
+    for i in range(n):
+        i_args, n_spa, j = [], 0, 0
 
-            for arg in args:
-                if len(arg[0]) > 1 and len(arg) >= i + 1:
-                    space = ' ' * (n_spa - len(str(arg[i])))
-                    k_list[j] += str(arg[i]) + space + ' | '
+        for arg in args:
+            if len(arg) >= i + 1:
+                i_args += [arg]
+                n_spa = max(n_spa, len(str(arg[i])))
 
-                elif len(arg[0]) == 1 and len(arg) >= i + 1:
-                    k_list[j] += arg[i] * (n_spa + 2) + '+'
+        for arg in args:
+            if len(arg[0]) > 1 and len(arg) >= i + 1:
+                space = ' ' * (n_spa - len(str(arg[i])))
+                k_list[j] += str(arg[i]) + space + ' | '
+
+            elif len(arg[0]) == 1 and len(arg) >= i + 1:
+                k_list[j] += arg[i] * (n_spa + 2) + '+'
+
+            else:
+                if i % 2 == 0:
+                    k_list[j] = k_list[j][:-2] + ' ' * (n_spa + 3) + '| '
 
                 else:
-                    if i % 2 == 0:
-                        k_list[j] = k_list[j][:-2] + ' ' * (n_spa + 3) + '| '
+                    k_list[j] = '|' + ' ' * (n_spa + 3) + k_list[j][1:]
 
-                    else:
-                        k_list[j] = '|' + ' ' * (n_spa + 3) + k_list[j][1:]
+            j += 1
 
-                j += 1
-
-        return '\n'.join(k_list)
-
-    def set_text2(self, *args):
-        n = max(len(arg) for arg in args)
-        k_list = ['| ' if len(arg[0]) > 1 else '+' for arg in args]
-
-        for i in range(n):
-            n_spa = max(len(str(arg[i])) for arg in args)
-            j = 0
-
-            for arg in args:
-                if len(arg[0]) > 1:
-                    space = ' ' * (n_spa - len(str(arg[i])))
-                    k_list[j] += str(arg[i]) + space + ' | '
-
-                else:
-                    k_list[j] += arg[0] * (n_spa + 2) + '+'
-
-                j += 1
-
-        return '\n'.join(k_list)
+    return '\n'.join(k_list)
 
 
 def set_results(order_results):
