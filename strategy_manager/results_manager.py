@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2019-05-02 19:07:38
 # @Last modified by: ArthurBernard
-# @Last modified time: 2019-05-11 11:42:13
+# @Last modified time: 2019-05-11 13:32:40
 
 """ Tools to manager results and display it. """
 
@@ -141,7 +141,32 @@ class ResultManager:
 
     def print_stats(self):
         """ Print some statistics of result historic strategy. """
-        txt_table = []
+        price = self.df.price.iloc[-1]
+        value = self.df.value.iloc[-1]
+        pos = self.df.position.iloc[-1]
+        # TODO : fix problem with vol equal to 0. when pos is 0
+        vol = self.df.volume.iloc[-1]
+        txt = 'Display results\n' + self.set_text(
+            ['-'],
+            ['Price of the underlying: {:.2f}'.format(price)],
+            ['Current fees: {:.2}%'.format(self.df.fee.iloc[-1])],
+            ['-'],
+        )
+
+        txt += '\nCurrent value of the porfolio:\n'
+        txt += self.set_text(['-'] * 3, [
+            'Portfolio',
+            '{:.2f} $'.format(value),
+            '{:.2f} ?'.format(value / price), ], [
+            'Base part.',
+            '{:.2f} $'.format(pos * vol * price),
+            '{:.2%}'.format(pos), ], [
+            'Underlying part',
+            '{:.2f} $'.format((1 - pos) * vol * price),
+            '{:.2%}'.format(1 - pos), ], ['-'] * 3)
+
+        txt_table = [['-'] * (1 + len(self.metrics)), ['   '] + self.metrics]
+
         for period in self.periods:
             if period.lower() == 'daily':
                 _index = self.df.index >= self.df.index[-1] - 86400
@@ -166,7 +191,7 @@ class ResultManager:
 
         txt_table += (['-'] * (1 + len(self.metrics)),)
 
-        txt = 'Statistics of results:\n' + self.set_text(*txt_table)
+        txt += '\nStatistics of results:\n' + self.set_text(*txt_table)
 
         self.logger.info(txt)
 
@@ -177,8 +202,7 @@ class ResultManager:
 
         return (
             ['-'] * (1 + len(self.metrics)),
-            [head] + self.metrics,
-            ['-'] * (1 + len(self.metrics)),
+            [head],
             ['Underlying'] + self.set_statistics(ui),
             ['Strategy'] + self.set_statistics(si),
             # ['-'] * 6,
@@ -211,6 +235,44 @@ class ResultManager:
         return rounder(*metric_values, dec=2)
 
     def set_text(self, *args):
+        n = max(len(arg) for arg in args)
+        k_list = ['| ' if len(arg[0]) > 1 else '+' for arg in args]
+
+        for i in range(n):
+            i_args, n_spa = [], 0
+            for arg in args:
+                if len(arg) >= i + 1:
+                    i_args += [arg]
+                    try:
+                        n_spa = max(n_spa, len(str(arg[i])))
+                    except Exception as e:
+                        print(arg)
+                        print(i)
+                        raise e
+
+            # n_spa = max(len(str(arg[i])) for arg in i_args)
+            j = 0
+
+            for arg in args:
+                if len(arg[0]) > 1 and len(arg) >= i + 1:
+                    space = ' ' * (n_spa - len(str(arg[i])))
+                    k_list[j] += str(arg[i]) + space + ' | '
+
+                elif len(arg[0]) == 1 and len(arg) >= i + 1:
+                    k_list[j] += arg[i] * (n_spa + 2) + '+'
+
+                else:
+                    if i % 2 == 0:
+                        k_list[j] = k_list[j][:-2] + ' ' * (n_spa + 3) + '| '
+
+                    else:
+                        k_list[j] = '|' + ' ' * (n_spa + 3) + k_list[j][1:]
+
+                j += 1
+
+        return '\n'.join(k_list)
+
+    def set_text2(self, *args):
         n = max(len(arg) for arg in args)
         k_list = ['| ' if len(arg[0]) > 1 else '+' for arg in args]
 
