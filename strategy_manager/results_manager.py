@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2019-05-02 19:07:38
 # @Last modified by: ArthurBernard
-# @Last modified time: 2019-05-11 11:20:38
+# @Last modified time: 2019-05-11 11:42:13
 
 """ Tools to manager results and display it. """
 
@@ -141,23 +141,32 @@ class ResultManager:
 
     def print_stats(self):
         """ Print some statistics of result historic strategy. """
-        day_index = self.df.index >= self.df.index[-1] - 86400
-        txt = self.set_stats_result(self.df.loc[day_index], 'Daily Perf.')
+        txt_table = []
+        for period in self.periods:
+            if period.lower() == 'daily':
+                _index = self.df.index >= self.df.index[-1] - 86400
 
-        week_index = self.df.index >= self.df.index[-1] - 86400 * 7
-        txt += self.set_stats_result(self.df.loc[week_index], 'Weekly Perf.')
+            elif period.lower() == 'weekly':
+                _index = self.df.index >= self.df.index[-1] - 86400 * 7
 
-        month_index = self.df.index >= self.df.index[-1] - 86400 * 30
-        txt += self.set_stats_result(self.df.loc[month_index], 'Monthly Perf.')
+            elif period.lower() == 'monthly':
+                _index = self.df.index >= self.df.index[-1] - 86400 * 30
 
-        year_index = self.df.index >= self.df.index[-1] - 86400 * 365
-        txt += self.set_stats_result(self.df.loc[year_index], 'Yearly Perf.')
+            elif period.lower() == 'yearly':
+                _index = self.df.index >= self.df.index[-1] - 86400 * 365
 
-        total_index = self.df.index >= self.df.index[0]
-        txt += self.set_stats_result(self.df.loc[total_index], 'Total Perf.')
-        txt += (['-'] * 6,)
+            elif period.lower() == 'total':
+                _index = self.df.index >= self.df.index[0]
 
-        txt = 'Statistics of results:\n' + self.set_text(*txt)
+            else:
+                self.logger.error('Unknown period: {}'.format(period))
+                continue
+
+            txt_table += self.set_stats_result(self.df.loc[_index], period)
+
+        txt_table += (['-'] * (1 + len(self.metrics)),)
+
+        txt = 'Statistics of results:\n' + self.set_text(*txt_table)
 
         self.logger.info(txt)
 
@@ -167,9 +176,9 @@ class ResultManager:
         si = df.value.values
 
         return (
-            ['-'] * 6,
+            ['-'] * (1 + len(self.metrics)),
             [head] + self.metrics,
-            ['-'] * 6,
+            ['-'] * (1 + len(self.metrics)),
             ['Underlying'] + self.set_statistics(ui),
             ['Strategy'] + self.set_statistics(si),
             # ['-'] * 6,
@@ -194,6 +203,10 @@ class ResultManager:
 
             elif metric.lower() == 'maxdd':
                 metric_values += [fy.mdd(series)]
+
+            else:
+                self.logger.error('Unknown metric: {}'.format(metric))
+                continue
 
         return rounder(*metric_values, dec=2)
 
