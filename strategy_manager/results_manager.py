@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2019-05-02 19:07:38
 # @Last modified by: ArthurBernard
-# @Last modified time: 2019-05-10 21:32:59
+# @Last modified time: 2019-05-11 11:20:38
 
 """ Tools to manager results and display it. """
 
@@ -91,16 +91,24 @@ class ResultManager:
         Initial value invested to the strategy.
     period : int, optional
         Number of period per year, default is 252 (trading days).
+    metrics : list of str
+        List of metrics to display results. Is available 'return', 'perf',
+        'sharpe', 'calmar' and 'maxdd'.
+    periods : list of str
+        List of periods to compte metrics. Is available 'daily', 'weekly',
+        'monthly', 'yearly' and 'total'
 
     """
 
-    def __init__(self, path='.', init_vol=1., period=252):
+    def __init__(self, path, init_vol=1., period=252, metrics=[], periods=[]):
         if path[-1] != '/':
             path += '/'
 
         self.path = path
         self.init_vol = init_vol
         self.period = period
+        self.metrics = metrics
+        self.periods = periods
         self.df = get_df(path, 'result_hist', ext='.dat')
         self.logger = logging.getLogger('strat_man.' + __name__)
 
@@ -160,23 +168,34 @@ class ResultManager:
 
         return (
             ['-'] * 6,
-            [head, 'Return', 'Perf.', 'Sharpe', 'Calmar', 'MaxDD'],
+            [head] + self.metrics,
             ['-'] * 6,
-            ('Underlying', *self.set_statistics(ui, ui[0])),
-            ('Strategy', *self.set_statistics(si, self.init_vol)),
+            ['Underlying'] + self.set_statistics(ui),
+            ['Strategy'] + self.set_statistics(si),
             # ['-'] * 6,
         )
 
         # return txt + '\n'
 
-    def set_statistics(self, series, V_0):
-        perf = series[-1] - V_0
-        pct = perf / V_0
-        sharpe = fy.sharpe(series, period=self.period)
-        calmar = fy.calmar(series, period=self.period)
-        maxdd = fy.mdd(series)
+    def set_statistics(self, series):
+        metric_values = []
+        for metric in self.metrics:
+            if metric.lower() == 'return':
+                metric_values += [series[-1] - series[0]]
 
-        return rounder(perf, pct, sharpe, calmar, maxdd, dec=2)
+            elif metric.lower() in ['perf', 'perf.', 'performance']:
+                metric_values += [series[-1] / series[0] - 1.]
+
+            elif metric.lower() == 'sharpe':
+                metric_values += [fy.sharpe(series, period=self.period)]
+
+            elif metric.lower() == 'calmar':
+                metric_values += [fy.calmar(series, period=self.period)]
+
+            elif metric.lower() == 'maxdd':
+                metric_values += [fy.mdd(series)]
+
+        return rounder(*metric_values, dec=2)
 
     def set_text(self, *args):
         n = max(len(arg) for arg in args)
@@ -245,4 +264,4 @@ def set_performance(df):
 
 
 def rounder(*args, dec=0):
-    return (round(arg, dec) for arg in args)
+    return [round(arg, dec) for arg in args]
