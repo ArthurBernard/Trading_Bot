@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2019-05-02 19:07:38
 # @Last modified by: ArthurBernard
-# @Last modified time: 2019-05-11 14:11:27
+# @Last modified time: 2019-05-12 13:16:32
 
 """ Tools to manager results and display it. """
 
@@ -230,6 +230,10 @@ class ResultManager:
                 continue
 
         return rounder(*metric_values, dec=2)
+
+    # TODO : method to get current portfolio value
+    def get_current_value(self):
+        pass
 
 
 def set_text(*args):
