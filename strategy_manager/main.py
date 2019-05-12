@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2019-05-03 17:36:22
 # @Last modified by: ArthurBernard
-# @Last modified time: 2019-05-12 13:06:17
+# @Last modified time: 2019-05-12 13:15:46
 
 """ Run a bot following a configuration file. """
 
@@ -72,6 +72,10 @@ def run_bot(id_strat, path='strategies/'):
             RM.update_result_hist(outputs)
             # Print some statistics
             RM.print_stats()
+            # TODO : reinvest profit option
+            # if reinvest_parameter:
+            #     new_value = RM.get_current_value()
+            #     data_cfg['order_instance']['volume'] = new_value
 
             # Get current pos
             current_pos = float(OM.current_pos)
