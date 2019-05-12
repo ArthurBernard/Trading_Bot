@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2019-05-03 17:36:22
 # @Last modified by: ArthurBernard
-# @Last modified time: 2019-05-10 21:23:27
+# @Last modified time: 2019-05-12 13:06:17
 
 """ Run a bot following a configuration file. """
 
@@ -38,6 +38,7 @@ def run_bot(id_strat, path='strategies/'):
         path += '/'
 
     # Load data configuration
+    logger.info('Load parameters of {}'.format(id_strat))
     data_cfg = load_config_params(path + id_strat + '/configuration.yaml')
 
     # Set strategy manager and data request configuration
@@ -96,16 +97,14 @@ def run_bot(id_strat, path='strategies/'):
     finally:
         # DEGUG
         df_ord = get_df(path + id_strat, 'orders_hist', '.dat')
-        # df_res = get_df(path + id_strat, 'result_hist', '.dat')
-        print('Historic:\n' + '-' * 9 + '\n')
-        print(df_ord.iloc[:, 1:].tail(), '\n')
-        # print(df_res.tail(), '\n')
-        print(RM.df.tail(), '\n')
+        logger.info('Historic orders:\n' + str(df_ord.iloc[:, 1:].tail()))
+        logger.info('Historic result:\n' + str(RM.df.tail()))
         # Save results
         RM.save_result_hist()
         # TODO : ending with save some statistics and others
         # TODO : save new volume to invest if reinvest
         # Save current position and volume
+        logger.info('Save parameters of {}'.format(id_strat))
         dump_config_params(data_cfg, path + id_strat + '/configuration.yaml')
         logger.info('Bot stopped. See you soon !')
 
