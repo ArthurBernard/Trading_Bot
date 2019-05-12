@@ -1,13 +1,20 @@
 #!/usr/bin/env python3
 # coding: utf-8
+# @Author: ArthurBernard
+# @Email: arthur.bernard.92@gmail.com
+# @Date: 2019-05-12 22:57:20
+# @Last modified by: ArthurBernard
+# @Last modified time: 2019-05-12 23:00:03
 
-# Import built-in packages
+""" Object to manage a financial strategy. """
+
+# Built-in packages
 import time
 import importlib
 
-# Import external packages
+# External packages
 
-# Import local packages
+# Local packages
 from strategy_manager.tools.time_tools import now
 from strategy_manager import DataBaseManager, DataExchangeManager
 
@@ -39,7 +46,8 @@ class StrategyManager:
 
     def __init__(self, frequency, underlying, script_name, STOP=None,
                  iso_volatility=True):
-        """
+        """ Initialize strategy manager.
+
         Parameters
         ----------
         frequency : int
@@ -101,7 +109,7 @@ class StrategyManager:
         return self
 
     def __next__(self):
-        """ Iterative method. """
+        """ Iterate method. """
         if self.t >= self.STOP:
             raise StopIteration
 
@@ -122,7 +130,7 @@ class StrategyManager:
         return self.get_order_params(data)
 
     def get_order_params(self, data):
-        """ Function to compute signal, price and volume.
+        """ Compute signal, price and volume.
 
         Parameters
         ----------
@@ -135,7 +143,6 @@ class StrategyManager:
             Signal, price and volume strategy.
 
         """
-
         return self._get_order_params(data, *self.args, **self.kwargs)
 
     def set_data_manager(self, **kwargs):
@@ -147,7 +154,6 @@ class StrategyManager:
             Cf `DataManager` constructor.
 
         """
-
         if 'args' in kwargs.keys():
             self.args_data = kwargs.pop('args')
         else:
