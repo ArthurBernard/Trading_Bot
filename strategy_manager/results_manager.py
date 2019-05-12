@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2019-05-02 19:07:38
 # @Last modified by: ArthurBernard
-# @Last modified time: 2019-05-12 13:16:32
+# @Last modified time: 2019-05-12 19:03:58
 
 """ Tools to manager results and display it. """
 
@@ -231,9 +231,16 @@ class ResultManager:
 
         return rounder(*metric_values, dec=2)
 
-    # TODO : method to get current portfolio value
     def get_current_value(self):
-        pass
+        """ Get current value of the portfolio.
+
+        Returns
+        -------
+        float
+            Current value of the portfolio.
+
+        """
+        return self.df.value.iloc[-1]
 
 
 def set_text(*args):
