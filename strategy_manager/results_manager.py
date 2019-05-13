@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2019-05-02 19:07:38
 # @Last modified by: ArthurBernard
-# @Last modified time: 2019-05-13 09:10:31
+# @Last modified time: 2019-05-13 19:53:10
 
 """ Tools to manager results and display it. """
 
@@ -83,7 +83,7 @@ def update_order_hist(order_result, name, path='.'):
 
 
 class ResultManager:
-    """ Print some statistics of result historic strategy.
+    """ Manager object of historical results of strategy.
 
     Methods
     -------
@@ -98,7 +98,8 @@ class ResultManager:
 
     """
 
-    def __init__(self, path, init_vol=1., period=252, metrics=[], periods=[]):
+    def __init__(self, path, init_vol=1., period=252, metrics=[], periods=[],
+                 reinvest_profit=False):
         """ Initialize object.
 
         Parameters
@@ -114,7 +115,9 @@ class ResultManager:
             'sharpe', 'calmar' and 'maxdd'.
         periods : list of str
             List of periods to compte metrics. Is available 'daily', 'weekly',
-            'monthly', 'yearly' and 'total'
+            'monthly', 'yearly' and 'total'.
+        reinvest_profit : bool, optional
+            If true reinvest profit.
 
         """
         if path[-1] != '/':
@@ -125,6 +128,7 @@ class ResultManager:
         self.period = period
         self.metrics = metrics
         self.periods = periods
+        self.reinvest_profit = reinvest_profit
         self.df = get_df(path, 'result_hist', ext='.dat')
         self.logger = logging.getLogger('strat_man.' + __name__)
 
