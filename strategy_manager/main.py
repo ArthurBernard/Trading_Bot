@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2019-05-03 17:36:22
 # @Last modified by: ArthurBernard
-# @Last modified time: 2019-05-12 13:15:46
+# @Last modified time: 2019-05-13 19:32:00
 
 """ Run a bot following a configuration file. """
 
@@ -58,7 +58,6 @@ def run_bot(id_strat, path='strategies/'):
     # The bot start to run
     try:
         for signal, order_params in SM(*args.copy(), **kwargs.copy()):
-            logger.info('{}th iteration'.format(SM.t))
             logger.info('Signal is {}.'.format(signal))
             logger.debug('Order parameters are {}\n'.format(order_params))
 
