@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2019-05-02 19:07:38
 # @Last modified by: ArthurBernard
-# @Last modified time: 2019-05-12 19:03:58
+# @Last modified time: 2019-05-13 09:10:31
 
 """ Tools to manager results and display it. """
 
@@ -20,6 +20,8 @@ import fynance as fy
 from strategy_manager.tools.utils import get_df, save_df
 
 __all__ = [
+    'set_order_hist', 'update_order_hist', 'set_results', 'set_performance',
+    'ResultManager',
 ]
 
 """
@@ -83,24 +85,38 @@ def update_order_hist(order_result, name, path='.'):
 class ResultManager:
     """ Print some statistics of result historic strategy.
 
-    Parameters
-    ----------
-    path : str
-        Path of the file to load and save results.
-    init_vol : float, optional
-        Initial value invested to the strategy.
-    period : int, optional
-        Number of period per year, default is 252 (trading days).
-    metrics : list of str
-        List of metrics to display results. Is available 'return', 'perf',
-        'sharpe', 'calmar' and 'maxdd'.
-    periods : list of str
-        List of periods to compte metrics. Is available 'daily', 'weekly',
-        'monthly', 'yearly' and 'total'
+    Methods
+    -------
+    update_result_hist(order_results)
+        Load, merge and save result historic strategy.
+    save_result_hist()
+        Save historical results.
+    print_stats()
+        Print some statistics of historical results strategy.
+    get_current_value()
+        Get current value of the portfolio strategy.
 
     """
 
     def __init__(self, path, init_vol=1., period=252, metrics=[], periods=[]):
+        """ Initialize object.
+
+        Parameters
+        ----------
+        path : str
+            Path of the file to load and save results.
+        init_vol : float, optional
+            Initial value invested to the strategy.
+        period : int, optional
+            Number of period per year, default is 252 (trading days).
+        metrics : list of str
+            List of metrics to display results. Is available 'return', 'perf',
+            'sharpe', 'calmar' and 'maxdd'.
+        periods : list of str
+            List of periods to compte metrics. Is available 'daily', 'weekly',
+            'monthly', 'yearly' and 'total'
+
+        """
         if path[-1] != '/':
             path += '/'
 
@@ -136,17 +152,17 @@ class ResultManager:
         return self
 
     def save_result_hist(self):
-        """ Save result historic. """
+        """ Save historical results. """
         save_df(self.df, self.path, 'result_hist', ext='.dat')
 
     def print_stats(self):
-        """ Print some statistics of result historic strategy. """
+        """ Print some statistics of historical results strategy. """
         price = self.df.price.iloc[-1]
         value = self.df.value.iloc[-1]
         pos = self.df.position.iloc[-1]
         # TODO : fix problem with vol equal to 0. when pos is 0
         vol = self.df.volume.iloc[-1]
-        txt = 'Display results\n' + set_text(
+        txt = 'Display results\n' + _set_text(
             ['-'],
             ['Price of the underlying: {:.2f}'.format(price)],
             ['Current fees: {:.2}%'.format(self.df.fee.iloc[-1])],
@@ -154,7 +170,7 @@ class ResultManager:
         )
 
         txt += '\nCurrent value of the porfolio:\n'
-        txt += set_text(['-'] * 3, [
+        txt += _set_text(['-'] * 3, [
             'Portfolio',
             '{:.2f} $'.format(value),
             '{:.2f} ?'.format(value / price), ], [
@@ -187,27 +203,40 @@ class ResultManager:
                 self.logger.error('Unknown period: {}'.format(period))
                 continue
 
-            txt_table += self.set_stats_result(self.df.loc[_index], period)
+            txt_table += self._set_stats_result(self.df.loc[_index], period)
 
         txt_table += (['-'] * (1 + len(self.metrics)),)
-
-        txt += '\nStatistics of results:\n' + set_text(*txt_table)
-
+        txt += '\nStatistics of results:\n' + _set_text(*txt_table)
         self.logger.info(txt)
 
-    def set_stats_result(self, df, head):
-        """ Compute stats `backward` seconds in past. """
+        return self
+
+    def _set_stats_result(self, df, head):
+        """ Set statistics in a table with header. """
         ui = df.price.values
         si = df.value.values
 
-        return (
+        return [
             ['-'] * (1 + len(self.metrics)),
             [head],
             ['Underlying'] + self.set_statistics(ui),
             ['Strategy'] + self.set_statistics(si),
-        )
+        ]
 
     def set_statistics(self, series):
+        """ Compute statistics of a series of price or index values.
+
+        Parameters
+        ----------
+        series : np.ndarray[ndim=1, dtype=np.float64]
+            Series of price or index values.
+
+        Returns
+        -------
+        list
+            Some statistics predefined when initialize the object.
+
+        """
         metric_values = []
         for metric in self.metrics:
             if metric.lower() == 'return':
@@ -229,10 +258,10 @@ class ResultManager:
                 self.logger.error('Unknown metric: {}'.format(metric))
                 continue
 
-        return rounder(*metric_values, dec=2)
+        return _rounder(*metric_values, dec=2)
 
     def get_current_value(self):
-        """ Get current value of the portfolio.
+        """ Get current value of the portfolio strategy.
 
         Returns
         -------
@@ -243,7 +272,8 @@ class ResultManager:
         return self.df.value.iloc[-1]
 
 
-def set_text(*args):
+def _set_text(*args):
+    """ Set a table. """
     n = max(len(arg) for arg in args)
     k_list = ['| ' if len(arg[0]) > 1 else '+' for arg in args]
 
@@ -276,7 +306,7 @@ def set_text(*args):
 
 
 def set_results(order_results):
-    """ Aggregate and set results.
+    """ Aggregate and set a dataframe of results.
 
     Parameters
     ----------
@@ -308,7 +338,20 @@ def set_results(order_results):
 
 
 def set_performance(df):
-    """ Compute performance of a strategy. """
+    """ Compute performance of a strategy.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        Dataframe with prices of the underlying and volumes, positions and fees
+        of the strategy.
+
+    Returns
+    -------
+    np.ndarray[ndim1, dtype=np.float64]
+        Performance of strategy.
+
+    """
     p = df.loc[:, 'price'].values
     ret = np.zeros([p.size])
     vol = df.loc[:, 'volume'].values
@@ -320,5 +363,6 @@ def set_performance(df):
     return np.cumsum(ret)
 
 
-def rounder(*args, dec=0):
+def _rounder(*args, dec=0):
+    """ Round each element of a list. """
     return [round(arg, dec) for arg in args]
