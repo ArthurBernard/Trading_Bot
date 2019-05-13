@@ -4,13 +4,14 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2019-05-12 22:57:20
 # @Last modified by: ArthurBernard
-# @Last modified time: 2019-05-12 23:00:03
+# @Last modified time: 2019-05-13 19:31:19
 
 """ Object to manage a financial strategy. """
 
 # Built-in packages
 import time
 import importlib
+import logging
 
 # External packages
 
@@ -78,6 +79,7 @@ class StrategyManager:
             self.STOP = STOP
 
         self.iso_vol = iso_volatility
+        self.logger = logging.getLogger('strat_man.' + __name__)
 
     def __call__(self, *args, **kwargs):
         """ Set parameters of strategy.
@@ -121,6 +123,7 @@ class StrategyManager:
 
         self.next += self.frequency
         self.t += 1
+        self.logger.info('{}th iteration'.format(self.t))
 
         # TODO : Debug/find solution to request data correctly.
         #        Need to choose between request a database, server,
