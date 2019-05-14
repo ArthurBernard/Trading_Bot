@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2019-05-02 19:07:38
 # @Last modified by: ArthurBernard
-# @Last modified time: 2019-05-13 19:53:10
+# @Last modified time: 2019-05-13 19:58:18
 
 """ Tools to manager results and display it. """
 
@@ -264,16 +264,16 @@ class ResultManager:
 
         return _rounder(*metric_values, dec=2)
 
-    def get_current_value(self):
-        """ Get current value of the portfolio strategy.
+    def get_current_volume(self):
+        """ Get current volume of the portfolio strategy.
 
         Returns
         -------
         float
-            Current value of the portfolio.
+            Current volume of the portfolio.
 
         """
-        return self.df.value.iloc[-1]
+        return self.df.value.iloc[-1] / self.df.price[-1]
 
 
 def _set_text(*args):
