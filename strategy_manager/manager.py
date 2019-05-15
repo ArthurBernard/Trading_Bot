@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2019-05-12 22:57:20
 # @Last modified by: ArthurBernard
-# @Last modified time: 2019-05-15 08:12:53
+# @Last modified time: 2019-05-15 08:16:03
 
 """ Object to manage a financial strategy. """
 
@@ -27,8 +27,9 @@ class StrategyManager:
 
     Methods
     -------
-    get_signal(data)
-        Computes and returns signal' strategy.
+    get_order_params(data)
+        Computes and returns signal strategy and additional parameters to set
+        order.
     __call__(*args, **kwargs)
         Set parameters to pass into function' strategy.
     set_iso_vol(series, target_vol=0.2, leverage=1., period=252, half_life=11)
@@ -40,8 +41,8 @@ class StrategyManager:
         Number of seconds between two samples.
     underlying : str
         Name of the underlying or list of data needed.
-    _get_signal : function
-        Function to get signal' strategy.
+    _get_order_params : function
+        Function to get signal strategy and additional parameters to set order.
 
     """
 
@@ -133,7 +134,7 @@ class StrategyManager:
         return self.get_order_params(data)
 
     def get_order_params(self, data):
-        """ Compute signal, price and volume.
+        """ Compute signal and additional parameters to set order.
 
         Parameters
         ----------
