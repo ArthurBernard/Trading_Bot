@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2019-05-02 19:07:38
 # @Last modified by: ArthurBernard
-# @Last modified time: 2019-05-13 19:58:18
+# @Last modified time: 2019-05-15 08:25:27
 
 """ Tools to manager results and display it. """
 
@@ -273,7 +273,7 @@ class ResultManager:
             Current volume of the portfolio.
 
         """
-        return self.df.value.iloc[-1] / self.df.price[-1]
+        return float(self.df.value.iloc[-1] / self.df.price.iloc[-1])
 
 
 def _set_text(*args):
