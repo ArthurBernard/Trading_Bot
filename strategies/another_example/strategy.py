@@ -7,7 +7,6 @@
 import numpy as np
 
 # Import internal packages
-from tools.utils import load_config_params
 
 
 __all__ = ['get_signal']
@@ -16,10 +15,7 @@ __all__ = ['get_signal']
 def get_order_params(data, *args, **kwargs):
     """ Return signal, price and volume. """
     # Get parameters
-    data_cfg = load_config_params(
-        './strategies/another_example/configuration.yaml'
-    )
-    params = data_cfg['order_instance']
+    params = {}
 
     # Set signal
     signal = get_signal(data, *args, **kwargs)
