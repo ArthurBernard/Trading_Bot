@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2019-05-03 17:36:22
 # @Last modified by: ArthurBernard
-# @Last modified time: 2019-05-13 20:08:35
+# @Last modified time: 2019-05-15 08:11:50
 
 """ Run a bot following a configuration file. """
 
@@ -51,18 +51,19 @@ def run_bot(id_strat, path='strategies/'):
     # Get parameters for strategy function
     args = data_cfg['strategy_instance']['args_params']
     kwargs = data_cfg['strategy_instance']['kwargs_params']
+    order_params = data_cfg['order_instance']
 
     # Set result manager configuration
     RM = ResultManager(**data_cfg['result_instance'])
 
     # The bot start to run
     try:
-        for signal, order_params in SM(*args.copy(), **kwargs.copy()):
+        for signal, add_params in SM(*args.copy(), **kwargs.copy()):
             logger.info('Signal is {}.'.format(signal))
             logger.debug('Order parameters are {}\n'.format(order_params))
 
             # Set order
-            outputs = OM.set_order(signal, **order_params)
+            outputs = OM.set_order(signal, **order_params, **add_params)
 
             # Update order historic
             update_order_hist(outputs, '', path=path + id_strat)
