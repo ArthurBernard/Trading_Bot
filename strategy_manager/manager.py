@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2019-05-12 22:57:20
 # @Last modified by: ArthurBernard
-# @Last modified time: 2019-05-13 19:31:19
+# @Last modified time: 2019-05-15 08:12:53
 
 """ Object to manage a financial strategy. """
 
@@ -142,8 +142,10 @@ class StrategyManager:
 
         Returns
         -------
-        signal, price, volume : foat
-            Signal, price and volume strategy.
+        signal : float
+            Signal of strategy.
+        params : tuple
+            Parameters for order, e.g. volume, order type, etc.
 
         """
         return self._get_order_params(data, *self.args, **self.kwargs)
