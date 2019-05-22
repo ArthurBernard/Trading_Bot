@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2019-05-19 13:05:40
 # @Last modified by: ArthurBernard
-# @Last modified time: 2019-05-22 08:49:03
+# @Last modified time: 2019-05-22 12:53:09
 
 """ Read and print dataframe results of a strategy bot. """
 
@@ -19,7 +19,7 @@ from results_manager import ResultManager
 from tools.utils import load_config_params
 
 
-def print_results(id_strat, n_last_results=None, path='strategies/',
+def print_results(id_strat, n_last_results=None, path='./strategies/',
                   metrics=[], periods=[]):
     """ Display statistics of a bot results for a specified configuration.
 
