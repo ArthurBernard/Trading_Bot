@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2019-05-19 13:05:40
 # @Last modified by: ArthurBernard
-# @Last modified time: 2019-05-22 08:43:49
+# @Last modified time: 2019-05-22 08:49:03
 
 """ Read and print dataframe results of a strategy bot. """
 
@@ -31,6 +31,12 @@ def print_results(id_strat, n_last_results=None, path='strategies/',
         Number of lines of dataframe results to display. Default is `None`.
     path : str, optional
         Path to load the configuration file.
+    metrics : list of str, optional
+        List of metrics to display results. Default is `None` and display
+        metrics in configuration file.
+    periods : list of str, optional
+        List of periods to display results. Default is `None` and display
+        periods in configuration file.
 
     """
     logger = logging.getLogger('strat_man.' + __name__)
