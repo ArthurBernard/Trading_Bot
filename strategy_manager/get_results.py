@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2019-05-19 13:05:40
 # @Last modified by: ArthurBernard
-# @Last modified time: 2019-05-22 08:26:21
+# @Last modified time: 2019-05-22 08:43:49
 
 """ Read and print dataframe results of a strategy bot. """
 
@@ -19,7 +19,8 @@ from results_manager import ResultManager
 from tools.utils import load_config_params
 
 
-def print_results(id_strat, n_last_results=None, path='strategies/'):
+def print_results(id_strat, n_last_results=None, path='strategies/',
+                  metrics=[], periods=[]):
     """ Display statistics of a bot results for a specified configuration.
 
     Parameters
@@ -40,6 +41,12 @@ def print_results(id_strat, n_last_results=None, path='strategies/'):
     # Load data configuration
     logger.info('Load parameters of {}'.format(id_strat))
     data_cfg = load_config_params(path + id_strat + '/configuration.yaml')
+
+    if metrics:
+        data_cfg['result_instance']['metrics'] = metrics
+
+    if periods:
+        data_cfg['result_instance']['periods'] = periods
 
     # Set result manager configuration
     RM = ResultManager(**data_cfg['result_instance'])
@@ -64,6 +71,16 @@ if __name__ == '__main__':
     args = sys.argv[1:].copy()
     id_strat = args.pop(0)
 
+    i = 0
+    metrics, periods = [], []
+    for arg in sys.argv[2:]:
+        if arg.lower() in ['return', 'perf', 'sharpe', 'calmar', 'maxdd']:
+            metrics += [args.pop(i)]
+        elif arg.lower() in ['daily', 'weekly', 'monthly', 'yearly', 'total']:
+            periods += [args.pop(i)]
+        else:
+            i += 1
+
     if not args:
         n_last_results = None
     elif len(args) == 1:
@@ -71,4 +88,5 @@ if __name__ == '__main__':
     else:
         raise ValueError('Unkown parameters : {}'.format(args))
 
-    print_results(id_strat, n_last_results=n_last_results)
+    print_results(id_strat, n_last_results=n_last_results, metrics=metrics,
+                  periods=periods)
