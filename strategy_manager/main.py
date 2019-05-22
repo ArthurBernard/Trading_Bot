@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2019-05-03 17:36:22
 # @Last modified by: ArthurBernard
-# @Last modified time: 2019-05-22 08:29:47
+# @Last modified time: 2019-05-22 12:49:09
 
 """ Run a bot following a configuration file. """
 
@@ -21,7 +21,7 @@ from results_manager import update_order_hist, ResultManager
 __all__ = ['run_bot']
 
 
-def run_bot(id_strat, path='strategies/'):
+def run_bot(id_strat, path='./strategies/'):
     """ Run a strategy bot for specified configuration file.
 
     Parameters
