@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2019-05-03 17:36:22
 # @Last modified by: ArthurBernard
-# @Last modified time: 2019-05-15 08:19:56
+# @Last modified time: 2019-05-22 08:29:47
 
 """ Run a bot following a configuration file. """
 
@@ -12,7 +12,7 @@
 import sys
 import logging
 
-# Internal packages
+# Local packages
 from manager import StrategyManager
 from tools.utils import load_config_params, dump_config_params, get_df
 from orders_manager import SetOrder
@@ -22,7 +22,7 @@ __all__ = ['run_bot']
 
 
 def run_bot(id_strat, path='strategies/'):
-    """ Run a bot for specified configuration file.
+    """ Run a strategy bot for specified configuration file.
 
     Parameters
     ----------
