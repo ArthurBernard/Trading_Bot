@@ -1,4 +1,4 @@
-# Strategy Manager - Manager for algorithmic financial strategies [In Progress]
+# Strategy Manager - Manager for financial algorithmic strategies [In Progress]
 
 ## /!\ Not yet working but comming soon ! /!\
 
@@ -18,7 +18,7 @@ Initially `Strategy Manager` will be used with the Kraken crypto-currency exchan
     - 3.6
     - 3.7
 
-- Python packages:
+- Python package:
     - requests
     - numpy
     - pandas
@@ -33,12 +33,12 @@ At the root of a folder, clone the repository and install it with `pip`:
 
 ## Quick-start
 
-1. Create a folder `YOUR_STRATEGY_NAME` with 3 scripts to configurate a strategy.
+1. Create a folder `./strategies/YOUR_STRATEGY_NAME`, with 3 scripts to configurate a strategy.
 
 Example:
 
 > $ mkdir ./strategies/YOUR_STRATEGY_NAME   
-> $ touch ./strategies/YOUR_STRATEGY_NAME/__init__.py   
+> $ touch ./strategies/YOUR_STRATEGY_NAME/\_\_init\_\_.py   
 > $ touch./strategies/YOUR_STRATEGY_NAME/configuration.yaml   
 > $ touch ./strategies/YOUR_STRATEGY_NAME/strategy.py   
 
@@ -55,7 +55,7 @@ Example:
 Example:
 
 > $ crontab -e   
->> 0 0 * * * python3 /path/Strategies_Manager/execution_scripts/bot_manager.sh >> execution_scripts/manager.log 2>&1 &
+>> 0 0 * * * python3 /path/Strategies_Manager/execution_scripts/bot_manager.sh >> /path/Strategies_Manager/execution_scripts/manager.log 2>&1 &
 
 ## TODO list
 
