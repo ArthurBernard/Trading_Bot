@@ -11,7 +11,6 @@ import fynance as fy
 
 # Import internal packages
 from strategy_manager.data_requests import DataRequests
-from tools.utils import load_config_params
 
 __all__ = ['get_signal']
 
@@ -19,18 +18,14 @@ __all__ = ['get_signal']
 def get_order_params(data, *args, **kwargs):
     """ Return signal, price and volume. """
     # Get parameters
-    data_cfg = load_config_params(
-        './strategies/example/configuration.yaml'
-    )
-    params = data_cfg['order_instance']
+    params = {}
 
     # Set signal
     signal = get_signal(data, *args, **kwargs)
 
     # Set paramaters
     params['price'] = get_price(data, signal, *args, **kwargs)
-    # params['volume'] *= get_coef_volume(data, *args, **kwargs)
-    params['volume'] *= 1.5 + signal
+    # params['volume'] *= 1.5 + signal
 
     return signal, params
 
