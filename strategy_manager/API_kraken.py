@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2019-05-06 20:53:46
 # @Last modified by: ArthurBernard
-# @Last modified time: 2019-05-08 08:43:21
+# @Last modified time: 2019-05-23 13:02:09
 
 """ Kraken Client API object. """
 
@@ -13,6 +13,7 @@ import hashlib
 import hmac
 import time
 import base64
+import logging
 
 # External packages
 import requests
@@ -49,6 +50,7 @@ class KrakenClient:
         self.uri = "https://api.kraken.com"
         self.key = key
         self.secret = secret
+        self.logger = logging.getLogger('strat_man.' + __name__)
 
     def load_key(self, path):
         """ Load key and secret from a text file.
@@ -102,14 +104,31 @@ class KrakenClient:
         nonce = self._nonce()
         kwargs['nonce'] = nonce
         path = '/0/private/' + method
-        headers = self._headers(path, nonce, kwargs.copy())
+        head = self._headers(path, nonce, kwargs.copy())
         url = self.uri + path
 
-        r = requests.post(url, headers=headers, data=kwargs, timeout=timeout)
+        try:
+            r = requests.post(url, headers=head, data=kwargs, timeout=timeout)
 
-        if r.status_code in [200, 201, 202]:
+            if r.status_code in [200, 201, 202]:
 
-            return r.json()
+                return r.json()['result']
 
-        else:
-            raise ValueError(r.status_code, r)
+            else:
+                raise ValueError(r.status_code, r)
+
+        except Exception as e:
+            if e in [KeyError]:
+                error_msg = 'KeyError | Request answere: {}.'.format(r.json())
+                self.logger.error(error_msg, exc_info=True)
+
+            elif e in [NameError]:
+                self.logger.error('NameError | Retry request.')
+
+                return self.query_private(method, timeout=30, **kwargs)
+
+            else:
+                error_msg = 'Unknown error: {}\n'.format(type(e))
+                error_msg += 'Request anwere: {}'.format(r.json())
+                self.logger.error(error_msg, exc_info=True)
+                raise e
