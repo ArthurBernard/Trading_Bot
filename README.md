@@ -33,7 +33,7 @@ At the root of a folder, clone the repository and install it with `pip`:
 
 ## Quick-start
 
-1. Create a folder `./strategies/YOUR_STRATEGY_NAME`, with 3 scripts to configurate a strategy.
+1. Create a folder `./strategies/YOUR_STRATEGY_NAME`, with 3 scripts to configurate a strategy: `__init__.py` an empty file, `configuration.yaml` and `strategy.py`. See examples in `strategies/example/` and `strategies/another_example/`.
 
 Example:
 
