@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2019-04-29 23:42:09
 # @Last modified by: ArthurBernard
-# @Last modified time: 2019-05-23 14:20:15
+# @Last modified time: 2019-05-27 11:10:57
 
 """ Manage orders execution. """
 
@@ -105,7 +105,7 @@ class SetOrder:
             self.fees_dict = self.K.query_private(
                 'TradeVolume',
                 pair='all'
-            )# ['result']
+            )
 
         else:
             self.logger.error('Exchange "{}" not allowed'.format(exchange))
@@ -144,8 +144,6 @@ class SetOrder:
                 timeout=30,
                 **kwargs
             )
-            # self.logger.info(out['result']['descr']['order'])
-            # txid = out['result']['txid']
             self.logger.info(out['descr']['order'])
             txid = out['txid']
 
@@ -189,14 +187,14 @@ class SetOrder:
 
         """
         open_order = self.K.query_private('OpenOrders', userref=id_order)
-        # if open_order['result']['open']:
+
         if open_order['open']:
 
             return True
 
         closed_order = self.K.query_private('ClosedOrders',
                                             userref=id_order, start=self.start)
-        # if closed_order['result']['closed']:
+
         if closed_order['closed']:
 
             return True
@@ -239,16 +237,12 @@ class SetOrder:
     def _set_result_output2(self, out, id_order, **kwargs):
         """ Add informations to output of query order. """
         # Set infos
-        # out['result']['userref'] = id_order
-        # out['result']['timestamp'] = now(self.frequency)
-        # out['result']['fee'] = self._get_fees(
         out['userref'] = id_order
         out['timestamp'] = now(self.frequency)
         out['fee'] = self._get_fees(kwargs['pair'], kwargs['ordertype'])
 
         if kwargs['ordertype'] == 'market' and kwargs['validate']:
             # Get the last price
-            # out['result']['price'] = get_close(kwargs['pair'])
             out['price'] = get_close(kwargs['pair'])
 
         elif kwargs['ordertype'] == 'market' and not kwargs['validate']:
@@ -256,9 +250,7 @@ class SetOrder:
             closed_order = self.K.query_private('ClosedOrders',
                                                 userref=id_order,
                                                 start=self.start)  # ['result']
-            # txid = out['result']['txid']
             txid = out['txid']
-            # out['result']['price'] = closed_order['closed'][txid]['price']
             out['price'] = closed_order['closed'][txid]['price']
             self.logger.debug('Get execution price is not yet verified')
 
