@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2019-05-03 17:36:22
 # @Last modified by: ArthurBernard
-# @Last modified time: 2019-05-22 12:49:09
+# @Last modified time: 2019-05-28 17:54:26
 
 """ Run a bot following a configuration file. """
 
