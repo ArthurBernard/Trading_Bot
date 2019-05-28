@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2019-05-02 19:07:38
 # @Last modified by: ArthurBernard
-# @Last modified time: 2019-05-15 08:25:27
+# @Last modified time: 2019-05-28 17:54:49
 
 """ Tools to manager results and display it. """
 
@@ -159,21 +159,23 @@ class ResultManager:
         """ Save historical results. """
         save_df(self.df, self.path, 'result_hist', ext='.dat')
 
-    def print_stats(self):
-        """ Print some statistics of historical results strategy. """
-        price = self.df.price.iloc[-1]
-        value = self.df.value.iloc[-1]
-        pos = self.df.position.iloc[-1]
-        # TODO : fix problem with vol equal to 0. when pos is 0
-        vol = self.df.volume.iloc[-1]
+    def set_current_price(self):
         txt = 'Display results\n' + _set_text(
             ['-'],
-            ['Price of the underlying: {:.2f}'.format(price)],
+            ['Price of the underlying: {:.2f}'.format(self.df.price.iloc[-1])],
             ['Current fees: {:.2}%'.format(self.df.fee.iloc[-1])],
             ['-'],
         )
 
-        txt += '\nCurrent value of the porfolio:\n'
+        return txt
+
+    def set_current_value(self):
+        price = self.df.price.iloc[-1]
+        value = self.df.value.iloc[-1]
+        pos = self.df.position.iloc[-1]
+        # TODO : fix problem with volume equal to 0. when pos is 0
+        vol = self.df.volume.iloc[-1]
+        txt = '\nCurrent value of the porfolio:\n'
         txt += _set_text(['-'] * 3, [
             'Portfolio',
             '{:.2f} $'.format(value),
@@ -185,6 +187,9 @@ class ResultManager:
             '{:.2f} $'.format((1 - pos) * vol * price),
             '{:.2%}'.format(1 - pos), ], ['-'] * 3)
 
+        return txt
+
+    def set_current_stats(self):
         txt_table = [['-'] * (1 + len(self.metrics)), ['   '] + self.metrics]
 
         for period in self.periods:
@@ -210,7 +215,15 @@ class ResultManager:
             txt_table += self._set_stats_result(self.df.loc[_index], period)
 
         txt_table += (['-'] * (1 + len(self.metrics)),)
-        txt += '\nStatistics of results:\n' + _set_text(*txt_table)
+
+        return '\nStatistics of results:\n' + _set_text(*txt_table)
+
+    def print_stats(self):
+        """ Print some statistics of historical results strategy. """
+        txt = self.set_current_price()
+        txt += self.set_current_value()
+        txt += self.set_current_stats()
+
         self.logger.info(txt)
 
         return self
