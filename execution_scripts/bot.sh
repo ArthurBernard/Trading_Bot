@@ -3,7 +3,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2019-04-18 23:52:54
 # @Last modified by: ArthurBernard
-# @Last modified time: 2019-05-24 23:10:11
+# @Last modified time: 2019-06-10 12:29:17
 #
 # Script to run automatically a Python scripts while one day and verify
 # each second that program didn't shutdown. 
@@ -40,7 +40,7 @@ while [ $ts -lt $stop ]; do
     # Check if script is always running
     if ! ps -p $script_pid > /dev/null; then
         # Program shutdown
-        echo '$1 strategy has stopped'
+        echo "$1 strategy has stopped"
         let "i = i + 1"
 
         # Save logs
