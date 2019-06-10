@@ -3,7 +3,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2019-04-18 23:52:54
 # @Last modified by: ArthurBernard
-# @Last modified time: 2019-06-10 12:29:17
+# @Last modified time: 2019-06-10 12:30:25
 #
 # Script to run automatically a Python scripts while one day and verify
 # each second that program didn't shutdown. 
@@ -45,7 +45,7 @@ while [ $ts -lt $stop ]; do
 
         # Save logs
         date +%H:%M:%S >> $path/error_`date +%y-%m-%d`.log
-        cat $path/execution.log >> $path/error_`date +%y-%m%-%d`.log
+        cat $path/execution.log >> $path/error_`date +%y-%m-%d`.log
 
         # Run `execution_strat.py` python script
         python3 strategy_manager/main.py $1 > $path/execution.log 2>&1 &
