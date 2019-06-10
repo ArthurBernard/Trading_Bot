@@ -3,7 +3,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2019-04-18 23:52:54
 # @Last modified by: ArthurBernard
-# @Last modified time: 2019-06-10 19:29:45
+# @Last modified time: 2019-06-10 19:39:18
 #
 # Script to run automatically a Python scripts while one day and verify
 # each second that program didn't shutdown. 
@@ -18,13 +18,11 @@
 path=./strategies/$1
 
 # Run `execution_strat.py` python script
-# python3 strategy_manager/main.py $1 >> bot_$1.log 2>&1 &
 python3 strategy_manager/main.py $1 > $path/execution.log 2>&1 &
 
 # Check the PID
 script_pid=`ps -f | grep main.py\ $1 | grep -v grep | awk '{print $2}'`
 echo "`date +%y-%m-%d %H:%M:%S` | $script_pid | Start to run $1."
-# echo "`date +%y-%m-%d %H:%M:%S` $1 has started, this pid is $script_pid"
 
 # Define curent timestamp
 ts=`date +%s`
@@ -42,7 +40,6 @@ while [ $ts -lt $stop ]; do
     if ! ps -p $script_pid > /dev/null; then
         # Program shutdown
         echo "`date +%y-%m-%d %H:%M:%S` | $script_pid | Stop to run $1."
-        # echo "$1 strategy has stopped"
         let "i = i + 1"
 
         # Save logs
@@ -51,12 +48,10 @@ while [ $ts -lt $stop ]; do
 
         # Run `execution_strat.py` python script
         python3 strategy_manager/main.py $1 > $path/execution.log 2>&1 &
-        # python3 strategy_manager/main.py $1 >> bot_$1.log 2>&1 &
 
         # Check the PID
         script_pid=`ps -f | grep main.py\ $1 | grep -v grep | awk '{print $2}'`
         echo "`date +%y-%m-%d %H:%M:%S` | $script_pid | Restart to run $1."
-        # echo "$1 has restarted, this new pid is $script_pid"
 
     fi
     # Sleep one second
@@ -70,6 +65,5 @@ while [ $ts -lt $stop ]; do
         # Send notification
         # TODO : send an email or alarm
         echo "`date +%y-%m-%d %H:%M:%S` | 1 | Stop to run bot."
-        # echo 'Program shutdown more than five times !'
     fi
 done
