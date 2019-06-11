@@ -3,7 +3,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2019-04-18 23:52:54
 # @Last modified by: ArthurBernard
-# @Last modified time: 2019-06-10 19:39:18
+# @Last modified time: 2019-06-11 15:05:47
 #
 # Script to run automatically a Python scripts while one day and verify
 # each second that program didn't shutdown. 
@@ -22,7 +22,7 @@ python3 strategy_manager/main.py $1 > $path/execution.log 2>&1 &
 
 # Check the PID
 script_pid=`ps -f | grep main.py\ $1 | grep -v grep | awk '{print $2}'`
-echo "`date +%y-%m-%d %H:%M:%S` | $script_pid | Start to run $1."
+echo "`date +%y-%m-%d\ %H:%M:%S` | $script_pid | Start to run $1."
 
 # Define curent timestamp
 ts=`date +%s`
@@ -39,7 +39,7 @@ while [ $ts -lt $stop ]; do
     # Check if script is always running
     if ! ps -p $script_pid > /dev/null; then
         # Program shutdown
-        echo "`date +%y-%m-%d %H:%M:%S` | $script_pid | Stop to run $1."
+        echo "`date +%y-%m-%d\ %H:%M:%S` | $script_pid | Stop to run $1."
         let "i = i + 1"
 
         # Save logs
@@ -51,7 +51,7 @@ while [ $ts -lt $stop ]; do
 
         # Check the PID
         script_pid=`ps -f | grep main.py\ $1 | grep -v grep | awk '{print $2}'`
-        echo "`date +%y-%m-%d %H:%M:%S` | $script_pid | Restart to run $1."
+        echo "`date +%y-%m-%d\ %H:%M:%S` | $script_pid | Restart to run $1."
 
     fi
     # Sleep one second
@@ -64,6 +64,6 @@ while [ $ts -lt $stop ]; do
         let "ts = ts + 3600"
         # Send notification
         # TODO : send an email or alarm
-        echo "`date +%y-%m-%d %H:%M:%S` | 1 | Stop to run bot."
+        echo "`date +%y-%m-%d\ %H:%M:%S` | 1 | Stop to run bot."
     fi
 done
