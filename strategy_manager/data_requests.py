@@ -1,19 +1,24 @@
 #!/usr/bin/env python3
 # coding: utf-8
+# @Author: ArthurBernard
+# @Email: arthur.bernard.92@gmail.com
+# @Date: 2019-04-26 08:49:26
+# @Last modified by: ArthurBernard
+# @Last modified time: 2019-06-12 18:49:34
 
-# Import built-in packages
+# Built-in import
 import json
 import time
 import sys
 from pickle import Pickler, Unpickler
 from os import listdir
 
-# Import external packages
+# External import
 import requests
 import pandas as pd
 import numpy as np
 
-# Import internal packages
+# Local import
 from strategy_manager.tools.time_tools import now
 
 __all__ = [
