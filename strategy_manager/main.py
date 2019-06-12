@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2019-05-03 17:36:22
 # @Last modified by: ArthurBernard
-# @Last modified time: 2019-05-28 17:54:26
+# @Last modified time: 2019-06-12 18:57:16
 
 """ Run a bot following a configuration file. """
 
@@ -60,6 +60,7 @@ def run_bot(id_strat, path='./strategies/'):
     try:
         for signal, add_params in SM(*args.copy(), **kwargs.copy()):
             logger.info('Signal is {}.'.format(signal))
+            logger.debug('Additional parameters are {}\n'.format(add_params))
             logger.debug('Order parameters are {}\n'.format(order_params))
 
             # Set order
