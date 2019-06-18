@@ -1,8 +1,17 @@
 #!/usr/bin/env python3
 # coding: utf-8
+# @Author: ArthurBernard
+# @Email: arthur.bernard.92@gmail.com
+# @Date: 2019-03-23 11:36:05
+# @Last modified by: ArthurBernard
+# @Last modified time: 2019-06-17 15:30:42
 
-# Import built-in packages
+# Built-in packages
 import time
+
+# External packages
+
+# Local packages
 
 __all__ = ['date_to_TS', 'TS_to_date', 'now']
 
