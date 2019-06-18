@@ -4,7 +4,9 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2019-03-23 11:36:05
 # @Last modified by: ArthurBernard
-# @Last modified time: 2019-06-17 15:30:42
+# @Last modified time: 2019-06-18 23:14:28
+
+""" Tools to manage date and time. """
 
 # Built-in packages
 import time
@@ -42,6 +44,7 @@ def now(freq=60):
 
 def date_to_TS(date, format='%d-%m-%y %H:%M:%S'):
     """ Convert date to timestamp.
+
     TODO : To finish !
 
     Parameters
@@ -69,6 +72,7 @@ def date_to_TS(date, format='%d-%m-%y %H:%M:%S'):
 
 def TS_to_date(TS, format='%d-%m-%y %H:%M:%S'):
     """ Convert timestamp to date.
+
     TODO : To finish !
 
     Parameters
