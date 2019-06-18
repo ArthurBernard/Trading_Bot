@@ -3,7 +3,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2019-04-18 23:52:54
 # @Last modified by: ArthurBernard
-# @Last modified time: 2019-06-11 15:05:47
+# @Last modified time: 2019-06-18 15:40:54
 #
 # Script to run automatically a Python scripts while one day and verify
 # each second that program didn't shutdown. 
@@ -19,6 +19,7 @@ path=./strategies/$1
 
 # Run `execution_strat.py` python script
 python3 strategy_manager/main.py $1 > $path/execution.log 2>&1 &
+sleep 1
 
 # Check the PID
 script_pid=`ps -f | grep main.py\ $1 | grep -v grep | awk '{print $2}'`
@@ -48,6 +49,7 @@ while [ $ts -lt $stop ]; do
 
         # Run `execution_strat.py` python script
         python3 strategy_manager/main.py $1 > $path/execution.log 2>&1 &
+        sleep 1
 
         # Check the PID
         script_pid=`ps -f | grep main.py\ $1 | grep -v grep | awk '{print $2}'`
