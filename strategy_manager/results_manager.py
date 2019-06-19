@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2019-05-02 19:07:38
 # @Last modified by: ArthurBernard
-# @Last modified time: 2019-05-28 17:54:49
+# @Last modified time: 2019-06-19 08:17:02
 
 """ Tools to manager results and display it. """
 
@@ -180,10 +180,10 @@ class ResultManager:
             'Portfolio',
             '{:.2f} $'.format(value),
             '{:.2f} ?'.format(value / price), ], [
-            'Base part.',
+            'Underlying part.',
             '{:.2f} $'.format(pos * vol * price),
             '{:.2%}'.format(pos), ], [
-            'Underlying part',
+            'Base part',
             '{:.2f} $'.format((1 - pos) * vol * price),
             '{:.2%}'.format(1 - pos), ], ['-'] * 3)
 
