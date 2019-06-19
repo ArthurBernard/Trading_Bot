@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2019-05-02 19:07:38
 # @Last modified by: ArthurBernard
-# @Last modified time: 2019-06-19 08:17:02
+# @Last modified time: 2019-06-19 08:24:06
 
 """ Tools to manager results and display it. """
 
@@ -160,6 +160,7 @@ class ResultManager:
         save_df(self.df, self.path, 'result_hist', ext='.dat')
 
     def set_current_price(self):
+        """ Display current price and fees. """
         txt = 'Display results\n' + _set_text(
             ['-'],
             ['Price of the underlying: {:.2f}'.format(self.df.price.iloc[-1])],
@@ -170,6 +171,7 @@ class ResultManager:
         return txt
 
     def set_current_value(self):
+        """ Display the current share of portfolio in underlying and cash. """
         price = self.df.price.iloc[-1]
         value = self.df.value.iloc[-1]
         pos = self.df.position.iloc[-1]
@@ -190,6 +192,7 @@ class ResultManager:
         return txt
 
     def set_current_stats(self):
+        """ Display some statistics for some time periods. """
         txt_table = [['-'] * (1 + len(self.metrics)), ['   '] + self.metrics]
 
         for period in self.periods:
