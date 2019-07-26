@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2019-03-08 20:19:22
 # @Last modified by: ArthurBernard
-# @Last modified time: 2019-05-06 20:47:08
+# @Last modified time: 2019-07-26 17:47:09
 
 # Built-in packages
 from pickle import Pickler, Unpickler
@@ -15,7 +15,7 @@ from ruamel.yaml import YAML
 import pandas as pd
 
 
-__all__ = ['load_config_params', 'save_df', 'get_df']
+__all__ = ['load_config_params', 'dump_config_params', 'save_df', 'get_df']
 
 
 def load_config_params(path):
