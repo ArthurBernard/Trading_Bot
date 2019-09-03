@@ -3,7 +3,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2019-04-18 23:52:54
 # @Last modified by: ArthurBernard
-# @Last modified time: 2019-06-18 15:40:54
+# @Last modified time: 2019-09-04 01:58:42
 #
 # Script to run automatically a Python scripts while one day and verify
 # each second that program didn't shutdown. 
@@ -63,7 +63,7 @@ while [ $ts -lt $stop ]; do
     # Check shutdown counter
     if [ $i -gt 5 ]; then
         # Stop loop
-        let "ts = ts + 3600"
+        let "ts = ts + 86400"
         # Send notification
         # TODO : send an email or alarm
         echo "`date +%y-%m-%d\ %H:%M:%S` | 1 | Stop to run bot."
