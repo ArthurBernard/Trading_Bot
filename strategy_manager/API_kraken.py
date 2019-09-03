@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2019-05-06 20:53:46
 # @Last modified by: ArthurBernard
-# @Last modified time: 2019-05-23 13:02:09
+# @Last modified time: 2019-09-04 01:41:22
 
 """ Kraken Client API object. """
 
@@ -14,6 +14,7 @@ import hmac
 import time
 import base64
 import logging
+from json.decoder import JSONDecodeError
 
 # External packages
 import requests
@@ -117,18 +118,20 @@ class KrakenClient:
             else:
                 raise ValueError(r.status_code, r)
 
+        except KeyError as e:
+            error_msg = 'KeyError | Request answere: {}.'.format(r.json())
+            self.logger.error(error_msg, exc_info=True)
+
+            raise e
+
+        except (NameError, JSONDecodeError) as e:
+            self.logger.error('{} | Retry request.'.format(type(e)))
+
+            return self.query_private(method, timeout=30, **kwargs)
+
         except Exception as e:
-            if e in [KeyError]:
-                error_msg = 'KeyError | Request answere: {}.'.format(r.json())
-                self.logger.error(error_msg, exc_info=True)
+            error_msg = 'Unknown error: {}\n'.format(type(e))
+            error_msg += 'Request answere: {}'.format(r.json())
+            self.logger.error(error_msg, exc_info=True)
 
-            elif e in [NameError]:
-                self.logger.error('NameError | Retry request.')
-
-                return self.query_private(method, timeout=30, **kwargs)
-
-            else:
-                error_msg = 'Unknown error: {}\n'.format(type(e))
-                error_msg += 'Request anwere: {}'.format(r.json())
-                self.logger.error(error_msg, exc_info=True)
-                raise e
+            raise e
