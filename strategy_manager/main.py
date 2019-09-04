@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2019-05-03 17:36:22
 # @Last modified by: ArthurBernard
-# @Last modified time: 2019-06-12 18:57:16
+# @Last modified time: 2019-09-04 07:59:32
 
 """ Run a bot following a configuration file. """
 
@@ -19,6 +19,8 @@ from orders_manager import SetOrder
 from results_manager import update_order_hist, ResultManager
 
 __all__ = ['run_bot']
+
+# TODO : add optional timer
 
 
 def run_bot(id_strat, path='./strategies/'):
@@ -88,8 +90,7 @@ def run_bot(id_strat, path='./strategies/'):
             # TODO : check if current volume is ok
             data_cfg['pre_order_instance']['current_vol'] = float(current_vol)
 
-        else:
-            logger.debug('All is good\n')
+        logger.debug('All is good\n')
 
     except Exception as e:
 

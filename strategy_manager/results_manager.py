@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2019-05-02 19:07:38
 # @Last modified by: ArthurBernard
-# @Last modified time: 2019-06-19 08:24:06
+# @Last modified time: 2019-09-04 08:03:45
 
 """ Tools to manager results and display it. """
 
@@ -276,7 +276,6 @@ class ResultManager:
 
             else:
                 self.logger.error('Unknown metric: {}'.format(metric))
-                continue
 
         return _rounder(*metric_values, dec=2)
 
@@ -352,9 +351,7 @@ def set_results(order_results):
         aggr_res[ts]['price'] = result['price']
         aggr_res[ts]['fee'] = result['fee']
 
-    else:
-
-        return pd.DataFrame(aggr_res).T
+    return pd.DataFrame(aggr_res).T
 
 
 def set_performance(df):
