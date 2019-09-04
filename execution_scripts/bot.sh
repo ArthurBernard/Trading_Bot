@@ -3,7 +3,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2019-04-18 23:52:54
 # @Last modified by: ArthurBernard
-# @Last modified time: 2019-09-04 02:00:18
+# @Last modified time: 2019-09-04 08:59:17
 #
 # Script to run automatically a Python scripts while one day and verify
 # each second that program didn't shutdown. 

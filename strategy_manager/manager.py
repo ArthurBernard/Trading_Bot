@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2019-05-12 22:57:20
 # @Last modified by: ArthurBernard
-# @Last modified time: 2019-05-15 08:16:03
+# @Last modified time: 2019-09-04 08:58:09
 
 """ Object to manage a financial strategy. """
 
@@ -59,11 +59,12 @@ class StrategyManager:
         script_name : str
             Name of script to load function strategy (named `get_signal`).
         STOP : int, optional
-            Number of iteration before stoping, if `None` iteration will
-            stop every 24 hours. Default is `None`.
+            Number of iteration before stoping, if None iteration will
+            stop at the end of the day (UTC time) (depreciated: stop after 24
+            hours running). Default is None.
         iso_volatility : bool, optional
             If true apply a coefficient of money management computed from
-            underlying volatility. Default is `True`.
+            underlying volatility. Default is True.
 
         """
         strat = importlib.import_module(
@@ -74,7 +75,9 @@ class StrategyManager:
         self.underlying = underlying
 
         if STOP is None:
-            self.STOP = 86400 // frequency
+            # Deprecated
+            # self.STOP = 86400 // frequency
+            self.STOP = (86400 - time.time() // 86400) // frequency
 
         else:
             self.STOP = STOP

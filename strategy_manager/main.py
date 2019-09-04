@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2019-05-03 17:36:22
 # @Last modified by: ArthurBernard
-# @Last modified time: 2019-09-04 07:59:32
+# @Last modified time: 2019-09-04 08:45:20
 
 """ Run a bot following a configuration file. """
 
@@ -20,10 +20,8 @@ from results_manager import update_order_hist, ResultManager
 
 __all__ = ['run_bot']
 
-# TODO : add optional timer
 
-
-def run_bot(id_strat, path='./strategies/'):
+def run_bot(id_strat, path='./strategies/', STOP=None):
     """ Run a strategy bot for specified configuration file.
 
     Parameters
@@ -45,6 +43,10 @@ def run_bot(id_strat, path='./strategies/'):
 
     # Set strategy manager and data request configuration
     SM = StrategyManager(**data_cfg['strat_manager_instance'].copy())
+
+    if STOP is not None:
+        SM.STOP = STOP
+
     SM.set_data_manager(**data_cfg['get_data_instance'].copy())
 
     # Set pre order configuration
@@ -127,4 +129,11 @@ if __name__ == '__main__':
     txt = '\nStrategy {} starts to run !\n'.format(sys.argv[1])
     txt += '-' * (len(txt) - 2) + '\n'
     print(txt)
-    run_bot(sys.argv[1])
+
+    try:
+        STOP = int(sys.argv[-1])
+
+    except ValueError:
+        STOP = None
+
+    run_bot(sys.argv[1], STOP=STOP)
