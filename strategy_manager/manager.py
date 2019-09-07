@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2019-05-12 22:57:20
 # @Last modified by: ArthurBernard
-# @Last modified time: 2019-09-04 08:58:09
+# @Last modified time: 2019-09-07 12:03:18
 
 """ Object to manage a financial strategy. """
 
@@ -127,7 +127,7 @@ class StrategyManager:
 
         self.next += self.frequency
         self.t += 1
-        self.logger.info('{}th iteration'.format(self.t))
+        self.logger.info('{}th iteration over {}'.format(self.t, self.STOP))
 
         # TODO : Debug/find solution to request data correctly.
         #        Need to choose between request a database, server,
