@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2019-04-29 23:42:09
 # @Last modified by: ArthurBernard
-# @Last modified time: 2019-05-27 11:10:57
+# @Last modified time: 2019-09-07 11:20:16
 
 """ Manage orders execution. """
 
@@ -14,7 +14,6 @@ import logging
 import time
 
 # External packages
-from requests import HTTPError
 import numpy as np
 
 # Internal packages
@@ -147,25 +146,21 @@ class SetOrder:
             self.logger.info(out['descr']['order'])
             txid = out['txid']
 
+        except (NameError, KeyError) as e:
+            self.logger.error('Output error: {}'.format(type(e)))
+            txid = 0
+
         except Exception as e:
+            self.logger.error('Unknown error: {}'.format(type(e)),
+                              exc_info=True)
 
-            if type(e) in [HTTPError]:
-                self.logger.error('Following error occurs: {}'.format(type(e)))
-
-            elif type(e) in [NameError, KeyError]:
-                self.logger.error('Error with output: {}'.format(type(e)))
-                txid = 0
-
-            else:
-                self.logger.error('Unknown error: {}'.format(type(e)),
-                                  exc_info=True)
-
-                raise e
+            raise e
 
         # Verify if order is posted
+        time.sleep(1)
         post_order = self.verify_post_order(id_order)
         if not post_order and not kwargs['validate']:
-            self.logger.info('Order not posted. Bot will retry.')
+            self.logger.info('Bot will retry to send order.')
             time.sleep(1)
 
             return self.order(id_order=id_order, **kwargs)
@@ -182,7 +177,7 @@ class SetOrder:
 
         Returns
         -------
-        bool :
+        bool
             Return true if order is posted else false.
 
         """
@@ -198,6 +193,8 @@ class SetOrder:
         if closed_order['closed']:
 
             return True
+
+        self.logger.info('Order not verified.')
 
         return False
 
