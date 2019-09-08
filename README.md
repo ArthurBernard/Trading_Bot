@@ -1,4 +1,7 @@
-# Strategy Manager - Manager for financial algorithmic strategies [In Progress]
+# Strategy Manager - Bot for financial algorithmic strategies [In Progress]
+
+![GitHub](https://img.shields.io/github/license/ArthurBernard/Strategy_Manager)
+[![Language grade: Python](https://img.shields.io/lgtm/grade/python/g/ArthurBernard/Strategy_Manager.svg?logo=lgtm&logoWidth=18)](https://lgtm.com/projects/g/ArthurBernard/Strategy_Manager/context:python)
 
 ## /!\ Not yet working but comming soon ! /!\
 
@@ -58,8 +61,6 @@ Example:
 >> 0 0 * * * python3 /path/Strategies_Manager/execution_scripts/bot_manager.sh >> /path/Strategies_Manager/execution_scripts/manager.log 2>&1 &
 
 ## TODO list
-
-By order of priority:
 
 - General: 
      - Make a documentation;
