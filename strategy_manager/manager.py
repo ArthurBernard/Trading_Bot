@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2019-05-12 22:57:20
 # @Last modified by: ArthurBernard
-# @Last modified time: 2019-09-07 12:03:18
+# @Last modified time: 2019-09-08 14:56:52
 
 """ Object to manage a financial strategy. """
 
@@ -60,8 +60,7 @@ class StrategyManager:
             Name of script to load function strategy (named `get_signal`).
         STOP : int, optional
             Number of iteration before stoping, if None iteration will
-            stop at the end of the day (UTC time) (depreciated: stop after 24
-            hours running). Default is None.
+            stop at the end of the day (UTC time). Default is None.
         iso_volatility : bool, optional
             If true apply a coefficient of money management computed from
             underlying volatility. Default is True.
@@ -77,13 +76,16 @@ class StrategyManager:
         if STOP is None:
             # Deprecated
             # self.STOP = 86400 // frequency
-            self.STOP = (86400 - time.time() // 86400) // frequency
+            time_stop = (86400 - time.time() % 86400)
+            self.STOP = int(time_stop // frequency)
 
         else:
+            time_stop = STOP * frequency - time.time() % frequency
             self.STOP = STOP
 
         self.iso_vol = iso_volatility
         self.logger = logging.getLogger('strat_man.' + __name__)
+        self.logger.info('Starting bot, stop in {:.0f}\'.'.format(time_stop))
 
     def __call__(self, *args, **kwargs):
         """ Set parameters of strategy.
