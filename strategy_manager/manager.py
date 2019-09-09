@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2019-05-12 22:57:20
 # @Last modified by: ArthurBernard
-# @Last modified time: 2019-09-09 12:54:50
+# @Last modified time: 2019-09-09 13:07:48
 
 """ Object to manage a financial strategy. """
 
@@ -77,7 +77,7 @@ class StrategyManager:
             # Deprecated
             # self.STOP = 86400 // frequency
             time_stop = (86400 - (time.time() + 43200) % 86400)
-            self.STOP = int(time_stop // frequency)
+            self.STOP = int(time_stop // frequency) + 1
 
         else:
             time_stop = STOP * frequency - time.time() % frequency
