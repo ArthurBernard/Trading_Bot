@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2019-05-06 20:53:46
 # @Last modified by: ArthurBernard
-# @Last modified time: 2019-09-07 11:10:33
+# @Last modified time: 2019-09-09 09:52:50
 
 """ Kraken Client API object. """
 
@@ -119,13 +119,13 @@ class KrakenClient:
             else:
                 raise ValueError(r.status_code, r)
 
-        # except KeyError as e:
-        #    error_msg = 'KeyError | Request answere: {}.'.format(r.json())
-        #    self.logger.error(error_msg, exc_info=True)
+        except KeyError as e:
+            error_msg = 'KeyError | Request answere: {}.'.format(r.json())
+            self.logger.error(error_msg, exc_info=True)
 
-        #    raise e
+            raise e
 
-        except (NameError, KeyError, JSONDecodeError) as e:
+        except (NameError, JSONDecodeError) as e:
             error_msg = 'Output error: {} | Retry request.'.format(type(e))
             self.logger.error(error_msg)
             time.sleep(1)
