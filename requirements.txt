@@ -1,5 +1,5 @@
-fynance>=1.0.0
+fynance>=1.0.7
 numpy>=1.14.0
 pandas>=0.24.0
-requests>=2.0.0
+requests>=2.21.0
 ruamel.yaml=>=0.15.0
