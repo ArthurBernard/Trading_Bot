@@ -3,7 +3,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2019-04-18 23:52:54
 # @Last modified by: ArthurBernard
-# @Last modified time: 2019-09-19 09:03:21
+# @Last modified time: 2019-09-19 09:09:09
 #
 # Script to run automatically a Python scripts while one day and verify
 # each second that program didn't shutdown. 
@@ -57,7 +57,7 @@ while [ $ts -lt $stop ]; do
 
     fi
     # Sleep one second
-    sleep 1
+    sleep 5
     # Set varaibles
     ts=`date +%s`
     # Check shutdown counter
