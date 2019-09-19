@@ -3,7 +3,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2019-04-18 23:52:54
 # @Last modified by: ArthurBernard
-# @Last modified time: 2019-09-04 08:59:17
+# @Last modified time: 2019-09-19 09:03:21
 #
 # Script to run automatically a Python scripts while one day and verify
 # each second that program didn't shutdown. 
@@ -23,7 +23,6 @@ sleep 1
 
 # Check the PID
 script_pid=`ps -f | grep main.py\ $1 | grep -v grep | awk '{print $2}'`
-echo "`date +%y-%m-%d\ %H:%M:%S` | $script_pid | Start to run $1."
 
 # Define curent timestamp
 ts=`date +%s`
@@ -33,6 +32,7 @@ let "stop = ts - ts % 86400 + 86370"
 
 # Define shutdown counter
 let "i = 0"
+echo "`date +%y-%m-%d\ %H:%M:%S` | $script_pid | Start to run $1 and stop in $stop s."
 
 # Loop while an hour
 while [ $ts -lt $stop ]; do
@@ -53,7 +53,7 @@ while [ $ts -lt $stop ]; do
 
         # Check the PID
         script_pid=`ps -f | grep main.py\ $1 | grep -v grep | awk '{print $2}'`
-        echo "`date +%y-%m-%d\ %H:%M:%S` | $script_pid | Restart to run $1."
+        echo "`date +%y-%m-%d\ %H:%M:%S` | $script_pid | Restart to run $1 and stop in $stop s."
 
     fi
     # Sleep one second
@@ -69,3 +69,6 @@ while [ $ts -lt $stop ]; do
         echo "`date +%y-%m-%d\ %H:%M:%S` | 1 | Stop to run bot."
     fi
 done
+
+# Job is done
+echo "`date +%y-%m-%d\ %H:%M:%S` | $script_pid | Stop to run $1."
