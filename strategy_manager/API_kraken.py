@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2019-05-06 20:53:46
 # @Last modified by: ArthurBernard
-# @Last modified time: 2019-09-09 09:52:50
+# @Last modified time: 2019-09-19 08:53:43
 
 """ Kraken Client API object. """
 
@@ -19,6 +19,7 @@ from json.decoder import JSONDecodeError
 # External packages
 import requests
 from requests import HTTPError
+from requests import ReadTimeout
 
 # Internal packages
 
@@ -120,10 +121,14 @@ class KrakenClient:
                 raise ValueError(r.status_code, r)
 
         except KeyError as e:
-            error_msg = 'KeyError | Request answere: {}.'.format(r.json())
+            error_msg = 'KeyError {} | '.format(type(e))
+            error_msg += 'Request answere: {}'.format(r.json())
+            error_msg += ' | Retry request.'
             self.logger.error(error_msg, exc_info=True)
+            time.sleep(5)
 
-            raise e
+            return self.query_private(method, timeout=30, **kwargs)
+            # raise e
 
         except (NameError, JSONDecodeError) as e:
             error_msg = 'Output error: {} | Retry request.'.format(type(e))
@@ -132,7 +137,7 @@ class KrakenClient:
 
             return self.query_private(method, timeout=30, **kwargs)
 
-        except (HTTPError,) as e:
+        except (HTTPError, ReadTimeout) as e:
             error_msg = 'Connection error: {} | Retry request.'.format(type(e))
             self.logger.error(error_msg)
             time.sleep(5)
