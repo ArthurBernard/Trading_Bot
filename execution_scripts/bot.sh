@@ -3,7 +3,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2019-04-18 23:52:54
 # @Last modified by: ArthurBernard
-# @Last modified time: 2019-09-19 09:09:09
+# @Last modified time: 2019-09-25 14:59:53
 #
 # Script to run automatically a Python scripts while one day and verify
 # each second that program didn't shutdown. 
@@ -28,7 +28,7 @@ script_pid=`ps -f | grep main.py\ $1 | grep -v grep | awk '{print $2}'`
 ts=`date +%s`
 
 # Define stop 
-let "stop = ts - ts % 86400 + 86370"
+let "stop = ts - (ts - 43200) % 86400 + 82800"
 
 # Define shutdown counter
 let "i = 0"
