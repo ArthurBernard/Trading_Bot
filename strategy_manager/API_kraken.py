@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2019-05-06 20:53:46
 # @Last modified by: ArthurBernard
-# @Last modified time: 2019-09-19 08:53:43
+# @Last modified time: 2019-09-27 08:30:49
 
 """ Kraken Client API object. """
 
@@ -30,12 +30,17 @@ __all__ = ['KrakenClient']
 class KrakenClient:
     """ Object to connect, request data and query orders to Kraken Client API.
 
+    Attributes
+    ----------
+    key, secret : str
+        Key and secret of Kraken Client API.
+    path_log : str
+        Path to read key and secret of Kraken Client API.
+
     Methods
     -------
-    load_key(path)
-        Load from a text file key and secret parameters.
-    query_prive(method, timeout=30, **kwargs)
-        Private request from Kraken API.
+    load_key
+    query_prive
 
     """
 
@@ -64,6 +69,7 @@ class KrakenClient:
             Path of file with key and secret.
 
         """
+        self.path_log = path
         with open(path, 'r') as f:
             self.key = f.readline().strip()
             self.secret = f.readline().strip()
@@ -123,8 +129,9 @@ class KrakenClient:
         except KeyError as e:
             error_msg = 'KeyError {} | '.format(type(e))
             error_msg += 'Request answere: {}'.format(r.json())
-            error_msg += ' | Retry request.'
+            error_msg += ' | Reload key/secret and retry request.'
             self.logger.error(error_msg, exc_info=True)
+            self.load_key(self.path_log)
             time.sleep(5)
 
             return self.query_private(method, timeout=30, **kwargs)
