@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2019-05-02 19:07:38
 # @Last modified by: ArthurBernard
-# @Last modified time: 2019-09-04 08:03:45
+# @Last modified time: 2020-01-21 17:05:19
 
 """ Tools to manager results and display it. """
 
@@ -382,4 +382,4 @@ def set_performance(df):
 
 def _rounder(*args, dec=0):
     """ Round each element of a list. """
-    return [round(arg, dec) for arg in args]
+    return [round(float(arg), dec) for arg in args]
