@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2019-05-06 20:53:46
 # @Last modified by: ArthurBernard
-# @Last modified time: 2019-09-27 08:30:49
+# @Last modified time: 2020-01-21 17:32:45
 
 """ Kraken Client API object. """
 
@@ -90,7 +90,7 @@ class KrakenClient:
             hashlib.sha512
         )
 
-        signature = base64.b64encode(h.digest()).decode()
+        signature = base64.b64encode(h.digest())  # .decode()
 
         return {'API-Key': self.key, 'API-sign': signature}
 
@@ -118,12 +118,25 @@ class KrakenClient:
 
         try:
             r = requests.post(url, headers=head, data=kwargs, timeout=timeout)
+            self.logger.debug('URL: ' + str(url))
+            self.logger.debug('HEAD: ' + str(head))
+            self.logger.debug('DATA: ' + str(kwargs))
+            self.logger.debug('ANSWERE: ' + str(r.json()))
+            # TODO : if r.json()['error']:
+            #            error
+            #        else:
+            #            not error
+            if r.json()['error']:
+
+                self.logger.error(r.json())
+                raise ValueError(r.status_code, r)
 
             if r.status_code in [200, 201, 202]:
 
                 return r.json()['result']
 
             else:
+
                 raise ValueError(r.status_code, r)
 
         except KeyError as e:
