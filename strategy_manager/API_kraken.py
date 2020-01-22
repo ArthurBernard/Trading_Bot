@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2019-05-06 20:53:46
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-01-22 16:29:02
+# @Last modified time: 2020-01-22 18:12:20
 
 """ Kraken Client API object. """
 
@@ -134,10 +134,12 @@ class KrakenClient:
                 STOP += 1
 
                 if 'EAPI:Invalid key' in r.json()['error'] and STOP < 5:
-                    error_msg = 'EAPI:Invalid key | Sleep 5 seconds | '
-                    error_msg += 'Reload key/secret and retry request.'
-                    self.logger.error(error_msg)
+                    self.logger.error('EAPI:Invalid key')
+                    self.logger.error('Reset with __init__')
+                    self.__init__()
+                    self.logger.error('Reload key/secret')
                     self.load_key(self.path_log)
+                    self.logger.error('Sleep 5 seconds')
                     time.sleep(5)
 
                     return self.query_private(method, timeout=30, STOP=STOP, **kwargs)
