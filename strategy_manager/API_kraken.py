@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2019-05-06 20:53:46
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-01-21 17:32:45
+# @Last modified time: 2020-01-22 16:23:55
 
 """ Kraken Client API object. """
 
@@ -94,7 +94,7 @@ class KrakenClient:
 
         return {'API-Key': self.key, 'API-sign': signature}
 
-    def query_private(self, method, timeout=30, **kwargs):
+    def query_private(self, method, timeout=30, STOP=0, **kwargs):
         """ Set a request.
 
         Parameters
@@ -128,10 +128,25 @@ class KrakenClient:
             #            not error
             if r.json()['error']:
 
+                self.logger.error('\n\n=========\n| ERROR |\n=========\n\n')
                 self.logger.error(r.json())
-                raise ValueError(r.status_code, r)
+                self.logger.error('\n\n=========\n| ERROR |\n=========\n\n')
+                STOP += 1
 
-            if r.status_code in [200, 201, 202]:
+                if r.json()['error'] == 'EAPI:Invalid key' and STOP < 5:
+                    error_msg = 'EAPI:Invalid key | Sleep 5 seconds | '
+                    error_msg += 'Reload key/secret and retry request.'
+                    self.logger.error(error_msg)
+                    self.load_key(self.path_log)
+                    time.sleep(5)
+
+                    return self.query_private(method, timeout=30, STOP=STOP, **kwargs)
+
+                else:
+
+                    raise ValueError(r.json()['error'], r.json())
+
+            elif r.status_code in [200, 201, 202]:
 
                 return r.json()['result']
 
