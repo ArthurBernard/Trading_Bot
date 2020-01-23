@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2019-05-06 20:53:46
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-01-22 18:12:20
+# @Last modified time: 2020-01-23 10:32:12
 
 """ Kraken Client API object. """
 
@@ -78,11 +78,13 @@ class KrakenClient:
         """ Return a nonce used in authentication. """
         return int(time.time() * 1000)
 
-    def _headers(self, path, nonce, data):
+    def _headers(self, path, data):
         """ Set header with signature for authentication. """
-        post_data = [str(key) + '=' + str(arg) for key, arg in data.items()]
-        post_data = str(data['nonce']) + '&'.join(post_data)
+        post_data = [str(key) + "=" + str(arg) for key, arg in data.items()]
+        post_data = str(data["nonce"]) + "&".join(post_data)
+        self.logger.debug("POST DATA: " + post_data)
         message = path.encode() + hashlib.sha256(post_data.encode()).digest()
+        # message = path + hashlib.sha256(post_data).digest()
 
         h = hmac.new(
             base64.b64decode(self.secret),
@@ -113,7 +115,7 @@ class KrakenClient:
         nonce = self._nonce()
         kwargs['nonce'] = nonce
         path = '/0/private/' + method
-        head = self._headers(path, nonce, kwargs.copy())
+        head = self._headers(path, kwargs.copy())
         url = self.uri + path
 
         try:
