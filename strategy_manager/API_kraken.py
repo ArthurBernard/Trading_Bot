@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2019-05-06 20:53:46
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-01-23 10:32:12
+# @Last modified time: 2020-01-24 13:37:53
 
 """ Kraken Client API object. """
 
@@ -115,7 +115,7 @@ class KrakenClient:
         nonce = self._nonce()
         kwargs['nonce'] = nonce
         path = '/0/private/' + method
-        head = self._headers(path, kwargs.copy())
+        head = self._headers(path, kwargs)
         url = self.uri + path
 
         try:
