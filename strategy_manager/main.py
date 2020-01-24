@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2019-05-03 17:36:22
 # @Last modified by: ArthurBernard
-# @Last modified time: 2019-09-04 08:45:20
+# @Last modified time: 2020-01-24 16:18:33
 
 """ Run a bot following a configuration file. """
 
@@ -42,10 +42,11 @@ def run_bot(id_strat, path='./strategies/', STOP=None):
     data_cfg = load_config_params(path + id_strat + '/configuration.yaml')
 
     # Set strategy manager and data request configuration
-    SM = StrategyManager(**data_cfg['strat_manager_instance'].copy())
-
+    strat_manager_params = data_cfg['strat_manager_instance'].copy()
     if STOP is not None:
-        SM.STOP = STOP
+        strat_manager_params['STOP'] = STOP
+
+    SM = StrategyManager(**strat_manager_params)
 
     SM.set_data_manager(**data_cfg['get_data_instance'].copy())
 
@@ -103,7 +104,7 @@ def run_bot(id_strat, path='./strategies/', STOP=None):
         raise e
 
     finally:
-        # DEGUG
+        # DEBUG
         df_ord = get_df(path + id_strat, 'orders_hist', '.dat')
         logger.info('Historic orders:\n' + str(df_ord.iloc[:, 1:].tail()))
         logger.info('Historic result:\n' + str(RM.df.tail()))
