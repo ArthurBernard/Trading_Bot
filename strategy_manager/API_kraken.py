@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2019-05-06 20:53:46
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-01-24 13:37:53
+# @Last modified time: 2020-01-24 16:56:29
 
 """ Kraken Client API object. """
 
@@ -78,13 +78,12 @@ class KrakenClient:
         """ Return a nonce used in authentication. """
         return int(time.time() * 1000)
 
-    def _headers(self, path, data):
-        """ Set header with signature for authentication. """
+    def set_sign(self, path, data):
+        """ Set signature for authentication. """
         post_data = [str(key) + "=" + str(arg) for key, arg in data.items()]
         post_data = str(data["nonce"]) + "&".join(post_data)
-        self.logger.debug("POST DATA: " + post_data)
+        # self.logger.debug("POST DATA: " + post_data)
         message = path.encode() + hashlib.sha256(post_data.encode()).digest()
-        # message = path + hashlib.sha256(post_data).digest()
 
         h = hmac.new(
             base64.b64decode(self.secret),
@@ -92,18 +91,16 @@ class KrakenClient:
             hashlib.sha512
         )
 
-        signature = base64.b64encode(h.digest())  # .decode()
+        return base64.b64encode(h.digest())  # .decode()
 
-        return {'API-Key': self.key, 'API-sign': signature}
-
-    def query_private(self, method, timeout=30, STOP=0, **kwargs):
+    def query_private(self, method, timeout=30, **data):
         """ Set a request.
 
         Parameters
         ----------
         method : str
             Kind of request.
-        kwargs : dict, optional
+        data : dict, optional
             Parameters of the request, cf Kraken Client API.
 
         Returns
@@ -112,43 +109,21 @@ class KrakenClient:
             Answere of Kraken Client API.
 
         """
-        nonce = self._nonce()
-        kwargs['nonce'] = nonce
+        data['nonce'] = self._nonce()
         path = '/0/private/' + method
-        head = self._headers(path, kwargs)
+        headers = {'API-Key': self.key, 'API-sign': self.set_sign(path, data)}
         url = self.uri + path
 
         try:
-            r = requests.post(url, headers=head, data=kwargs, timeout=timeout)
-            self.logger.debug('URL: ' + str(url))
-            self.logger.debug('HEAD: ' + str(head))
-            self.logger.debug('DATA: ' + str(kwargs))
-            self.logger.debug('ANSWERE: ' + str(r.json()))
-            # TODO : if r.json()['error']:
-            #            error
-            #        else:
-            #            not error
+            r = requests.post(url, headers=headers, data=data, timeout=timeout)
             if r.json()['error']:
 
-                self.logger.error('\n\n=========\n| ERROR |\n=========\n\n')
-                self.logger.error(r.json())
-                self.logger.error('\n\n=========\n| ERROR |\n=========\n\n')
-                STOP += 1
+                self.logger.error('ANSWERE: ' + str(r.json()))
+                self.logger.error('URL: ' + str(url))
+                self.logger.error('HEAD: ' + str(headers))
+                self.logger.error('DATA: ' + str(data))
 
-                if 'EAPI:Invalid key' in r.json()['error'] and STOP < 5:
-                    self.logger.error('EAPI:Invalid key')
-                    self.logger.error('Reset with __init__')
-                    self.__init__()
-                    self.logger.error('Reload key/secret')
-                    self.load_key(self.path_log)
-                    self.logger.error('Sleep 5 seconds')
-                    time.sleep(5)
-
-                    return self.query_private(method, timeout=30, STOP=STOP, **kwargs)
-
-                else:
-
-                    raise ValueError(r.json()['error'], r.json())
+                raise ValueError(r.json()['error'], r.json())
 
             elif r.status_code in [200, 201, 202]:
 
@@ -166,22 +141,22 @@ class KrakenClient:
             self.load_key(self.path_log)
             time.sleep(5)
 
-            return self.query_private(method, timeout=30, **kwargs)
+            return self.query_private(method, timeout=30, **data)
             # raise e
 
         except (NameError, JSONDecodeError) as e:
             error_msg = 'Output error: {} | Retry request.'.format(type(e))
             self.logger.error(error_msg)
-            time.sleep(1)
+            time.sleep(5)
 
-            return self.query_private(method, timeout=30, **kwargs)
+            return self.query_private(method, timeout=30, **data)
 
         except (HTTPError, ReadTimeout) as e:
             error_msg = 'Connection error: {} | Retry request.'.format(type(e))
             self.logger.error(error_msg)
             time.sleep(5)
 
-            return self.query_private(method, timeout=30, **kwargs)
+            return self.query_private(method, timeout=30, **data)
 
         except Exception as e:
             error_msg = 'Unknown error: {}\n'.format(type(e))
