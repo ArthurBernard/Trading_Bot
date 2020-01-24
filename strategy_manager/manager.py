@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2019-05-12 22:57:20
 # @Last modified by: ArthurBernard
-# @Last modified time: 2019-09-09 13:07:48
+# @Last modified time: 2020-01-24 16:41:29
 
 """ Object to manage a financial strategy. """
 
@@ -72,20 +72,13 @@ class StrategyManager:
         self._get_order_params = strat.get_order_params
         self.frequency = frequency
         self.underlying = underlying
-
-        if STOP is None:
-            # Deprecated
-            # self.STOP = 86400 // frequency
-            time_stop = (86400 - (time.time() + 43200) % 86400)
-            self.STOP = int(time_stop // frequency) + 1
-
-        else:
-            time_stop = STOP * frequency - time.time() % frequency
-            self.STOP = STOP
-
+        self.t = 0
+        self.STOP = STOP
         self.iso_vol = iso_volatility
         self.logger = logging.getLogger('strat_man.' + __name__)
-        self.logger.info('Starting bot, stop in {:.0f}\'.'.format(time_stop))
+        self.logger.info('Bot is starting, it will stop in {:.0f}\'.'.format(
+            self.time_stop()
+        ))
 
     def __call__(self, *args, **kwargs):
         """ Set parameters of strategy.
@@ -130,6 +123,7 @@ class StrategyManager:
         self.next += self.frequency
         self.t += 1
         self.logger.info('{}th iteration over {}'.format(self.t, self.STOP))
+        self.logger.info('Bot will stop in {:.0f}\'.'.format(self.time_stop()))
 
         # TODO : Debug/find solution to request data correctly.
         #        Need to choose between request a database, server,
@@ -186,3 +180,16 @@ class StrategyManager:
                              'Not {}'.format(request_from))
 
         return self
+
+    def time_stop(self):
+        """ Compute the number of seconds before stopping.
+
+        Returns
+        -------
+        int
+            Number of seconds before stopping.
+
+        """
+        time_stop = (self.STOP - self.t) * self.frequency
+
+        return max(time_stop - time.time() % self.frequency, 0)
