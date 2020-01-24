@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2019-05-02 19:07:38
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-01-21 17:05:19
+# @Last modified time: 2020-01-24 13:49:44
 
 """ Tools to manager results and display it. """
 
@@ -259,7 +259,10 @@ class ResultManager:
         """
         metric_values = []
         for metric in self.metrics:
-            if metric.lower() == 'return':
+            if series.size < 2:
+                metric_values += [0]
+
+            elif metric.lower() == 'return':
                 metric_values += [series[-1] - series[0]]
 
             elif metric.lower() in ['perf', 'perf.', 'performance']:
