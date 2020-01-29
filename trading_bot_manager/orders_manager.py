@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2019-04-29 23:42:09
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-01-28 19:46:38
+# @Last modified time: 2020-01-29 20:27:48
 
 """ Client to manage orders execution. """
 
@@ -12,15 +12,17 @@
 from pickle import Pickler, Unpickler
 import logging
 import time
+from os import getpid, getppid
 
 # External packages
 import numpy as np
 
 # Internal packages
-from strategy_manager.tools.time_tools import now
-from strategy_manager.API_kraken import KrakenClient
-from strategy_manager.data_requests import get_close
-from _client import _Client
+# from strategy_manager.tools.time_tools import now
+# from strategy_manager.API_kraken import KrakenClient
+# from strategy_manager.data_requests import get_close
+from API_kraken import KrakenClient
+from _client import _OrderManagerClient
 # from _server import TradingBotServer as TBS
 
 __all__ = ['OrdersManager']
@@ -34,7 +36,7 @@ TODO list:
 """
 
 
-class OrdersManager(_Client):
+class OrdersManager(_OrderManagerClient):
     """ Client to set and manage orders.
 
     Verify the intigrity of the new orders with past orders and suffisant
@@ -57,6 +59,7 @@ class OrdersManager(_Client):
     # TODO : Singleton
     # TODO : Asynchronous methods
     # TODO : get_balance
+    # TODO : load order config
 
     Attributs
     ---------
@@ -88,25 +91,40 @@ class OrdersManager(_Client):
 
         """
         # Set client and connect to the trading bot server
-        _Client.__init__(self, address=address, authkey=authkey)
-        self.r_tbm, self.w_tbm = self.m._get_pipe_om_tbm()
+        _OrderManagerClient.__init__(self, address=address, authkey=authkey)
 
+        self.logger = logging.getLogger('trad_bot.' + __name__)
+        #self.logger.info('Initialize OrdersManager | Current PID is '
+        #                 '{} and Parent PID is {}'.format(getpid()), getppid())
+        self.logger.info('Initialize OrdersManager | Current PID is {} and '
+                         'Parent PID is {}'.format(getpid(), getppid()))
         self.id_max = 2147483647
         self.path = path_log
-        # self.current_pos = current_pos
-        # self.current_vol = current_vol
-        # self.frequency = frequency
+        self.exchange = exchange
         self.start = int(time.time())
+
         self.K = KrakenClient()
         self.K.load_key(path_log)
-
-        self.logger = logging.getLogger('strat_man.' + __name__)
+        self.logger.debug('Exchange client loaded.')
+        self.get_fees()
 
     def start_loop(self, condition=True):
         """ Run a loop until condition is false. """
+        self.logger.info('Starting to wait orders.')
         while condition:
+            print(time.strftime('%y-%m-%d %H:%M:%S'), end='\r')
+            time.sleep(0.1)
             if not self.q_ord.empty():
-                self.set_order(self.q_ord.get())
+                id_strat, kwrds = self.q_ord.get()
+                self.logger.debug(
+                    'Get order | Strat {} | Params {}'.format(id_strat, kwrds)
+                )
+                self.set_order(id_strat, **kwrds)
+
+            if self.is_stop():
+                break
+
+        self.logger.info('OrdersManager stopped.')
 
     def set_order(self, id_strat, **kwargs):
         """ Request an order following defined parameters.
@@ -279,7 +297,7 @@ class OrdersManager(_Client):
                 'TradeVolume',
                 pair='all'
             )
-            # TODO : get balance
+            self.logger.debug('Got fees from the exchange.')
 
         else:
             self.logger.error('Exchange {} not allowed'.format(self.exchange))
@@ -287,6 +305,7 @@ class OrdersManager(_Client):
             raise ValueError(self.exchange + ' not allowed.')
 
         self.w_tbm.send(self.fees_dict)
+        self.logger.debug('Sent fees to TradingBotManager.')
 
     def _set_id_order(self, id_strat):
         """ Set an unique order identifier.
@@ -318,3 +337,18 @@ class OrdersManager(_Client):
             Pickler(f).dump(id_order)
 
         return int(str(id_order) + str(id_strat))
+
+
+if __name__ == '__main__':
+
+    import logging.config
+    import yaml
+
+    with open('./trading_bot_manager/logging.ini', 'rb') as f:
+        config = yaml.safe_load(f.read())
+
+    logging.config.dictConfig(config)
+
+    path_log = '/home/arthur/Strategies/Data_Server/Untitled_Document2.txt'
+    OM = OrdersManager(path_log)
+    OM.start_loop()
