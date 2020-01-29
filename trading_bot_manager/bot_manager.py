@@ -4,81 +4,95 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2020-01-27 09:58:03
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-01-28 19:45:34
+# @Last modified time: 2020-01-29 20:25:43
 
-""" Test.
-
-Server to receive orders to execute from clients. Clients are the trading
-strategies running.
-
-"""
+""" Set a server and run each bot. """
 
 # Built-in packages
-from multiprocessing import Pipe
 from threading import Thread
-from queue import Queue
+from multiprocessing import Process
+import logging
 import time
 import os
 
 # Third party packages
 
 # Local packages
+from _server import _TradingBotManager
 from _server import TradingBotServer as TBS
 
 
-class TradingBotManager:
+class TradingBotManager(_TradingBotManager):
     """ Trading Bot Manager object. """
-    # TODO : get fees
+    # TODO : load general config
+    # TODO : run strategies
 
     def __init__(self, address=('', 50000), authkey=b'tradingbot', s=9):
         """ Initialize Trading Bot Manager object. """
-        # Set queue for orders
-        self.q_ord = Queue()
-        TBS.register('get_queue_orders', callable=lambda: self.q_ord)
+        _TradingBotManager.__init__(self, address=address, authkey=authkey)
 
-        # Set proxy to share fees dictionary
-        self.fees = {}
-        TBS.register('get_proxy_fees', callable=lambda: self.fees)
-
-        # Set pipe with order manager
-        self.r_om, w = Pipe(duplex=False)
-        r, self.w_om = Pipe(duplex=False)
-        TBS.register('_get_pipe_om_tbm', callable=lambda: r, w)
-
-        print('Current PID is {}'.format(os.getpid()))
+        self.logger = logging.getLogger('trad_bot.' + __name__)
+        self.logger.info('Initialize TradingBotManager | '
+                         'Current PID is {}'.format(os.getpid()))
         self.t = time.time()
+        self.path_log = '/home/arthur/Strategies/Data_Server/Untitled_Document2.txt'
+        self.address = address
+        self.authkey = authkey
+        self.fees = {}
 
         # Set threads
         server_thread = Thread(
             target=self.set_server,
             kwargs={'address': address, 'authkey': authkey}
         )
-        bot_thread = Thread(target=self.runtime, args=(s,))
+        # bot_thread = Thread(target=self.runtime, args=(s,))
+        fees_thread = Thread(target=self.set_fees, daemon=True)
         server_thread.start()
-        bot_thread.start()
+        fees_thread.start()
+        # bot_thread.start()
         # server_thread.join()
         # bot_thread.join()
-        print('Initialization is finished.')
+        # self.set_fees()
+        self.runtime(s)
+        self.logger.info('Initialization finished.')
 
     def set_server(self, address=('', 50000), authkey=b'tradingbot'):
         """ Initialize a server connection. """
         self.m = TBS(address=address, authkey=authkey)
         self.s = self.m.get_server()
-        print('Server is initialized.')
+        self.logger.info('Server initialized.')
+        # print(self.stop)
+        self.state['stop'] = False
         self.s.serve_forever()
-        print('Server is stopped.')
+        self.logger.info('Server stopped.')
 
     def runtime(self, s=9):
         """ Do something. """
         # TODO : Run OrderManagerClient object
         # TODO : Run all StrategyManagerClient objects
-        print('Start to do something')
+        self.logger.debug('Start to do something')
+        # Start bot OrdersManager
+        # p_om = Process(
+        #    target=start_order_manager,
+        #    name='truc',
+        #    args=(self.path_log,),
+        #    kwargs={'address': self.address, 'authkey': self.authkey}
+        # )
+        # p_om.start()
         while time.time() - self.t < s:
             print('{:.1f} sec.'.format(time.time() - self.t), end='\r')
             time.sleep(0.1)
 
-        print('\nEnd to do something')
+        self.logger.debug('End to do something.')
+        self.state['stop'] = True
+        self.logger.debug('Stop propageted.')
+
+        # Wait until child process closed
+        # p_om.join()
+
+        time.sleep(0.2)
         self.s.stop_event.set()
+        self.logger.info('TradingBotManager stopped.')
 
     def run_strategy(self, name):
         # TODO : set a dedicated pipe
@@ -88,8 +102,23 @@ class TradingBotManager:
     def get_fees(self):
         return self.r_om.recv()
 
-    def set_fees(self, fees):
-        self.fees = fees
+    def set_fees(self, fees=None):
+        if fees is None:
+            fees = self.get_fees()
+            self.logger.info('New fees received.')
+
+        self.fees.update(fees)
+        self.logger.info('Fees updated.')
+
+
+def start_order_manager(path_log, exchange='kraken', address=('', 50000),
+                        authkey=b'tradingbot'):
+    from orders_manager import OrdersManager as OM
+
+    om = OM(path_log, exchange=exchange, address=address, authkey=authkey)
+    om.start_loop()
+
+    return None
 
 
 def start_tradingbotserver(address=('', 50000), authkey=b'tradingbot'):
@@ -104,6 +133,15 @@ def start_tradingbotserver(address=('', 50000), authkey=b'tradingbot'):
 
 
 if __name__ == '__main__':
+
+    import logging.config
+    import yaml
+
+    with open('./trading_bot_manager/logging.ini', 'rb') as f:
+        config = yaml.safe_load(f.read())
+
+    logging.config.dictConfig(config)
+
     # start_tradingbotmanager()
     tbm = TradingBotManager(s=20)
     # tbm.run()
