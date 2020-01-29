@@ -4,27 +4,28 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2019-05-12 22:57:20
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-01-28 19:30:08
+# @Last modified time: 2020-01-29 21:32:19
 
-""" Object to manage a financial strategy. """
+""" Client to manage a financial strategy. """
 
 # Built-in packages
 import time
 import importlib
 import logging
+from os import getpid, getppid
 
 # External packages
 
 # Local packages
-from strategy_manager.tools.time_tools import now
-from strategy_manager import DataBaseManager, DataExchangeManager
-from strategy_manager.data_requests import get_close
-from _client import _Client
+# from strategy_manager.tools.time_tools import now
+# from strategy_manager import DataBaseManager, DataExchangeManager
+# from strategy_manager.data_requests import get_close
+from _client import _BotClient
 
 __all__ = ['StrategyManager']
 
 
-class StrategyManager(_Client):
+class StrategyManager(_BotClient):
     """ Main object to load data, compute signals and execute orders.
 
     Methods
@@ -47,6 +48,7 @@ class StrategyManager(_Client):
         Function to get signal strategy and additional parameters to set order.
 
     """
+    # TODO : Load strategy config
 
     def __init__(self, frequency, underlying, script_name, current_pos,
                  current_vol, STOP=None, iso_volatility=True,
@@ -70,13 +72,21 @@ class StrategyManager(_Client):
 
         """
         # Set client and connect to the trading bot server
-        _Client.__init__(self, address=address, authkey=authkey)
+        _BotClient.__init__(self, address=address, authkey=authkey)
+
+        self.logger = logging.getLogger('trad_bot.' + __name__)
+        self.logger.info('Initialize StrategyManager | Current PID is '
+                         '{} and Parent PID is {}'.format(getpid(), getppid()))
 
         # Import strategy
         strat = importlib.import_module(
             'strategies.' + script_name + '.strategy'
         )
         self._get_order_params = strat.get_order_params
+        self.logger.info('Strategy function loaded')
+
+        # Load configuration
+        # TODO : load strat_manager_instance
         self.frequency = frequency
         self.underlying = underlying
         self.current_pos = current_pos
@@ -84,10 +94,29 @@ class StrategyManager(_Client):
         self.t = 0
         self.STOP = STOP
         self.iso_vol = iso_volatility
-        self.logger = logging.getLogger('strat_man.' + __name__)
+        self.logger.info('Configuration loaded')
+
+    def start_loop(self, condition=True):
+        """ Run a loop until condition is false. """
         self.logger.info('Bot is starting, it will stop in {:.0f}\'.'.format(
             self.time_stop()
         ))
+        test = True
+        while condition:
+            txt = time.strftime('%y-%m-%d %H:%M:%S')
+            if self.p_fees._getvalue():
+                txt = 'Fees received | ' + txt
+                if test:
+                    test = False
+                    self.logger.debug(self.p_fees._getvalue())
+
+            print(txt, end='\r')
+            time.sleep(0.1)
+
+            if self.is_stop():
+                break
+
+        self.logger.info('StrategyManager stopped.')
 
     def __call__(self, *args, **kwargs):
         """ Set parameters of strategy.
@@ -120,7 +149,8 @@ class StrategyManager(_Client):
 
     def __next__(self):
         """ Iterate method. """
-        if self.t >= self.STOP:
+        # if self.t >= self.STOP:
+        if self.is_stop():
             raise StopIteration
 
         self.TS = int(time.time())
@@ -263,7 +293,7 @@ class StrategyManager(_Client):
             'timestamp': now(self.frequency),
             'current_volume': self.current_vol,
             'current_position': self.current_pos,
-            'fee': self._get_fees(kwargs['pair'], kwargs['ordertype']),
+            'fee': self.get_fee(kwargs['pair'], kwargs['ordertype']),
             'descr': None,
         }
         if kwargs['ordertype'] == 'limit':
@@ -323,13 +353,16 @@ class StrategyManager(_Client):
 
         return max(time_stop - time.time() % self.frequency, 0)
 
-    def get_fees(self):
-        """ Get the current fees associated with the exchange account.
 
-        Returns
-        -------
-        dict
-            Fees for each currency pair.
+if __name__ == '__main__':
 
-        """
-        return self.p_fees._getvalue()
+    import logging.config
+    import yaml
+
+    with open('./trading_bot_manager/logging.ini', 'rb') as f:
+        config = yaml.safe_load(f.read())
+
+    logging.config.dictConfig(config)
+
+    sm = StrategyManager(60, 'XETHZUSD', 'another_example', 0, 0, STOP=100)
+    sm.start_loop()
