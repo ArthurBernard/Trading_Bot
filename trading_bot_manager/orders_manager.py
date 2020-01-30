@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2019-04-29 23:42:09
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-01-29 20:27:48
+# @Last modified time: 2020-01-30 19:27:30
 
 """ Client to manage orders execution. """
 
@@ -18,9 +18,9 @@ from os import getpid, getppid
 import numpy as np
 
 # Internal packages
-# from strategy_manager.tools.time_tools import now
+from tools.time_tools import str_time, now
 # from strategy_manager.API_kraken import KrakenClient
-# from strategy_manager.data_requests import get_close
+from data_requests import get_close
 from API_kraken import KrakenClient
 from _client import _OrderManagerClient
 # from _server import TradingBotServer as TBS
@@ -111,15 +111,21 @@ class OrdersManager(_OrderManagerClient):
     def start_loop(self, condition=True):
         """ Run a loop until condition is false. """
         self.logger.info('Starting to wait orders.')
+        last_order = 0
         while condition:
-            print(time.strftime('%y-%m-%d %H:%M:%S'), end='\r')
-            time.sleep(0.1)
             if not self.q_ord.empty():
                 id_strat, kwrds = self.q_ord.get()
                 self.logger.debug(
                     'Get order | Strat {} | Params {}'.format(id_strat, kwrds)
                 )
-                self.set_order(id_strat, **kwrds)
+                result = self.set_order(id_strat, **kwrds)
+                self.logger.debug('Result: {}'.format(result))
+                last_order = time.time()
+
+            txt = time.strftime('%y-%m-%d %H:%M:%S') + ' | Last order was '
+            txt += str_time(int(time.time() - last_order)) + ' ago'
+            print(txt, end='\r')
+            time.sleep(0.01)
 
             if self.is_stop():
                 break
@@ -216,22 +222,24 @@ class OrdersManager(_OrderManagerClient):
 
     def _set_result_output(self, txid, id_order, **kwargs):
         """ Add informations to output of query order. """
+        pair = kwargs['pair']
+        ordertype = kwargs['ordertype']
         result = {
             'txid': txid,
             'userref': id_order,
             'type': kwargs['type'],
             'volume': kwargs['volume'],
-            'pair': kwargs['pair'],
-            'ordertype': kwargs['ordertype'],
+            'pair': pair,
+            'ordertype': ordertype,
             'leverage': kwargs['leverage'],
-            'timestamp': now(self.frequency),
-            'fee': self._get_fees(kwargs['pair'], kwargs['ordertype']),
+            'timestamp': int(time.time()),  # now(self.frequency),
+            'fee': float(self.fees[self._handler[ordertype]][pair]['fee'])  # self._get_fees(kwargs['pair'], kwargs['ordertype']),
         }
-        if kwargs['ordertype'] == 'market' and kwargs['validate']:
+        if ordertype == 'market' and kwargs['validate']:
             # Get the last price
-            result['price'] = get_close(kwargs['pair'])
+            result['price'] = get_close(pair)
 
-        elif kwargs['ordertype'] == 'market' and not kwargs['validate']:
+        elif ordertype == 'market' and not kwargs['validate']:
             # TODO : verify if get the exection market price
             closed_order = self.K.query_private('ClosedOrders',
                                                 userref=id_order,
@@ -242,32 +250,10 @@ class OrdersManager(_OrderManagerClient):
             ])
             self.logger.debug('Get execution price is not yet verified')
 
-        elif kwargs['ordertype'] == 'limit':
+        elif ordertype == 'limit':
             result['price'] = kwargs['price']
 
         return result
-
-    def _set_result_output2(self, out, id_order, **kwargs):
-        """ Add informations to output of query order. """
-        # Set infos
-        out['userref'] = id_order
-        out['timestamp'] = now(self.frequency)
-        out['fee'] = self._get_fees(kwargs['pair'], kwargs['ordertype'])
-
-        if kwargs['ordertype'] == 'market' and kwargs['validate']:
-            # Get the last price
-            out['price'] = get_close(kwargs['pair'])
-
-        elif kwargs['ordertype'] == 'market' and not kwargs['validate']:
-            # TODO : verify if get the exection market price
-            closed_order = self.K.query_private('ClosedOrders',
-                                                userref=id_order,
-                                                start=self.start)  # ['result']
-            txid = out['txid']
-            out['price'] = closed_order['closed'][txid]['price']
-            self.logger.debug('Get execution price is not yet verified')
-
-        return out
 
     def _set_output(self, kwargs):
         """ Set output when no orders query. """
@@ -293,7 +279,7 @@ class OrdersManager(_OrderManagerClient):
 
     def get_fees(self):
         if self.exchange.lower() == 'kraken':
-            self.fees_dict = self.K.query_private(
+            self.fees = self.K.query_private(
                 'TradeVolume',
                 pair='all'
             )
@@ -304,7 +290,7 @@ class OrdersManager(_OrderManagerClient):
 
             raise ValueError(self.exchange + ' not allowed.')
 
-        self.w_tbm.send(self.fees_dict)
+        self.w_tbm.send(self.fees)
         self.logger.debug('Sent fees to TradingBotManager.')
 
     def _set_id_order(self, id_strat):
