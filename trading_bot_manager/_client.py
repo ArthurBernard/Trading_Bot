@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2020-01-28 16:47:55
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-01-29 15:08:35
+# @Last modified time: 2020-01-30 19:21:02
 
 """ Clients to connect to TradingBotServer. """
 
@@ -20,6 +20,8 @@ from _server import TradingBotServer as TBS
 class _Client:
     """ Base class for a client. """
 
+    _handler = {'market': 'fees', 'limit': 'fees_maker'}
+
     def __init__(self, address=('', 50000), authkey=b'tradingbot'):
         """ Initialize a client object and connect to the TradingBotServer. """
         print('Module {}: process ID is {} and parent PID is {}'.format(
@@ -33,6 +35,7 @@ class _Client:
         self.p_state = self.m.get_state()
 
     def is_stop(self):
+        """ Check if the server is stopped. """
         return self.p_state._getvalue()['stop']
 
 
@@ -61,17 +64,14 @@ class _BotClient(_Client):
             Fee of specified pair and order type.
 
         """
-        if order_type == 'market':
+        fees = self.p_fees._getvalue()
+        if fees:
 
-            return float(self.p_fees._getvalue()['fees'][pair]['fee'])
-
-        elif order_type == 'limit':
-
-            return float(self.p_fees._getvalue()['fees_maker'][pair]['fee'])
+            return float(fees[self._handler[order_type]][pair]['fee'])
 
         else:
 
-            raise ValueError('Unknown order type: {}'.format(order_type))
+            return 0.0
 
 
 class _OrderManagerClient(_Client):
