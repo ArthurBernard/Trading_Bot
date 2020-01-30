@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2019-05-12 22:57:20
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-01-29 21:32:19
+# @Last modified time: 2020-01-30 18:46:20
 
 """ Client to manage a financial strategy. """
 
@@ -17,9 +17,10 @@ from os import getpid, getppid
 # External packages
 
 # Local packages
-# from strategy_manager.tools.time_tools import now
 # from strategy_manager import DataBaseManager, DataExchangeManager
-# from strategy_manager.data_requests import get_close
+from data_requests import get_close, DataBaseManager, DataExchangeManager
+from tools.time_tools import now
+from tools.utils import load_config_params  # , dump_config_params, get_df
 from _client import _BotClient
 
 __all__ = ['StrategyManager']
@@ -44,28 +45,28 @@ class StrategyManager(_BotClient):
         Number of seconds between two samples.
     underlying : str
         Name of the underlying or list of data needed.
+    name_strat : str
+        Name of the strategy to run.
     _get_order_params : function
         Function to get signal strategy and additional parameters to set order.
 
     """
-    # TODO : Load strategy config
 
-    def __init__(self, frequency, underlying, script_name, current_pos,
-                 current_vol, STOP=None, iso_volatility=True,
-                 address=('', 50000), authkey=b'tradingbot'):
+    # TODO : Load strategy config
+    def __init__(self, name_strat, path, STOP=None, address=('', 50000),
+                 authkey=b'tradingbot'):
         """ Initialize strategy manager.
 
         Parameters
         ----------
-        frequency : int
-            Number of seconds between two samples.
-        underlying : str
-            Name of the underlying or list of data needed.
-        script_name : str
-            Name of script to load function strategy (named `get_signal`).
+        name_strat : str
+            Name of the strategy to run.
+        path : str
+            Path to load configuration, functions and any scripts needed to run
+            the strategy.
         STOP : int, optional
-            Number of iteration before stoping, if None iteration will
-            stop at the end of the day (UTC time). Default is None.
+            Number of iteration before stoping, if None it will load it in
+            configuration file.
         iso_volatility : bool, optional
             If true apply a coefficient of money management computed from
             underlying volatility. Default is True.
@@ -80,41 +81,71 @@ class StrategyManager(_BotClient):
 
         # Import strategy
         strat = importlib.import_module(
-            'strategies.' + script_name + '.strategy'
+            'strategies.' + name_strat + '.strategy'
         )
         self._get_order_params = strat.get_order_params
         self.logger.info('Strategy function loaded')
 
         # Load configuration
-        # TODO : load strat_manager_instance
-        self.frequency = frequency
-        self.underlying = underlying
-        self.current_pos = current_pos
-        self.current_vol = current_vol
-        self.t = 0
         self.STOP = STOP
-        self.iso_vol = iso_volatility
-        self.logger.info('Configuration loaded')
+        self.name_strat = name_strat
+        self.set_configuration(path + name_strat + '/configuration.yaml')
+
+        self.logger.info('{} initialized'.format(name_strat))
+
+    def set_configuration(self, path):
+        """ Set configuration.
+
+        Parameters
+        ----------
+        path : str
+            Path to load the YAML configuration file.
+
+        """
+        self.logger.info('Load configuration of {}'.format(self.name_strat))
+        data_cfg = load_config_params(path)
+
+        # Set general parameters and strategy state
+        self.underlying = data_cfg['strat_manager_instance']['underlying']
+        self.iso_vol = data_cfg['strat_manager_instance']['iso_volatility']
+        self.frequency = data_cfg['strat_manager_instance']['frequency']
+        self.id_strat = data_cfg['strat_manager_instance']['id_strat']
+        self.current_pos = data_cfg['strat_manager_instance']['current_pos']
+        self.current_vol = data_cfg['strat_manager_instance']['current_vol']
+        if self.STOP is None:
+            self.STOP = data_cfg['strat_manager_instance']['STOP']
+
+        # Set data manager configuration
+        self.set_data_manager(**data_cfg['get_data_instance'].copy())
+
+        # Set parameters for strategy function
+        self.f_args = data_cfg['strategy_instance']['args_params']
+        self.f_kwrds = data_cfg['strategy_instance']['kwargs_params']
+
+        # Set parameters for orders
+        self.ord_kwrds = data_cfg['order_instance']
+
+        # TODO : Set ResultManager
+        self.logger.info('Strategy is configured')
 
     def start_loop(self, condition=True):
         """ Run a loop until condition is false. """
-        self.logger.info('Bot is starting, it will stop in {:.0f}\'.'.format(
-            self.time_stop()
-        ))
-        test = True
-        while condition:
+        # test = True
+        for output in self:
+            # while condition:
+            if output:
+                self.logger.info('Executed order : {}'.format(output))
+
             txt = time.strftime('%y-%m-%d %H:%M:%S')
-            if self.p_fees._getvalue():
-                txt = 'Fees received | ' + txt
-                if test:
-                    test = False
-                    self.logger.debug(self.p_fees._getvalue())
+            txt += ' | Next signal in {:.1f}'.format(self.next - time.time())
+            # if self.p_fees._getvalue():
+            #    txt = 'Fees received | ' + txt
+            #    if test:
+            #        test = False
+            #        self.logger.debug(self.p_fees._getvalue())
 
             print(txt, end='\r')
-            time.sleep(0.1)
-
-            if self.is_stop():
-                break
+            time.sleep(0.01)
 
         self.logger.info('StrategyManager stopped.')
 
@@ -144,32 +175,50 @@ class StrategyManager(_BotClient):
         self.t = 0
         self.TS = now(self.frequency)
         self.next = self.TS + self.frequency
+        self.logger.info('Bot starting | Stop in {:.0f}\'.'.format(
+            self.time_stop()
+        ))
 
         return self
 
     def __next__(self):
-        """ Iterate method. """
-        # if self.t >= self.STOP:
-        if self.is_stop():
+        """ Iterate method.
+
+        Returns
+        -------
+        list
+            If the position moved then return the list of executed orders,
+            otherwise returns an empty list.
+
+        """
+        server_stop = self.is_stop()
+        strat_stop = self.t >= self.STOP
+        if server_stop or strat_stop:
+            self.logger.info('Server stop : {}'.format(server_stop))
+            self.logger.info('Strategy stop : {}'.format(strat_stop))
+
             raise StopIteration
 
         self.TS = int(time.time())
 
         # Sleep until ready
-        if self.next > self.TS:
-            time.sleep(self.next - self.TS)
+        # if self.next > self.TS:
+        #    time.sleep(self.next - self.TS)
+        if self.next <= self.TS:
 
-        self.next += self.frequency
-        self.t += 1
-        self.logger.info('{}th iteration over {}'.format(self.t, self.STOP))
-        self.logger.info('Bot will stop in {:.0f}\'.'.format(self.time_stop()))
+            self.next += self.frequency
+            self.t += 1
+            self.logger.info('{}th iter. over {}'.format(self.t, self.STOP))
+            self.logger.info('Stop in {:.0f}\'.'.format(self.time_stop()))
 
-        # TODO : Debug/find solution to request data correctly.
-        #        Need to choose between request a database, server,
-        #        exchange API or other.
-        data = self.DM.get_data(*self.args_data, **self.kwargs_data)
+            # TODO : Debug/find solution to request data correctly.
+            #        Need to choose between request a database, server,
+            #        exchange API or other.
+            data = self.DM.get_data(*self.args_data, **self.kwargs_data)
 
-        return self.get_order_params(data)
+            return self.get_order_params(data)
+
+        return []
 
     def get_order_params(self, data):
         """ Compute signal and additional parameters to set order.
@@ -187,26 +236,28 @@ class StrategyManager(_BotClient):
             Parameters for order, e.g. volume, order type, etc.
 
         """
-        signal, kw = self._get_order_params(data, *self.args, **self.kwargs)
+        out = []
+        signal, kw = self._get_order_params(data, *self.f_args, **self.f_kwrds)
 
         # Don't move
         if self.current_pos == signal:
+            self.logger.info('Position not moved')
 
-            return None
+            return []
 
         # Up move
         elif self.current_pos <= 0. and signal >= 0:
             kw['type'] = 'buy'
-            self.set_order(self.cut_short(signal, **kw.copy()))
-            self.set_order(self.set_long(signal, **kw.copy()))
+            out += self.cut_short(signal, **kw.copy(), **self.ord_kwrds.copy())
+            out += self.set_long(signal, **kw.copy(), **self.ord_kwrds.copy())
 
         # Down move
         elif self.current_pos >= 0. and signal <= 0:
             kw['type'] = 'sell'
-            self.cut_long(signal, **kw.copy())
-            self.set_short(signal, **kw.copy())
+            out += self.cut_long(signal, **kw.copy(), **self.ord_kwrds.copy())
+            out += self.set_short(signal, **kw.copy(), **self.ord_kwrds.copy())
 
-        return None
+        return out
 
     def cut_short(self, signal, **kwargs):
         """ Cut short position. """
@@ -226,11 +277,12 @@ class StrategyManager(_BotClient):
             self.current_pos = 0
             result['current_volume'] = 0.
             result['current_position'] = 0
+            self.logger.info('Short position cutted')
 
         else:
             result = self._set_output(kwargs)
 
-        return result
+        return [result]
 
     def set_long(self, signal, **kwargs):
         """ Set long order. """
@@ -242,11 +294,12 @@ class StrategyManager(_BotClient):
             self.current_pos = signal
             result['current_volume'] = self.current_vol
             result['current_position'] = signal
+            self.logger.info('Long position placed')
 
         else:
             result = self._set_output(kwargs)
 
-        return result
+        return [result]
 
     def cut_long(self, signal, **kwargs):
         """ Cut long position. """
@@ -262,11 +315,12 @@ class StrategyManager(_BotClient):
             self.current_pos = 0
             result['current_volume'] = 0.
             result['current_position'] = 0
+            self.logger.info('Long position cutted')
 
         else:
             result = self._set_output(kwargs)
 
-        return result
+        return [result]
 
     def set_short(self, signal, **kwargs):
         """ Set short order. """
@@ -274,18 +328,28 @@ class StrategyManager(_BotClient):
             # Set leverage to short
             leverage = kwargs.pop('leverage')
             kwargs['leverage'] = 2 if leverage is None else leverage + 1
-            result = self.send_order(leverage=leverage, **kwargs)
+            result = self.send_order(**kwargs)
 
             # Set current volume
             self.current_vol = kwargs['volume']
             self.current_pos = signal
             result['current_volume'] = self.current_vol
             result['current_position'] = signal
+            self.logger.info('Short position placed')
 
         else:
             result = self._set_output(kwargs)
 
-        return result
+        return [result]
+
+    def send_order(self, **kwargs):
+        """ Send the ID of strategy and order parameters to OrdersManager. """
+        self.q_ord.put((self.id_strat, kwargs))
+        self.logger.debug(
+            'Set order | Strat {} | Params {}'.format(self.id_strat, kwargs)
+        )
+
+        return self._set_output(kwargs)
 
     def _set_output(self, kwargs):
         """ Set output when no orders query. """
@@ -300,6 +364,8 @@ class StrategyManager(_BotClient):
             result['price'] = kwargs['price']
 
         elif kwargs['ordertype'] == 'market':
+            # TODO : Improve it
+            #    request close price to OM ? TBM ? DM ?
             result['price'] = get_close(kwargs['pair'])
 
         else:
@@ -338,6 +404,8 @@ class StrategyManager(_BotClient):
             raise ValueError('request_data must be exchange or database.'
                              'Not {}'.format(request_from))
 
+        self.logger.info('DataManager initialized')
+
         return self
 
     def time_stop(self):
@@ -364,5 +432,5 @@ if __name__ == '__main__':
 
     logging.config.dictConfig(config)
 
-    sm = StrategyManager(60, 'XETHZUSD', 'another_example', 0, 0, STOP=100)
+    sm = StrategyManager('another_example_2', './strategies/')
     sm.start_loop()
