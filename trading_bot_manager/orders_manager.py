@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2019-04-29 23:42:09
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-01-30 19:27:30
+# @Last modified time: 2020-01-31 14:09:09
 
 """ Client to manage orders execution. """
 
@@ -101,12 +101,14 @@ class OrdersManager(_OrderManagerClient):
         self.id_max = 2147483647
         self.path = path_log
         self.exchange = exchange
-        self.start = int(time.time())
+        self.t = self.start = int(time.time())
+        self.call_counter = 0
 
         self.K = KrakenClient()
         self.K.load_key(path_log)
         self.logger.debug('Exchange client loaded.')
         self.get_fees()
+        self.get_balance()
 
     def start_loop(self, condition=True):
         """ Run a loop until condition is false. """
@@ -121,6 +123,10 @@ class OrdersManager(_OrderManagerClient):
                 result = self.set_order(id_strat, **kwrds)
                 self.logger.debug('Result: {}'.format(result))
                 last_order = time.time()
+
+            else:
+                # DO SOMETHING ELSE (e.g. results_manager)
+                pass
 
             txt = time.strftime('%y-%m-%d %H:%M:%S') + ' | Last order was '
             txt += str_time(int(time.time() - last_order)) + ' ago'
@@ -165,6 +171,7 @@ class OrdersManager(_OrderManagerClient):
                 timeout=30,
                 **kwargs
             )
+            self.call_count(pt=0)
             self.logger.info(out['descr']['order'])
             txid = out['txid']
 
@@ -179,13 +186,13 @@ class OrdersManager(_OrderManagerClient):
             raise e
 
         # Verify if order is posted
-        time.sleep(1)
+        # time.sleep(1)
         post_order = self.verify_post_order(id_order)
         if not post_order and not kwargs['validate']:
-            self.logger.info('Bot will retry to send order.')
+            self.logger.error('ORDER NOT SENT. \n\nBot retry to send order\n')
             time.sleep(1)
 
-            return self.order(id_order=id_order, **kwargs)
+            return self.order(id_strat=id_strat, **kwargs)
 
         return self._set_result_output(txid, id_order, **kwargs)
 
@@ -204,13 +211,18 @@ class OrdersManager(_OrderManagerClient):
 
         """
         open_order = self.K.query_private('OpenOrders', userref=id_order)
+        self.call_count()
 
         if open_order['open']:
 
             return True
 
-        closed_order = self.K.query_private('ClosedOrders',
-                                            userref=id_order, start=self.start)
+        closed_order = self.K.query_private(
+            'ClosedOrders',
+            userref=id_order,
+            start=self.start
+        )
+        self.call_count()
 
         if closed_order['closed']:
 
@@ -283,6 +295,7 @@ class OrdersManager(_OrderManagerClient):
                 'TradeVolume',
                 pair='all'
             )
+            self.call_count()
             self.logger.debug('Got fees from the exchange.')
 
         else:
@@ -290,8 +303,22 @@ class OrdersManager(_OrderManagerClient):
 
             raise ValueError(self.exchange + ' not allowed.')
 
-        self.w_tbm.send(self.fees)
+        self.w_tbm.send({'fees': self.fees})
         self.logger.debug('Sent fees to TradingBotManager.')
+
+    def get_balance(self):
+        if self.exchange.lower() == 'kraken':
+            self.balance = self.K.query_private('Balance')
+            self.call_count()
+            self.logger.debug('Got balance : {}'.format(self.balance))
+
+        else:
+            self.logger.error('Exchange {} not allowed'.format(self.exchange))
+
+            raise ValueError(self.exchange + ' not allowed.')
+
+        self.w_tbm.send({'balance': self.balance})
+        self.logger.debug('Sent balance to TradingBotManager.')
 
     def _set_id_order(self, id_strat):
         """ Set an unique order identifier.
@@ -322,7 +349,21 @@ class OrdersManager(_OrderManagerClient):
         with open('id_order.dat', 'wb') as f:
             Pickler(f).dump(id_order)
 
+        if id_strat < 10:
+            id_strat = '0' + str(id_strat)
+
         return int(str(id_order) + str(id_strat))
+
+    def call_count(self, pt=1, discount=2, max_call=20):
+        self.call_counter += pt
+        t = int(time.time())
+        self.call_counter -= (t - self.t) // discount
+        self.call_counter = max(self.call_counter, 0)
+        self.t = t
+        self.logger.debug('Call count: {}'.format(self.call_counter))
+        if self.call_counter >= max_call:
+            self.logger.info('Max call exceeded: {}'.format(self.call_counter))
+            time.sleep(self.call_counter - max_call + 1)
 
 
 if __name__ == '__main__':
