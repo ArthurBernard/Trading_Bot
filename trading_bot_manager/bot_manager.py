@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2020-01-27 09:58:03
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-01-29 20:25:43
+# @Last modified time: 2020-01-31 13:16:41
 
 """ Set a server and run each bot. """
 
@@ -20,10 +20,13 @@ import os
 # Local packages
 from _server import _TradingBotManager
 from _server import TradingBotServer as TBS
+from strategy_manager import StrategyManager as SM
+from tools.time_tools import str_time
 
 
 class TradingBotManager(_TradingBotManager):
     """ Trading Bot Manager object. """
+
     # TODO : load general config
     # TODO : run strategies
 
@@ -39,6 +42,8 @@ class TradingBotManager(_TradingBotManager):
         self.address = address
         self.authkey = authkey
         self.fees = {}
+        self.balance = {}
+        self.txt = {}
 
         # Set threads
         server_thread = Thread(
@@ -46,15 +51,15 @@ class TradingBotManager(_TradingBotManager):
             kwargs={'address': address, 'authkey': authkey}
         )
         # bot_thread = Thread(target=self.runtime, args=(s,))
-        fees_thread = Thread(target=self.set_fees, daemon=True)
+        listen_thread = Thread(target=self.listen_om, daemon=True)
         server_thread.start()
-        fees_thread.start()
+        listen_thread.start()
         # bot_thread.start()
         # server_thread.join()
         # bot_thread.join()
         # self.set_fees()
-        self.runtime(s)
         self.logger.info('Initialization finished.')
+        self.runtime(s)
 
     def set_server(self, address=('', 50000), authkey=b'tradingbot'):
         """ Initialize a server connection. """
@@ -80,8 +85,13 @@ class TradingBotManager(_TradingBotManager):
         # )
         # p_om.start()
         while time.time() - self.t < s:
-            print('{:.1f} sec.'.format(time.time() - self.t), end='\r')
-            time.sleep(0.1)
+            # print('{:.1f} sec.'.format(time.time() - self.t), end='\r')
+            txt = '{} | Have bean started {} ago'.format(
+                time.strftime('%y-%m-%d %H:%M:%S'),
+                str_time(int(time.time() - self.t)),
+            )
+            print(txt, end='\r')
+            time.sleep(0.01)
 
         self.logger.debug('End to do something.')
         self.state['stop'] = True
@@ -97,18 +107,35 @@ class TradingBotManager(_TradingBotManager):
     def run_strategy(self, name):
         # TODO : set a dedicated pipe
         # TODO : run a new process for a new strategy
-        pass
+        with SM(name, address=self.address, authkey=self.authkey) as sm:
+            sm.set_configuration(self.path + name + '/configuration.yaml')
+            for s, kw in sm:
+                if s is not None:
+                    self.logger.info('Signal: {} | Params: {}'.format(s, kw))
+                    output = sm.set_order(s, **kw, **sm.ord_kwrds)
 
-    def get_fees(self):
-        return self.r_om.recv()
+                    if output:
+                        self.logger.info('Executed order : {}'.format(output))
 
-    def set_fees(self, fees=None):
-        if fees is None:
-            fees = self.get_fees()
-            self.logger.info('New fees received.')
+                self.txt[name] += '{} | Next signal in {}'.format(
+                    name, str_time(int(sm.next - sm.TS))
+                )
 
-        self.fees.update(fees)
-        self.logger.info('Fees updated.')
+    def listen_om(self):
+        """ Update fees and balance when received them from OrdersManager. """
+        while True:
+            msg = self.r_om.recv()
+            for k, a in msg.items():
+                if k == 'fees':
+                    self.fees.update(a)
+                    self.logger.info('Fees updated : {}'.format(a))
+
+                elif k == 'balance':
+                    self.balance.update(a)
+                    self.logger.info('Balance updated : {}'.format(a))
+
+                else:
+                    self.logger.error('Unknown {} : {}'.format(k, a))
 
 
 def start_order_manager(path_log, exchange='kraken', address=('', 50000),
@@ -143,5 +170,5 @@ if __name__ == '__main__':
     logging.config.dictConfig(config)
 
     # start_tradingbotmanager()
-    tbm = TradingBotManager(s=20)
+    tbm = TradingBotManager(s=40)
     # tbm.run()
