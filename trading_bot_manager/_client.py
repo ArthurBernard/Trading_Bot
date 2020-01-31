@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2020-01-28 16:47:55
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-01-30 19:21:02
+# @Last modified time: 2020-01-31 11:21:48
 
 """ Clients to connect to TradingBotServer. """
 
@@ -15,12 +15,16 @@ import os
 
 # Local packages
 from _server import TradingBotServer as TBS
+from data_requests import DataBaseManager, DataExchangeManager
 
 
 class _Client:
     """ Base class for a client. """
 
-    _handler = {'market': 'fees', 'limit': 'fees_maker'}
+    _handler = {
+        'market': 'fees',
+        'limit': 'fees_maker',
+    }
 
     def __init__(self, address=('', 50000), authkey=b'tradingbot'):
         """ Initialize a client object and connect to the TradingBotServer. """
@@ -41,6 +45,12 @@ class _Client:
 
 class _BotClient(_Client):
     """ Base class for a trading bot. """
+
+    _handler = {
+        **_Client._handler,
+        'exchange': DataExchangeManager,
+        'database': DataBaseManager,
+    }
 
     def __init__(self, address=('', 50000), authkey=b'tradingbot'):
         """ Initialize a client object and connect to TradingBotServer. """
