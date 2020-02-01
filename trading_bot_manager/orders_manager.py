@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2019-04-29 23:42:09
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-01-31 14:09:09
+# @Last modified time: 2020-01-31 17:39:36
 
 """ Client to manage orders execution. """
 
@@ -78,35 +78,41 @@ class OrdersManager(_OrderManagerClient):
 
         Parameters
         ----------
-        path_log : str
-            Path where API key and secret are saved.
-        current_pos : int, {1 : long, 0 : None, -1 : short}
-            Current position of the account.
-        current_vol : float
-            Current volume position.
-        exchange : str, optional
-            Name of the exchange (default is `'kraken'`).
-        frequency : int, optional
-            Frequency to round timestamp.
+        address :
+        authkey :
 
         """
         # Set client and connect to the trading bot server
         _OrderManagerClient.__init__(self, address=address, authkey=authkey)
+        self.logger = logging.getLogger('OrdersManager.' + __name__)
+        self.logger.info('init | PID: {} PPID: {}'.format(getpid(), getppid()))
 
-        self.logger = logging.getLogger('trad_bot.' + __name__)
-        #self.logger.info('Initialize OrdersManager | Current PID is '
-        #                 '{} and Parent PID is {}'.format(getpid()), getppid())
-        self.logger.info('Initialize OrdersManager | Current PID is {} and '
-                         'Parent PID is {}'.format(getpid(), getppid()))
         self.id_max = 2147483647
-        self.path = path_log
-        self.exchange = exchange
         self.t = self.start = int(time.time())
         self.call_counter = 0
 
+    def __call__(self, exchange, path_log):
+        """ Set parameters of order manager.
+
+        Parameters
+        ----------
+        path_log : str
+            Path where API key and secret are saved.
+        exchange : str, optional
+            Name of the exchange (default is `'kraken'`).
+
+        Returns
+        -------
+        OrdersManager
+            Object to manage orders.
+
+        """
+        self.path = path_log
+        self.exchange = exchange
+
         self.K = KrakenClient()
         self.K.load_key(path_log)
-        self.logger.debug('Exchange client loaded.')
+        self.logger.debug('call | {} client loaded'.format(exchange))
         self.get_fees()
         self.get_balance()
 
@@ -290,35 +296,37 @@ class OrdersManager(_OrderManagerClient):
         return result
 
     def get_fees(self):
+        """ Load current fees. """
         if self.exchange.lower() == 'kraken':
             self.fees = self.K.query_private(
                 'TradeVolume',
                 pair='all'
             )
             self.call_count()
-            self.logger.debug('Got fees from the exchange.')
+            self.logger.debug('get_fees | Loaded')
 
         else:
-            self.logger.error('Exchange {} not allowed'.format(self.exchange))
+            self.logger.error('get_fees | {} not allowed'.format(self.exchange))
 
             raise ValueError(self.exchange + ' not allowed.')
 
         self.w_tbm.send({'fees': self.fees})
-        self.logger.debug('Sent fees to TradingBotManager.')
+        self.logger.debug('get_fees | Sent fees to TradingBotManager')
 
     def get_balance(self):
+        """ Load current balance. """
         if self.exchange.lower() == 'kraken':
             self.balance = self.K.query_private('Balance')
             self.call_count()
-            self.logger.debug('Got balance : {}'.format(self.balance))
+            self.logger.debug('get_balance | Loaded {}'.format(self.balance))
 
         else:
-            self.logger.error('Exchange {} not allowed'.format(self.exchange))
+            self.logger.error('get_balance | {} not allowed'.format(self.exchange))
 
             raise ValueError(self.exchange + ' not allowed.')
 
         self.w_tbm.send({'balance': self.balance})
-        self.logger.debug('Sent balance to TradingBotManager.')
+        self.logger.debug('get_balance | Sent balance to TradingBotManager')
 
     def _set_id_order(self, id_strat):
         """ Set an unique order identifier.
@@ -377,5 +385,5 @@ if __name__ == '__main__':
     logging.config.dictConfig(config)
 
     path_log = '/home/arthur/Strategies/Data_Server/Untitled_Document2.txt'
-    OM = OrdersManager(path_log)
-    OM.start_loop()
+    om = OrdersManager()  # path_log)
+    om('kraken', path_log).start_loop()
