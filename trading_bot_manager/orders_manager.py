@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2019-04-29 23:42:09
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-01-31 17:39:36
+# @Last modified time: 2020-02-01 09:27:36
 
 """ Client to manage orders execution. """
 
@@ -72,8 +72,7 @@ class OrdersManager(_OrderManagerClient):
 
     """
 
-    def __init__(self, path_log, exchange='kraken', address=('', 50000),
-                 authkey=b'tradingbot'):
+    def __init__(self, address=('', 50000), authkey=b'tradingbot'):
         """ Set the order class.
 
         Parameters
@@ -116,16 +115,50 @@ class OrdersManager(_OrderManagerClient):
         self.get_fees()
         self.get_balance()
 
+    def __enter__(self):
+        """ Enter to context manager. """
+        # TODO : load config and data
+        self.logger.info('enter | Load configuration')
+        return self
+
+    def __exit__(self, exc_type, exc_value, exc_tb):
+        """ Exit from context manager. """
+        # TODO : save config and data
+        self.logger.info('exit | Save configuration')
+        if exc_type is not None:
+            self.logger.error('exit | {}: {}\n{}'.format(
+                exc_type, exc_value, exc_tb
+            ))
+
+        self.logger.info('exit | end')
+
+    def __iter__(self):
+        """ Iterate until server stop. """
+        self.logger.info('iter | Starting to wait orders')
+        return self
+
+    def __next__(self):
+        """ Next method. """
+        if self.is_stop():
+
+            raise StopIteration
+
+        elif not self.q_ord.empty():
+            self.logger.debug('next | get an order')
+
+            return self.q_ord.get()
+
+        return None, None
+
     def start_loop(self, condition=True):
         """ Run a loop until condition is false. """
         self.logger.info('Starting to wait orders.')
         last_order = 0
-        while condition:
-            if not self.q_ord.empty():
-                id_strat, kwrds = self.q_ord.get()
-                self.logger.debug(
-                    'Get order | Strat {} | Params {}'.format(id_strat, kwrds)
-                )
+        # while condition:
+        for id_strat, kwrds in self:
+            # if not self.q_ord.empty():
+            if id_strat is not None:
+                # id_strat, kwrds = self.q_ord.get()
                 result = self.set_order(id_strat, **kwrds)
                 self.logger.debug('Result: {}'.format(result))
                 last_order = time.time()
@@ -363,6 +396,18 @@ class OrdersManager(_OrderManagerClient):
         return int(str(id_order) + str(id_strat))
 
     def call_count(self, pt=1, discount=2, max_call=20):
+        """ Count the number of requests done and wait if exceed the max rate.
+
+        Parameters
+        ----------
+        pt: int
+            Number to increase the call rate counter.
+        discount: int
+            Number of seconds to decrease of one the call rate counter.
+        max_call: int
+            Max call rate counter.
+
+        """
         self.call_counter += pt
         t = int(time.time())
         self.call_counter -= (t - self.t) // discount
@@ -386,4 +431,5 @@ if __name__ == '__main__':
 
     path_log = '/home/arthur/Strategies/Data_Server/Untitled_Document2.txt'
     om = OrdersManager()  # path_log)
-    om('kraken', path_log).start_loop()
+    with om('kraken', path_log):
+        om.start_loop()
