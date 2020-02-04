@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2019-04-29 23:42:09
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-02-01 09:27:36
+# @Last modified time: 2020-02-04 19:15:33
 
 """ Client to manage orders execution. """
 
@@ -18,12 +18,11 @@ from os import getpid, getppid
 import numpy as np
 
 # Internal packages
-from tools.time_tools import str_time, now
-# from strategy_manager.API_kraken import KrakenClient
+from tools.time_tools import str_time  # , now
 from data_requests import get_close
 from API_kraken import KrakenClient
 from _client import _OrderManagerClient
-# from _server import TradingBotServer as TBS
+from _exceptions import MissingOrderError
 
 __all__ = ['OrdersManager']
 
@@ -34,6 +33,94 @@ TODO list:
     - New method : verify integrity of new orders
     - New method : (future) split orders for a better scalability
 """
+
+
+class _Orders(dict):
+    _waiting, _open, _close = [], [], []
+
+    def __init__(self, *args, **kwargs):
+        super(_Orders, self).__init__(*args, **kwargs)
+        self._set_state()
+
+    def __setitem__(self, key, value):
+        print('set {}'.format(key))
+        dict.__setitem__(self, key, value)
+        self._add_state(key, value)
+
+    def __delitem__(self, key):
+        print('del {}'.format(key))
+        dict.__delitem__(self, key)
+        self._del_state(key)
+
+    def __repr__(self):
+        return str({
+            'waiting': self._waiting,
+            'open': self._open,
+            'close': self._close
+        }) + '\n' + dict.__repr__(self)
+
+    def pop(self, key):
+        print('pop {}'.format(key))
+        self._del_state(key)
+
+        return dict.pop(self, key)
+
+    def popitem(self):
+        key, value = dict.popitem(self)
+        self._del_state(key)
+
+        return key, value
+
+    def update(self, *args, **kwargs):
+        dict.update(self, *args, **kwargs)
+        self._reset_state()
+
+    def get_first(self):
+        ordered_list = self.get_ordered_list()
+
+        return ordered_list[0]
+
+    def get_ordered_list(self):
+        return self._waiting + self._open + self._close
+
+    def pop_first(self):
+        key = self.get_first()
+
+        return key, self.pop(key)
+
+    def _set_state(self):
+        for key, value in self.items():
+            self._add_state(key, value)
+
+    def _reset_state(self):
+        self._waiting, self._open, self._close = [], [], []
+        self._set_state()
+
+    def _add_state(self, key, value):
+        if value.get('state') is None:
+            self._waiting.append(key)
+
+        elif value['state'] == 'open':
+            self._open.append(key)
+
+        elif value['state'] == 'close':
+            self._close.append(key)
+
+        else:
+            raise ValueError('unknown state {}'.format(value['state']))
+
+    def _del_state(self, key):
+        if key in self._waiting:
+            self._waiting.remove(key)
+
+        elif key in self._open:
+            self._open.remove(key)
+
+        elif key in self._close:
+            self._close.remove(key)
+
+        else:
+            raise ValueError('unknown id_order: {}'.format(key))
 
 
 class OrdersManager(_OrderManagerClient):
@@ -72,6 +159,11 @@ class OrdersManager(_OrderManagerClient):
 
     """
 
+    _handler_client = {
+        'kraken': KrakenClient,
+    }
+    orders = _Orders()
+
     def __init__(self, address=('', 50000), authkey=b'tradingbot'):
         """ Set the order class.
 
@@ -109,20 +201,31 @@ class OrdersManager(_OrderManagerClient):
         self.path = path_log
         self.exchange = exchange
 
-        self.K = KrakenClient()
+        if exchange.lower() in self._handler_client.keys():
+            self.K = self._handler_client[exchange.lower()]()
+
+        else:
+            raise ValueError('Exchange {} not supported'.format(exchange))
+
         self.K.load_key(path_log)
         self.logger.debug('call | {} client loaded'.format(exchange))
         self.get_fees()
         self.get_balance()
 
+        return self
+
     def __enter__(self):
         """ Enter to context manager. """
         # TODO : load config and data
         self.logger.info('enter | Load configuration')
+        # TODO : load orders to verify
+        self.logger.debug('enter | order: {}'.format(self.orders))
+
         return self
 
     def __exit__(self, exc_type, exc_value, exc_tb):
         """ Exit from context manager. """
+        self.logger.debug('exit | order: {}'.format(self.orders))
         # TODO : save config and data
         self.logger.info('exit | Save configuration')
         if exc_type is not None:
@@ -138,54 +241,84 @@ class OrdersManager(_OrderManagerClient):
         return self
 
     def __next__(self):
-        """ Next method. """
+        """ Next method.
+
+        Returns
+        -------
+        int
+           Identifier of the order. If None then there is no order to manage.
+        dict
+           Dictionary containing input (dict), output (dict or list) and state
+           (string).
+
+        """
         if self.is_stop():
 
             raise StopIteration
 
         elif not self.q_ord.empty():
-            self.logger.debug('next | get an order')
-
-            return self.q_ord.get()
-
-        return None, None
-
-    def start_loop(self, condition=True):
-        """ Run a loop until condition is false. """
-        self.logger.info('Starting to wait orders.')
-        last_order = 0
-        # while condition:
-        for id_strat, kwrds in self:
-            # if not self.q_ord.empty():
-            if id_strat is not None:
-                # id_strat, kwrds = self.q_ord.get()
-                result = self.set_order(id_strat, **kwrds)
-                self.logger.debug('Result: {}'.format(result))
-                last_order = time.time()
+            id_strat, kwargs = self.q_ord.get()
+            self.logger.debug('next | {}: {}'.format(id_strat, kwargs))
+            if kwargs.get('userref'):
+                id_order = kwargs.pop('userref')
 
             else:
-                # DO SOMETHING ELSE (e.g. results_manager)
+                id_order = self._set_id_order(id_strat)
+                kwrds = {
+                    'input': kwargs,
+                    'open_out': [],
+                    'close_out': [],
+                    'request_out': [],
+                    'state': None
+                }
+
+            return id_order, kwrds
+
+        elif self.orders:
+
+            return self.orders.pop_first()
+
+        return None, {}
+
+    def loop(self):
+        """ Run a loop until condition is false. """
+        self.logger.info('loop | wait orders')
+        last_order = 0
+        for id_order, kwrds in self:
+            if id_order is None:
+                # DO SOMETHING ELSE (e.g. display results_manager)
                 pass
+
+            elif kwrds.get('state') is None:
+                self.post_order(id_order, kwrds)
+                last_order = time.time()
+
+            elif kwrds['state'] == 'open':
+                self.check_post_order(id_order, kwrds)
+
+            elif kwrds['state'] == 'close':
+                self.logger.debug('loop | remove {}'.format(id_order))
+                # TODO : save order
+                # TODO : update results_manager
+
+            else:
+
+                raise ValueError('unknown state: {}'.format(kwrds['state']))
 
             txt = time.strftime('%y-%m-%d %H:%M:%S') + ' | Last order was '
             txt += str_time(int(time.time() - last_order)) + ' ago'
             print(txt, end='\r')
             time.sleep(0.01)
 
-            if self.is_stop():
-                break
-
         self.logger.info('OrdersManager stopped.')
 
-    def set_order(self, id_strat, **kwargs):
+    def set_order(self, **kwargs):
         """ Request an order following defined parameters.
 
         /! To verify ConnectionResetError exception. /!
 
         Parameters
         ----------
-        id_strat : int
-            Identifier of the strategy (between 0 and 99).
         kwargs : dict
             Parameters for ordering, refer to API documentation of the
             plateform used.
@@ -196,80 +329,76 @@ class OrdersManager(_OrderManagerClient):
             Result of output of the request.
 
         """
-        id_order = self._set_id_order(id_strat)
-
         if kwargs['leverage'] == 1:
             kwargs['leverage'] = None
 
         # TODO : Append a method to verify if the volume is available.
         try:
             # Send order
-            out = self.K.query_private(
-                'AddOrder',
-                userref=id_order,
-                timeout=30,
-                **kwargs
-            )
+            output = self.K.query_private('AddOrder', **kwargs)
             self.call_count(pt=0)
-            self.logger.info(out['descr']['order'])
-            txid = out['txid']
-
-        except (NameError, KeyError) as e:
-            self.logger.error('Output error: {}'.format(type(e)))
-            txid = 0
+            self.logger.info(output['descr']['order'])
+            if kwargs['validate']:
+                self.logger.info('set_order | Validating order is True')
+                output['txid'] = 0
 
         except Exception as e:
-            self.logger.error('Unknown error: {}'.format(type(e)),
+            self.logger.error('set_order | Unknown error: {}'.format(type(e)),
                               exc_info=True)
 
             raise e
 
-        # Verify if order is posted
-        # time.sleep(1)
-        post_order = self.verify_post_order(id_order)
-        if not post_order and not kwargs['validate']:
-            self.logger.error('ORDER NOT SENT. \n\nBot retry to send order\n')
-            time.sleep(1)
+        return output
 
-            return self.order(id_strat=id_strat, **kwargs)
+    def post_order(self, id_order, kwrds):
+        """ Post an order. """
+        self.logger.debug('post | {}: {}'.format(id_order, kwrds))
+        out = self.set_order(userref=id_order, **kwrds['input'])
+        kwrds['request_out'] += out if isinstance(out, list) else [out]
+        kwrds['state'] = 'open'
+        self.orders[id_order] = kwrds
+        self.logger.debug('post | output: {}'.format(out))
 
-        return self._set_result_output(txid, id_order, **kwargs)
-
-    def verify_post_order(self, id_order):
-        """ Verify if an order is well posted.
+    def check_post_order(self, id_order, kwrds):
+        """ Verify if an order was posted.
 
         Parameters
         ----------
         id_order : int
             User reference of the order to verify.
-
-        Returns
-        -------
-        bool
-            Return true if order is posted else false.
+        kwrds : dict
+            Information about the order.
 
         """
-        open_order = self.K.query_private('OpenOrders', userref=id_order)
+        open_ord = self.K.query_private('OpenOrders', userref=id_order)
+        print(open_ord)
         self.call_count()
+        if open_ord['open']:
+            # TODO : cancel order, update price and post_order
+            self.logger.debug('check | {} always open'.format(id_order))
+            kwrds['open_out'] += open_ord['open']
+            self.orders[id_order] = kwrds
 
-        if open_order['open']:
+        else:
+            close_ord = self.K.query_private(
+                'ClosedOrders',
+                userref=id_order,
+                start=self.start
+            )
+            self.call_count()
+            if close_ord['closed']:
+                self.logger.debug('check | {} closed'.format(id_order))
+                kwrds['closed_out'] += close_ord['closed']
+                kwrds['state'] = 'close'
+                self.orders[id_order] = kwrds
 
-            return True
+            elif kwrds['input'].get('validate'):
+                self.logger.warning('check | {} validating'.format(id_order))
 
-        closed_order = self.K.query_private(
-            'ClosedOrders',
-            userref=id_order,
-            start=self.start
-        )
-        self.call_count()
+            else:
+                self.logger.error('check | {} missing'.format(id_order))
 
-        if closed_order['closed']:
-
-            return True
-
-        self.logger.info('Order not verified.')
-
-        return False
+                raise MissingOrderError(id_order, params=kwrds)
 
     def _set_result_output(self, txid, id_order, **kwargs):
         """ Add informations to output of query order. """
@@ -283,8 +412,8 @@ class OrdersManager(_OrderManagerClient):
             'pair': pair,
             'ordertype': ordertype,
             'leverage': kwargs['leverage'],
-            'timestamp': int(time.time()),  # now(self.frequency),
-            'fee': float(self.fees[self._handler[ordertype]][pair]['fee'])  # self._get_fees(kwargs['pair'], kwargs['ordertype']),
+            'timestamp': int(time.time()),
+            'fee': float(self.fees[self._handler[ordertype]][pair]['fee'])
         }
         if ordertype == 'market' and kwargs['validate']:
             # Get the last price
@@ -294,7 +423,7 @@ class OrdersManager(_OrderManagerClient):
             # TODO : verify if get the exection market price
             closed_order = self.K.query_private('ClosedOrders',
                                                 userref=id_order,
-                                                start=self.start)  # ['result']
+                                                start=self.start)
             txids = closed_order['closed'].keys()
             result['price'] = np.mean([
                 closed_order['closed'][i]['price'] for i in txids
@@ -306,57 +435,23 @@ class OrdersManager(_OrderManagerClient):
 
         return result
 
-    def _set_output(self, kwargs):
-        """ Set output when no orders query. """
-        result = {
-            'timestamp': now(self.frequency),
-            'current_volume': self.current_vol,
-            'current_position': self.current_pos,
-            'fee': self._get_fees(kwargs['pair'], kwargs['ordertype']),
-            'descr': None,
-        }
-        if kwargs['ordertype'] == 'limit':
-            result['price'] = kwargs['price']
-
-        elif kwargs['ordertype'] == 'market':
-            result['price'] = get_close(kwargs['pair'])
-
-        else:
-            raise ValueError(
-                'Unknown order type: {}'.format(kwargs['ordertype'])
-            )
-
-        return result
-
     def get_fees(self):
         """ Load current fees. """
-        if self.exchange.lower() == 'kraken':
-            self.fees = self.K.query_private(
-                'TradeVolume',
-                pair='all'
-            )
-            self.call_count()
-            self.logger.debug('get_fees | Loaded')
-
-        else:
-            self.logger.error('get_fees | {} not allowed'.format(self.exchange))
-
-            raise ValueError(self.exchange + ' not allowed.')
+        self.fees = self.K.query_private(
+            'TradeVolume',
+            pair='all'
+        )
+        self.call_count()
+        self.logger.debug('get_fees | fees are loaded')
 
         self.w_tbm.send({'fees': self.fees})
-        self.logger.debug('get_fees | Sent fees to TradingBotManager')
+        self.logger.debug('get_fees | fees are sent to TradingBotManager')
 
     def get_balance(self):
         """ Load current balance. """
-        if self.exchange.lower() == 'kraken':
-            self.balance = self.K.query_private('Balance')
-            self.call_count()
-            self.logger.debug('get_balance | Loaded {}'.format(self.balance))
-
-        else:
-            self.logger.error('get_balance | {} not allowed'.format(self.exchange))
-
-            raise ValueError(self.exchange + ' not allowed.')
+        self.balance = self.K.query_private('Balance')
+        self.call_count()
+        self.logger.debug('get_balance | Loaded {}'.format(self.balance))
 
         self.w_tbm.send({'balance': self.balance})
         self.logger.debug('get_balance | Sent balance to TradingBotManager')
@@ -432,4 +527,4 @@ if __name__ == '__main__':
     path_log = '/home/arthur/Strategies/Data_Server/Untitled_Document2.txt'
     om = OrdersManager()  # path_log)
     with om('kraken', path_log):
-        om.start_loop()
+        om.loop()
