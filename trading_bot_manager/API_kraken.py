@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2019-05-06 20:53:46
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-01-24 16:56:29
+# @Last modified time: 2020-02-03 11:12:06
 
 """ Kraken Client API object. """
 
@@ -58,7 +58,8 @@ class KrakenClient:
         self.uri = "https://api.kraken.com"
         self.key = key
         self.secret = secret
-        self.logger = logging.getLogger('strat_man.' + __name__)
+        self.logger = logging.getLogger('OrdersManager.' + __name__)
+        self.logger.info('init')
 
     def load_key(self, path):
         """ Load key and secret from a text file.
@@ -73,6 +74,8 @@ class KrakenClient:
         with open(path, 'r') as f:
             self.key = f.readline().strip()
             self.secret = f.readline().strip()
+
+        self.logger.info('load_key')
 
     def _nonce(self):
         """ Return a nonce used in authentication. """
@@ -126,6 +129,7 @@ class KrakenClient:
                 raise ValueError(r.json()['error'], r.json())
 
             elif r.status_code in [200, 201, 202]:
+                self.logger.info('query_private | success')
 
                 return r.json()['result']
 
