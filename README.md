@@ -1,7 +1,7 @@
-# Strategy Manager - Bot for financial algorithmic strategies [In Progress]
+# Trading_Bot - Autonomous Trading Bot in Python for algorithmic financial strategies [In Progress]
 
-![GitHub](https://img.shields.io/github/license/ArthurBernard/Strategy_Manager)
-[![Language grade: Python](https://img.shields.io/lgtm/grade/python/g/ArthurBernard/Strategy_Manager.svg?logo=lgtm&logoWidth=18)](https://lgtm.com/projects/g/ArthurBernard/Strategy_Manager/context:python)
+![GitHub](https://img.shields.io/github/license/ArthurBernard/Trading_Bot)
+[![Language grade: Python](https://img.shields.io/lgtm/grade/python/g/ArthurBernard/Trading_Bot.svg?logo=lgtm&logoWidth=18)](https://lgtm.com/projects/g/ArthurBernard/Trading_Bot/context:python)
 
 ## /!\ Not yet working but comming soon ! /!\
 
@@ -9,7 +9,7 @@
 
 This project is in progress, eventually it will be able to automatically manage several strategies, signal calculation, order execution, allow history performance, etc.    
 
-Initially `Strategy Manager` will be used with the Kraken crypto-currency exchange platform, but in the long term this project may be extended to other trading platforms (e.g. Bitfinex, Bitmex or some more classical trading platforms as Interactive-Brokers). 
+Initially `Trading_Bot` will be used with the Kraken crypto-currency exchange platform, but in the long term this project may be extended to other trading platforms (e.g. Bitfinex, Bitmex or some more classical trading platforms as Interactive-Brokers). 
 
 ## Requirements
 
@@ -31,44 +31,68 @@ Initially `Strategy Manager` will be used with the Kraken crypto-currency exchan
 
 At the root of a folder, clone the repository and install it with `pip`:
 
-> $ git clone https://github.com/ArthurBernard/Strategy_Manager.git    
-> $ pip install -e strategy_manager   
+```bash
+$ git clone https://github.com/ArthurBernard/Trading_Bot.git    
+$ cd Trading_Bot    
+$ pip install -e strategy_manager   
+```
 
 ## Quick-start
 
 1. Create a folder `./strategies/YOUR_STRATEGY_NAME`, with 3 scripts to configurate a strategy: `__init__.py` an empty file, `configuration.yaml` and `strategy.py`. See examples in `strategies/example/` and `strategies/another_example/`.
 
-Example:
+#### Example:
 
-> $ mkdir ./strategies/YOUR_STRATEGY_NAME   
-> $ touch ./strategies/YOUR_STRATEGY_NAME/\_\_init\_\_.py   
-> $ touch./strategies/YOUR_STRATEGY_NAME/configuration.yaml   
-> $ touch ./strategies/YOUR_STRATEGY_NAME/strategy.py   
+```bash
+$ mkdir ./strategies/YOUR_STRATEGY_NAME   
+$ touch ./strategies/YOUR_STRATEGY_NAME/\_\_init\_\_.py   
+$ touch./strategies/YOUR_STRATEGY_NAME/configuration.yaml   
+$ touch ./strategies/YOUR_STRATEGY_NAME/strategy.py   
+```
 
 TODO : explain how write `configuration.yaml` and `strategy.py`.
 
-2. Append your strategy at the file `strategy_list_to_run.txt`.
+2. Start the bot manager server.
 
-Example:
+#### Example:
 
-> $ echo YOUR_STRATEGY_NAME >> ./execution_scripts/strategy_list_to_run.txt
+```bash
+$ python ./trading_bot/bot_manager.py
+```
 
-3. With crontab you can schedule automatic execution every day. 
+3. Start the orders manager client.
 
-Example:
+#### Example:
 
-> $ crontab -e   
->> 0 0 * * * python3 /path/Strategies_Manager/execution_scripts/bot_manager.sh >> /path/Strategies_Manager/execution_scripts/manager.log 2>&1 &
+```bash
+$ python ./trading_bot/orders_manager.py
+```
+
+4. Start your stragies client.
+
+#### Example:
+
+```bash
+$ python ./trading_bot/strategy_manager.py YOUR_STRATEGY_NAME
+```
+
+## Custom your own strategy manager
+
+Documentation is available at [comming soon].
 
 ## TODO list
 
 - General: 
-     - Make a documentation;
-- `bot_download_data.sh` shell to request data and verify that it runs fine.
-- `bot_manager.sh` shell script to run and verify that all bots run fine. 
+    - Make a documentation;
+- `bot_manager.py`:
+    - Clean object;
+    - Method: Run automatically order_manager client;
+    - Method: Run automatically several strategies on multiprocess;
+    - Method: Send update configuration to strategy manager.
 - `orders_manager.py`:
-    - Method: Get available funds;
     - Method: Verify integrity of new orders (if volume to order is available); 
-- `execution_order.py`: Algorithm of execution order (not just 'submit and leaves'). Something like vwap or twap. 
+    - Method: Algorithm of execution order (not just 'submit and leaves'). Something like vwap or twap. 
 - `result_manager.py`:
-    - Object: special logger 
+    - Object: special logger to display pnl of strategies and portfolio
+- `strategy_manager.py`:
+    - Method: Receive update of configuration from bot_manager.

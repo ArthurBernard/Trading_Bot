@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2019-04-19 08:30:03
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-02-05 10:27:03
+# @Last modified time: 2020-02-05 11:33:10
 
 """ Set up the trading_bot package. """
 
@@ -20,7 +20,7 @@ setup(
     version='0.1.0',
     description='Autonomous trading bot in Python for your financial '
                 'algorithmic strategies [In progress]',
-    url='https://github.com/ArthurBernard/Strategy_Manager',
+    url='https://github.com/ArthurBernard/Trading_Bot',
     author=['Arthur Bernard'],
     author_email='arthur.bernard.92@gmail.com',
     packages=find_packages(),
