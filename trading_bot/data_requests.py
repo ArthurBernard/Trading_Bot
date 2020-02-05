@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2019-04-26 08:49:26
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-01-30 14:34:32
+# @Last modified time: 2020-02-05 10:38:55
 
 # Built-in import
 import json
@@ -19,7 +19,7 @@ import pandas as pd
 import numpy as np
 
 # Local import
-from tools.time_tools import now
+from trading_bot.tools.time_tools import now
 
 __all__ = [
     'DataRequests', 'data_base_requests', 'aggregate_data', 'DataBaseManager',

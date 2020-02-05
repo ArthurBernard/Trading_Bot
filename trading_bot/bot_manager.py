@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2020-01-27 09:58:03
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-01-31 13:16:41
+# @Last modified time: 2020-02-05 10:37:02
 
 """ Set a server and run each bot. """
 
@@ -18,10 +18,14 @@ import os
 # Third party packages
 
 # Local packages
-from _server import _TradingBotManager
-from _server import TradingBotServer as TBS
-from strategy_manager import StrategyManager as SM
-from tools.time_tools import str_time
+from trading_bot._server import _TradingBotManager
+from trading_bot._server import TradingBotServer as TBS
+from trading_bot.strategy_manager import StrategyManager as SM
+from trading_bot.tools.time_tools import str_time
+
+__all__ = [
+    'TradingBotManager', 'start_order_manager', 'start_tradingbotserver',
+]
 
 
 class TradingBotManager(_TradingBotManager):
@@ -100,7 +104,7 @@ class TradingBotManager(_TradingBotManager):
         # Wait until child process closed
         # p_om.join()
 
-        time.sleep(0.2)
+        time.sleep(1)
         self.s.stop_event.set()
         self.logger.info('TradingBotManager stopped.')
 
@@ -164,11 +168,11 @@ if __name__ == '__main__':
     import logging.config
     import yaml
 
-    with open('./trading_bot_manager/logging.ini', 'rb') as f:
+    with open('./trading_bot/logging.ini', 'rb') as f:
         config = yaml.safe_load(f.read())
 
     logging.config.dictConfig(config)
 
     # start_tradingbotmanager()
-    tbm = TradingBotManager(s=40)
+    tbm = TradingBotManager(s=30)
     # tbm.run()

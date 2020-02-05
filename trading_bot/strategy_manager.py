@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2019-05-12 22:57:20
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-01-31 15:54:27
+# @Last modified time: 2020-02-05 10:28:27
 
 """ Client to manage a financial strategy. """
 
@@ -19,10 +19,10 @@ import sys
 
 # Local packages
 # from strategy_manager import DataBaseManager, DataExchangeManager
-from data_requests import get_close  # , DataBaseManager, DataExchangeManager
-from tools.time_tools import now, str_time
-from tools.utils import load_config_params, dump_config_params  # , get_df
-from _client import _BotClient
+from trading_bot.data_requests import get_close
+from trading_bot.tools.time_tools import now, str_time
+from trading_bot.tools.utils import load_config_params, dump_config_params
+from trading_bot._client import _BotClient
 
 __all__ = ['StrategyManager']
 
@@ -56,9 +56,22 @@ class StrategyManager(_BotClient):
     """
 
     # TODO : Load strategy config
-    def __init__(self, name_strat, STOP=None, address=('', 50000),
-                 authkey=b'tradingbot'):
+    def __init__(self, address=('', 50000), authkey=b'tradingbot'):
         """ Initialize strategy manager.
+
+        Parameters
+        ----------
+        address :
+        authkey :
+
+        """
+        # Set client and connect to the trading bot server
+        _BotClient.__init__(self, address=address, authkey=authkey)
+        self.logger = logging.getLogger('StrategyManager.' + __name__)
+        self.logger.info('init | PID: {} PPID: {}'.format(getpid(), getppid()))
+
+    def __call__(self, name_strat, STOP=None, path='./strategies'):
+        """ Set parameters of strategy.
 
         Parameters
         ----------
@@ -67,38 +80,8 @@ class StrategyManager(_BotClient):
         STOP : int, optional
             Number of iteration before stoping, if None it will load it in
             configuration file.
-        iso_volatility : bool, optional
-            If true apply a coefficient of money management computed from
-            underlying volatility. Default is True.
-
-        """
-        # Set client and connect to the trading bot server
-        _BotClient.__init__(self, address=address, authkey=authkey)
-
-        self.logger = logging.getLogger('trad_bot.' + __name__)
-        self.logger.info('Initialize StrategyManager | Current PID is '
-                         '{} and Parent PID is {}'.format(getpid(), getppid()))
-
-        # Import strategy
-        strat = importlib.import_module(
-            'strategies.' + name_strat + '.strategy'
-        )
-        self.get_order_params = strat.get_order_params
-        self.logger.info('Strategy function loaded')
-
-        self.STOP = STOP
-        self.name_strat = name_strat
-        self.logger.info('{} initialized'.format(name_strat))
-
-    def __call__(self, *args, **kwargs):
-        """ Set parameters of strategy.
-
-        Parameters
-        ----------
-        args : tuple, optional
-            Any arguments to pass into function' strategy.
-        kwargs : dict, optionl
-            Any keyword arguments to pass into function' strategy.
+        path : str, optional
+            Path of the folder to load the strategy.
 
         Returns
         -------
@@ -106,8 +89,16 @@ class StrategyManager(_BotClient):
             Object to manage strategy computations.
 
         """
-        self.args = args
-        self.kwargs = kwargs
+        # Import strategy
+        strat = importlib.import_module(
+            'strategies.' + name_strat + '.strategy'
+        )
+        self.get_order_params = strat.get_order_params
+        self.logger.info('call | Load {} function'.format(name_strat))
+
+        self.name_strat = name_strat
+        self.STOP = STOP
+        self.path = path + '/' + name_strat
 
         return self
 
@@ -116,8 +107,8 @@ class StrategyManager(_BotClient):
         self.t = 0
         self.TS = now(self.frequency)
         self.next = self.TS + self.frequency
-        self.logger.info('Bot starting | Stop in {:.0f}\'.'.format(
-            self.time_stop()
+        self.logger.info('iter | Start now and stop in {}'.format(
+            str_time(int(self.time_stop()))
         ))
 
         return self
@@ -135,8 +126,8 @@ class StrategyManager(_BotClient):
         server_stop = self.is_stop()
         strat_stop = self.t >= self.STOP
         if server_stop or strat_stop:
-            self.logger.debug('Server stop : {}'.format(server_stop))
-            self.logger.debug('Strategy stop : {}'.format(strat_stop))
+            self.logger.debug('next | Server stop : {}'.format(server_stop))
+            self.logger.debug('next | Strategy stop : {}'.format(strat_stop))
 
             raise StopIteration
 
@@ -144,8 +135,10 @@ class StrategyManager(_BotClient):
         if self.next <= self.TS:
             self.next += self.frequency
             self.t += 1
-            self.logger.info('{}th iter. over {}'.format(self.t, self.STOP))
-            self.logger.info('Stop in {:.0f}\'.'.format(self.time_stop()))
+            self.logger.info('next | {}/{}iteration'.format(self.t, self.STOP))
+            self.logger.info('next | Stop in {}'.format(
+                str_time(int(self.time_stop()))
+            ))
             # TODO : Debug/find solution to request data correctly.
             #        Need to choose between request a database, server,
             #        exchange API or other.
@@ -158,7 +151,10 @@ class StrategyManager(_BotClient):
     def __enter__(self):
         """ Enter. """
         # TODO : Load precedent data
-        # self.set_config(self.path)
+        self.logger.info('enter | Load configuration and history')
+        self.set_config(self.path + '/configuration.yaml')
+        # self.get_histo_orders(self.path + '/orders_hist.dat')
+        # self.get_histo_result(self.path + '/result_hist.dat')
 
         return self
 
@@ -197,6 +193,21 @@ class StrategyManager(_BotClient):
         if self.STOP is None:
             self.STOP = strat_cfg['STOP']
 
+    def set_general_cfg(self, path):
+        """ Save configuration with respect to new position and volume.
+
+        Parameters
+        ----------
+        path : str
+            path to save the configuration file.
+
+        """
+        self.cfg['strat_manager_instance']['current_pos'] = self.current_pos
+        self.cfg['strat_manager_instance']['current_vol'] = self.current_vol
+        self.logger.info('set_general_cfg | pos: {}'.format(self.current_pos))
+        self.logger.info('set_general_cfg | vol: {}'.format(self.current_vol))
+        dump_config_params(self.cfg, path)
+
     def _strat_cfg(self, strat_cfg):
         # Set parameters for strategy function
         self.f_args = strat_cfg['args_params']
@@ -205,15 +216,11 @@ class StrategyManager(_BotClient):
     def __exit__(self, exc_type, exc_value, exc_tb):
         """ Exit. """
         self.logger.info('exit | Save configuration')
-        # TODO : Save data
-        self.cfg['strat_manager_instance']['current_pos'] = self.current_pos
-        self.cfg['strat_manager_instance']['current_vol'] = self.current_vol
-        self.logger.info('exit | pos: {}'.format(self.current_pos))
-        self.logger.info('exit | vol: {}'.format(self.current_vol))
-        dump_config_params(
-            self.cfg,
-            'strategies/' + self.name_strat + '/configuration.yaml'
-        )
+        # Save configuration and data
+        self.set_general_cfg(self.path + '/configuration.yaml')
+        # TODO: Save data
+        # self.set_histo_orders(self.path + '/orders_hist.dat')
+        # self.set_histo_result(self.path + '/result_hist.dat')
         if exc_type is not None:
             self.logger.error('exit | {}: {}\n{}'.format(
                 exc_type, exc_value, exc_tb
@@ -432,8 +439,9 @@ if __name__ == '__main__':
     else:
         name = sys.argv[1]
 
-    with StrategyManager(name) as sm:
-        sm.set_config('./strategies/' + name + '/configuration.yaml')
+    sm = StrategyManager()
+    with sm(name):
+        # sm.set_config('./strategies/' + name + '/configuration.yaml')
         for s, kw in sm:
             if s is not None:
                 sm.logger.info(' | Signal: {} | Parameters: {}'.format(s, kw))

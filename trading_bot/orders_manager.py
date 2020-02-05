@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2019-04-29 23:42:09
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-02-04 19:15:33
+# @Last modified time: 2020-02-05 10:23:27
 
 """ Client to manage orders execution. """
 
@@ -18,11 +18,11 @@ from os import getpid, getppid
 import numpy as np
 
 # Internal packages
-from tools.time_tools import str_time  # , now
-from data_requests import get_close
-from API_kraken import KrakenClient
-from _client import _OrderManagerClient
-from _exceptions import MissingOrderError
+from trading_bot.tools.time_tools import str_time  # , now
+from trading_bot.data_requests import get_close
+from trading_bot.API_kraken import KrakenClient
+from trading_bot._client import _OrderManagerClient
+from trading_bot._exceptions import MissingOrderError
 
 __all__ = ['OrdersManager']
 

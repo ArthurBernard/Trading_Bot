@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2020-01-28 16:47:55
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-01-31 11:21:48
+# @Last modified time: 2020-02-05 10:39:36
 
 """ Clients to connect to TradingBotServer. """
 
@@ -14,8 +14,8 @@ import os
 # Third party packages
 
 # Local packages
-from _server import TradingBotServer as TBS
-from data_requests import DataBaseManager, DataExchangeManager
+from trading_bot._server import TradingBotServer as TBS
+from trading_bot.data_requests import DataBaseManager, DataExchangeManager
 
 
 class _Client:

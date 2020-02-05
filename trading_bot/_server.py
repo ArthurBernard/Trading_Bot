@@ -4,11 +4,13 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2020-01-27 09:58:03
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-01-29 15:02:42
+# @Last modified time: 2020-02-05 10:32:53
+
+""" Base object for trading bot server. """
 
 # Built-in packages
 from multiprocessing.managers import BaseManager, BaseProxy
-from multiprocessing import Pipe, Manager
+from multiprocessing import Pipe
 from queue import Queue
 import os
 
