@@ -34,7 +34,7 @@ At the root of a folder, clone the repository and install it with `pip`:
 ```bash
 $ git clone https://github.com/ArthurBernard/Trading_Bot.git    
 $ cd Trading_Bot    
-$ pip install -e strategy_manager   
+$ pip install -e trading_bot   
 ```
 
 ## Quick-start
@@ -45,7 +45,7 @@ $ pip install -e strategy_manager
 
 ```bash
 $ mkdir ./strategies/YOUR_STRATEGY_NAME   
-$ touch ./strategies/YOUR_STRATEGY_NAME/\_\_init\_\_.py   
+$ touch ./strategies/YOUR_STRATEGY_NAME/__init__.py   
 $ touch./strategies/YOUR_STRATEGY_NAME/configuration.yaml   
 $ touch ./strategies/YOUR_STRATEGY_NAME/strategy.py   
 ```
@@ -84,6 +84,8 @@ Documentation is available at [comming soon].
 
 - General: 
     - Make a documentation;
+    - Script to simplify Quick-Start;
+    - GUI.
 - `bot_manager.py`:
     - Clean object;
     - Method: Run automatically order_manager client;
