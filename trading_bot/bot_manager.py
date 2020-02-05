@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2020-01-27 09:58:03
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-02-05 10:37:02
+# @Last modified time: 2020-02-05 16:27:37
 
 """ Set a server and run each bot. """
 
@@ -104,7 +104,7 @@ class TradingBotManager(_TradingBotManager):
         # Wait until child process closed
         # p_om.join()
 
-        time.sleep(1)
+        time.sleep(3)
         self.s.stop_event.set()
         self.logger.info('TradingBotManager stopped.')
 

@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2020-02-04 16:04:55
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-02-04 16:39:20
+# @Last modified time: 2020-02-05 16:00:32
 
 """ Define some various richly-typed exceptions. """
 
@@ -28,4 +28,4 @@ class MissingOrderError(Exception):
         if msg_prefix is not None:
             msg = '{}: {}'.format(msg_prefix, msg)
 
-        super(Exception, self).__init__(msg)
+        super(MissingOrderError, self).__init__(msg)

@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2019-04-29 23:42:09
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-02-05 10:23:27
+# @Last modified time: 2020-02-05 16:38:39
 
 """ Client to manage orders execution. """
 
@@ -53,11 +53,23 @@ class _Orders(dict):
         self._del_state(key)
 
     def __repr__(self):
-        return str({
-            'waiting': self._waiting,
-            'open': self._open,
-            'close': self._close
-        }) + '\n' + dict.__repr__(self)
+        txt = 'waiting: {}, open: {}, close: {}'.format(
+            self._waiting, self._open, self._close
+        )
+        for k, v in self.items():
+            txt += '\nOrder {}: {}'.format(k, v)
+
+        return txt
+
+    def __eq__(self, other):
+        if not isinstance(other, _Orders):
+
+            return False
+
+        return (other._waiting == self._waiting and
+                other._open == self._open and
+                other._close == self._close and
+                dict.__eq__(self, other))
 
     def pop(self, key):
         print('pop {}'.format(key))
@@ -519,12 +531,12 @@ if __name__ == '__main__':
     import logging.config
     import yaml
 
-    with open('./trading_bot_manager/logging.ini', 'rb') as f:
+    with open('./trading_bot/logging.ini', 'rb') as f:
         config = yaml.safe_load(f.read())
 
     logging.config.dictConfig(config)
 
     path_log = '/home/arthur/Strategies/Data_Server/Untitled_Document2.txt'
-    om = OrdersManager()  # path_log)
+    om = OrdersManager()
     with om('kraken', path_log):
         om.loop()

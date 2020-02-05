@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2019-05-12 22:57:20
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-02-05 10:28:27
+# @Last modified time: 2020-02-05 16:22:25
 
 """ Client to manage a financial strategy. """
 
@@ -427,7 +427,7 @@ if __name__ == '__main__':
     import logging.config
     import yaml
 
-    with open('./trading_bot_manager/logging.ini', 'rb') as f:
+    with open('./trading_bot/logging.ini', 'rb') as f:
         config = yaml.safe_load(f.read())
 
     logging.config.dictConfig(config)
