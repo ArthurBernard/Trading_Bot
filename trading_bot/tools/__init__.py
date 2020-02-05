@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2019-03-23 12:47:31
 # @Last modified by: ArthurBernard
-# @Last modified time: 2019-09-07 11:22:57
+# @Last modified time: 2020-02-05 10:52:48
 
 """ Module with some tools. """
 
@@ -13,9 +13,7 @@
 # Third party packages
 
 # Local packages
-from . import utils
 from .utils import *
-from . import time_tools
 from .time_tools import *
 
 __all__ = utils.__all__

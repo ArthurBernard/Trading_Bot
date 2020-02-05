@@ -4,21 +4,52 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2020-01-28 15:41:40
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-02-05 10:37:51
+# @Last modified time: 2020-02-05 11:13:54
+
+"""
+Trading_Bot : A Python package to build autonomous trading bot
+==============================================================
+
+Documentation is available at [comming soon]
+
+Contents
+--------
+Trading_Bot is a Python project that provides tools to build your custom
+autonomous trading bot adapted to your algorithmic financial strategies.
+
+Modules
+-------
+bot_manager      --- Set the bot server and run order and strategy clients
+data_requests    --- Request data needed for strategy computations
+order_manager    --- Set the order client and execute orders
+result_manager   --- Display results of strategies and portfolio
+strategy_manager --- Set a strategy client and send orders to execute
+
+Utility tools
+-------------
+API_bfx     --- Bitfinex client API
+API_kraken  --- Kraken client API
+_client     --- Base client to connect to server
+_exceptions --- Trading_Bot exceptions
+_server     --- Base server to run several bots
+tests       --- Run trading_bot unittests
+tools       --- Time, setting, and configuration tools
+
+"""
 
 # Built-in packages
 
 # Third party packages
 
 # Local packages
-from . import tools
-from . import orders_manager
-from . import data_requests
-from . import bot_manager
-from . import results_manager
-from . import strategy_manager
-from . import API_kraken
-from . import API_bfx
+from .tools import *
+from .orders_manager import *
+from .data_requests import *
+from .bot_manager import *
+from .results_manager import *
+from .strategy_manager import *
+from .API_kraken import *
+from .API_bfx import *
 
 __all__ = tools.__all__
 __all__ += data_requests.__all__
