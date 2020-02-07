@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2019-04-26 08:49:26
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-02-05 10:38:55
+# @Last modified time: 2020-02-07 18:33:56
 
 # Built-in import
 import json
@@ -633,13 +633,13 @@ class DataExchangeManager:
             return df.loc[:, self.ohlcv].values[-self.n_min_obs:]
 
 
-def get_close(pair, path="https://api.kraken.com/0/public"):
-    """ Get the last close price of `pair`.
+def get_open(pair, path="https://api.kraken.com/0/public"):
+    """ Get the open price of `pair`.
 
     Parameters
     ----------
     pair : str
-        Code of the requested pair.
+        Code of the requested pair(s). Comma delimited if several pair.
     path : str
         Path of the exchange to request.
 
@@ -650,9 +650,152 @@ def get_close(pair, path="https://api.kraken.com/0/public"):
 
     """
     out = DataRequests(path, stop_step=1).get_data('Ticker', pair=pair)
+    res = []
     for arg in out['result'].values():
 
-        return float(arg['c'][0])
+        res += [float(arg['o'])]
+
+    if len(res) == 1:
+
+        return res[0]
+
+    else:
+
+        return res
+
+
+def _get_ticker(pair, method, path="https://api.kraken.com/0/public"):
+    out = DataRequests(path, stop_step=1).get_data('Ticker', pair=pair)
+    res = []
+    for arg in out['result'].values():
+
+        if method != 'o':
+            res += [float(arg[method][0])]
+
+        else:
+            res += [float(arg[method])]
+
+    if len(res) == 1:
+
+        return res[0]
+
+    else:
+
+        return res
+
+
+def get_close(pair, path="https://api.kraken.com/0/public"):
+    """ Get the last close price of `pair`.
+
+    Parameters
+    ----------
+    pair : str
+        Code of the requested pair(s). Comma delimited if several pair.
+    path : str
+        Path of the exchange to request.
+
+    Returns
+    -------
+    float
+        Last close price.
+
+    """
+    _get_ticker(pair, 'c', path)
+
+
+def get_ask(pair, path="https://api.kraken.com/0/public"):
+    """ Get the last ask price of `pair`.
+
+    Parameters
+    ----------
+    pair : str
+        Code of the requested pair(s). Comma delimited if several pair.
+    path : str
+        Path of the exchange to request.
+
+    Returns
+    -------
+    float
+        Last close price.
+
+    """
+    _get_ticker(pair, 'a', path)
+
+
+def get_bid(pair, path="https://api.kraken.com/0/public"):
+    """ Get the last bid price of `pair`.
+
+    Parameters
+    ----------
+    pair : str
+        Code of the requested pair(s). Comma delimited if several pair.
+    path : str
+        Path of the exchange to request.
+
+    Returns
+    -------
+    float
+        Last close price.
+
+    """
+    _get_ticker(pair, 'b', path)
+
+
+def get_high(pair, path="https://api.kraken.com/0/public"):
+    """ Get the last 24h high price of `pair`.
+
+    Parameters
+    ----------
+    pair : str
+        Code of the requested pair(s). Comma delimited if several pair.
+    path : str
+        Path of the exchange to request.
+
+    Returns
+    -------
+    float
+        Last close price.
+
+    """
+    _get_ticker(pair, 'h', path)
+
+
+def get_low(pair, path="https://api.kraken.com/0/public"):
+    """ Get the last 24h low price of `pair`.
+
+    Parameters
+    ----------
+    pair : str
+        Code of the requested pair(s). Comma delimited if several pair.
+    path : str
+        Path of the exchange to request.
+
+    Returns
+    -------
+    float
+        Last close price.
+
+    """
+    _get_ticker(pair, 'l', path)
+
+
+def get_volume(pair, path="https://api.kraken.com/0/public"):
+    """ Get the last 24h volume of `pair`.
+
+    Parameters
+    ----------
+    pair : str
+        Code of the requested pair(s). Comma delimited if several pair.
+    path : str
+        Path of the exchange to request.
+
+    Returns
+    -------
+    float
+        Last close price.
+
+    """
+    _get_ticker(pair, 'v', path)
 
 
 if __name__ == '__main__':
