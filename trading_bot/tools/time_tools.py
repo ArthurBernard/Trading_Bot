@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2019-03-23 11:36:05
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-01-30 18:34:54
+# @Last modified time: 2020-02-05 17:41:40
 
 """ Tools to manage date and time. """
 
@@ -76,10 +76,8 @@ def str_time(t):
     return txt + '{}:{}:{}'.format(h, m, s)
 
 
-def date_to_TS(date, format='%d-%m-%y %H:%M:%S'):
+def date_to_TS(date, format='%y-%m-%d %H:%M:%S'):
     """ Convert date to timestamp.
-
-    TODO : To finish !
 
     Parameters
     ----------
@@ -95,19 +93,21 @@ def date_to_TS(date, format='%d-%m-%y %H:%M:%S'):
 
     """
     if isinstance(date, int):
+
         return date
+
     elif isinstance(date, str):
-        # TODO
-        pass
+
+        return time.mktime(time.strptime(date, format))
+
     else:
         print('Date format not allowed')
+
         raise ValueError('Unknow format', type(date))
 
 
-def TS_to_date(TS, format='%d-%m-%y %H:%M:%S'):
+def TS_to_date(TS, format='%y-%m-%d %H:%M:%S'):
     """ Convert timestamp to date.
-
-    TODO : To finish !
 
     Parameters
     ----------
@@ -123,10 +123,14 @@ def TS_to_date(TS, format='%d-%m-%y %H:%M:%S'):
 
     """
     if isinstance(TS, int):
-        # TODO
-        pass
+
+        return time.strftime(format, time.localtime(TS))
+
     elif isinstance(TS, str):
+
         return TS
+
     else:
         print('Timestamp format not recognized')
+
         raise ValueError('Unknow format', type(TS))
