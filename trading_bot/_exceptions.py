@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2020-02-04 16:04:55
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-02-05 16:00:32
+# @Last modified time: 2020-02-07 17:28:51
 
 """ Define some various richly-typed exceptions. """
 
@@ -13,6 +13,31 @@
 # Third party packages
 
 # Local packages
+
+
+class OrderError(Exception):
+    """ Order exception. """
+
+    def __init__(self, order, msg=None, msg_prefix=''):
+        """ Initialize the order exception. """
+        if msg is not None:
+            msg = '[Order ID {}] - '.format(order.id) + msg
+
+        else:
+            msg = str(order)
+
+        super(OrderError, self).__init__(msg_prefix + msg)
+
+
+class OrderStatusError(OrderError):
+    """ Order exception when the auction is not allowed by the current status.
+
+    """
+
+    def __init__(self, order, auction):
+        """ Initialize the OrderStatusError exception. """
+        msg = 'can not {} order with status {}'.format(auction, order.status)
+        super(OrderStatusError, self).__init__(order, msg)
 
 
 class MissingOrderError(Exception):
