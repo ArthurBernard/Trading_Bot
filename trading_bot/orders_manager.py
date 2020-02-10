@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2019-04-29 23:42:09
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-02-05 16:38:39
+# @Last modified time: 2020-02-10 12:09:45
 
 """ Client to manage orders execution. """
 
@@ -23,6 +23,7 @@ from trading_bot.data_requests import get_close
 from trading_bot.API_kraken import KrakenClient
 from trading_bot._client import _OrderManagerClient
 from trading_bot._exceptions import MissingOrderError
+from trading_bot._order import Order, OrderDict
 
 __all__ = ['OrdersManager']
 
@@ -174,7 +175,7 @@ class OrdersManager(_OrderManagerClient):
     _handler_client = {
         'kraken': KrakenClient,
     }
-    orders = _Orders()
+    orders = OrderDict()  # _Orders()
 
     def __init__(self, address=('', 50000), authkey=b'tradingbot'):
         """ Set the order class.
@@ -199,10 +200,10 @@ class OrdersManager(_OrderManagerClient):
 
         Parameters
         ----------
-        path_log : str
-            Path where API key and secret are saved.
         exchange : str, optional
             Name of the exchange (default is `'kraken'`).
+        path_log : str
+            Path where API key and secret are saved.
 
         Returns
         -------
@@ -276,42 +277,54 @@ class OrdersManager(_OrderManagerClient):
 
             else:
                 id_order = self._set_id_order(id_strat)
-                kwrds = {
-                    'input': kwargs,
-                    'open_out': [],
-                    'close_out': [],
-                    'request_out': [],
-                    'state': None
-                }
+                # kwrds = {
+                #    'input': kwargs,
+                #    'open_out': [],
+                #    'close_out': [],
+                #    'request_out': [],
+                #    'state': None
+                # }
 
-            return id_order, kwrds
+            return Order(id_order, self.K, input=kwargs)
 
         elif self.orders:
+            id_order = self.orders.get_first()
 
-            return self.orders.pop_first()
+            return self.orders.pop(id_order)
 
-        return None, {}
+        return None
 
     def loop(self):
         """ Run a loop until condition is false. """
         self.logger.info('loop | wait orders')
         last_order = 0
-        for id_order, kwrds in self:
-            if id_order is None:
+        for order in self:
+            if order is None:
                 # DO SOMETHING ELSE (e.g. display results_manager)
                 pass
 
-            elif kwrds.get('state') is None:
-                self.post_order(id_order, kwrds)
+            elif order.status is None:
+                # self.post_order(id_order, kwrds)
+                order.execute()
                 last_order = time.time()
+                self.orders.append(order)
 
-            elif kwrds['state'] == 'open':
-                self.check_post_order(id_order, kwrds)
+            elif order.status == 'open':  # kwrds['state'] == 'open':
+                # self.check_post_order(id_order, kwrds)
+                # TODO: check open, if true cancel, update vol, replace order
+                self.orders.append(order)
+                pass
 
-            elif kwrds['state'] == 'close':
+            elif order.status == 'canceled':
+                # TODO: check vol, replace order
+                self.orders.append(order)
+                pass
+
+            elif kwrds['state'] == 'closed':
                 self.logger.debug('loop | remove {}'.format(id_order))
                 # TODO : save order
                 # TODO : update results_manager
+                pass
 
             else:
 
