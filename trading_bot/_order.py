@@ -4,7 +4,9 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2020-02-06 11:57:48
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-02-07 19:31:24
+# @Last modified time: 2020-02-10 11:56:53
+
+""" Some order objects. """
 
 # Built-in packages
 import time
@@ -181,19 +183,43 @@ class OrderDict(dict):
         self._set_state()
 
     def __setitem__(self, key, value):
-        """ Set item order. """
+        """ Set item order.
+
+        Parameters
+        ----------
+        key : int
+            ID of the order.
+        value : Order
+            The order object to collect.
+
+        """
         print('set {}'.format(key))
         self._is_order(value)
         dict.__setitem__(self, key, value)
         self._add_state(key, value)
 
     def __delitem__(self, key):
-        """ Delete item order. """
+        """ Delete item order.
+
+        Parameters
+        ----------
+        key : int
+            ID of the order.
+
+        """
         print('del {}'.format(key))
         dict.__delitem__(self, key)
         self._del_state(key)
 
     def __repr__(self):
+        """ Represent the collection of orders.
+
+        Returns
+        -------
+        str
+            Representation of the collection of orders.
+
+        """
         txt = 'waiting: {}, open: {}, closed: {}'.format(
             self._waiting, self._open, self._closed
         )
@@ -204,6 +230,14 @@ class OrderDict(dict):
         return txt[:-2] + '}'
 
     def __eq__(self, other):
+        """ Compare self with other object.
+
+        Returns
+        -------
+        bool
+            True if self is equal to other, False otherwise.
+
+        """
         if not isinstance(other, OrderDict):
 
             return False
@@ -213,38 +247,113 @@ class OrderDict(dict):
                 other._closed == self._closed and
                 dict.__eq__(self, other))
 
+    def append(self, order):
+        """ Apend an order object to the collection.
+
+        Parameters
+        ----------
+        order : Order
+            Order object to append.
+
+        """
+        self._is_order(order)
+        self[order.id] = order
+
     def pop(self, key):
+        """ Remove an order from the collection of orders.
+
+        Parameters
+        ----------
+        key : int
+            ID of the order to remove.
+
+        Returns
+        -------
+        Order
+            The removed order object.
+
+        """
         print('pop {}'.format(key))
         self._del_state(key)
 
         return dict.pop(self, key)
 
     def popitem(self):
+        """ Remove an random order from the collection of orders.
+
+        Returns
+        -------
+        int
+            ID of the order to remove.
+        Order
+            The removed order object.
+
+        """
         key, value = dict.popitem(self)
         self._del_state(key)
 
         return key, value
 
     def update(self, *orders, **kworders):
+        """ Update self with order objects or an other collection of orders.
+
+        Parameters
+        ----------
+        *orders : Order or OrderDict
+            Order objects or collection of orders to update.
+        **kworders : Orders
+            Order objects to update.
+
+        """
         for k, v in kworders.items():
             self._is_order(v)
 
         for o in orders:
-            self._is_order(o)
-            kworders[str(o.id)] = o
+            if isinstance(o, OrderDict):
+                kworders.update({k: v for k, v in o.items()})
+
+            else:
+                self._is_order(o)
+                kworders[str(o.id)] = o
 
         dict.update(self, **kworders)
         self._reset_state()
 
     def get_first(self):
+        """ Get the first order to sent following the priority.
+
+        Returns
+        -------
+        int
+            ID of the first order to sent.
+
+        """
         ordered_list = self.get_ordered_list()
 
         return ordered_list[0]
 
     def get_ordered_list(self):
+        """ Get the ordered list of orders following the priority.
+
+        Returns
+        -------
+        list
+            Ordered list of orders.
+
+        """
         return self._waiting + self._open + self._closed
 
     def pop_first(self):
+        """ Remove the first order following the priority.
+
+        Returns
+        -------
+        int
+            ID of the order removed.
+        Order
+            Order object removed.
+
+        """
         key = self.get_first()
 
         return key, self.pop(key)
