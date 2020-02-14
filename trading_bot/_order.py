@@ -4,29 +4,72 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2020-02-06 11:57:48
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-02-10 11:56:53
+# @Last modified time: 2020-02-14 14:53:04
 
 """ Some order objects. """
 
 # Built-in packages
 import time
+import logging
 
 # Third party packages
 
 # Local packages
-from ._exceptions import OrderError, OrderStatusError
-from .data_requests import get_ask, get_bid
+from trading_bot._exceptions import OrderError, OrderStatusError
+from trading_bot.data_requests import get_ask, get_bid
+
+__all__ = ['Order', 'OrderDict']
 
 
 class Order:
-    """ Order object. """
+    """ Order object.
+
+    Methods
+    -------
+    execute
+    cancel
+    get_open
+    get_closed
+    get_vol_exec
+    check_vol_exec
+    replace
+
+    Attributes
+    ----------
+    id : int
+        ID of the order (32-bit).
+    exchange_client : object inherits from ExchangeClient
+        API client to send private requests.
+    status : {None, 'open', 'canceled', 'closed'}
+        Status of the order.
+    input : dict
+        Parameters of the order to sent.
+    volume : float
+        Initial volume to order.
+    type : {'buy', 'sell'}
+        Type of the order.
+    vol_exec : float
+        Current volume executed.
+    pair : str
+        Code corresponding to the pair of the order.
+    price : float or 'market'
+        Price to sent to the order.
+    state : dict
+        Last state of the order (ansewered by the exchange API).
+    history : list of dict
+        Historic of all anseweres by the exchange API.
+    tol : float, optional
+            Tolerance's threshold for non-executed volume. Default is 0.1%.
+
+    """
 
     _handler_best = {
         'buy': get_bid,
         'sell': get_ask,
     }
 
-    def __init__(self, id, exchange_client, status=None, input={}):
+    def __init__(self, id, exchange_client, status=None, input={}, tol=0.001,
+                 logger=None):
         """ Initialize an order object.
 
         Parameters
@@ -43,10 +86,18 @@ class Order:
             was executed.
             - If 'canceled', then the order was canceled and only the quantity
             of `volume` wasn't executed.
-        input : dict (optional)
+        input : dict, optional
             Input to request order.
+        tol : float, optional
+            Tolerance's threshold for non-executed volume. Default is 0.1%.
 
         """
+        if logger is None:
+            self.logger = logging.getLogger(str(id))
+
+        else:
+            self.logger = logger
+
         self.id = id
         self.exchange_client = exchange_client
         self.status = status
@@ -75,7 +126,7 @@ class Order:
     def execute(self):
         """ Execute the order. """
         if self.status is None or self.status == 'canceled':
-            self.start = int(time.time())
+            self._last = int(time.time())
             ans = self._request('AddOrder', userref=self.id, **self.input)
             self.state = ans
             if self.input.get('validate'):
@@ -98,18 +149,71 @@ class Order:
 
         self.status = 'canceled'
 
+    def get_closed(self, start):
+        """ Get the closed orders corresponding to the ID.
+
+        Parameters
+        ----------
+        start : int
+            Timestamp from which requested closed orders.
+
+        Returns
+        -------
+        dict
+            Closed orders.
+
+        """
+        return self._request('ClosedOrders', userref=self.id, start=start)
+
+    def get_open(self):
+        """ Get the open orders corresponding to the ID.
+
+        Returns
+        -------
+        dict
+            Open orders.
+
+        """
+        return self._request('OpenOrders', userref=self.id)
+
+    def get_vol_exec(self, start):
+        """ Get the volume executed since `start` parameter.
+
+        Parameters
+        ----------
+        start : int
+            Timestamp from which requested volume executed.
+
+        Returns
+        -------
+        float
+            Executed volume.
+
+        """
+        vol_exec = 0.
+        ans = self.get_closed(start=start)
+        for v in ans['closed'].values():
+            vol_exec += v['vol_exec']
+
+        return vol_exec
+
     def check_vol_exec(self):
         """ Check the volume has been executed. """
         if self.status is None:
 
             raise OrderStatusError(self, 'check_vol_exec')
 
-        ans = self._get_closed()
-        for k, v in ans['closed'].items():
-            self.vol_exec += v['vol_exec']
+        self._update_vol_exec()
 
         if self.vol_exec == self.volume:
             self.status = 'closed'
+
+        elif 1 - self.vol_exec / self.volume < self.tol:
+            self.status = 'closed'
+            not_exec_vol = 1 - self.vol_exec / self.volume
+            self.logger.warning("{:.6%} of the volume was not executed but is "
+                                "less than tolerance's threshold {:%}"
+                                "".format(not_exec_vol, self.tol))
 
         elif self.vol_exec > self.volume:
 
@@ -155,18 +259,33 @@ class Order:
     def _request(self, method, **kwargs):
         ans = self.exchange_client.query_private(method, **kwargs)
         self.hist += [ans]
+        self.logger.debug('{} | {}'.format(method, kwargs))
 
         return ans
 
-    def _get_open(self):
-        return self._request('OpenOrders', userref=self.id)
-
-    def _get_closed(self):
-        return self._request('ClosedOrders', userref=self.id, start=self.start)
+    def _update_vol_exec(self):
+        # FIXME : some issues may occurs if an order is executed between the
+        # call of get_closed() and the setting of _last attribute
+        ans = self.get_closed(start=self._last)
+        self._last = int(time.time())
+        for v in ans['closed'].values():
+            self.vol_exec += v['vol_exec']
 
 
 class OrderDict(dict):
-    """ Order collection object. """
+    """ Order collection object.
+
+    Methods
+    -------
+    append
+    get_first
+    get_ordered_list
+    pop
+    pop_first
+    popitem
+    update
+
+    """
 
     _waiting, _open, _closed = [], [], []
 
@@ -259,6 +378,30 @@ class OrderDict(dict):
         self._is_order(order)
         self[order.id] = order
 
+    def get_first(self):
+        """ Get the first order to sent following the priority.
+
+        Returns
+        -------
+        int
+            ID of the first order to sent.
+
+        """
+        ordered_list = self.get_ordered_list()
+
+        return ordered_list[0]
+
+    def get_ordered_list(self):
+        """ Get the ordered list of orders following the priority.
+
+        Returns
+        -------
+        list
+            Ordered list of orders.
+
+        """
+        return self._waiting + self._open + self._closed
+
     def pop(self, key):
         """ Remove an order from the collection of orders.
 
@@ -277,6 +420,21 @@ class OrderDict(dict):
         self._del_state(key)
 
         return dict.pop(self, key)
+
+    def pop_first(self):
+        """ Remove the first order following the priority.
+
+        Returns
+        -------
+        int
+            ID of the order removed.
+        Order
+            Order object removed.
+
+        """
+        key = self.get_first()
+
+        return key, self.pop(key)
 
     def popitem(self):
         """ Remove an random order from the collection of orders.
@@ -318,45 +476,6 @@ class OrderDict(dict):
 
         dict.update(self, **kworders)
         self._reset_state()
-
-    def get_first(self):
-        """ Get the first order to sent following the priority.
-
-        Returns
-        -------
-        int
-            ID of the first order to sent.
-
-        """
-        ordered_list = self.get_ordered_list()
-
-        return ordered_list[0]
-
-    def get_ordered_list(self):
-        """ Get the ordered list of orders following the priority.
-
-        Returns
-        -------
-        list
-            Ordered list of orders.
-
-        """
-        return self._waiting + self._open + self._closed
-
-    def pop_first(self):
-        """ Remove the first order following the priority.
-
-        Returns
-        -------
-        int
-            ID of the order removed.
-        Order
-            Order object removed.
-
-        """
-        key = self.get_first()
-
-        return key, self.pop(key)
 
     def _set_state(self):
         for key, value in self.items():
