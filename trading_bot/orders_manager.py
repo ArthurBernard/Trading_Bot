@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2019-04-29 23:42:09
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-02-10 12:09:45
+# @Last modified time: 2020-02-14 14:55:50
 
 """ Client to manage orders execution. """
 
@@ -22,118 +22,16 @@ from trading_bot.tools.time_tools import str_time  # , now
 from trading_bot.data_requests import get_close
 from trading_bot.API_kraken import KrakenClient
 from trading_bot._client import _OrderManagerClient
-from trading_bot._exceptions import MissingOrderError
+from trading_bot._exceptions import MissingOrderError, OrderError
 from trading_bot._order import Order, OrderDict
 
 __all__ = ['OrdersManager']
 
-"""
-TODO list:
-    - New method : set history orders
-    - New method : get available funds
-    - New method : verify integrity of new orders
-    - New method : (future) split orders for a better scalability
-"""
-
-
-class _Orders(dict):
-    _waiting, _open, _close = [], [], []
-
-    def __init__(self, *args, **kwargs):
-        super(_Orders, self).__init__(*args, **kwargs)
-        self._set_state()
-
-    def __setitem__(self, key, value):
-        print('set {}'.format(key))
-        dict.__setitem__(self, key, value)
-        self._add_state(key, value)
-
-    def __delitem__(self, key):
-        print('del {}'.format(key))
-        dict.__delitem__(self, key)
-        self._del_state(key)
-
-    def __repr__(self):
-        txt = 'waiting: {}, open: {}, close: {}'.format(
-            self._waiting, self._open, self._close
-        )
-        for k, v in self.items():
-            txt += '\nOrder {}: {}'.format(k, v)
-
-        return txt
-
-    def __eq__(self, other):
-        if not isinstance(other, _Orders):
-
-            return False
-
-        return (other._waiting == self._waiting and
-                other._open == self._open and
-                other._close == self._close and
-                dict.__eq__(self, other))
-
-    def pop(self, key):
-        print('pop {}'.format(key))
-        self._del_state(key)
-
-        return dict.pop(self, key)
-
-    def popitem(self):
-        key, value = dict.popitem(self)
-        self._del_state(key)
-
-        return key, value
-
-    def update(self, *args, **kwargs):
-        dict.update(self, *args, **kwargs)
-        self._reset_state()
-
-    def get_first(self):
-        ordered_list = self.get_ordered_list()
-
-        return ordered_list[0]
-
-    def get_ordered_list(self):
-        return self._waiting + self._open + self._close
-
-    def pop_first(self):
-        key = self.get_first()
-
-        return key, self.pop(key)
-
-    def _set_state(self):
-        for key, value in self.items():
-            self._add_state(key, value)
-
-    def _reset_state(self):
-        self._waiting, self._open, self._close = [], [], []
-        self._set_state()
-
-    def _add_state(self, key, value):
-        if value.get('state') is None:
-            self._waiting.append(key)
-
-        elif value['state'] == 'open':
-            self._open.append(key)
-
-        elif value['state'] == 'close':
-            self._close.append(key)
-
-        else:
-            raise ValueError('unknown state {}'.format(value['state']))
-
-    def _del_state(self, key):
-        if key in self._waiting:
-            self._waiting.remove(key)
-
-        elif key in self._open:
-            self._open.remove(key)
-
-        elif key in self._close:
-            self._close.remove(key)
-
-        else:
-            raise ValueError('unknown id_order: {}'.format(key))
+# TODO list:
+#    - New method : set history orders
+#    - New method : get available funds
+#    - New method : verify integrity of new orders
+#    - New method : (future) split orders for a better scalability
 
 
 class OrdersManager(_OrderManagerClient):
@@ -295,45 +193,52 @@ class OrdersManager(_OrderManagerClient):
         return None
 
     def loop(self):
-        """ Run a loop until condition is false. """
-        self.logger.info('loop | wait orders')
+        """ Run a loop until TradingBotServer closed. """
+        self.logger.info('loop | start to wait orders')
+        # TODO : get last order
         last_order = 0
         for order in self:
             if order is None:
                 # DO SOMETHING ELSE (e.g. display results_manager)
-                pass
+                txt = time.strftime('%y-%m-%d %H:%M:%S') + ' | Last order was '
+                txt += str_time(int(time.time() - last_order)) + ' ago'
+                print(txt, end='\r')
+                time.sleep(0.01)
+                continue
 
             elif order.status is None:
-                # self.post_order(id_order, kwrds)
                 order.execute()
                 last_order = time.time()
                 self.orders.append(order)
 
-            elif order.status == 'open':  # kwrds['state'] == 'open':
-                # self.check_post_order(id_order, kwrds)
-                # TODO: check open, if true cancel, update vol, replace order
+            elif order.status == 'open':
+                if order.get_open():
+                    order.replace('best')
+
+                else:
+                    order.check_vol_exec()
+                    if order.status != 'closed':
+
+                        raise OrderError(order, 'missing volume')
+
                 self.orders.append(order)
-                pass
 
             elif order.status == 'canceled':
                 # TODO: check vol, replace order
+                order.replace('best')
                 self.orders.append(order)
-                pass
 
-            elif kwrds['state'] == 'closed':
-                self.logger.debug('loop | remove {}'.format(id_order))
+            elif order.status == 'closed':
+                self.logger.debug('loop | remove {}'.format(order.id))
                 # TODO : save order
                 # TODO : update results_manager
                 pass
 
             else:
 
-                raise ValueError('unknown state: {}'.format(kwrds['state']))
+                raise OrderError(order, 'unknown state')
 
-            txt = time.strftime('%y-%m-%d %H:%M:%S') + ' | Last order was '
-            txt += str_time(int(time.time() - last_order)) + ' ago'
-            print(txt, end='\r')
-            time.sleep(0.01)
+            self.logger('loop | {}'.format(order))
 
         self.logger.info('OrdersManager stopped.')
 
