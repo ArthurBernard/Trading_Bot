@@ -83,18 +83,21 @@ Documentation is available at [comming soon].
 ## TODO list
 
 - General: 
-    - Make a documentation;
-    - Script to simplify Quick-Start;
-    - GUI.
+    - Make documentation;
+    - Simplify Quick-Start;
+    - Make GUI.
 - `bot_manager.py`:
     - Clean object;
-    - Method: Run automatically order_manager client;
-    - Method: Run automatically several strategies on multiprocess;
-    - Method: Send update configuration to strategy manager.
+    - Start automatically `OrdersManager` client on an other process;
+    - Start automatically several `StrategyManager` clients on several process;
+    - Receive update from `OrdersManager` client;
+    - Send update to `StrategyManager` clients.
 - `orders_manager.py`:
-    - Method: Verify integrity of new orders (if volume to order is available); 
-    - Method: Algorithm of execution order (not just 'submit and leaves'). Something like vwap or twap. 
+    - Verify if the volume to order is available; 
+- `_order.py`:
+    - Make algorithms of execution order (not just 'submit and leaves'). Something like vwap or twap.
+    - Use WebSockets instead of REST API.
 - `result_manager.py`:
-    - Object: special logger to display pnl of strategies and portfolio
+    - Make an object to display PnL of strategies and portfolio.
 - `strategy_manager.py`:
-    - Method: Receive update of configuration from bot_manager.
+    - Receive update from `BotManager`.
