@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2019-04-29 23:42:09
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-02-14 14:55:50
+# @Last modified time: 2020-02-15 14:08:24
 
 """ Client to manage orders execution. """
 
@@ -21,6 +21,7 @@ import numpy as np
 from trading_bot.tools.time_tools import str_time  # , now
 from trading_bot.data_requests import get_close
 from trading_bot.API_kraken import KrakenClient
+from trading_bot.call_counters import KrakenCallCounter
 from trading_bot._client import _OrderManagerClient
 from trading_bot._exceptions import MissingOrderError, OrderError
 from trading_bot._order import Order, OrderDict
@@ -70,10 +71,14 @@ class OrdersManager(_OrderManagerClient):
 
     """
 
+    logger = None  # logging.getLogger('trade_bot.' + __name__)
     _handler_client = {
         'kraken': KrakenClient,
     }
-    orders = OrderDict()  # _Orders()
+    _handler_call_counters = {
+        'kraken': KrakenCallCounter('intermediate', logger),
+    }
+    orders = OrderDict()
 
     def __init__(self, address=('', 50000), authkey=b'tradingbot'):
         """ Set the order class.
@@ -86,12 +91,12 @@ class OrdersManager(_OrderManagerClient):
         """
         # Set client and connect to the trading bot server
         _OrderManagerClient.__init__(self, address=address, authkey=authkey)
-        self.logger = logging.getLogger('OrdersManager.' + __name__)
+        self.logger = logging.getLogger('trade_bot.' + __name__)
         self.logger.info('init | PID: {} PPID: {}'.format(getpid(), getppid()))
+        print(self.logger)
 
         self.id_max = 2147483647
-        self.t = self.start = int(time.time())
-        self.call_counter = 0
+        self.start = int(time.time())
 
     def __call__(self, exchange, path_log):
         """ Set parameters of order manager.
@@ -109,14 +114,15 @@ class OrdersManager(_OrderManagerClient):
             Object to manage orders.
 
         """
-        self.path = path_log
-        self.exchange = exchange
-
         if exchange.lower() in self._handler_client.keys():
             self.K = self._handler_client[exchange.lower()]()
 
         else:
-            raise ValueError('Exchange {} not supported'.format(exchange))
+            raise ValueError('exchange {} not supported'.format(exchange))
+
+        self.path = path_log
+        self.exchange = exchange
+        self.call_counter = self._handler_call_counters.get(exchange.lower())
 
         self.K.load_key(path_log)
         self.logger.debug('call | {} client loaded'.format(exchange))
@@ -238,10 +244,110 @@ class OrdersManager(_OrderManagerClient):
 
                 raise OrderError(order, 'unknown state')
 
-            self.logger('loop | {}'.format(order))
+            self.logger.debug('loop | {}'.format(order))
 
         self.logger.info('OrdersManager stopped.')
 
+    def _set_result_output(self, txid, id_order, **kwargs):
+        """ Add informations to output of query order. """
+        pair = kwargs['pair']
+        ordertype = kwargs['ordertype']
+        result = {
+            'txid': txid,
+            'userref': id_order,
+            'type': kwargs['type'],
+            'volume': kwargs['volume'],
+            'pair': pair,
+            'ordertype': ordertype,
+            'leverage': kwargs['leverage'],
+            'timestamp': int(time.time()),
+            'fee': float(self.fees[self._handler[ordertype]][pair]['fee'])
+        }
+        if ordertype == 'market' and kwargs['validate']:
+            # Get the last price
+            result['price'] = get_close(pair)
+
+        elif ordertype == 'market' and not kwargs['validate']:
+            # TODO : verify if get the exection market price
+            closed_order = self.K.query_private('ClosedOrders',
+                                                userref=id_order,
+                                                start=self.start)
+            txids = closed_order['closed'].keys()
+            result['price'] = np.mean([
+                closed_order['closed'][i]['price'] for i in txids
+            ])
+            self.logger.debug('Get execution price is not yet verified')
+
+        elif ordertype == 'limit':
+            result['price'] = kwargs['price']
+
+        return result
+
+    def get_fees(self):
+        """ Load current fees. """
+        self.fees = self.K.query_private(
+            'TradeVolume',
+            pair='all'
+        )
+        self.call_counter('TradeVolume')
+        self.logger.debug('get_fees | fees are loaded')
+
+        self.w_tbm.send({'fees': self.fees})
+        self.logger.debug('get_fees | fees are sent to TradingBotManager')
+
+    def get_balance(self):
+        """ Load current balance. """
+        self.balance = self.K.query_private('Balance')
+        self.call_counter('Balance')
+        self.logger.debug('get_balance | Loaded {}'.format(self.balance))
+
+        self.w_tbm.send({'balance': self.balance})
+        self.logger.debug('get_balance | Sent balance to TradingBotManager')
+
+    def _set_id_order(self, id_strat):
+        """ Set an unique order identifier.
+
+        Parameters
+        ----------
+        id_strat : int
+            Identifier of the strategy (between 0 and 99).
+
+        Returns
+        -------
+        id_order : int (signed and 32-bit)
+            Number to identify an order and link it with a strategy.
+
+        """
+        try:
+
+            with open('id_order.dat', 'rb') as f:
+                id_order = Unpickler(f).load()
+
+        except FileNotFoundError:
+            id_order = 0
+
+        id_order += 1
+        if id_order > self.id_max // 100:
+            id_order = 0
+
+        with open('id_order.dat', 'wb') as f:
+            Pickler(f).dump(id_order)
+
+        if id_strat < 10:
+            id_strat = '0' + str(id_strat)
+
+        return int(str(id_order) + str(id_strat))
+
+    def _get_id_strat(self, id_order):
+        return int(id_order[-2:])
+
+
+# =========================================================================== #
+#                                 Deprecated                                  #
+# =========================================================================== #
+
+
+class DeprecatedMethods:
     def set_order(self, **kwargs):
         """ Request an order following defined parameters.
 
@@ -329,96 +435,6 @@ class OrdersManager(_OrderManagerClient):
                 self.logger.error('check | {} missing'.format(id_order))
 
                 raise MissingOrderError(id_order, params=kwrds)
-
-    def _set_result_output(self, txid, id_order, **kwargs):
-        """ Add informations to output of query order. """
-        pair = kwargs['pair']
-        ordertype = kwargs['ordertype']
-        result = {
-            'txid': txid,
-            'userref': id_order,
-            'type': kwargs['type'],
-            'volume': kwargs['volume'],
-            'pair': pair,
-            'ordertype': ordertype,
-            'leverage': kwargs['leverage'],
-            'timestamp': int(time.time()),
-            'fee': float(self.fees[self._handler[ordertype]][pair]['fee'])
-        }
-        if ordertype == 'market' and kwargs['validate']:
-            # Get the last price
-            result['price'] = get_close(pair)
-
-        elif ordertype == 'market' and not kwargs['validate']:
-            # TODO : verify if get the exection market price
-            closed_order = self.K.query_private('ClosedOrders',
-                                                userref=id_order,
-                                                start=self.start)
-            txids = closed_order['closed'].keys()
-            result['price'] = np.mean([
-                closed_order['closed'][i]['price'] for i in txids
-            ])
-            self.logger.debug('Get execution price is not yet verified')
-
-        elif ordertype == 'limit':
-            result['price'] = kwargs['price']
-
-        return result
-
-    def get_fees(self):
-        """ Load current fees. """
-        self.fees = self.K.query_private(
-            'TradeVolume',
-            pair='all'
-        )
-        self.call_count()
-        self.logger.debug('get_fees | fees are loaded')
-
-        self.w_tbm.send({'fees': self.fees})
-        self.logger.debug('get_fees | fees are sent to TradingBotManager')
-
-    def get_balance(self):
-        """ Load current balance. """
-        self.balance = self.K.query_private('Balance')
-        self.call_count()
-        self.logger.debug('get_balance | Loaded {}'.format(self.balance))
-
-        self.w_tbm.send({'balance': self.balance})
-        self.logger.debug('get_balance | Sent balance to TradingBotManager')
-
-    def _set_id_order(self, id_strat):
-        """ Set an unique order identifier.
-
-        Parameters
-        ----------
-        id_strat : int
-            Identifier of the strategy (between 0 and 99).
-
-        Returns
-        -------
-        id_order : int (signed and 32-bit)
-            Number to identify an order and link it with a strategy.
-
-        """
-        try:
-
-            with open('id_order.dat', 'rb') as f:
-                id_order = Unpickler(f).load()
-
-        except FileNotFoundError:
-            id_order = 0
-
-        id_order += 1
-        if id_order > self.id_max // 100:
-            id_order = 0
-
-        with open('id_order.dat', 'wb') as f:
-            Pickler(f).dump(id_order)
-
-        if id_strat < 10:
-            id_strat = '0' + str(id_strat)
-
-        return int(str(id_order) + str(id_strat))
 
     def call_count(self, pt=1, discount=2, max_call=20):
         """ Count the number of requests done and wait if exceed the max rate.
