@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2020-02-15 12:34:18
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-02-15 14:09:55
+# @Last modified time: 2020-02-17 16:02:28
 
 """ Some call counter objects. """
 
@@ -44,7 +44,7 @@ class _CallCounter(object):
 
     counter = 0
 
-    def __init__(self, time_down, call_rate_limit, logger=None):
+    def __init__(self, time_down, call_rate_limit):
         """ Initialize counter object.
 
         Parameters
@@ -55,12 +55,7 @@ class _CallCounter(object):
             Max call rate counter.
 
         """
-        if logger is None:
-            self.logger = logging.getLogger('trade_bot.' + __name__)
-
-        else:
-            self.logger = logger
-
+        self.logger = logging.getLogger(__name__ + '._CallCounter')
         self.time_down = time_down
         self.call_rate_limit = call_rate_limit
         self.t = int(time.time())
@@ -135,7 +130,7 @@ class KrakenCallCounter(_CallCounter):
         'QueryLedgers': 2,  # not sure
     }
 
-    def __init__(self, status_verified_user, logger=None):
+    def __init__(self, status_verified_user):
         """ Initialize the Kraken's counter object.
 
         Parameters
@@ -158,7 +153,8 @@ class KrakenCallCounter(_CallCounter):
                 status_verified_user
             ))
 
-        _CallCounter.__init__(self, time_down, call_rate_limit, logger=logger)
+        super(KrakenCallCounter, self).__init__(time_down, call_rate_limit)
+        self.logger = logging.getLogger(__name__ + '.KrakenCallCounter')
 
     def __call__(self, method):
         """ Increase the Kraken counter and wait if necessary.
