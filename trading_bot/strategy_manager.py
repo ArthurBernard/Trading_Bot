@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2019-05-12 22:57:20
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-02-05 16:22:25
+# @Last modified time: 2020-02-17 16:03:31
 
 """ Client to manage a financial strategy. """
 
@@ -46,12 +46,18 @@ class StrategyManager(_BotClient):
 
     Attributes
     ----------
-    frequency : int
-        Number of seconds between two samples.
-    underlying : str
-        Name of the underlying or list of data needed.
+    get_order_params : callable
+        Strategy function that returns a tuple with a signal ({1, 0, -1}) and
+        additional parameters (dict) to set order.
     name_strat : str
         Name of the strategy to run.
+    STOP : int, optional
+        Number of iteration before stoping, if None it will load it in
+        configuration file.
+    path : str, optional
+        Path of the folder to load the strategy and configuration file.
+    frequency : int
+        Number of seconds between two samples.
 
     """
 
@@ -67,7 +73,7 @@ class StrategyManager(_BotClient):
         """
         # Set client and connect to the trading bot server
         _BotClient.__init__(self, address=address, authkey=authkey)
-        self.logger = logging.getLogger('StrategyManager.' + __name__)
+        self.logger = logging.getLogger(__name__ + '.StrategyManager')
         self.logger.info('init | PID: {} PPID: {}'.format(getpid(), getppid()))
 
     def __call__(self, name_strat, STOP=None, path='./strategies'):
@@ -182,10 +188,10 @@ class StrategyManager(_BotClient):
 
     def _get_general_cfg(self, strat_cfg):
         # Get general parameters and strategy state
-        self.underlying = strat_cfg['underlying']
-        self.iso_vol = strat_cfg['iso_volatility']
         self.frequency = strat_cfg['frequency']
         self.id_strat = strat_cfg['id_strat']
+        name_logger = __name__ + '.Strat-' + str(self.id_strat)
+        self.logger = logging.getLogger(name_logger)
         self.current_pos = strat_cfg['current_pos']
         self.current_vol = strat_cfg['current_vol']
         self.logger.info('_get_general_cfg | pos: {}'.format(self.current_pos))

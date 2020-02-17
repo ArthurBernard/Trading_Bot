@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2020-02-06 11:57:48
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-02-14 14:53:04
+# @Last modified time: 2020-02-17 19:12:23
 
 """ Some order objects. """
 
@@ -16,7 +16,7 @@ import logging
 
 # Local packages
 from trading_bot._exceptions import OrderError, OrderStatusError
-from trading_bot.data_requests import get_ask, get_bid
+from trading_bot.data_requests import get_ask, get_bid, get_close
 
 __all__ = ['Order', 'OrderDict']
 
@@ -69,7 +69,7 @@ class Order:
     }
 
     def __init__(self, id, exchange_client, status=None, input={}, tol=0.001,
-                 logger=None):
+                 call_counter=None):
         """ Initialize an order object.
 
         Parameters
@@ -90,21 +90,29 @@ class Order:
             Input to request order.
         tol : float, optional
             Tolerance's threshold for non-executed volume. Default is 0.1%.
+        call_counter : CallCounter, optional
+            Object that calls itself at each private request, and if call rate
+            limit is exceeded then the object waits a few seconds. By default
+            the object is None, so it never waits.
 
         """
-        if logger is None:
-            self.logger = logging.getLogger(str(id))
-
-        else:
-            self.logger = logger
-
+        self.logger = logging.getLogger(__name__ + '.Ord-' + str(id))
         self.id = id
         self.exchange_client = exchange_client
         self.status = status
         self.input = input
+        self.tol = tol
+
+        if call_counter is None:
+            self.call_counter = lambda x: None
+
+        else:
+            self.call_counter = call_counter
+
         self.volume = input['volume']
         self.type = input['type']
         self.vol_exec = 0.
+        self.price_exec = 0.
         self.pair = input['pair']
 
         if input['ordertype'] == 'market':
@@ -113,15 +121,19 @@ class Order:
         else:
             self.price = input['price']
 
+        if self.input['leverage'] == 1:
+            self.input['leverage'] = None
+
+        self._start = int(time.time())
         self.state = None
         self.hist = []
+        self.logger.debug('init')
 
     def __repr__(self):
         """ Represent the order. """
         return ("[Order ID {self.id}] - status: {self.status}, type: "
                 "{self.type}, pair: {self.pair}, price: {self.price}, volume: "
-                "{self.volume}, vol_exec: {self.vol_exec}, state: {self.state}"
-                "".format(self=self))
+                "{self.volume}, vol_exec: {self.vol_exec}".format(self=self))
 
     def execute(self):
         """ Execute the order. """
@@ -130,7 +142,11 @@ class Order:
             ans = self._request('AddOrder', userref=self.id, **self.input)
             self.state = ans
             if self.input.get('validate'):
+                self.logger.debug('execute | validate order')
                 self.status = 'closed'
+                if self.price == 'market':
+                    self.price = get_close(self.pair)
+                    self.logger.debug('execute | set price {}'.format(self.price))
 
             else:
                 self.status = 'open'
@@ -141,13 +157,19 @@ class Order:
     def cancel(self):
         """ Cancel the order. """
         if self.status == 'open':
-            self._request('CancelOrder', txid=self.id)
+            ans = self._request('CancelOrder', txid=self.id)
+            if ans['count'] == 0:
+
+                raise OrderError(self, 'no order canceled')
+
+            else:
+                self.status = 'canceled'
+
+                return ans
 
         else:
 
             raise OrderStatusError(self, 'cancel')
-
-        self.status = 'canceled'
 
     def get_closed(self, start):
         """ Get the closed orders corresponding to the ID.
@@ -207,6 +229,7 @@ class Order:
 
         if self.vol_exec == self.volume:
             self.status = 'closed'
+            self.logger.debug('check_vol_exec | order closed')
 
         elif 1 - self.vol_exec / self.volume < self.tol:
             self.status = 'closed'
@@ -220,6 +243,9 @@ class Order:
             raise OrderError(self, msg_prefix='too many volume executed: ')
 
         else:
+            self.logger.debug('check_vol_exec | ex vol={}, new vol={}'.format(
+                self.input['volume'], self.volume - self.vol_exec
+            ))
             self.input['volume'] = self.volume - self.vol_exec
 
     def replace(self, price):
@@ -257,9 +283,10 @@ class Order:
         self.execute()
 
     def _request(self, method, **kwargs):
+        self.call_counter(method)
         ans = self.exchange_client.query_private(method, **kwargs)
         self.hist += [ans]
-        self.logger.debug('{} | {}'.format(method, kwargs))
+        self.logger.debug('send {} | answere: {}'.format(method, ans))
 
         return ans
 
@@ -270,6 +297,92 @@ class Order:
         self._last = int(time.time())
         for v in ans['closed'].values():
             self.vol_exec += v['vol_exec']
+
+    def get_result_exec(self):
+        """ Get execution information (price, fees, etc.).
+
+        Returns
+        -------
+        dict
+            {'txid': list, 'price': float, 'vol_exec': float, 'fee': float,
+            'feeq': float, 'feeb': float, 'cost': float, 'start_time': int}.
+
+        """
+        if self.status is not 'closed':
+
+            raise OrderStatusError(self, 'get_result_exec')
+
+        ans = self.get_closed(start=self._start)
+        self.logger.debug('get_result_exec | ' + str(ans))
+        txid = list(ans['closed'].keys())
+        v0, p0, f, fq, fb, c = 0., 0., 0., 0., 0., 0.
+        for v in ans['closed'].values():
+            if 'viqc' in v['oflags']:
+                # FIXME : viqc
+                raise OrderError(self, "'viqc' oflags is not yet allowed")
+
+            oflags = get_fees_currency(v['oflags'])
+            v0 += v['vol_exec']
+            p0 += v['price'] * v['vol_exec']
+            if oflags == 'fciq':
+                fq += v['fee']
+
+            elif oflags == 'fcib':
+                fb += v['fee'] * v['price']
+
+            f += v['fee']
+            c += v['cost']
+
+        if v0 > 0.:
+            p0 /= v0
+
+        return {
+            'txid': txid,
+            'price_exec': p0,
+            'vol_exec': v0,
+            'fee': f,
+            'feeq': fq,
+            'feeb': fb,
+            'cost': c,
+            'start_time': self._start,
+        }
+
+
+def get_fees_currency(oflags):
+    """ Get the fees currency flags.
+
+    Parameters
+    ----------
+    oflags : str or list
+        Parameters returned by the exchange client API.
+
+    Returns
+    -------
+    str
+        'fcib' if the currency is in base, and 'fciq' if the currency is in
+        quote.
+
+    """
+    if isinstance(oflags, list):
+        if 'fcib' in oflags:
+
+            return 'fcib'
+
+        elif 'fciq' in oflags:
+
+            return 'fciq'
+
+        else:
+
+            raise ValueError('unknown oflags fees: {}'.format(oflags))
+
+    elif oflags in ['fcib', 'fciq']:
+
+        return oflags
+
+    else:
+
+        raise ValueError('unknown oflags fees: {}'.format(oflags))
 
 
 class OrderDict(dict):
@@ -291,6 +404,7 @@ class OrderDict(dict):
 
     def __init__(self, *orders, **kworders):
         """ Initialize a collection of order objects. """
+        self.logger = logging.getLogger(__name__ + '.OrderDict')
         for k, v in kworders.items():
             self._is_order(v)
 
@@ -312,7 +426,7 @@ class OrderDict(dict):
             The order object to collect.
 
         """
-        print('set {}'.format(key))
+        self.logger.debug('set {}'.format(key))
         self._is_order(value)
         dict.__setitem__(self, key, value)
         self._add_state(key, value)
@@ -326,7 +440,7 @@ class OrderDict(dict):
             ID of the order.
 
         """
-        print('del {}'.format(key))
+        self.logger.debug('del {}'.format(key))
         dict.__delitem__(self, key)
         self._del_state(key)
 
@@ -416,7 +530,7 @@ class OrderDict(dict):
             The removed order object.
 
         """
-        print('pop {}'.format(key))
+        self.logger.debug('pop {}'.format(key))
         self._del_state(key)
 
         return dict.pop(self, key)

@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2020-02-04 16:04:55
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-02-07 17:28:51
+# @Last modified time: 2020-02-09 11:04:28
 
 """ Define some various richly-typed exceptions. """
 
@@ -30,13 +30,11 @@ class OrderError(Exception):
 
 
 class OrderStatusError(OrderError):
-    """ Order exception when the auction is not allowed by the current status.
+    """ Raise an exception when an action isn't allowed by current status. """
 
-    """
-
-    def __init__(self, order, auction):
+    def __init__(self, order, action):
         """ Initialize the OrderStatusError exception. """
-        msg = 'can not {} order with status {}'.format(auction, order.status)
+        msg = 'can not {} order with status {}'.format(action, order.status)
         super(OrderStatusError, self).__init__(order, msg)
 
 

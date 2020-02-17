@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2020-01-28 15:41:40
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-02-05 11:13:54
+# @Last modified time: 2020-02-15 13:45:43
 
 """
 Trading_Bot : A Python package to build autonomous trading bot
@@ -30,6 +30,7 @@ Utility tools
 API_bfx     --- Bitfinex client API
 API_kraken  --- Kraken client API
 _client     --- Base client to connect to server
+_order      --- Object representing order to execute.
 _exceptions --- Trading_Bot exceptions
 _server     --- Base server to run several bots
 tests       --- Run trading_bot unittests
@@ -42,20 +43,23 @@ tools       --- Time, setting, and configuration tools
 # Third party packages
 
 # Local packages
-from .tools import *
-from .orders_manager import *
-from .data_requests import *
+from .API_bfx import *
+from .API_kraken import *
 from .bot_manager import *
+from .call_counters import *
+from .data_requests import *
+from .orders_manager import *
 from .results_manager import *
 from .strategy_manager import *
-from .API_kraken import *
-from .API_bfx import *
+from .tools import *
 
-__all__ = tools.__all__
+
+__all__ = API_bfx.__all__
+__all__ += API_kraken.__all__
+__all__ += bot_manager.__all__
+__all__ += call_counters.__all__
 __all__ += data_requests.__all__
 __all__ += orders_manager.__all__
-__all__ += bot_manager.__all__
 __all__ += results_manager.__all__
 __all__ += strategy_manager.__all__
-__all__ += API_kraken.__all__
-__all__ += API_bfx.__all__
+__all__ += tools.__all__

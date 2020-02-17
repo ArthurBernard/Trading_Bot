@@ -4,13 +4,14 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2019-03-08 20:19:22
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-01-14 10:47:22
+# @Last modified time: 2020-02-17 17:36:06
 
 """ Some utility functions. """
 
 # Built-in packages
 from pickle import Pickler, Unpickler
 from os import makedirs
+import logging
 
 # External packages
 from ruamel.yaml import YAML
@@ -18,6 +19,9 @@ import pandas as pd
 
 
 __all__ = ['load_config_params', 'dump_config_params', 'save_df', 'get_df']
+
+
+logger = logging.getLogger(__name__)
 
 
 def load_config_params(path):
@@ -87,6 +91,7 @@ def get_df(path, name, ext=''):
             return df
 
     except FileNotFoundError:
+        logger.error('FileNotFoundError | return an empty dataframe')
 
         return pd.DataFrame()
 
@@ -113,6 +118,7 @@ def save_df(df, path, name, ext=''):
             Pickler(f).dump(df)
 
     except FileNotFoundError:
+        logger.error('FileNotFoundError | create dir and save dataframe')
         makedirs(path, exist_ok=True)
 
         with open(path + name + ext, 'wb') as f:

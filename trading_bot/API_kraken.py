@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2019-05-06 20:53:46
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-02-03 11:12:06
+# @Last modified time: 2020-02-17 15:38:04
 
 """ Kraken Client API object. """
 
@@ -58,7 +58,7 @@ class KrakenClient:
         self.uri = "https://api.kraken.com"
         self.key = key
         self.secret = secret
-        self.logger = logging.getLogger('OrdersManager.' + __name__)
+        self.logger = logging.getLogger(__name__)
         self.logger.info('init')
 
     def load_key(self, path):
