@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2019-05-02 19:07:38
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-02-05 10:39:59
+# @Last modified time: 2020-02-17 17:56:11
 
 """ Tools to manager results and display it. """
 
@@ -35,35 +35,43 @@ TODO:
 """
 
 
-def set_order_hist(order_result):
+COLUMNS = ['userref', 'txid', 'price', 'volume', 'pair', 'type', 'price_exec',
+           'vol_exec', 'cost', 'ordertype', 'leverage', 'start_time',
+           'end_time', 'fee', 'feeq', 'feeb', 'fee_pct', 'strat_id']
+
+
+def set_order_hist(result):
     """ Set dataframe of historic order.
 
     Parameters
     ----------
-    order_result : dict or list of dict
-        Cleaned result of one or several output order.
+    result : dict
+        {'txid': list, 'price_exec': float, 'vol_exec': float, 'fee': float,
+        'feeq': float, 'feeb': float, 'cost': float, 'start_time': int,
+        'userref': int, 'type': str, 'volume', float, 'price': float,
+        'pair': str, 'ordertype': str, 'leverage': int, 'end_time': int,
+        'fee_pct': float, 'strat_id': int}.
 
     Returns
     -------
-    df_hist : pandas.DataFrame
+    pandas.DataFrame
         Order result as dataframe.
 
     """
-    df_hist = pd.DataFrame(order_result, columns=[
-        'timestamp', 'txid', 'userref', 'price', 'volume',
-        'type', 'pair', 'ordertype', 'leverage'
-    ])
-
-    return df_hist
+    return pd.DataFrame([result], columns=COLUMNS)
 
 
-def update_order_hist(order_result, name, path='.'):
+def update_order_hist(result, name, path='.'):
     """ Update the historic order dataframe.
 
     Parameters
     ----------
-    order_result : dict or list of dict
-        Cleaned result of one or several output order.
+    result : dict
+        {'txid': list, 'price_exec': float, 'vol_exec': float, 'fee': float,
+        'feeq': float, 'feeb': float, 'cost': float, 'start_time': int,
+        'userref': int, 'type': str, 'volume', float, 'price': float,
+        'pair': str, 'ordertype': str, 'leverage': int, 'end_time': int,
+        'fee_pct': float, 'strat_id': int}.
 
     """
     # TODO : Save by year ? month ? day ?
@@ -75,7 +83,7 @@ def update_order_hist(order_result, name, path='.'):
     df_hist = get_df(path, name + 'orders_hist', '.dat')
 
     # Set new order historic dataframe
-    df_hist = df_hist.append(set_order_hist(order_result), sort=False)
+    df_hist = df_hist.append(set_order_hist(result), sort=False)
     df_hist = df_hist.reset_index(drop=True)
 
     # Save order historic dataframe
@@ -130,7 +138,7 @@ class ResultManager:
         self.periods = periods
         self.reinvest_profit = reinvest_profit
         self.df = get_df(path, 'result_hist', ext='.dat')
-        self.logger = logging.getLogger('strat_man.' + __name__)
+        self.logger = logging.getLogger(__name__)
 
     def update_result_hist(self, order_results):
         """ Load, merge and save result historic strategy.
