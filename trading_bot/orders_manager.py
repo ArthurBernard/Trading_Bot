@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2019-04-29 23:42:09
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-02-15 14:08:24
+# @Last modified time: 2020-02-17 17:57:20
 
 """ Client to manage orders execution. """
 
@@ -71,12 +71,11 @@ class OrdersManager(_OrderManagerClient):
 
     """
 
-    logger = None  # logging.getLogger('trade_bot.' + __name__)
     _handler_client = {
         'kraken': KrakenClient,
     }
     _handler_call_counters = {
-        'kraken': KrakenCallCounter('intermediate', logger),
+        'kraken': KrakenCallCounter('intermediate'),
     }
     orders = OrderDict()
 
@@ -91,7 +90,7 @@ class OrdersManager(_OrderManagerClient):
         """
         # Set client and connect to the trading bot server
         _OrderManagerClient.__init__(self, address=address, authkey=authkey)
-        self.logger = logging.getLogger('trade_bot.' + __name__)
+        self.logger = logging.getLogger(__name__ + '.OrdersManager')
         self.logger.info('init | PID: {} PPID: {}'.format(getpid(), getppid()))
         print(self.logger)
 
@@ -181,15 +180,10 @@ class OrdersManager(_OrderManagerClient):
 
             else:
                 id_order = self._set_id_order(id_strat)
-                # kwrds = {
-                #    'input': kwargs,
-                #    'open_out': [],
-                #    'close_out': [],
-                #    'request_out': [],
-                #    'state': None
-                # }
 
-            return Order(id_order, self.K, input=kwargs)
+            return Order(
+                id_order, self.K, input=kwargs, call_counter=self.call_counter
+            )
 
         elif self.orders:
             id_order = self.orders.get_first()
@@ -213,15 +207,18 @@ class OrdersManager(_OrderManagerClient):
                 continue
 
             elif order.status is None:
+                self.logger.debug('execute {}'.format(order))
                 order.execute()
                 last_order = time.time()
                 self.orders.append(order)
 
             elif order.status == 'open':
                 if order.get_open():
+                    self.logger.debug('replace {}'.format(order))
                     order.replace('best')
 
                 else:
+                    self.logger.debug('check vol {}'.format(order))
                     order.check_vol_exec()
                     if order.status != 'closed':
 
@@ -231,57 +228,22 @@ class OrdersManager(_OrderManagerClient):
 
             elif order.status == 'canceled':
                 # TODO: check vol, replace order
+                self.logger.debug('replace {}'.format(order))
                 order.replace('best')
                 self.orders.append(order)
 
             elif order.status == 'closed':
-                self.logger.debug('loop | remove {}'.format(order.id))
-                # TODO : save order
+                res = self._set_result(order)
+                self.w_tbm.send({'closed_order': res})
+                # TODO : save order object
                 # TODO : update results_manager
-                pass
+                self.logger.debug('remove {}'.format(order))
 
             else:
 
                 raise OrderError(order, 'unknown state')
 
-            self.logger.debug('loop | {}'.format(order))
-
         self.logger.info('OrdersManager stopped.')
-
-    def _set_result_output(self, txid, id_order, **kwargs):
-        """ Add informations to output of query order. """
-        pair = kwargs['pair']
-        ordertype = kwargs['ordertype']
-        result = {
-            'txid': txid,
-            'userref': id_order,
-            'type': kwargs['type'],
-            'volume': kwargs['volume'],
-            'pair': pair,
-            'ordertype': ordertype,
-            'leverage': kwargs['leverage'],
-            'timestamp': int(time.time()),
-            'fee': float(self.fees[self._handler[ordertype]][pair]['fee'])
-        }
-        if ordertype == 'market' and kwargs['validate']:
-            # Get the last price
-            result['price'] = get_close(pair)
-
-        elif ordertype == 'market' and not kwargs['validate']:
-            # TODO : verify if get the exection market price
-            closed_order = self.K.query_private('ClosedOrders',
-                                                userref=id_order,
-                                                start=self.start)
-            txids = closed_order['closed'].keys()
-            result['price'] = np.mean([
-                closed_order['closed'][i]['price'] for i in txids
-            ])
-            self.logger.debug('Get execution price is not yet verified')
-
-        elif ordertype == 'limit':
-            result['price'] = kwargs['price']
-
-        return result
 
     def get_fees(self):
         """ Load current fees. """
@@ -303,6 +265,9 @@ class OrdersManager(_OrderManagerClient):
 
         self.w_tbm.send({'balance': self.balance})
         self.logger.debug('get_balance | Sent balance to TradingBotManager')
+
+    def _get_id_strat(self, id_order):
+        return int(str(id_order)[-2:])
 
     def _set_id_order(self, id_strat):
         """ Set an unique order identifier.
@@ -338,8 +303,36 @@ class OrdersManager(_OrderManagerClient):
 
         return int(str(id_order) + str(id_strat))
 
-    def _get_id_strat(self, id_order):
-        return int(id_order[-2:])
+    def _set_result(self, order):
+        """ Add informations to output of query order.
+
+        Returns
+        -------
+        dict
+            {'txid': list, 'price_exec': float, 'vol_exec': float,
+            'fee': float, 'feeq': float, 'feeb': float, 'cost': float,
+            'start_time': int, 'userref': int, 'type': str, 'volume', float,
+            'price': float, 'pair': str, 'ordertype': str, 'leverage': int,
+            'end_time': int, 'fee_pct': float, 'strat_id': int}.
+
+        """
+        pair = order.pair
+        ordertype = order.input['ordertype']
+        result = order.get_result_exec()
+        result.update({
+            'userref': order.id,
+            'type': order.type,
+            'price': order.price,
+            'volume': order.volume,
+            'pair': pair,
+            'ordertype': ordertype,
+            'leverage': order.input['leverage'],
+            'end_time': int(time.time()),
+            'fee_pct': float(self.fees[self._handler[ordertype]][pair]['fee']),
+            'strat_id': self._get_id_strat(order.id),
+        })
+
+        return result
 
 
 # =========================================================================== #
@@ -458,6 +451,41 @@ class DeprecatedMethods:
         if self.call_counter >= max_call:
             self.logger.info('Max call exceeded: {}'.format(self.call_counter))
             time.sleep(self.call_counter - max_call + 1)
+
+    def _set_result_output(self, txid, id_order, **kwargs):
+        """ Add informations to output of query order. """
+        pair = kwargs['pair']
+        ordertype = kwargs['ordertype']
+        result = {
+            'txid': txid,
+            'userref': id_order,
+            'type': kwargs['type'],
+            'volume': kwargs['volume'],
+            'pair': pair,
+            'ordertype': ordertype,
+            'leverage': kwargs['leverage'],
+            'timestamp': int(time.time()),
+            'fee': float(self.fees[self._handler[ordertype]][pair]['fee'])
+        }
+        if ordertype == 'market' and kwargs['validate']:
+            # Get the last price
+            result['price'] = get_close(pair)
+
+        elif ordertype == 'market' and not kwargs['validate']:
+            # TODO : verify if get the exection market price
+            closed_order = self.K.query_private('ClosedOrders',
+                                                userref=id_order,
+                                                start=self.start)
+            txids = closed_order['closed'].keys()
+            result['price'] = np.mean([
+                closed_order['closed'][i]['price'] for i in txids
+            ])
+            self.logger.debug('Get execution price is not yet verified')
+
+        elif ordertype == 'limit':
+            result['price'] = kwargs['price']
+
+        return result
 
 
 if __name__ == '__main__':
