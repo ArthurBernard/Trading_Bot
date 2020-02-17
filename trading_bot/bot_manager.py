@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2020-01-27 09:58:03
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-02-05 16:27:37
+# @Last modified time: 2020-02-17 17:09:49
 
 """ Set a server and run each bot. """
 
@@ -20,6 +20,7 @@ import os
 # Local packages
 from trading_bot._server import _TradingBotManager
 from trading_bot._server import TradingBotServer as TBS
+from trading_bot.results_manager import update_order_hist, ResultManager
 from trading_bot.strategy_manager import StrategyManager as SM
 from trading_bot.tools.time_tools import str_time
 
@@ -38,9 +39,8 @@ class TradingBotManager(_TradingBotManager):
         """ Initialize Trading Bot Manager object. """
         _TradingBotManager.__init__(self, address=address, authkey=authkey)
 
-        self.logger = logging.getLogger('trad_bot.' + __name__)
-        self.logger.info('Initialize TradingBotManager | '
-                         'Current PID is {}'.format(os.getpid()))
+        self.logger = logging.getLogger(__name__ + '.TradingBotManager')
+        self.logger.info('init | current PID is {}'.format(os.getpid()))
         self.t = time.time()
         self.path_log = '/home/arthur/Strategies/Data_Server/Untitled_Document2.txt'
         self.address = address
@@ -62,24 +62,24 @@ class TradingBotManager(_TradingBotManager):
         # server_thread.join()
         # bot_thread.join()
         # self.set_fees()
-        self.logger.info('Initialization finished.')
+        self.logger.info('init | init finished')
         self.runtime(s)
 
     def set_server(self, address=('', 50000), authkey=b'tradingbot'):
         """ Initialize a server connection. """
         self.m = TBS(address=address, authkey=authkey)
         self.s = self.m.get_server()
-        self.logger.info('Server initialized.')
+        self.logger.info('set_server | started')
         # print(self.stop)
         self.state['stop'] = False
         self.s.serve_forever()
-        self.logger.info('Server stopped.')
+        self.logger.info('set_server | stopped')
 
     def runtime(self, s=9):
         """ Do something. """
         # TODO : Run OrderManagerClient object
         # TODO : Run all StrategyManagerClient objects
-        self.logger.debug('Start to do something')
+        self.logger.debug('run | start to do something')
         # Start bot OrdersManager
         # p_om = Process(
         #    target=start_order_manager,
@@ -97,29 +97,34 @@ class TradingBotManager(_TradingBotManager):
             print(txt, end='\r')
             time.sleep(0.01)
 
-        self.logger.debug('End to do something.')
+        self.logger.debug('run | end to do something')
         self.state['stop'] = True
-        self.logger.debug('Stop propageted.')
+        self.logger.debug('run | stop propageted')
 
         # Wait until child process closed
         # p_om.join()
 
         time.sleep(3)
         self.s.stop_event.set()
-        self.logger.info('TradingBotManager stopped.')
+        self.logger.info('run | TradingBotManager stopped.')
 
     def run_strategy(self, name):
+        # /!\ DEPRECATED /!\
         # TODO : set a dedicated pipe
         # TODO : run a new process for a new strategy
         with SM(name, address=self.address, authkey=self.authkey) as sm:
             sm.set_configuration(self.path + name + '/configuration.yaml')
             for s, kw in sm:
                 if s is not None:
-                    self.logger.info('Signal: {} | Params: {}'.format(s, kw))
+                    self.logger.info(
+                        'run_strat | Signal: {} | Params: {}'.format(s, kw)
+                    )
                     output = sm.set_order(s, **kw, **sm.ord_kwrds)
 
                     if output:
-                        self.logger.info('Executed order : {}'.format(output))
+                        self.logger.info(
+                            'run_strat | executed order : {}'.format(output)
+                        )
 
                 self.txt[name] += '{} | Next signal in {}'.format(
                     name, str_time(int(sm.next - sm.TS))
@@ -132,18 +137,40 @@ class TradingBotManager(_TradingBotManager):
             for k, a in msg.items():
                 if k == 'fees':
                     self.fees.update(a)
-                    self.logger.info('Fees updated : {}'.format(a))
+                    self.logger.info('listen_om | fees updated')
 
                 elif k == 'balance':
                     self.balance.update(a)
-                    self.logger.info('Balance updated : {}'.format(a))
+                    self.logger.info('listen_om | balance updated')
+
+                elif k == 'closed_order':
+                    self.set_closed_order(a)
+                    self.logger.info('listen_om |closed_order updated')
 
                 else:
-                    self.logger.error('Unknown {} : {}'.format(k, a))
+                    self.logger.error('listen_om| unknown {}: {}'.format(k, a))
+
+    def set_closed_order(self, result):
+        """ Update closed orders and send it to ResultManager.
+
+        Parameters
+        ----------
+        result : dict
+            {'txid': list, 'price': float, 'vol_exec': float, 'fee': float,
+            'feeq': float, 'feeb': float, 'cost': float, 'start_time': int,
+            'userref': int, 'type': str, 'volume', float, 'pair': str,
+            'ordertype': str, 'level': int, 'end_time': int, 'fee_pct': float,
+            'strat_id': int}.
+
+        """
+        self.logger.debug('set_closed_order | id {}'.format(result['userref']))
+        update_order_hist(result, name='', path='./results/')
+        # TODO : update vol to strategy_manager
 
 
 def start_order_manager(path_log, exchange='kraken', address=('', 50000),
                         authkey=b'tradingbot'):
+    """ Start order manager client. """
     from orders_manager import OrdersManager as OM
 
     om = OM(path_log, exchange=exchange, address=address, authkey=authkey)
@@ -174,5 +201,5 @@ if __name__ == '__main__':
     logging.config.dictConfig(config)
 
     # start_tradingbotmanager()
-    tbm = TradingBotManager(s=30)
+    tbm = TradingBotManager(s=500)
     # tbm.run()
