@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2019-04-26 08:49:26
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-02-07 18:33:56
+# @Last modified time: 2020-02-17 19:17:35
 
 # Built-in import
 import json
@@ -700,7 +700,7 @@ def get_close(pair, path="https://api.kraken.com/0/public"):
         Last close price.
 
     """
-    _get_ticker(pair, 'c', path)
+    return _get_ticker(pair, 'c', path)
 
 
 def get_ask(pair, path="https://api.kraken.com/0/public"):
@@ -719,7 +719,7 @@ def get_ask(pair, path="https://api.kraken.com/0/public"):
         Last close price.
 
     """
-    _get_ticker(pair, 'a', path)
+    return _get_ticker(pair, 'a', path)
 
 
 def get_bid(pair, path="https://api.kraken.com/0/public"):
@@ -738,7 +738,7 @@ def get_bid(pair, path="https://api.kraken.com/0/public"):
         Last close price.
 
     """
-    _get_ticker(pair, 'b', path)
+    return _get_ticker(pair, 'b', path)
 
 
 def get_high(pair, path="https://api.kraken.com/0/public"):
@@ -757,7 +757,7 @@ def get_high(pair, path="https://api.kraken.com/0/public"):
         Last close price.
 
     """
-    _get_ticker(pair, 'h', path)
+    return _get_ticker(pair, 'h', path)
 
 
 def get_low(pair, path="https://api.kraken.com/0/public"):
@@ -776,7 +776,7 @@ def get_low(pair, path="https://api.kraken.com/0/public"):
         Last close price.
 
     """
-    _get_ticker(pair, 'l', path)
+    return _get_ticker(pair, 'l', path)
 
 
 def get_volume(pair, path="https://api.kraken.com/0/public"):
@@ -795,7 +795,7 @@ def get_volume(pair, path="https://api.kraken.com/0/public"):
         Last close price.
 
     """
-    _get_ticker(pair, 'v', path)
+    return _get_ticker(pair, 'v', path)
 
 
 if __name__ == '__main__':
