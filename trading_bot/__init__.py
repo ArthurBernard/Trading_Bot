@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2020-01-28 15:41:40
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-02-15 13:45:43
+# @Last modified time: 2020-02-18 12:15:43
 
 """
 Trading_Bot : A Python package to build autonomous trading bot
@@ -21,9 +21,10 @@ Modules
 -------
 bot_manager      --- Set the bot server and run order and strategy clients
 data_requests    --- Request data needed for strategy computations
-order_manager    --- Set the order client and execute orders
+order_manager    --- Manage every orders
 result_manager   --- Display results of strategies and portfolio
 strategy_manager --- Set a strategy client and send orders to execute
+order            --- Object to execute orders.
 
 Utility tools
 -------------
@@ -34,7 +35,7 @@ _order      --- Object representing order to execute.
 _exceptions --- Trading_Bot exceptions
 _server     --- Base server to run several bots
 tests       --- Run trading_bot unittests
-tools       --- Time, setting, and configuration tools
+tools       --- Time, IO, setting, and configuration tools
 
 """
 

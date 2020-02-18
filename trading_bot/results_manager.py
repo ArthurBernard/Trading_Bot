@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2019-05-02 19:07:38
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-02-17 17:56:11
+# @Last modified time: 2020-02-18 12:14:01
 
 """ Tools to manager results and display it. """
 
@@ -17,7 +17,7 @@ import numpy as np
 import fynance as fy
 
 # Local packages
-from trading_bot.tools.utils import get_df, save_df
+from trading_bot.tools.io import get_df, save_df
 
 __all__ = [
     'set_order_hist', 'update_order_hist', 'set_results', 'set_performance',
