@@ -4,11 +4,12 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2019-05-12 22:57:20
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-02-17 16:03:31
+# @Last modified time: 2020-02-18 12:18:26
 
 """ Client to manage a financial strategy. """
 
 # Built-in packages
+from pickle import Pickler, Unpickler
 import time
 import importlib
 import logging
@@ -21,8 +22,9 @@ import sys
 # from strategy_manager import DataBaseManager, DataExchangeManager
 from trading_bot.data_requests import get_close
 from trading_bot.tools.time_tools import now, str_time
-from trading_bot.tools.utils import load_config_params, dump_config_params
+from trading_bot.tools.io import load_config_params, dump_config_params
 from trading_bot._client import _BotClient
+from trading_bot._order import OrderSL, OrderBestLimit
 
 __all__ = ['StrategyManager']
 
@@ -60,6 +62,11 @@ class StrategyManager(_BotClient):
         Number of seconds between two samples.
 
     """
+
+    _handler_order = {
+        'submit_and_leave': OrderSL,
+        'best_limit': OrderBestLimit,
+    }
 
     # TODO : Load strategy config
     def __init__(self, address=('', 50000), authkey=b'tradingbot'):
@@ -194,6 +201,7 @@ class StrategyManager(_BotClient):
         self.logger = logging.getLogger(name_logger)
         self.current_pos = strat_cfg['current_pos']
         self.current_vol = strat_cfg['current_vol']
+        self.Order = self._handler_order[strat_cfg['order']]
         self.logger.info('_get_general_cfg | pos: {}'.format(self.current_pos))
         self.logger.info('_get_general_cfg | vol: {}'.format(self.current_vol))
         if self.STOP is None:
@@ -342,8 +350,13 @@ class StrategyManager(_BotClient):
             Parameters for order, e.g. volume, order type, etc.
 
         """
-        self.q_ord.put((self.id_strat, kwargs))
-        self.logger.info('send_order | Params {}'.format(kwargs))
+        id_order = self._set_id_order()
+        time_force = self.frequency - 60 if self.frequency > 60 else None
+        order = self.Order(id_order, input=kwargs, time_force=time_force)
+        self.q_ord.put(order)
+        self.logger.info(' send_order | {}'.format(order))
+        # self.q_ord.put((self.id_strat, kwargs))
+        # self.logger.info('send_order | Params {}'.format(kwargs))
 
         return self._set_output(kwargs)
 
@@ -426,6 +439,36 @@ class StrategyManager(_BotClient):
             time.sleep(0.01)
 
         self.logger.info('StrategyManager stopped.')
+
+    def _set_id_order(self):
+        """ Set an unique order identifier.
+
+        Returns
+        -------
+        id_order : int (signed and 32-bit)
+            Number to identify an order and link it with a strategy.
+
+        """
+        try:
+
+            with open(self.path + '/id_order.dat', 'rb') as f:
+                id_order = Unpickler(f).load()
+
+        except FileNotFoundError:
+            id_order = 0
+
+        id_order += 1
+        if id_order > 2147483647 // 100:
+            id_order = 0
+
+        with open(self.path + '/id_order.dat', 'wb') as f:
+            Pickler(f).dump(id_order)
+
+        id_strat = str(self.id_strat)
+        if self.id_strat < 10:
+            id_strat = '0' + id_strat
+
+        return int(str(id_order) + str(id_strat))
 
 
 if __name__ == '__main__':

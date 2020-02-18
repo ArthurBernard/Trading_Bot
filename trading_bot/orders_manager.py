@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2019-04-29 23:42:09
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-02-17 17:57:20
+# @Last modified time: 2020-02-18 12:16:35
 
 """ Client to manage orders execution. """
 
@@ -24,7 +24,7 @@ from trading_bot.API_kraken import KrakenClient
 from trading_bot.call_counters import KrakenCallCounter
 from trading_bot._client import _OrderManagerClient
 from trading_bot._exceptions import MissingOrderError, OrderError
-from trading_bot._order import Order, OrderDict
+from trading_bot._order import OrderDict  # , Order
 
 __all__ = ['OrdersManager']
 
@@ -173,17 +173,21 @@ class OrdersManager(_OrderManagerClient):
             raise StopIteration
 
         elif not self.q_ord.empty():
-            id_strat, kwargs = self.q_ord.get()
-            self.logger.debug('next | {}: {}'.format(id_strat, kwargs))
-            if kwargs.get('userref'):
-                id_order = kwargs.pop('userref')
+            # id_strat, kwargs = self.q_ord.get()
+            # self.logger.debug('next | {}: {}'.format(id_strat, kwargs))
+            # if kwargs.get('userref'):
+            #    id_order = kwargs.pop('userref')
 
-            else:
-                id_order = self._set_id_order(id_strat)
+            # else:
+            #    id_order = self._set_id_order(id_strat)
 
-            return Order(
-                id_order, self.K, input=kwargs, call_counter=self.call_counter
-            )
+            # return Order(
+            #    id_order, self.K, input=kwargs, call_counter=self.call_counter
+            # )
+            order = self.q_ord.get()
+            order.set_client_API(self.K, call_counter=self.call_counter)
+
+            return order
 
         elif self.orders:
             id_order = self.orders.get_first()
@@ -212,17 +216,18 @@ class OrdersManager(_OrderManagerClient):
                 last_order = time.time()
                 self.orders.append(order)
 
-            elif order.status == 'open':
-                if order.get_open():
-                    self.logger.debug('replace {}'.format(order))
-                    order.replace('best')
+            elif order.status == 'open' or order.status == 'canceled':
+                # if order.get_open():
+                #    self.logger.debug('replace {}'.format(order))
+                #    order.replace('best')
 
-                else:
-                    self.logger.debug('check vol {}'.format(order))
-                    order.check_vol_exec()
-                    if order.status != 'closed':
+                # else:
+                #    self.logger.debug('check vol {}'.format(order))
+                #    order.check_vol_exec()
+                #    if order.status != 'closed':
 
-                        raise OrderError(order, 'missing volume')
+                #        raise OrderError(order, 'missing volume')
+                order.update()
 
                 self.orders.append(order)
 
@@ -233,8 +238,9 @@ class OrdersManager(_OrderManagerClient):
                 self.orders.append(order)
 
             elif order.status == 'closed':
-                res = self._set_result(order)
-                self.w_tbm.send({'closed_order': res})
+                # res = self._set_result(order)
+                # self.w_tbm.send({'closed_order': res})
+                self.w_tbm.send({'order': order})
                 # TODO : save order object
                 # TODO : update results_manager
                 self.logger.debug('remove {}'.format(order))

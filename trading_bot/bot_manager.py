@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2020-01-27 09:58:03
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-02-17 17:09:49
+# @Last modified time: 2020-02-18 12:12:30
 
 """ Set a server and run each bot. """
 
@@ -146,6 +146,9 @@ class TradingBotManager(_TradingBotManager):
                 elif k == 'closed_order':
                     self.set_closed_order(a)
                     self.logger.info('listen_om |closed_order updated')
+
+                elif k == 'order':
+                    self.logger.info('listen_om | order: {}'.format(a))
 
                 else:
                     self.logger.error('listen_om| unknown {}: {}'.format(k, a))
