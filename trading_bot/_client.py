@@ -4,12 +4,13 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2020-01-28 16:47:55
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-02-05 10:39:36
+# @Last modified time: 2020-02-19 15:39:29
 
 """ Clients to connect to TradingBotServer. """
 
 # Built-in packages
 import os
+from random import randrange
 
 # Third party packages
 
@@ -18,8 +19,8 @@ from trading_bot._server import TradingBotServer as TBS
 from trading_bot.data_requests import DataBaseManager, DataExchangeManager
 
 
-class _Client:
-    """ Base class for a client. """
+class _ClientBot:
+    """ Base object for a client bot. """
 
     _handler = {
         'market': 'fees',
@@ -28,26 +29,50 @@ class _Client:
 
     def __init__(self, address=('', 50000), authkey=b'tradingbot'):
         """ Initialize a client object and connect to the TradingBotServer. """
-        print('Module {}: process ID is {} and parent PID is {}'.format(
-            __name__, os.getpid(), os.getppid()
+        self._id = randrange(1, 1e9)
+        print('Id {} | Module {} | process ID is {} | parent PID is {}'.format(
+            self._id, __name__, os.getpid(), os.getppid()
         ))
+        # register methods
         TBS.register('get_queue_orders')
+        TBS.register('get_queue_cli_to_tbm')
         TBS.register('get_state')
+        TBS.register('get_reader_tbm')
+        TBS.register('get_writer_tbm')
+        # authentication and connection to server
         self.m = TBS(address=address, authkey=authkey)
         self.m.connect()
+
+    def __enter__(self):
+        # get queue to send orders to OrdersManager
         self.q_ord = self.m.get_queue_orders()
+        # get queue to notify new client to TBM
+        self.q_to_tbm = self.m.get_queue_cli_to_tbm()
+        # get state of server process
         self.p_state = self.m.get_state()
+        # get reader and writer to TBM
+        self.r_tbm = self.m.get_reader_tbm(self._id)
+        self.w_tbm = self.m.get_writer_tbm(self._id)
+        # notify new client to TBM
+        self.q_to_tbm.put((self._id, 'up'),)
+
+    def __exit__(self, exc_type, exc_value, exc_tb):
+        # stop listen client into TBM
+        self.w_tbm.send({'stop': exc_type})
+        # close connections
+        self.r_tbm.close()
+        self.w_tbm.close()
 
     def is_stop(self):
         """ Check if the server is stopped. """
         return self.p_state._getvalue()['stop']
 
 
-class _BotClient(_Client):
-    """ Base class for a trading bot. """
+class _ClientStrategyBot(_ClientBot):
+    """ Base class for a trading strategy bot. """
 
     _handler = {
-        **_Client._handler,
+        **_ClientBot._handler,
         'exchange': DataExchangeManager,
         'database': DataBaseManager,
     }
@@ -55,7 +80,10 @@ class _BotClient(_Client):
     def __init__(self, address=('', 50000), authkey=b'tradingbot'):
         """ Initialize a client object and connect to TradingBotServer. """
         TBS.register('get_proxy_fees')
-        _Client.__init__(self, address=address, authkey=authkey)
+        _ClientBot.__init__(self, address=address, authkey=authkey)
+
+    def __enter__(self):
+        super(_ClientStrategyBot, self).__enter__()
         self.p_fees = self.m.get_proxy_fees()
 
     def get_fee(self, pair, order_type):
@@ -84,13 +112,14 @@ class _BotClient(_Client):
             return 0.0
 
 
-class _OrderManagerClient(_Client):
+class _ClientOrdersManager(_ClientBot):
     """ Base class for an order manager. """
 
     def __init__(self, address=('', 50000), authkey=b'tradingbot'):
         """ Initialize a client object and connect to TradingBotServer. """
-        TBS.register('get_reader_tbm')
-        TBS.register('get_writer_tbm')
-        _Client.__init__(self, address=address, authkey=authkey)
-        self.r_tbm = self.m.get_reader_tbm()
-        self.w_tbm = self.m.get_writer_tbm()
+        # TBS.register('get_reader_tbm')
+        # TBS.register('get_writer_tbm')
+        _ClientBot.__init__(self, address=address, authkey=authkey)
+        self._id = 0
+        # self.r_tbm = self.m.get_reader_tbm()
+        # self.w_tbm = self.m.get_writer_tbm()

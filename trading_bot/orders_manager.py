@@ -4,27 +4,28 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2019-04-29 23:42:09
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-02-18 12:16:35
+# @Last modified time: 2020-02-19 15:41:05
 
 """ Client to manage orders execution. """
 
 # Built-in packages
-from pickle import Pickler, Unpickler
 import logging
-import time
+from multiprocessing import Pipe
 from os import getpid, getppid
+from pickle import Pickler, Unpickler
+import time
 
 # External packages
 import numpy as np
 
 # Internal packages
-from trading_bot.tools.time_tools import str_time  # , now
-from trading_bot.data_requests import get_close
-from trading_bot.API_kraken import KrakenClient
-from trading_bot.call_counters import KrakenCallCounter
-from trading_bot._client import _OrderManagerClient
+from trading_bot._client import _ClientOrdersManager
 from trading_bot._exceptions import MissingOrderError, OrderError
 from trading_bot._order import OrderDict  # , Order
+from trading_bot.API_kraken import KrakenClient
+from trading_bot.call_counters import KrakenCallCounter
+from trading_bot.data_requests import get_close
+from trading_bot.tools.time_tools import str_time  # , now
 
 __all__ = ['OrdersManager']
 
@@ -35,7 +36,7 @@ __all__ = ['OrdersManager']
 #    - New method : (future) split orders for a better scalability
 
 
-class OrdersManager(_OrderManagerClient):
+class OrdersManager(_ClientOrdersManager):
     """ Client to set and manage orders.
 
     Verify the intigrity of the new orders with past orders and suffisant
@@ -89,7 +90,7 @@ class OrdersManager(_OrderManagerClient):
 
         """
         # Set client and connect to the trading bot server
-        _OrderManagerClient.__init__(self, address=address, authkey=authkey)
+        _ClientOrdersManager.__init__(self, address=address, authkey=authkey)
         self.logger = logging.getLogger(__name__ + '.OrdersManager')
         self.logger.info('init | PID: {} PPID: {}'.format(getpid(), getppid()))
         print(self.logger)
@@ -125,17 +126,19 @@ class OrdersManager(_OrderManagerClient):
 
         self.K.load_key(path_log)
         self.logger.debug('call | {} client loaded'.format(exchange))
-        self.get_fees()
-        self.get_balance()
 
         return self
 
     def __enter__(self):
         """ Enter to context manager. """
+        super(OrdersManager, self).__enter__()
         # TODO : load config and data
         self.logger.info('enter | Load configuration')
         # TODO : load orders to verify
         self.logger.debug('enter | order: {}'.format(self.orders))
+        # Setup fees and balance
+        self.get_fees()
+        self.get_balance()
 
         return self
 
@@ -150,10 +153,12 @@ class OrdersManager(_OrderManagerClient):
             ))
 
         self.logger.info('exit | end')
+        super(OrdersManager, self).__exit__(exc_type, exc_value, exc_tb)
 
     def __iter__(self):
         """ Iterate until server stop. """
         self.logger.info('iter | Starting to wait orders')
+
         return self
 
     def __next__(self):

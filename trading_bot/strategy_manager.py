@@ -4,32 +4,32 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2019-05-12 22:57:20
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-02-18 12:18:26
+# @Last modified time: 2020-02-19 15:45:52
 
 """ Client to manage a financial strategy. """
 
 # Built-in packages
-from pickle import Pickler, Unpickler
-import time
 import importlib
 import logging
+from multiprocessing import Pipe
 from os import getpid, getppid
+from pickle import Pickler, Unpickler
 import sys
+import time
 
 # External packages
 
 # Local packages
-# from strategy_manager import DataBaseManager, DataExchangeManager
-from trading_bot.data_requests import get_close
-from trading_bot.tools.time_tools import now, str_time
-from trading_bot.tools.io import load_config_params, dump_config_params
-from trading_bot._client import _BotClient
+from trading_bot._client import _ClientStrategyBot
 from trading_bot._order import OrderSL, OrderBestLimit
+from trading_bot.data_requests import get_close
+from trading_bot.tools.io import load_config_params, dump_config_params
+from trading_bot.tools.time_tools import now, str_time
 
-__all__ = ['StrategyManager']
+__all__ = ['StrategyBot']
 
 
-class StrategyManager(_BotClient):
+class StrategyBot(_ClientStrategyBot):
     """ Main object to load data, compute signals and execute orders.
 
     Methods
@@ -79,8 +79,8 @@ class StrategyManager(_BotClient):
 
         """
         # Set client and connect to the trading bot server
-        _BotClient.__init__(self, address=address, authkey=authkey)
-        self.logger = logging.getLogger(__name__ + '.StrategyManager')
+        _ClientStrategyBot.__init__(self, address=address, authkey=authkey)
+        self.logger = logging.getLogger(__name__ + '.StrategyBot')
         self.logger.info('init | PID: {} PPID: {}'.format(getpid(), getppid()))
 
     def __call__(self, name_strat, STOP=None, path='./strategies'):
@@ -98,7 +98,7 @@ class StrategyManager(_BotClient):
 
         Returns
         -------
-        StrategyManager
+        StrategyBot
             Object to manage strategy computations.
 
         """
@@ -163,6 +163,7 @@ class StrategyManager(_BotClient):
 
     def __enter__(self):
         """ Enter. """
+        super(StrategyBot, self).__enter__()
         # TODO : Load precedent data
         self.logger.info('enter | Load configuration and history')
         self.set_config(self.path + '/configuration.yaml')
@@ -170,6 +171,22 @@ class StrategyManager(_BotClient):
         # self.get_histo_result(self.path + '/result_hist.dat')
 
         return self
+
+    def __exit__(self, exc_type, exc_value, exc_tb):
+        """ Exit. """
+        self.logger.info('exit | Save configuration')
+        # Save configuration and data
+        self.set_general_cfg(self.path + '/configuration.yaml')
+        # TODO: Save data
+        # self.set_histo_orders(self.path + '/orders_hist.dat')
+        # self.set_histo_result(self.path + '/result_hist.dat')
+        if exc_type is not None:
+            self.logger.error('exit | {}: {}\n{}'.format(
+                exc_type, exc_value, exc_tb
+            ))
+
+        self.logger.info('exit | end')
+        super(StrategyBot, self).__exit__(exc_type, exc_value, exc_tb)
 
     def set_config(self, path):
         """ Set configuration.
@@ -226,21 +243,6 @@ class StrategyManager(_BotClient):
         # Set parameters for strategy function
         self.f_args = strat_cfg['args_params']
         self.f_kwrds = strat_cfg['kwargs_params']
-
-    def __exit__(self, exc_type, exc_value, exc_tb):
-        """ Exit. """
-        self.logger.info('exit | Save configuration')
-        # Save configuration and data
-        self.set_general_cfg(self.path + '/configuration.yaml')
-        # TODO: Save data
-        # self.set_histo_orders(self.path + '/orders_hist.dat')
-        # self.set_histo_result(self.path + '/result_hist.dat')
-        if exc_type is not None:
-            self.logger.error('exit | {}: {}\n{}'.format(
-                exc_type, exc_value, exc_tb
-            ))
-
-        self.logger.info('exit | end')
 
     def set_order(self, s, **kwargs):
         """ Compute signal and additional parameters to set order.
@@ -438,7 +440,7 @@ class StrategyManager(_BotClient):
             print(txt, end='\r')
             time.sleep(0.01)
 
-        self.logger.info('StrategyManager stopped.')
+        self.logger.info('StrategyBot stopped.')
 
     def _set_id_order(self):
         """ Set an unique order identifier.
@@ -488,7 +490,7 @@ if __name__ == '__main__':
     else:
         name = sys.argv[1]
 
-    sm = StrategyManager()
+    sm = StrategyBot()
     with sm(name):
         # sm.set_config('./strategies/' + name + '/configuration.yaml')
         for s, kw in sm:
@@ -504,6 +506,6 @@ if __name__ == '__main__':
             print(txt, end='\r')
             time.sleep(0.01)
 
-        sm.logger.info('StrategyManager stopped.')
+        sm.logger.info('StrategyBot stopped.')
 
     print('bye')
