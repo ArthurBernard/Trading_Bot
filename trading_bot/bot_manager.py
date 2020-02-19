@@ -4,24 +4,23 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2020-01-27 09:58:03
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-02-18 12:12:30
+# @Last modified time: 2020-02-19 15:53:35
 
 """ Set a server and run each bot. """
 
 # Built-in packages
-from threading import Thread
-from multiprocessing import Process
 import logging
-import time
+from multiprocessing import Process
 import os
+from threading import Thread
+import time
 
 # Third party packages
 
 # Local packages
-from trading_bot._server import _TradingBotManager
-from trading_bot._server import TradingBotServer as TBS
+from trading_bot._server import _TradingBotManager, TradingBotServer as TBS
 from trading_bot.results_manager import update_order_hist, ResultManager
-from trading_bot.strategy_manager import StrategyManager as SM
+from trading_bot.strategy_manager import StrategyBot as SB
 from trading_bot.tools.time_tools import str_time
 
 __all__ = [
@@ -48,22 +47,33 @@ class TradingBotManager(_TradingBotManager):
         self.fees = {}
         self.balance = {}
         self.txt = {}
+        self.order_bot_state = 'down'
+        self.strat_thread = {}
 
         # Set threads
         server_thread = Thread(
             target=self.set_server,
             kwargs={'address': address, 'authkey': authkey}
         )
+        listen_thread = Thread(target=self.listen_client, daemon=True)
         # bot_thread = Thread(target=self.runtime, args=(s,))
-        listen_thread = Thread(target=self.listen_om, daemon=True)
+        # listen_thread = Thread(target=self.listen_om, daemon=True)
+        # strat_thread = Thread(target=self.listen_client, daemon=True)
         server_thread.start()
         listen_thread.start()
+        # listen_thread.start()
+        # strat_thread.start()
         # bot_thread.start()
         # server_thread.join()
         # bot_thread.join()
         # self.set_fees()
         self.logger.info('init | init finished')
         self.runtime(s)
+
+    def __repr__(self):
+        return 'order bot is {} | {} are running'.format(
+            self.order_bot, self.strat_bot
+        )
 
     def set_server(self, address=('', 50000), authkey=b'tradingbot'):
         """ Initialize a server connection. """
@@ -79,7 +89,7 @@ class TradingBotManager(_TradingBotManager):
         """ Do something. """
         # TODO : Run OrderManagerClient object
         # TODO : Run all StrategyManagerClient objects
-        self.logger.debug('run | start to do something')
+        self.logger.debug('runtime | start')
         # Start bot OrdersManager
         # p_om = Process(
         #    target=start_order_manager,
@@ -90,7 +100,7 @@ class TradingBotManager(_TradingBotManager):
         # p_om.start()
         while time.time() - self.t < s:
             # print('{:.1f} sec.'.format(time.time() - self.t), end='\r')
-            txt = '{} | Have bean started {} ago'.format(
+            txt = '{} | Have been started {} ago'.format(
                 time.strftime('%y-%m-%d %H:%M:%S'),
                 str_time(int(time.time() - self.t)),
             )
@@ -112,7 +122,7 @@ class TradingBotManager(_TradingBotManager):
         # /!\ DEPRECATED /!\
         # TODO : set a dedicated pipe
         # TODO : run a new process for a new strategy
-        with SM(name, address=self.address, authkey=self.authkey) as sm:
+        with SB(name, address=self.address, authkey=self.authkey) as sm:
             sm.set_configuration(self.path + name + '/configuration.yaml')
             for s, kw in sm:
                 if s is not None:
@@ -132,7 +142,13 @@ class TradingBotManager(_TradingBotManager):
 
     def listen_om(self):
         """ Update fees and balance when received them from OrdersManager. """
+        self.logger.debug('listen_om | start')
         while True:
+            if not self.r_om.poll():
+                time.sleep(0.1)
+
+                continue
+
             msg = self.r_om.recv()
             for k, a in msg.items():
                 if k == 'fees':
@@ -150,8 +166,76 @@ class TradingBotManager(_TradingBotManager):
                 elif k == 'order':
                     self.logger.info('listen_om | order: {}'.format(a))
 
+                elif k == 'stop':
+                    self.logger.info('listen_om | stop due to {}'.format(a))
+
+                    return None
+
                 else:
                     self.logger.error('listen_om| unknown {}: {}'.format(k, a))
+
+    def listen_sb(self, _id):
+        """ Update fees and balance when received them from OrdersManager. """
+        _msg = 'listen_sb {} | '.format(_id)
+        self.logger.debug(_msg + 'start')
+
+        while True:
+            if not self.r_strat[_id].poll():
+                time.sleep(0.1)
+
+                continue
+
+            msg = self.r_strat[_id].recv()
+            for k, a in msg.items():
+                if k == 'stop':
+                    self.logger.info(_msg + 'stop due to {}'.format(a))
+
+                    return None
+
+                else:
+                    self.logger.error(_msg + 'unknown {}: {}'.format(k, a))
+
+    def listen_client(self):
+        """ Listen client (OrderManager and StrategyManager). """
+        self.logger.debug('listen_client | start')
+        while True:
+            if self.q_from_cli.empty():
+                time.sleep(0.1)
+
+                continue
+
+            _id, action = self.q_from_cli.get()
+            self.logger.debug('listen_client | {}: {}'.format(_id, action))
+            if _id == 0:
+                if action == 'up':
+                    # start thread listen OrderManager
+                    order_thread = Thread(
+                        target=self.listen_om,
+                        daemon=True
+                    )
+                    order_thread.start()
+
+                else:
+                    # shutdown thread
+                    order_thread.join()
+                    self.r_om.close()
+                    self.w_om.close()
+
+            else:
+                if action == 'up':
+                    # start thread listen StrategyBot
+                    self.strat_thread[_id] = Thread(
+                        target=self.listen_sb,
+                        kwargs={'_id': _id},
+                        daemon=True
+                    )
+                    self.strat_thread[_id].start()
+
+                elif action == 'down':
+                    # shutdown thread
+                    self.strat_thread[_id].join()
+                    self.r_strat[_id].close()
+                    self.w_strat[_id].close()
 
     def set_closed_order(self, result):
         """ Update closed orders and send it to ResultManager.
