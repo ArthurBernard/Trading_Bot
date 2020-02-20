@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2019-04-29 23:42:09
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-02-19 15:41:05
+# @Last modified time: 2020-02-20 16:21:37
 
 """ Client to manage orders execution. """
 
@@ -93,7 +93,6 @@ class OrdersManager(_ClientOrdersManager):
         _ClientOrdersManager.__init__(self, address=address, authkey=authkey)
         self.logger = logging.getLogger(__name__ + '.OrdersManager')
         self.logger.info('init | PID: {} PPID: {}'.format(getpid(), getppid()))
-        print(self.logger)
 
         self.id_max = 2147483647
         self.start = int(time.time())
@@ -244,8 +243,8 @@ class OrdersManager(_ClientOrdersManager):
 
             elif order.status == 'closed':
                 # res = self._set_result(order)
-                # self.w_tbm.send({'closed_order': res})
-                self.w_tbm.send({'order': order})
+                # self.conn_tbm.send({'closed_order': res})
+                self.conn_tbm.send({'order': order})
                 # TODO : save order object
                 # TODO : update results_manager
                 self.logger.debug('remove {}'.format(order))
@@ -265,7 +264,7 @@ class OrdersManager(_ClientOrdersManager):
         self.call_counter('TradeVolume')
         self.logger.debug('get_fees | fees are loaded')
 
-        self.w_tbm.send({'fees': self.fees})
+        self.conn_tbm.send({'fees': self.fees})
         self.logger.debug('get_fees | fees are sent to TradingBotManager')
 
     def get_balance(self):
@@ -274,7 +273,7 @@ class OrdersManager(_ClientOrdersManager):
         self.call_counter('Balance')
         self.logger.debug('get_balance | Loaded {}'.format(self.balance))
 
-        self.w_tbm.send({'balance': self.balance})
+        self.conn_tbm.send({'balance': self.balance})
         self.logger.debug('get_balance | Sent balance to TradingBotManager')
 
     def _get_id_strat(self, id_order):
