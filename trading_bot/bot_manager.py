@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2020-01-27 09:58:03
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-02-19 15:53:35
+# @Last modified time: 2020-02-20 15:11:29
 
 """ Set a server and run each bot. """
 
@@ -50,23 +50,15 @@ class TradingBotManager(_TradingBotManager):
         self.order_bot_state = 'down'
         self.strat_thread = {}
 
-        # Set threads
+        # Set client and server threads
         server_thread = Thread(
             target=self.set_server,
             kwargs={'address': address, 'authkey': authkey}
         )
-        listen_thread = Thread(target=self.listen_client, daemon=True)
-        # bot_thread = Thread(target=self.runtime, args=(s,))
-        # listen_thread = Thread(target=self.listen_om, daemon=True)
-        # strat_thread = Thread(target=self.listen_client, daemon=True)
+        client_thread = Thread(target=self.client_manager, daemon=True)
         server_thread.start()
-        listen_thread.start()
-        # listen_thread.start()
-        # strat_thread.start()
-        # bot_thread.start()
-        # server_thread.join()
-        # bot_thread.join()
-        # self.set_fees()
+        client_thread.start()
+
         self.logger.info('init | init finished')
         self.runtime(s)
 
@@ -195,9 +187,9 @@ class TradingBotManager(_TradingBotManager):
                 else:
                     self.logger.error(_msg + 'unknown {}: {}'.format(k, a))
 
-    def listen_client(self):
+    def client_manager(self):
         """ Listen client (OrderManager and StrategyManager). """
-        self.logger.debug('listen_client | start')
+        self.logger.debug('client_manager | start')
         while True:
             if self.q_from_cli.empty():
                 time.sleep(0.1)
@@ -205,37 +197,68 @@ class TradingBotManager(_TradingBotManager):
                 continue
 
             _id, action = self.q_from_cli.get()
-            self.logger.debug('listen_client | {}: {}'.format(_id, action))
-            if _id == 0:
-                if action == 'up':
-                    # start thread listen OrderManager
-                    order_thread = Thread(
-                        target=self.listen_om,
-                        daemon=True
-                    )
-                    order_thread.start()
+            self.conn[_id] = _ConnectionState(_id)
+            if action == 'up':
+                self.setup_client(_id)
 
-                else:
-                    # shutdown thread
-                    order_thread.join()
-                    self.r_om.close()
-                    self.w_om.close()
+            elif action == 'down':
+                self.shutdown_client(_id)
 
             else:
-                if action == 'up':
-                    # start thread listen StrategyBot
-                    self.strat_thread[_id] = Thread(
-                        target=self.listen_sb,
-                        kwargs={'_id': _id},
-                        daemon=True
-                    )
-                    self.strat_thread[_id].start()
+                self.logger.error('unknown action: {}'.format(action))
 
-                elif action == 'down':
-                    # shutdown thread
-                    self.strat_thread[_id].join()
-                    self.r_strat[_id].close()
-                    self.w_strat[_id].close()
+                raise ValueError('Unknown action: {}'.format(action))
+
+    def setup_client(self, _id):
+        """ Setup a client thread (OrdersManager, StrategyBot, etc.).
+
+        Parameters
+        ----------
+        _id : int
+            ID of the client. If equal to 0 then setup an OrdersManager, else
+            setup a StrategyBot.
+
+        """
+        self.logger.debug('setup_client | ID-{}'.format(_id))
+        if _id == 0:
+            # start thread listen OrderManager
+            self.order_thread = Thread(
+                target=self.listen_om,
+                daemon=True
+            )
+            self.order_thread.start()
+
+        else:
+            # start thread listen StrategyBot
+            self.strat_thread[_id] = Thread(
+                target=self.listen_sb,
+                kwargs={'_id': _id},
+                daemon=True
+            )
+            self.strat_thread[_id].start()
+
+    def shutdown_client(self, _id):
+        """ Shutdown a client thread (OrdersManager, StrategyBot, etc.).
+
+        Parameters
+        ----------
+        _id : int
+            ID of the client. If equal to 0 then setup an OrdersManager, else
+            setup a StrategyBot.
+
+        """
+        self.logger.debug('shutdown_client | ID-{}'.format(_id))
+        if _id == 0:
+            # shutdown thread
+            self.order_thread.join()
+            self.r_om.close()
+            self.w_om.close()
+
+        else:
+            # shutdown thread
+            self.strat_thread[_id].join()
+            self.r_strat[_id].close()
+            self.w_strat[_id].close()
 
     def set_closed_order(self, result):
         """ Update closed orders and send it to ResultManager.
