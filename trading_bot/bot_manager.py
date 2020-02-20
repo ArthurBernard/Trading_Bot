@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2020-01-27 09:58:03
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-02-20 15:11:29
+# @Last modified time: 2020-02-20 20:50:51
 
 """ Set a server and run each bot. """
 
@@ -34,7 +34,7 @@ class TradingBotManager(_TradingBotManager):
     # TODO : load general config
     # TODO : run strategies
 
-    def __init__(self, address=('', 50000), authkey=b'tradingbot', s=9):
+    def __init__(self, address=('', 50000), authkey=b'tradingbot'):
         """ Initialize Trading Bot Manager object. """
         _TradingBotManager.__init__(self, address=address, authkey=authkey)
 
@@ -47,35 +47,27 @@ class TradingBotManager(_TradingBotManager):
         self.fees = {}
         self.balance = {}
         self.txt = {}
-        self.order_bot_state = 'down'
-        self.strat_thread = {}
+        self.client_thread = Thread(target=self.client_manager, daemon=True)
 
-        # Set client and server threads
-        server_thread = Thread(
-            target=self.set_server,
-            kwargs={'address': address, 'authkey': authkey}
-        )
-        client_thread = Thread(target=self.client_manager, daemon=True)
-        server_thread.start()
-        client_thread.start()
+    def __enter__(self):
+        super(TradingBotManager, self).__enter__()
+        time.sleep(1)
+        self.client_thread.start()
 
-        self.logger.info('init | init finished')
-        self.runtime(s)
+    def __exit__(self, exc_type, exc_value, exc_tb):
+        """ Exit from TradingBotManager. """
+        super(TradingBotManager, self).__exit__(exc_type, exc_value, exc_tb)
+        if exc_type is not None:
+            self.logger.error('exit | {}: {}\n{}'.format(
+                exc_type, exc_value, exc_tb
+            ))
+
+        self.logger.info('run | TradingBotManager stopped.')
 
     def __repr__(self):
         return 'order bot is {} | {} are running'.format(
             self.order_bot, self.strat_bot
         )
-
-    def set_server(self, address=('', 50000), authkey=b'tradingbot'):
-        """ Initialize a server connection. """
-        self.m = TBS(address=address, authkey=authkey)
-        self.s = self.m.get_server()
-        self.logger.info('set_server | started')
-        # print(self.stop)
-        self.state['stop'] = False
-        self.s.serve_forever()
-        self.logger.info('set_server | stopped')
 
     def runtime(self, s=9):
         """ Do something. """
@@ -100,15 +92,9 @@ class TradingBotManager(_TradingBotManager):
             time.sleep(0.01)
 
         self.logger.debug('run | end to do something')
-        self.state['stop'] = True
-        self.logger.debug('run | stop propageted')
 
         # Wait until child process closed
         # p_om.join()
-
-        time.sleep(3)
-        self.s.stop_event.set()
-        self.logger.info('run | TradingBotManager stopped.')
 
     def run_strategy(self, name):
         # /!\ DEPRECATED /!\
@@ -135,13 +121,13 @@ class TradingBotManager(_TradingBotManager):
     def listen_om(self):
         """ Update fees and balance when received them from OrdersManager. """
         self.logger.debug('listen_om | start')
-        while True:
-            if not self.r_om.poll():
+        while not self.is_stop():
+            if not self.conn_om.poll():
                 time.sleep(0.1)
 
                 continue
 
-            msg = self.r_om.recv()
+            msg = self.conn_om.recv()
             for k, a in msg.items():
                 if k == 'fees':
                     self.fees.update(a)
@@ -171,13 +157,13 @@ class TradingBotManager(_TradingBotManager):
         _msg = 'listen_sb {} | '.format(_id)
         self.logger.debug(_msg + 'start')
 
-        while True:
-            if not self.r_strat[_id].poll():
+        while not self.is_stop():
+            if not self.conn_sb[_id].poll():
                 time.sleep(0.1)
 
                 continue
 
-            msg = self.r_strat[_id].recv()
+            msg = self.conn_sb[_id].recv()
             for k, a in msg.items():
                 if k == 'stop':
                     self.logger.info(_msg + 'stop due to {}'.format(a))
@@ -190,14 +176,13 @@ class TradingBotManager(_TradingBotManager):
     def client_manager(self):
         """ Listen client (OrderManager and StrategyManager). """
         self.logger.debug('client_manager | start')
-        while True:
+        while not self.is_stop():
             if self.q_from_cli.empty():
                 time.sleep(0.1)
 
                 continue
 
             _id, action = self.q_from_cli.get()
-            self.conn[_id] = _ConnectionState(_id)
             if action == 'up':
                 self.setup_client(_id)
 
@@ -222,20 +207,20 @@ class TradingBotManager(_TradingBotManager):
         self.logger.debug('setup_client | ID-{}'.format(_id))
         if _id == 0:
             # start thread listen OrderManager
-            self.order_thread = Thread(
+            self.conn_om.thread = Thread(
                 target=self.listen_om,
                 daemon=True
             )
-            self.order_thread.start()
+            self.conn_om.thread.start()
 
         else:
             # start thread listen StrategyBot
-            self.strat_thread[_id] = Thread(
+            self.conn_sb[_id].thread = Thread(
                 target=self.listen_sb,
                 kwargs={'_id': _id},
                 daemon=True
             )
-            self.strat_thread[_id].start()
+            self.conn_sb[_id].thread.start()
 
     def shutdown_client(self, _id):
         """ Shutdown a client thread (OrdersManager, StrategyBot, etc.).
@@ -247,18 +232,15 @@ class TradingBotManager(_TradingBotManager):
             setup a StrategyBot.
 
         """
-        self.logger.debug('shutdown_client | ID-{}'.format(_id))
         if _id == 0:
-            # shutdown thread
-            self.order_thread.join()
-            self.r_om.close()
-            self.w_om.close()
+            # shutdown ordermanager communication thread
+            self.conn_om.shutdown()
 
         else:
-            # shutdown thread
-            self.strat_thread[_id].join()
-            self.r_strat[_id].close()
-            self.w_strat[_id].close()
+            # shutdown stratbot communication thread
+            self.conn_sb[_id].shutdown()
+
+        self.logger.debug('shutdown_client | ID-{}'.format(_id))
 
     def set_closed_order(self, result):
         """ Update closed orders and send it to ResultManager.
@@ -311,5 +293,7 @@ if __name__ == '__main__':
     logging.config.dictConfig(config)
 
     # start_tradingbotmanager()
-    tbm = TradingBotManager(s=500)
+    tbm = TradingBotManager()
+    with tbm:
+        tbm.runtime(s=300)
     # tbm.run()
