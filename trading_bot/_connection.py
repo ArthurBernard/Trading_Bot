@@ -4,10 +4,11 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2020-02-20 16:35:31
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-02-20 18:00:03
+# @Last modified time: 2020-02-21 17:52:14
 
 # Built-in packages
 import logging
+import time
 
 # Third party packages
 
@@ -23,34 +24,62 @@ class Connection:
     thread = None
 
     def __init__(self, _id, name='connection'):
+        self.logger = logging.getLogger(__name__)
         self.id = _id
         self.name = name
 
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        if self.state == 'down':
+            self._shutdown()
+
+            raise StopIteration
+
+        if self.poll():
+            return self._handler(*self.recv())
+
+        else:
+            time.sleep(0.1)
+
+            return None, None
+
     def __repr__(self):
-        return 'ID-{self.id:9} | {self.name} is {self.state}'.format(self=self)
+        return 'ID-{self.id:2} | {self.name} is {self.state}'.format(self=self)
 
     def setup(self, reader, writer):
         self.state = 'up'
         self.r = reader
         self.w = writer
+        self.logger.debug('setup | {}'.format(self))
 
     def shutdown(self, msg=None):
-        if self.thread is not None:
-            self.thread.join()
-
-        self.send({'stop': msg})
         self.state = 'down'
-        self.r.close()
-        self.w.close()
+        if msg is not None:
+            self.logger.debug('shutdown | {}'.format(msg))
+
+        self.logger.debug('shutdown | {}'.format(self))
+        self._shutdown()
 
     def recv(self):
-        return self.r.recv()
+        k, a = self.r.recv()
+
+        return k, a
 
     def send(self, msg):
         self.w.send(msg)
 
     def poll(self):
         return self.r.poll()
+
+    def _handler(self, k, a):
+        if k == 'stop':
+            self.shutdown(msg=a)
+
+            raise StopIteration
+
+        return k, a
 
     def _set_reader(self, reader):
         self.r = reader
@@ -62,6 +91,52 @@ class Connection:
         if self.r is not None:
             self.state = 'up'
 
+    def _shutdown(self):
+        self.r.close()
+        self.w.close()
+
+
+class ConnectionOrderManager(Connection):
+    """ Connection object to OrderManager object. """
+
+    def __init__(self):
+        super(ConnectionOrderManager, self).__init__(0, name='order_manager')
+
+    # def shutdown(self, msg=None):
+    #    self.send(('stop', msg),)
+    #    super(ConnectionOrderManager, self)._shutdown(msg=msg)
+
+
+class ConnectionStrategyBot(Connection):
+    """ Connection object to StrategyBot object. """
+
+    def _handler(self, k, a):
+        k, a = super(ConnectionStrategyBot, self)._handler(k, a)
+        if k == 'name':
+            self.name = a
+
+        # elif k == 'switch_id':
+        #    self.id = a
+
+        #    return k, a
+
+        else:
+
+            return k, a
+
+        return None, None
+
+
+class ConnectionTradingBotManager(Connection):
+    """ Connection object to TradingBotManager object. """
+
+    def __init__(self, _id):
+        super(ConnectionTradingBotManager, self).__init__(_id, name='TBM')
+
+    # def _set_id(self, _id):
+    #    self.id = _id
+    #    self.send(('switch_id', _id),)
+
 
 class ConnDict(dict):
     """ Connection collection object.
@@ -69,6 +144,7 @@ class ConnDict(dict):
     Methods
     -------
     append
+    # switch_id
     update
 
     """
@@ -76,29 +152,29 @@ class ConnDict(dict):
     def __init__(self, *conn, **kwconn):
         """ Initialize a collection of connection objects. """
         self.logger = logging.getLogger(__name__ + '.ConnDict')
-        for k, v in kwconn.items():
-            self._is_conn(v)
+        for k, c in kwconn.items():
+            self._is_conn(c)
 
-        for o in conn:
-            if self._is_conn(o):
-                kwconn[str(o.id)] = o
+        for c in conn:
+            if self._is_conn(c):
+                kwconn[str(c.id)] = c
 
         super(ConnDict, self).__init__(**kwconn)
 
-    def __setitem__(self, key, value):
-        """ Set item conn.
+    def __setitem__(self, _id, conn):
+        """ Set item Connection object.
 
         Parameters
         ----------
-        key : int
-            ID of the conn.
-        value : Connection
-            The conn object to collect.
+        _id : int
+            ID of the Connection object.
+        conn : Connection
+            The Connection object to append collect.
 
         """
-        self.logger.debug('set {}'.format(key))
-        self._is_conn(value)
-        dict.__setitem__(self, key, value)
+        self.logger.debug('set | {}'.format(conn))
+        self._is_conn(conn)
+        dict.__setitem__(self, _id, conn)
 
     def __repr__(self):
         """ Represent the collection of connections.
@@ -109,11 +185,9 @@ class ConnDict(dict):
             Representation of the collection of connections.
 
         """
-        txt = ''
-        for v in self.values():
-            txt += '{}\n'.format(v)
+        txt = ',\n'.join([str(c) for c in self.values()])
 
-        return txt
+        return '{' + txt + '}'
 
     def __eq__(self, other):
         """ Compare self with other object.
@@ -136,11 +210,37 @@ class ConnDict(dict):
         Parameters
         ----------
         conn : Connection
-            conn object to append.
+            Connection object to append.
 
         """
         self._is_conn(conn)
-        self[conn.id] = conn
+        if conn.id not in self.keys():
+            self[conn.id] = conn
+
+        else:
+            self.logger.error('append | {} is already stored'.format(conn))
+
+            raise ValueError('{} and {}'.format(conn, self[conn.id]))
+
+    # def switch_id(self, new_id, ex_id):
+    #    """ Remove `ex_id` ID and append `new_id` ID of a connection.
+    #
+    #    Parameters
+    #    ----------
+    #    new_id : int
+    #        New ID of the connection object.
+    #    ex_id : int
+    #        Old ID of the connection to remove.
+    #
+    #    """
+    #    self.logger.debug('switch_id | {} to {}'.format(ex_id, new_id))
+    #    if new_id not in self.keys():
+    #        self[new_id] = self.pop(ex_id)
+
+    #    else:
+    #        txt_err = 'ID-{} is already stored'.format(new_id)
+    #        self.logger.error(txt_err)
+    #        self[ex_id].send(('stop', txt_err),)
 
     def update(self, *conn, **kwconn):
         """ Update self with conn objects or an other collection of conn.
@@ -148,20 +248,20 @@ class ConnDict(dict):
         Parameters
         ----------
         *conn : Connection or ConnDict
-            conn objects or collection of conn to update.
+            Connection objects or collection of conn to update.
         **kwconn : Connection
-            conn objects to update.
+            Connection objects to update.
 
         """
-        for k, v in kwconn.items():
-            self._is_conn(v)
+        for k, c in kwconn.items():
+            self._is_conn(c)
 
-        for o in conn:
-            if isinstance(o, ConnDict):
-                kwconn.update({k: v for k, v in o.items()})
+        for c in conn:
+            if isinstance(c, ConnDict):
+                kwconn.update({k: v for k, v in c.items()})
 
-            elif self._is_conn(o):
-                kwconn[str(o.id)] = o
+            elif self._is_conn(c):
+                kwconn[str(c.id)] = c
 
         dict.update(self, **kwconn)
 

@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2019-05-02 19:07:38
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-02-18 12:14:01
+# @Last modified time: 2020-02-18 17:38:49
 
 """ Tools to manager results and display it. """
 
@@ -12,9 +12,9 @@
 import logging
 
 # External packages
-import pandas as pd
-import numpy as np
 import fynance as fy
+import numpy as np
+import pandas as pd
 
 # Local packages
 from trading_bot.tools.io import get_df, save_df

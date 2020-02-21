@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2019-05-12 22:57:20
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-02-19 15:45:52
+# @Last modified time: 2020-02-21 17:34:49
 
 """ Client to manage a financial strategy. """
 
@@ -163,10 +163,11 @@ class StrategyBot(_ClientStrategyBot):
 
     def __enter__(self):
         """ Enter. """
-        super(StrategyBot, self).__enter__()
         # TODO : Load precedent data
         self.logger.info('enter | Load configuration and history')
         self.set_config(self.path + '/configuration.yaml')
+        super(StrategyBot, self).__enter__()
+        self.conn_tbm.send(('name', name),)
         # self.get_histo_orders(self.path + '/orders_hist.dat')
         # self.get_histo_result(self.path + '/result_hist.dat')
 
@@ -213,8 +214,8 @@ class StrategyBot(_ClientStrategyBot):
     def _get_general_cfg(self, strat_cfg):
         # Get general parameters and strategy state
         self.frequency = strat_cfg['frequency']
-        self.id_strat = strat_cfg['id_strat']
-        name_logger = __name__ + '.Strat-' + str(self.id_strat)
+        self.id = strat_cfg['id_strat']
+        name_logger = __name__ + '.Strat-' + str(self.id)
         self.logger = logging.getLogger(name_logger)
         self.current_pos = strat_cfg['current_pos']
         self.current_vol = strat_cfg['current_vol']
@@ -357,8 +358,9 @@ class StrategyBot(_ClientStrategyBot):
         order = self.Order(id_order, input=kwargs, time_force=time_force)
         self.q_ord.put(order)
         self.logger.info(' send_order | {}'.format(order))
-        # self.q_ord.put((self.id_strat, kwargs))
+        # self.q_ord.put((self.id, kwargs))
         # self.logger.info('send_order | Params {}'.format(kwargs))
+        self.conn_tbm.send(('hello', 'world'),)
 
         return self._set_output(kwargs)
 
@@ -466,8 +468,8 @@ class StrategyBot(_ClientStrategyBot):
         with open(self.path + '/id_order.dat', 'wb') as f:
             Pickler(f).dump(id_order)
 
-        id_strat = str(self.id_strat)
-        if self.id_strat < 10:
+        id_strat = str(self.id)
+        if self.id < 10:
             id_strat = '0' + id_strat
 
         return int(str(id_order) + str(id_strat))

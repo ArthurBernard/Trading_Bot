@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2019-04-29 23:42:09
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-02-20 16:21:37
+# @Last modified time: 2020-02-21 10:00:47
 
 """ Client to manage orders execution. """
 
@@ -54,8 +54,6 @@ class OrdersManager(_ClientOrdersManager):
     get_query_order(id_order)
         Return status of a specified order or position.
     # TODO : cancel orders/position if too far of mid
-    # TODO : replace limit order/position
-    # TODO : market order/position if time is over
     # TODO : Singleton
     # TODO : Asynchronous methods
     # TODO : get_balance
@@ -244,7 +242,7 @@ class OrdersManager(_ClientOrdersManager):
             elif order.status == 'closed':
                 # res = self._set_result(order)
                 # self.conn_tbm.send({'closed_order': res})
-                self.conn_tbm.send({'order': order})
+                self.conn_tbm.send(('order', order),)
                 # TODO : save order object
                 # TODO : update results_manager
                 self.logger.debug('remove {}'.format(order))
@@ -264,7 +262,7 @@ class OrdersManager(_ClientOrdersManager):
         self.call_counter('TradeVolume')
         self.logger.debug('get_fees | fees are loaded')
 
-        self.conn_tbm.send({'fees': self.fees})
+        self.conn_tbm.send(('fees', self.fees),)
         self.logger.debug('get_fees | fees are sent to TradingBotManager')
 
     def get_balance(self):
@@ -273,7 +271,7 @@ class OrdersManager(_ClientOrdersManager):
         self.call_counter('Balance')
         self.logger.debug('get_balance | Loaded {}'.format(self.balance))
 
-        self.conn_tbm.send({'balance': self.balance})
+        self.conn_tbm.send(('balance', self.balance),)
         self.logger.debug('get_balance | Sent balance to TradingBotManager')
 
     def _get_id_strat(self, id_order):

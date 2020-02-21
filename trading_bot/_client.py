@@ -4,18 +4,19 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2020-01-28 16:47:55
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-02-20 18:00:10
+# @Last modified time: 2020-02-21 17:54:33
 
 """ Clients to connect to TradingBotServer. """
 
 # Built-in packages
+import logging
 import os
 from random import randrange
 
 # Third party packages
 
 # Local packages
-from trading_bot._connection import Connection, ConnDict
+from trading_bot._connection import ConnectionTradingBotManager, ConnDict
 from trading_bot._server import TradingBotServer as TBS
 from trading_bot.data_requests import DataBaseManager, DataExchangeManager
 
@@ -28,24 +29,27 @@ class _ClientBot:
         'limit': 'fees_maker',
     }
 
-    def __init__(self, address=('', 50000), authkey=b'tradingbot', _id=None):
+    def __init__(self, address=('', 50000), authkey=b'tradingbot'):
         """ Initialize a client object and connect to the TradingBotServer. """
-        self.id = randrange(1, 1e9) if _id is None else _id
-        print('Id {} | Module {} | process ID is {} | parent PID is {}'.format(
-            self.id, __name__, os.getpid(), os.getppid()
-        ))
+        # self.id = randrange(100, 1e9) if _id is None else _id
+        self.logger = logging.getLogger(__name__)
+        self.logger.debug(
+            'Module {} | process ID is {} | parent PID is {}'.format(
+                __name__, os.getpid(), os.getppid()
+            )
+        )
         # register methods
         TBS.register('get_queue_orders')
         TBS.register('get_queue_cli_to_tbm')
         TBS.register('get_state')
         TBS.register('get_reader_tbm')
         TBS.register('get_writer_tbm')
-        # authentication and connection to server
+        # authentication and ConnectionTradingBotManager to server
         self.m = TBS(address=address, authkey=authkey)
         self.m.connect()
 
     def __enter__(self):
-        # setup connection to TBM
+        # setup ConnectionTradingBotManager to TBM
         self.conn_tbm.setup(
             self.m.get_reader_tbm(self.id),
             self.m.get_writer_tbm(self.id)
@@ -60,7 +64,8 @@ class _ClientBot:
         self.q_to_tbm.put((self.id, 'up'),)
 
     def __exit__(self, exc_type, exc_value, exc_tb):
-        # shutdown connection to TBM
+        # shutdown ConnectionTradingBotManager to TBM
+        self.q_to_tbm.put((self.id, 'down'),)
         self.conn_tbm.shutdown(msg=exc_type)
 
     def is_stop(self):
@@ -81,9 +86,9 @@ class _ClientStrategyBot(_ClientBot):
         """ Initialize a client object and connect to TradingBotServer. """
         TBS.register('get_proxy_fees')
         _ClientBot.__init__(self, address=address, authkey=authkey)
-        self.conn_tbm = Connection(self.id, name='strat')
 
     def __enter__(self):
+        self.conn_tbm = ConnectionTradingBotManager(self.id)
         super(_ClientStrategyBot, self).__enter__()
         self.p_fees = self.m.get_proxy_fees()
 
@@ -112,11 +117,17 @@ class _ClientStrategyBot(_ClientBot):
 
             return 0.0
 
+    # def _set_id(self, _id):
+    #    if _id != self.id:
+    #        self.id = _id
+    #        self.conn_tbm._set_id(_id)
+
 
 class _ClientOrdersManager(_ClientBot):
     """ Base class for an conn manager. """
 
     def __init__(self, address=('', 50000), authkey=b'tradingbot'):
         """ Initialize a client object and connect to TradingBotServer. """
-        _ClientBot.__init__(self, address=address, authkey=authkey, _id=0)
-        self.conn_tbm = Connection(self.id, name='order_manager')
+        self.id = 0
+        _ClientBot.__init__(self, address=address, authkey=authkey)
+        self.conn_tbm = ConnectionTradingBotManager(self.id)

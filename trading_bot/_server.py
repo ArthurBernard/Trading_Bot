@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2020-01-27 09:58:03
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-02-20 23:27:43
+# @Last modified time: 2020-02-21 16:57:48
 
 """ Base object for trading bot server. """
 
@@ -20,7 +20,9 @@ import time
 # Third party packages
 
 # Local packages
-from trading_bot._connection import Connection, ConnDict
+from trading_bot._connection import (
+    ConnDict, ConnectionOrderManager, ConnectionStrategyBot,
+)
 
 
 class TradingBotServer(BaseManager):
@@ -32,7 +34,7 @@ class TradingBotServer(BaseManager):
 class _TradingBotManager:
     """ Base class of trading bot manager. """
     conn_sb = ConnDict()
-    conn_om = Connection(0, name='order_manager')
+    conn_om = ConnectionOrderManager()
 
     def __init__(self, address=('', 50000), authkey=b'tradingbot'):
         """ Initialize the trading bot manager. """
@@ -96,7 +98,6 @@ class _TradingBotManager:
         self.m = TradingBotServer(address=address, authkey=authkey)
         self.s = self.m.get_server()
         self.logger.info('set_server | started')
-        # print(self.stop)
         self.state['stop'] = False
         self.s.serve_forever()
         self.logger.info('set_server | stopped')
@@ -121,9 +122,14 @@ class _TradingBotManager:
 
         else:
             if _id not in self.conn_sb:
-                self.conn_sb.append(Connection(_id))
+                self.conn_sb.append(ConnectionStrategyBot(_id))
 
-            self.conn_sb[_id]._set_reader(r)
+            if self.conn_sb[_id].state != 'up':
+                self.conn_sb[_id]._set_reader(r)
+
+            else:
+
+                raise ConnectionRefusedError
 
         return w
 
@@ -147,9 +153,14 @@ class _TradingBotManager:
 
         else:
             if _id not in self.conn_sb:
-                self.conn_sb.append(Connection(_id))
+                self.conn_sb.append(ConnectionStrategyBot(_id))
 
-            self.conn_sb[_id]._set_writer(w)
+            if self.conn_sb[_id].state != 'up':
+                self.conn_sb[_id]._set_writer(w)
+
+            else:
+
+                raise ConnectionRefusedError
 
         return r
 

@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2020-02-06 11:57:48
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-02-18 11:41:55
+# @Last modified time: 2020-02-21 16:47:28
 
 """ Each order inherits from _BasisOrder object, and each order object has
 specified `update` method.
@@ -599,11 +599,9 @@ class OrderDict(dict):
         txt = 'waiting: {}, open: {}, closed: {}'.format(
             self._waiting, self._open, self._closed
         )
-        txt += '\n{'
-        for v in self.values():
-            txt += '{},\n'.format(v)
+        txt += '\n{' + ',\n'.join([str(v) for v in self.values()]) + '}'
 
-        return txt[:-2] + '}'
+        return txt
 
     def __eq__(self, other):
         """ Compare self with other object.
