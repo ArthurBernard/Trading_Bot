@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2020-01-27 09:58:03
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-02-21 16:57:48
+# @Last modified time: 2020-02-22 14:12:37
 
 """ Base object for trading bot server. """
 
@@ -20,9 +20,9 @@ import time
 # Third party packages
 
 # Local packages
-from trading_bot._connection import (
-    ConnDict, ConnectionOrderManager, ConnectionStrategyBot,
-)
+from trading_bot._connection import ConnOrderManager, ConnStrategyBot
+from trading_bot._containers import ConnDict
+from trading_bot._exceptions import ConnRefused
 
 
 class TradingBotServer(BaseManager):
@@ -34,7 +34,7 @@ class TradingBotServer(BaseManager):
 class _TradingBotManager:
     """ Base class of trading bot manager. """
     conn_sb = ConnDict()
-    conn_om = ConnectionOrderManager()
+    conn_om = ConnOrderManager()
 
     def __init__(self, address=('', 50000), authkey=b'tradingbot'):
         """ Initialize the trading bot manager. """
@@ -121,15 +121,15 @@ class _TradingBotManager:
             self.conn_om._set_reader(r)
 
         else:
-            if _id not in self.conn_sb:
-                self.conn_sb.append(ConnectionStrategyBot(_id))
+            if _id not in self.conn_sb.keys():
+                self.conn_sb.append(ConnStrategyBot(_id))
 
             if self.conn_sb[_id].state != 'up':
                 self.conn_sb[_id]._set_reader(r)
 
             else:
 
-                raise ConnectionRefusedError
+                raise ConnRefused(_id, msg='already connected to TBM')
 
         return w
 
@@ -152,15 +152,15 @@ class _TradingBotManager:
             self.conn_om._set_writer(w)
 
         else:
-            if _id not in self.conn_sb:
-                self.conn_sb.append(ConnectionStrategyBot(_id))
+            if _id not in self.conn_sb.keys():
+                self.conn_sb.append(ConnStrategyBot(_id))
 
             if self.conn_sb[_id].state != 'up':
                 self.conn_sb[_id]._set_writer(w)
 
             else:
 
-                raise ConnectionRefusedError
+                raise ConnRefused(_id, msg='already connected to TBM')
 
         return r
 

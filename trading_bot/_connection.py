@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2020-02-20 16:35:31
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-02-22 11:14:39
+# @Last modified time: 2020-02-22 14:16:30
 
 """ Objects to send and receive objetcs between clients. """
 
@@ -17,9 +17,7 @@ import time
 # Local packages
 
 __all__ = [
-    'ConnectionStrategyBot',
-    'ConnectionOrderManager',
-    'ConnectionTradingBotManager'
+    'ConnStrategyBot', 'ConnOrderManager', 'ConnTradingBotManager'
 ]
 
 
@@ -30,7 +28,8 @@ class _BasisConnection:
     thread = None
 
     def __init__(self, _id, name='connection'):
-        self.logger = logging.getLogger(__name__)
+        # self.logger = logging.getLogger(__name__)
+        self.logger = logging.getLogger('{}-{}'.format(name, _id))
         self.id = _id
         self.name = name
 
@@ -92,10 +91,14 @@ class _BasisConnection:
         if self.w is not None:
             self.state = 'up'
 
+        self.logger.debug('setup | {}'.format(self))
+
     def _set_writer(self, writer):
         self.w = writer
         if self.r is not None:
             self.state = 'up'
+
+        self.logger.debug('setup | {}'.format(self))
 
     def _shutdown(self):
         self.r.close()
@@ -115,6 +118,9 @@ class ConnOrderManager(_BasisConnection):
 
 class ConnStrategyBot(_BasisConnection):
     """ Connection object to StrategyBot object. """
+
+    def __init__(self, _id, name='StratBot'):
+        super(ConnStrategyBot, self).__init__(_id, name)
 
     def _handler(self, k, a):
         k, a = super(ConnStrategyBot, self)._handler(k, a)

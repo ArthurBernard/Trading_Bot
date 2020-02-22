@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2020-02-22 11:01:49
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-02-22 11:13:24
+# @Last modified time: 2020-02-22 14:11:39
 
 """ Module with specific containers objects. """
 
@@ -14,8 +14,8 @@ import logging
 # Third party packages
 
 # Local packages
-from orders import _BasisOrder
-from _connection import _BasisConnection
+from trading_bot.orders import _BasisOrder
+from trading_bot._connection import _BasisConnection
 
 __all__ = ['OrderDict', 'ConnDict']
 
@@ -395,6 +395,7 @@ class ConnDict(dict):
 
     def _is_conn(self, obj):
         if not isinstance(obj, _BasisConnection):
+            self.logger.error('{} is {}'.format(obj, type(obj)))
 
             raise TypeError("{} must be a Connection object".format(obj))
 

@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2020-01-27 09:58:03
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-02-21 17:53:28
+# @Last modified time: 2020-02-21 18:09:55
 
 """ Set a server and run each bot. """
 
@@ -54,7 +54,7 @@ class TradingBotManager(_TradingBotManager):
     _handler_om = {
         'fees': fees.update,
         'balance': balance.update,
-        'closed_order': set_closed_order,
+        # 'closed_order': set_closed_order,
         'order': lambda x: x,
     }
     _handler_sb = {
@@ -151,6 +151,9 @@ class TradingBotManager(_TradingBotManager):
             if k in self._handler_om.keys():
                 self._handler_om[k](a)
                 self.logger.debug('listen_om | {}: {}'.format(k, a))
+
+            elif k == 'closed_order':
+                self.set_closed_order(a)
 
             elif k is None:
                 pass
@@ -270,7 +273,7 @@ class TradingBotManager(_TradingBotManager):
         self.logger.debug('shutdown_client | ID-{}'.format(_id))
 
     def set_closed_order(self, result):
-        """ Update closed orders and send it to ResultManager.
+        """ Update closed orders and send it to StrategyBot.
 
         Parameters
         ----------
@@ -282,9 +285,11 @@ class TradingBotManager(_TradingBotManager):
             'strat_id': int}.
 
         """
+        conn = self.conn_sb[result['strat_id']]
         self.logger.debug('set_closed_order | id {}'.format(result['userref']))
-        update_order_hist(result, name='', path='./results/')
-        # TODO : update vol to strategy_manager
+        update_order_hist(result, name=conn.name + '/', path='./strategies/')
+        conn.send(result)
+        # TODO : send it also to result manager ?
 
 
 def start_order_manager(path_log, exchange='kraken', address=('', 50000),

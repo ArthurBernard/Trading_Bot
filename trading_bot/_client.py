@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2020-01-28 16:47:55
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-02-21 17:54:33
+# @Last modified time: 2020-02-22 12:12:29
 
 """ Clients to connect to TradingBotServer. """
 
@@ -16,7 +16,8 @@ from random import randrange
 # Third party packages
 
 # Local packages
-from trading_bot._connection import ConnectionTradingBotManager, ConnDict
+from trading_bot._connection import ConnTradingBotManager
+from trading_bot._containers import ConnDict
 from trading_bot._server import TradingBotServer as TBS
 from trading_bot.data_requests import DataBaseManager, DataExchangeManager
 
@@ -88,7 +89,7 @@ class _ClientStrategyBot(_ClientBot):
         _ClientBot.__init__(self, address=address, authkey=authkey)
 
     def __enter__(self):
-        self.conn_tbm = ConnectionTradingBotManager(self.id)
+        self.conn_tbm = ConnTradingBotManager(self.id)
         super(_ClientStrategyBot, self).__enter__()
         self.p_fees = self.m.get_proxy_fees()
 
@@ -130,4 +131,4 @@ class _ClientOrdersManager(_ClientBot):
         """ Initialize a client object and connect to TradingBotServer. """
         self.id = 0
         _ClientBot.__init__(self, address=address, authkey=authkey)
-        self.conn_tbm = ConnectionTradingBotManager(self.id)
+        self.conn_tbm = ConnTradingBotManager(self.id)
