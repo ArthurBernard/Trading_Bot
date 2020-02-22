@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2020-02-04 16:04:55
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-02-09 11:04:28
+# @Last modified time: 2020-02-22 11:42:43
 
 """ Define some various richly-typed exceptions. """
 
@@ -13,6 +13,10 @@
 # Third party packages
 
 # Local packages
+
+# =========================================================================== #
+#                         Errors with order objects                           #
+# =========================================================================== #
 
 
 class OrderError(Exception):
@@ -52,3 +56,28 @@ class MissingOrderError(Exception):
             msg = '{}: {}'.format(msg_prefix, msg)
 
         super(MissingOrderError, self).__init__(msg)
+
+
+# =========================================================================== #
+#                       Errors with connection objects                        #
+# =========================================================================== #
+
+
+class ConnError(Exception):
+    """ Connection exception. """
+
+    pass
+
+
+class ConnRefused(ConnError):
+    """ Connection refused exception. """
+
+    def __init__(self, _id, msg=None, msg_prefix=None):
+        txt = '{}'.format(_id)
+        if msg is not None:
+            txt += ' ' + msg
+
+        if msg_prefix is not None:
+            txt = msg_prefix + ', ' + txt
+
+        super(ConnRefused, self).__init__(txt)
