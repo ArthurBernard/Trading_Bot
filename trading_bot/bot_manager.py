@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2020-01-27 09:58:03
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-02-21 18:09:55
+# @Last modified time: 2020-02-24 20:14:58
 
 """ Set a server and run each bot. """
 
@@ -65,8 +65,7 @@ class TradingBotManager(_TradingBotManager):
         """ Initialize Trading Bot Manager object. """
         _TradingBotManager.__init__(self, address=address, authkey=authkey)
 
-        self.logger = logging.getLogger(__name__ + '.TradingBotManager')
-        self.logger.info('init | current PID is {}'.format(os.getpid()))
+        self.logger = logging.getLogger(__name__)
         self.t = time.time()
         self.path_log = '/home/arthur/Strategies/Data_Server/Untitled_Document2.txt'
         self.address = address
@@ -88,7 +87,7 @@ class TradingBotManager(_TradingBotManager):
                 exc_type, exc_value, exc_tb
             ))
 
-        self.logger.info('run | TradingBotManager stopped.')
+        self.logger.info('exit | TradingBotManager stopped')
 
     def __repr__(self):
         return 'order bot is {} | {} are running'.format(

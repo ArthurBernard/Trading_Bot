@@ -4,20 +4,18 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2020-01-28 16:47:55
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-02-22 12:12:29
+# @Last modified time: 2020-02-24 20:18:12
 
 """ Clients to connect to TradingBotServer. """
 
 # Built-in packages
 import logging
 import os
-from random import randrange
 
 # Third party packages
 
 # Local packages
 from trading_bot._connection import ConnTradingBotManager
-from trading_bot._containers import ConnDict
 from trading_bot._server import TradingBotServer as TBS
 from trading_bot.data_requests import DataBaseManager, DataExchangeManager
 
@@ -34,11 +32,10 @@ class _ClientBot:
         """ Initialize a client object and connect to the TradingBotServer. """
         # self.id = randrange(100, 1e9) if _id is None else _id
         self.logger = logging.getLogger(__name__)
-        self.logger.debug(
-            'Module {} | process ID is {} | parent PID is {}'.format(
-                __name__, os.getpid(), os.getppid()
-            )
+        self.logger.info(
+            'init | PID: {} | PPID: {}'.format(os.getpid(), os.getppid())
         )
+
         # register methods
         TBS.register('get_queue_orders')
         TBS.register('get_queue_cli_to_tbm')
@@ -117,11 +114,6 @@ class _ClientStrategyBot(_ClientBot):
         else:
 
             return 0.0
-
-    # def _set_id(self, _id):
-    #    if _id != self.id:
-    #        self.id = _id
-    #        self.conn_tbm._set_id(_id)
 
 
 class _ClientOrdersManager(_ClientBot):

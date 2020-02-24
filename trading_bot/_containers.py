@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2020-02-22 11:01:49
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-02-22 14:11:39
+# @Last modified time: 2020-02-24 20:17:48
 
 """ Module with specific containers objects. """
 
@@ -39,7 +39,7 @@ class OrderDict(dict):
 
     def __init__(self, *orders, **kworders):
         """ Initialize a collection of order objects. """
-        self.logger = logging.getLogger(__name__ + '.OrderDict')
+        self.logger = logging.getLogger(__name__)
         for k, v in kworders.items():
             self._is_order(v)
 
@@ -279,7 +279,7 @@ class ConnDict(dict):
 
     def __init__(self, *conn, **kwconn):
         """ Initialize a collection of connection objects. """
-        self.logger = logging.getLogger(__name__ + '.ConnDict')
+        self.logger = logging.getLogger(__name__)
         for k, c in kwconn.items():
             self._is_conn(c)
 

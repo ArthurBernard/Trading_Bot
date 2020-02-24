@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2020-02-15 12:34:18
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-02-17 16:02:28
+# @Last modified time: 2020-02-24 20:19:51
 
 """ Some call counter objects. """
 
@@ -55,7 +55,7 @@ class _CallCounter(object):
             Max call rate counter.
 
         """
-        self.logger = logging.getLogger(__name__ + '._CallCounter')
+        self.logger = logging.getLogger(__name__)
         self.time_down = time_down
         self.call_rate_limit = call_rate_limit
         self.t = int(time.time())
@@ -154,7 +154,7 @@ class KrakenCallCounter(_CallCounter):
             ))
 
         super(KrakenCallCounter, self).__init__(time_down, call_rate_limit)
-        self.logger = logging.getLogger(__name__ + '.KrakenCallCounter')
+        self.logger = logging.getLogger(__name__)
 
     def __call__(self, method):
         """ Increase the Kraken counter and wait if necessary.

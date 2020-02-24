@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2020-02-20 16:35:31
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-02-22 14:16:30
+# @Last modified time: 2020-02-24 20:20:57
 
 """ Objects to send and receive objetcs between clients. """
 
@@ -29,7 +29,7 @@ class _BasisConnection:
 
     def __init__(self, _id, name='connection'):
         # self.logger = logging.getLogger(__name__)
-        self.logger = logging.getLogger('{}-{}'.format(name, _id))
+        self.logger = logging.getLogger(__name__ + '.{}-{}'.format(name, _id))
         self.id = _id
         self.name = name
 

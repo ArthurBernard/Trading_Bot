@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2019-05-12 22:57:20
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-02-22 12:13:46
+# @Last modified time: 2020-02-24 20:22:49
 
 """ Client to manage a financial strategy. """
 
@@ -15,12 +15,14 @@ from multiprocessing import Pipe
 from os import getpid, getppid
 from pickle import Pickler, Unpickler
 import sys
+from threading import Thread
 import time
 
 # External packages
 
 # Local packages
 from trading_bot._client import _ClientStrategyBot
+from trading_bot._containers import OrderDict
 from trading_bot.data_requests import get_close
 from trading_bot.orders import OrderSL, OrderBestLimit
 from trading_bot.tools.io import load_config_params, dump_config_params
@@ -80,8 +82,9 @@ class StrategyBot(_ClientStrategyBot):
         """
         # Set client and connect to the trading bot server
         _ClientStrategyBot.__init__(self, address=address, authkey=authkey)
-        self.logger = logging.getLogger(__name__ + '.StrategyBot')
+        self.logger = logging.getLogger(__name__)
         self.logger.info('init | PID: {} PPID: {}'.format(getpid(), getppid()))
+        self.ord_dict = OrderDict()
 
     def __call__(self, name_strat, STOP=None, path='./strategies'):
         """ Set parameters of strategy.
@@ -353,14 +356,13 @@ class StrategyBot(_ClientStrategyBot):
             Parameters for order, e.g. volume, order type, etc.
 
         """
-        id_order = self._set_id_order()
+        _id = self._set_id_order()
         time_force = self.frequency - 60 if self.frequency > 60 else None
-        order = self.Order(id_order, input=kwargs, time_force=time_force)
+        order = self.Order(_id, input=kwargs, time_force=time_force)
         self.q_ord.put(order)
-        self.logger.info(' send_order | {}'.format(order))
-        # self.q_ord.put((self.id, kwargs))
-        # self.logger.info('send_order | Params {}'.format(kwargs))
-        self.conn_tbm.send(('hello', 'world'),)
+        # self.ord_dict.append(order)
+        self.logger.info('send_order | {}'.format(order))
+        # self.logger.info('Ord_Dict | {}'.format(self.ord_dict))
 
         return self._set_output(kwargs)
 
@@ -444,8 +446,15 @@ class StrategyBot(_ClientStrategyBot):
 
         self.logger.info('StrategyBot stopped.')
 
-    def _set_id_order(self):
-        """ Set an unique order identifier.
+    def _set_id_order(self, n=3):
+        r""" Set an unique order identifier.
+
+        Parameters
+        ----------
+        n : int
+            $10^n$ is the maximum number of different ID strategies allowed. By
+            default `n=3` such that the number of different strategies will not
+            exceed 1000.
 
         Returns
         -------
@@ -453,8 +462,8 @@ class StrategyBot(_ClientStrategyBot):
             Number to identify an order and link it with a strategy.
 
         """
+        s = 10 ** n
         try:
-
             with open(self.path + '/id_order.dat', 'rb') as f:
                 id_order = Unpickler(f).load()
 
@@ -462,15 +471,13 @@ class StrategyBot(_ClientStrategyBot):
             id_order = 0
 
         id_order += 1
-        if id_order > 2147483647 // 100:
+        if id_order > 2147483647 // s:
             id_order = 0
 
         with open(self.path + '/id_order.dat', 'wb') as f:
             Pickler(f).dump(id_order)
 
-        id_strat = str(self.id)
-        if self.id < 10:
-            id_strat = '0' + id_strat
+        id_strat = '0' * (n - len(str(self.id))) + str(self.id)
 
         return int(str(id_order) + str(id_strat))
 

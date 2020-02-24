@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2020-02-06 11:57:48
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-02-22 11:05:52
+# @Last modified time: 2020-02-24 20:22:58
 
 """ Each order inherits from _BasisOrder object, and each order object has
 specified `update` method.
@@ -106,7 +106,7 @@ class _BasisOrder:
             None.
 
         """
-        self.logger = logging.getLogger(__name__ + '.Ord-' + str(id))
+        self.logger = logging.getLogger(__name__ + '.Order-' + str(id))
         self.id = id
         self.input = input
         self.tol = tol

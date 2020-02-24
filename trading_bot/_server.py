@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2020-01-27 09:58:03
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-02-22 14:12:37
+# @Last modified time: 2020-02-24 19:28:36
 
 """ Base object for trading bot server. """
 
@@ -40,9 +40,7 @@ class _TradingBotManager:
         """ Initialize the trading bot manager. """
         self.logger = logging.getLogger(__name__)
         self.logger.info(
-            'Module {}: process ID is {} and parent PID is {}'.format(
-                __name__, os.getpid(), os.getppid()
-            )
+            'init | PID: {} | PPID: {}'.format(os.getpid(), os.getppid())
         )
 
         # Set queue for orders
@@ -128,6 +126,7 @@ class _TradingBotManager:
                 self.conn_sb[_id]._set_reader(r)
 
             else:
+                self.logger.error('get_writer | {} already exists'.format(_id))
 
                 raise ConnRefused(_id, msg='already connected to TBM')
 
@@ -159,6 +158,7 @@ class _TradingBotManager:
                 self.conn_sb[_id]._set_writer(w)
 
             else:
+                self.logger.error('get_reader | {} already exists'.format(_id))
 
                 raise ConnRefused(_id, msg='already connected to TBM')
 
