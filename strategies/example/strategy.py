@@ -10,7 +10,7 @@ import numpy as np
 import fynance as fy
 
 # Import internal packages
-from strategy_manager.data_requests import DataRequests
+from trading_bot.data_requests import DataRequests
 
 __all__ = ['get_signal']
 

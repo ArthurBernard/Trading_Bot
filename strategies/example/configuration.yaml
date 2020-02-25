@@ -1,15 +1,16 @@
 # Example of a strategy configuration file
-# Parameters for StrategyManager object
+# 1 - Parameters for StrategyManager object
 strat_manager_instance:
-  script_name: example  # Name of strategy 
-  underlying: ETHUSD    # Code of underlying
-  iso_volatility: true  # Money management
-  frequency: 5  # Frequency in seconds e.g. daily = 86400
-  STOP: 3       # Optional number of iteration before stopping
+  id_strat: 2        # An number id for your strat (< 100)
+  current_pos: -1.0  # Current position of the strategy {1, 0, -1}
+  current_vol: 1.    # Current volume set to the position
+  frequency: 10      # Frequency in seconds e.g. daily = 86400
+  STOP: 3            # Optional number of iteration before stopping
+  order: best_limit  # Kind of order object (see API documentation)
 
-# Parameters for the strategy function
+# 2 - Parameters for the strategy function
 strategy_instance:
-  args_params: # Optional list of parameters to compute signal
+  args_params:      # Optional list of parameters to compute signal
   - 1
   - 0
   - -1
@@ -19,7 +20,7 @@ strategy_instance:
     half_life: 11   # Number of period to compute exponential vol
     period: 525600  # Number of trading period per year
 
-# Parameters for DataRequest object
+# 3 - Parameters for DataRequest object
 get_data_instance:
   source_data: database  # database or exchange available
   args: []               # Optional list of parameters
@@ -34,16 +35,7 @@ get_data_instance:
   n_min_obs: 5           # Minimal number of observation to compute signal
   path: ./data_base/     # Path of data source
 
-# Parameters for set pre_order
-pre_order_instance:
-  id_strat: 0        # An number id for your strat (< 100)
-  path_log: /home/arthur/Strategies/Data_Server/Untitled_Document2.txt # Path of the file with your logging
-  exchange: kraken   # Name of the exchange to trade
-  current_pos: 0.0   # Current position of the strategy {1, 0, -1}
-  current_vol: 0.0   # Current volume set to the position
-  frequency: 5       # Similar of the first frequency parameter (useless)
-
-# Parameters for set_order method, check API documentation
+# 4 - Parameters for set_order method, check API documentation
 order_instance:
   pair: XETHZUSD    # Symbol of underlying
   ordertype: limit  # Order type e.g. limit or market
@@ -52,22 +44,3 @@ order_instance:
   - post
   validate: true    # /!\ Doesn't push order if True /!\
   volume: 1.        # Max volume to trade without leverage
-
-# Parameters to print some statistic of strategy
-result_instance:
-  path: ./strategies/example/  # Path to load and save results
-  period: 1.                   # Number of period 
-  init_vol: 100.               # Initial volume invested
-  reinvset_profit: false       # Reinvest profit or not
-  metrics:                     # Results measures to be displayed 
-  - Return                       # Raw returns
-  - Perf                         # Percentage returns
-  - Sharpe                       # Sharpe ratio (returns over volatility)
-  - Calmar                       # Calmar ratio
-  - MaxDD                        # Maximum drawdown
-  periods:                     # Period to compute results
-  - Daily
-  - Weekly
-  - Monthly
-  - Yearly
-  - Total
