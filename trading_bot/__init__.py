@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2020-01-28 15:41:40
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-02-18 12:15:43
+# @Last modified time: 2020-02-25 12:14:42
 
 """
 Trading_Bot : A Python package to build autonomous trading bot
@@ -44,23 +44,25 @@ tools       --- Time, IO, setting, and configuration tools
 # Third party packages
 
 # Local packages
-from .API_bfx import *
-from .API_kraken import *
+# from .API_bfx import *
+# from .API_kraken import *
 from .bot_manager import *
-from .call_counters import *
+# from .call_counters import *
 from .data_requests import *
+from .exchanges import *
 from .orders_manager import *
-from .results_manager import *
+# from .results_manager import *
 from .strategy_manager import *
 from .tools import *
 
 
-__all__ = API_bfx.__all__
-__all__ += API_kraken.__all__
-__all__ += bot_manager.__all__
-__all__ += call_counters.__all__
+# __all__ = API_bfx.__all__
+# __all__ += API_kraken.__all__
+__all__ = bot_manager.__all__
+# __all__ += call_counters.__all__
 __all__ += data_requests.__all__
+__all__ += exchanges.__all__
 __all__ += orders_manager.__all__
-__all__ += results_manager.__all__
+# __all__ += results_manager.__all__
 __all__ += strategy_manager.__all__
 __all__ += tools.__all__

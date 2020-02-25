@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2020-01-27 09:58:03
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-02-24 20:14:58
+# @Last modified time: 2020-02-25 12:06:52
 
 """ Set a server and run each bot. """
 
@@ -19,7 +19,7 @@ import time
 
 # Local packages
 from trading_bot._server import _TradingBotManager, TradingBotServer as TBS
-from trading_bot.results_manager import update_order_hist, ResultManager
+# from trading_bot.results_manager import update_order_hist, ResultManager
 from trading_bot.strategy_manager import StrategyBot as SB
 from trading_bot.tools.time_tools import str_time
 
@@ -67,7 +67,7 @@ class TradingBotManager(_TradingBotManager):
 
         self.logger = logging.getLogger(__name__)
         self.t = time.time()
-        self.path_log = '/home/arthur/Strategies/Data_Server/Untitled_Document2.txt'
+        self.path_log = '~/Strategies/Data_Server/Untitled_Document2.txt'
         self.address = address
         self.authkey = authkey
         self.txt = {}
@@ -236,6 +236,10 @@ class TradingBotManager(_TradingBotManager):
                 daemon=True
             )
             self.conn_om.thread.start()
+
+        elif _id == -1:
+            # TradingPerformance started
+            pass
 
         else:
             # start thread listen StrategyBot

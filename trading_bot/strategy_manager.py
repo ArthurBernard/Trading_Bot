@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2019-05-12 22:57:20
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-02-24 20:22:49
+# @Last modified time: 2020-02-25 10:20:15
 
 """ Client to manage a financial strategy. """
 
@@ -170,6 +170,7 @@ class StrategyBot(_ClientStrategyBot):
         self.logger.info('enter | Load configuration and history')
         self.set_config(self.path + '/configuration.yaml')
         super(StrategyBot, self).__enter__()
+        # send name of strategy to TBM
         self.conn_tbm.send(('name', name),)
         # self.get_histo_orders(self.path + '/orders_hist.dat')
         # self.get_histo_result(self.path + '/result_hist.dat')

@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2020-01-28 16:47:55
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-02-24 20:18:12
+# @Last modified time: 2020-02-25 10:34:36
 
 """ Clients to connect to TradingBotServer. """
 
@@ -52,7 +52,7 @@ class _ClientBot:
             self.m.get_reader_tbm(self.id),
             self.m.get_writer_tbm(self.id)
         )
-        # get queue to send conn to OrdersManager
+        # get queue to send order to OrdersManager
         self.q_ord = self.m.get_queue_orders()
         # get state of server process
         self.p_state = self.m.get_state()
@@ -91,19 +91,19 @@ class _ClientStrategyBot(_ClientBot):
         self.p_fees = self.m.get_proxy_fees()
 
     def get_fee(self, pair, order_type):
-        """ Get current the fee for a pair and an conn type.
+        """ Get current the fee for a pair and an order type.
 
         Parameters
         ----------
         pair : str
             Symbol of the currency pair.
         order_type : str
-            Type of conn.
+            Type of order.
 
         Returns
         -------
         float
-            Fee of specified pair and conn type.
+            Fee of specified pair and order type.
 
         """
         fees = self.p_fees._getvalue()
@@ -117,10 +117,19 @@ class _ClientStrategyBot(_ClientBot):
 
 
 class _ClientOrdersManager(_ClientBot):
-    """ Base class for an conn manager. """
+    """ Base class for an OrderdManager object. """
 
     def __init__(self, address=('', 50000), authkey=b'tradingbot'):
         """ Initialize a client object and connect to TradingBotServer. """
         self.id = 0
+        _ClientBot.__init__(self, address=address, authkey=authkey)
+        self.conn_tbm = ConnTradingBotManager(self.id)
+
+
+class _ClientTradingPerformance(_ClientBot):
+    """ Base class for an TradingPerformance object. """
+
+    def __init__(self, address=('', 50000), authkey=b'tradingbot'):
+        self.id = -1
         _ClientBot.__init__(self, address=address, authkey=authkey)
         self.conn_tbm = ConnTradingBotManager(self.id)
