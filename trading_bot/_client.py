@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2020-01-28 16:47:55
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-02-25 10:34:36
+# @Last modified time: 2020-02-25 16:46:40
 
 """ Clients to connect to TradingBotServer. """
 
@@ -64,7 +64,10 @@ class _ClientBot:
     def __exit__(self, exc_type, exc_value, exc_tb):
         # shutdown ConnectionTradingBotManager to TBM
         self.q_to_tbm.put((self.id, 'down'),)
-        self.conn_tbm.shutdown(msg=exc_type)
+        if self.conn_tbm.state == 'up':
+            self.conn_tbm.shutdown(msg=exc_type)
+
+        self.logger.info('exit | closed connection to TBM and thread')
 
     def is_stop(self):
         """ Check if the server is stopped. """

@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2019-05-12 22:57:20
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-02-25 10:20:15
+# @Last modified time: 2020-02-25 17:27:11
 
 """ Client to manage a financial strategy. """
 
@@ -25,6 +25,7 @@ from trading_bot._client import _ClientStrategyBot
 from trading_bot._containers import OrderDict
 from trading_bot.data_requests import get_close
 from trading_bot.orders import OrderSL, OrderBestLimit
+from trading_bot.order.io import update_df_from_order
 from trading_bot.tools.io import load_config_params, dump_config_params
 from trading_bot.tools.time_tools import now, str_time
 
@@ -170,6 +171,8 @@ class StrategyBot(_ClientStrategyBot):
         self.logger.info('enter | Load configuration and history')
         self.set_config(self.path + '/configuration.yaml')
         super(StrategyBot, self).__enter__()
+        self.conn_tbm.thread = Thread(target=self.listen_tbm, daemon=True)
+        self.conn_tbm.thread.start()
         # send name of strategy to TBM
         self.conn_tbm.send(('name', name),)
         # self.get_histo_orders(self.path + '/orders_hist.dat')
@@ -192,6 +195,7 @@ class StrategyBot(_ClientStrategyBot):
 
         self.logger.info('exit | end')
         super(StrategyBot, self).__exit__(exc_type, exc_value, exc_tb)
+        self.conn_tbm.thread.join()
 
     def set_config(self, path):
         """ Set configuration.
@@ -360,6 +364,7 @@ class StrategyBot(_ClientStrategyBot):
         _id = self._set_id_order()
         time_force = self.frequency - 60 if self.frequency > 60 else None
         order = self.Order(_id, input=kwargs, time_force=time_force)
+        order.fee = self.get_fee(kwargs['pair'], kwargs['ordertype'])
         self.q_ord.put(order)
         # self.ord_dict.append(order)
         self.logger.info('send_order | {}'.format(order))
@@ -482,6 +487,26 @@ class StrategyBot(_ClientStrategyBot):
 
         return int(str(id_order) + str(id_strat))
 
+    def listen_tbm(self):
+        self.logger.debug('listen_tbm | starting')
+        for k, a in self.conn_tbm:
+            self._handler_tbm(k, a)
+            if self.is_stop():
+                self.conn_tbm.shutdown()
+
+        self.logger.debug('listen_tbm | end loop')
+
+    def _handler_tbm(self, k, a):
+        if k is None:
+            pass
+
+        elif k == 'order':
+            self.logger.debug('listen_tbm | {}: {}'.format(k, a))
+            update_df_from_order(a, path=self.path)
+
+        else:
+            self.logger.error('listen_tbm | unknown {}: {}'.format(k, a))
+
 
 if __name__ == '__main__':
 
@@ -494,8 +519,8 @@ if __name__ == '__main__':
     logging.config.dictConfig(config)
 
     if len(sys.argv) < 2:
-        print('/!\\ RUN ANOTHER_EXAMPLE_2 /!\\')
-        name = 'another_example_2'
+        print('/!\\ RUN ANOTHER_EXAMPLE /!\\')
+        name = 'another_example'
 
     else:
         name = sys.argv[1]

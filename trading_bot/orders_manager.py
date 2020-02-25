@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2019-04-29 23:42:09
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-02-25 12:08:14
+# @Last modified time: 2020-02-25 17:13:56
 
 """ Client to manage orders execution. """
 
@@ -220,8 +220,9 @@ class OrdersManager(_ClientOrdersManager):
                 self.orders.append(order)
 
             elif order.status == 'closed':
+                order.get_result_exec()
                 # res = self._set_result(order)
-                # self.conn_tbm.send({'closed_order': res})
+                # self.conn_tbm.send(('closed_order': res),)
                 self.conn_tbm.send(('order', order),)
                 # TODO : save order object
                 # TODO : update results_manager
@@ -253,9 +254,6 @@ class OrdersManager(_ClientOrdersManager):
 
         self.conn_tbm.send(('balance', self.balance),)
         self.logger.debug('get_balance | Sent balance to TradingBotManager')
-
-    def _get_id_strat(self, id_order, n=3):
-        return int(str(id_order)[-n:])
 
     def _set_result(self, order):
         """ Add informations to output of query order.

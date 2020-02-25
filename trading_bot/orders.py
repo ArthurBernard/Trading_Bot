@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2020-02-06 11:57:48
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-02-24 20:22:58
+# @Last modified time: 2020-02-25 17:18:15
 
 """ Each order inherits from _BasisOrder object, and each order object has
 specified `update` method.
@@ -78,15 +78,7 @@ class _BasisOrder:
 
     """
 
-    result_exec = {
-        'txid': [],
-        'price_exec': 0,
-        'vol_exec': 0,
-        'fee': 0,
-        'feeq': 0,
-        'feeb': 0,
-        'cost': 0,
-    }
+    fee = None
 
     def __init__(self, id, input={}, tol=0.001, time_force=None):
         """ Initialize an order object.
@@ -106,6 +98,16 @@ class _BasisOrder:
             None.
 
         """
+        self.result_exec = {
+            'txid': [],
+            'price_exec': 0,
+            'vol_exec': 0,
+            'fee': 0,
+            'feeq': 0,
+            'feeb': 0,
+            'cost': 0,
+            'start_time': int(time.time())
+        }
         self.logger = logging.getLogger(__name__ + '.Order-' + str(id))
         self.id = id
         self.input = input
@@ -127,7 +129,6 @@ class _BasisOrder:
         if self.input['leverage'] == 1:
             self.input['leverage'] = None
 
-        self.result_exec['start_time'] = int(time.time())
         self.time_force += self.result_exec['start_time']
         self.state = None
         self.status = None
@@ -320,7 +321,7 @@ class _BasisOrder:
         Store the execution information in the attribute `result_exec`.
 
         """
-        if self.status is not 'closed':
+        if self.status != 'closed':
 
             raise OrderStatusError(self, 'get_result_exec')
 

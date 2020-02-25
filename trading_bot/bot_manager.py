@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2020-01-27 09:58:03
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-02-25 12:06:52
+# @Last modified time: 2020-02-25 16:52:14
 
 """ Set a server and run each bot. """
 
@@ -19,29 +19,13 @@ import time
 
 # Local packages
 from trading_bot._server import _TradingBotManager, TradingBotServer as TBS
-# from trading_bot.results_manager import update_order_hist, ResultManager
+# from trading_bot.results_manager import update_order_hist  # , ResultManager
 from trading_bot.strategy_manager import StrategyBot as SB
 from trading_bot.tools.time_tools import str_time
 
 __all__ = [
     'TradingBotManager', 'start_order_manager', 'start_tradingbotserver',
 ]
-
-
-def set_closed_order(result):
-    """ Update closed orders and send it to ResultManager.
-
-    Parameters
-    ----------
-    result : dict
-        {'txid': list, 'price': float, 'vol_exec': float, 'fee': float,
-        'feeq': float, 'feeb': float, 'cost': float, 'start_time': int,
-        'userref': int, 'type': str, 'volume', float, 'pair': str,
-        'ordertype': str, 'level': int, 'end_time': int, 'fee_pct': float,
-        'strat_id': int}.
-
-    """
-    update_order_hist(result, name='', path='./results/')
 
 
 class TradingBotManager(_TradingBotManager):
@@ -55,7 +39,7 @@ class TradingBotManager(_TradingBotManager):
         'fees': fees.update,
         'balance': balance.update,
         # 'closed_order': set_closed_order,
-        'order': lambda x: x,
+        # 'order': lambda x: x,
     }
     _handler_sb = {
         # 'switch_id': _TradingBotManager.conn_sb.switch_id,
@@ -153,6 +137,11 @@ class TradingBotManager(_TradingBotManager):
 
             elif k == 'closed_order':
                 self.set_closed_order(a)
+
+            elif k == 'order':
+                self.logger.info('listen_om | received {}: {}'.format(k, a))
+                _id = _get_id_strat(a.id)
+                self.conn_sb[_id].send((k, a),)
 
             elif k is None:
                 pass
@@ -315,6 +304,10 @@ def start_tradingbotserver(address=('', 50000), authkey=b'tradingbot'):
     m = TBS(address=address, authkey=authkey)
     s = m.get_server()
     s.serve_forever()
+
+
+def _get_id_strat(id_order, n=3):
+    return int(str(id_order)[-n:])
 
 
 if __name__ == '__main__':
