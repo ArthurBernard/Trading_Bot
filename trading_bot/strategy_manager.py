@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2019-05-12 22:57:20
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-02-25 17:27:11
+# @Last modified time: 2020-02-26 13:32:34
 
 """ Client to manage a financial strategy. """
 
@@ -182,6 +182,8 @@ class StrategyBot(_ClientStrategyBot):
 
     def __exit__(self, exc_type, exc_value, exc_tb):
         """ Exit. """
+        # TODO : wait until received all orders closed
+        self._wait_orders_closed()
         self.logger.info('exit | Save configuration')
         # Save configuration and data
         self.set_general_cfg(self.path + '/configuration.yaml')
@@ -196,6 +198,14 @@ class StrategyBot(_ClientStrategyBot):
         self.logger.info('exit | end')
         super(StrategyBot, self).__exit__(exc_type, exc_value, exc_tb)
         self.conn_tbm.thread.join()
+
+    def _wait_orders_closed(self):
+        self.logger.debug('exit | wait until all orders closed')
+        t0 = time.time()
+        while self.orders._waiting:
+            time.sleep(0.1)
+            t = time.time()
+            print('waiting {:.0f} seconds'.format(t - t0), end='\r')
 
     def set_config(self, path):
         """ Set configuration.
@@ -365,7 +375,9 @@ class StrategyBot(_ClientStrategyBot):
         time_force = self.frequency - 60 if self.frequency > 60 else None
         order = self.Order(_id, input=kwargs, time_force=time_force)
         order.fee = self.get_fee(kwargs['pair'], kwargs['ordertype'])
+        self.logger.debug('send_order | fee is {}'.format(order.fee))
         self.q_ord.put(order)
+        self.orders.append(order)
         # self.ord_dict.append(order)
         self.logger.info('send_order | {}'.format(order))
         # self.logger.info('Ord_Dict | {}'.format(self.ord_dict))
@@ -501,8 +513,10 @@ class StrategyBot(_ClientStrategyBot):
             pass
 
         elif k == 'order':
+            # TODO : update volume to trade if reinvest volume
             self.logger.debug('listen_tbm | {}: {}'.format(k, a))
             update_df_from_order(a, path=self.path)
+            self.orders.pop(a.id)
 
         else:
             self.logger.error('listen_tbm | unknown {}: {}'.format(k, a))

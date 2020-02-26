@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2020-02-20 16:35:31
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-02-24 20:20:57
+# @Last modified time: 2020-02-26 13:44:47
 
 """ Objects to send and receive objetcs between clients. """
 
@@ -51,7 +51,9 @@ class _BasisConnection:
             return None, None
 
     def __repr__(self):
-        return 'ID-{self.id:2} | {self.name} is {self.state}'.format(self=self)
+        return 'Conn ID {self.id:2} - with {self.name} is {self.state}'.format(
+            self=self
+        )
 
     def setup(self, reader, writer):
         self.state = 'up'

@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2020-01-27 09:58:03
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-02-24 19:28:36
+# @Last modified time: 2020-02-26 11:56:53
 
 """ Base object for trading bot server. """
 
@@ -62,12 +62,12 @@ class _TradingBotManager:
         TradingBotServer.register('get_reader_tbm', callable=self.get_reader)
 
         # Set a proxy to share a state
-        self.state = {'stop': True}
+        self.state = {'stop': True, 'balance': {}, 'fees': {}}
         TradingBotServer.register('get_state', callable=lambda: self.state)
 
         # Set proxy to share fees dictionary
-        self.fees = {}
-        TradingBotServer.register('get_proxy_fees', callable=lambda: self.fees)
+        # self.fees = {}
+        # TradingBotServer.register('get_proxy_fees', callable=lambda: self.fees)
 
         # Set client and server threads
         self.server_thread = Thread(

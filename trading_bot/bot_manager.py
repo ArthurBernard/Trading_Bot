@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2020-01-27 09:58:03
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-02-25 16:52:14
+# @Last modified time: 2020-02-26 11:59:34
 
 """ Set a server and run each bot. """
 
@@ -33,11 +33,11 @@ class TradingBotManager(_TradingBotManager):
 
     # TODO : load general config
     # TODO : run strategies
-    fees = {}
-    balance = {}
+    # fees = {}
+    # balance = {}
     _handler_om = {
-        'fees': fees.update,
-        'balance': balance.update,
+        # 'fees': fees.update,
+        # 'balance': balance.update,
         # 'closed_order': set_closed_order,
         # 'order': lambda x: x,
     }
@@ -133,6 +133,14 @@ class TradingBotManager(_TradingBotManager):
         for k, a in self.conn_om:
             if k in self._handler_om.keys():
                 self._handler_om[k](a)
+                self.logger.debug('listen_om | {}: {}'.format(k, a))
+
+            elif k == 'fees':
+                self.state['fees'].update(a)
+                self.logger.debug('listen_om | {}: {}'.format(k, a))
+
+            elif k == 'balance':
+                self.state['balance'].update(a)
                 self.logger.debug('listen_om | {}: {}'.format(k, a))
 
             elif k == 'closed_order':
@@ -323,5 +331,5 @@ if __name__ == '__main__':
     # start_tradingbotmanager()
     tbm = TradingBotManager()
     with tbm:
-        tbm.runtime(s=300)
+        tbm.runtime(s=2000)
     # tbm.run()

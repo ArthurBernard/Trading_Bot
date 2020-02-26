@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2020-02-06 11:57:48
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-02-25 17:18:15
+# @Last modified time: 2020-02-25 20:04:40
 
 """ Each order inherits from _BasisOrder object, and each order object has
 specified `update` method.
@@ -78,8 +78,6 @@ class _BasisOrder:
 
     """
 
-    fee = None
-
     def __init__(self, id, input={}, tol=0.001, time_force=None):
         """ Initialize an order object.
 
@@ -98,6 +96,7 @@ class _BasisOrder:
             None.
 
         """
+        self.fee = None
         self.result_exec = {
             'txid': [],
             'price_exec': 0,

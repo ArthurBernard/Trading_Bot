@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2020-01-28 16:47:55
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-02-25 16:46:40
+# @Last modified time: 2020-02-26 13:04:05
 
 """ Clients to connect to TradingBotServer. """
 
@@ -16,6 +16,7 @@ import os
 
 # Local packages
 from trading_bot._connection import ConnTradingBotManager
+from trading_bot._containers import OrderDict
 from trading_bot._server import TradingBotServer as TBS
 from trading_bot.data_requests import DataBaseManager, DataExchangeManager
 
@@ -85,13 +86,14 @@ class _ClientStrategyBot(_ClientBot):
 
     def __init__(self, address=('', 50000), authkey=b'tradingbot'):
         """ Initialize a client object and connect to TradingBotServer. """
-        TBS.register('get_proxy_fees')
+        # TBS.register('get_proxy_fees')
         _ClientBot.__init__(self, address=address, authkey=authkey)
+        self.orders = OrderDict()
 
     def __enter__(self):
         self.conn_tbm = ConnTradingBotManager(self.id)
         super(_ClientStrategyBot, self).__enter__()
-        self.p_fees = self.m.get_proxy_fees()
+        # self.p_fees = self.m.get_proxy_fees()
 
     def get_fee(self, pair, order_type):
         """ Get current the fee for a pair and an order type.
@@ -109,7 +111,7 @@ class _ClientStrategyBot(_ClientBot):
             Fee of specified pair and order type.
 
         """
-        fees = self.p_fees._getvalue()
+        fees = self.p_state._getvalue()['fees']
         if fees:
 
             return float(fees[self._handler[order_type]][pair]['fee'])

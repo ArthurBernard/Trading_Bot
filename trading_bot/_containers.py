@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2020-02-22 11:01:49
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-02-24 20:17:48
+# @Last modified time: 2020-02-26 13:39:40
 
 """ Module with specific containers objects. """
 
@@ -91,7 +91,12 @@ class OrderDict(dict):
         txt = 'waiting: {}, open: {}, closed: {}'.format(
             self._waiting, self._open, self._closed
         )
-        txt += '\n{' + ',\n'.join([str(v) for v in self.values()]) + '}'
+        if len(self) <= 1:
+            txt += '\n{' + ',\n'.join([str(v) for v in self.values()]) + '}'
+
+        else:
+            txt += '\n{\n  '
+            txt += ',\n  '.join([str(v) for v in self.values()]) + '\n}'
 
         return txt
 
@@ -313,7 +318,11 @@ class ConnDict(dict):
             Representation of the collection of connections.
 
         """
-        txt = ',\n'.join([str(c) for c in self.values()])
+        if len(self) <= 1:
+            txt = ',\n'.join([str(c) for c in self.values()])
+
+        else:
+            txt = '\n  ' + ',\n  '.join([str(c) for c in self.values()]) + '\n'
 
         return '{' + txt + '}'
 

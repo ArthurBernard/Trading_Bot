@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2019-03-08 20:19:22
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-02-17 17:36:06
+# @Last modified time: 2020-02-25 19:45:52
 
 """ Some utility functions. """
 
@@ -107,6 +107,7 @@ def save_df(df, path, name, ext=''):
         Path to the file, name of the file and the extension of the file.
 
     """
+    # logger.debug(str(df))
     if path[-1] != '/' and name[0] != '/':
         path += '/'
 
