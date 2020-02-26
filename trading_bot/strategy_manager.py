@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2019-05-12 22:57:20
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-02-26 16:46:37
+# @Last modified time: 2020-02-26 19:50:35
 
 """ Client to manage a financial strategy. """
 
@@ -215,9 +215,10 @@ class StrategyBot(_ClientStrategyBot):
                 self.logger.error('exit | force exit because thread to listen '
                                   ' tbm is dead | some orders havent closed: '
                                   '{}'.format(self.orders))
-                with open(self.path + '/list_unsaved_orders.dat', 'wb') as f:
-                    list_orders = [o for o in self.orders.values()]
-                    Pickler(f).dump(list_orders)
+                self.orders._save(self.path, '/list_unsaved_orders')
+                # with open(self.path + '/list_unsaved_orders.dat', 'wb') as f:
+                #    list_orders = [o for o in self.orders.values()]
+                #    Pickler(f).dump(list_orders)
 
                 break
 
@@ -394,6 +395,8 @@ class StrategyBot(_ClientStrategyBot):
             'ex_pos': self.current_pos,
             'ex_vol': self.current_vol,
             'strat_id': self.id,
+            'strat_name': self.name_strat,
+            'path': self.path,
         }
         order = self.Order(_id, input=kwargs, time_force=time_force, info=info)
         # order.fee = self.get_fee(kwargs['pair'], kwargs['ordertype'])
