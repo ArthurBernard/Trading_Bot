@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2020-02-25 10:38:17
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-02-26 18:57:20
+# @Last modified time: 2020-02-26 19:11:10
 
 """ Objects to measure and display trading performance. """
 
@@ -21,7 +21,7 @@ from trading_bot.tools.io import get_df
 class _Performance:
     """ Object to compute performance of a strategy. """
 
-    def __init__(self, path='.', name='orders_hist', ext='.dat', t=0):
+    def __init__(self, path='.', name='orders_hist', ext='.dat', t=0, fee=None):
         self.df = get_df(path, name, ext)  # .reset_index()
         self.t0 = t
         i = self.df.index[t]
@@ -30,6 +30,15 @@ class _Performance:
 
         else:
             raise ValueError('ex_vol = 0')
+
+        if 'fee_pct' in self.df.columns:
+            self.fee = 'update'
+
+        elif fee is None:
+            self.fee = 0.
+
+        else:
+            self.fee = fee
 
         self.pos_0 = self.df.loc[i, 'ex_pos']
 
@@ -42,12 +51,6 @@ class _Performance:
         self.vol_quote = (1 - self.pos) * self.val_0
         self.vol_base = self.pos * self.val_0 / self.df.loc[self.i, 'price']
         self.pnl = 0
-        if 'fee_pct' in self.df.columns:
-            self.fee = self.df.loc[self.i, 'fee_pct']
-
-        else:
-            self.fee = None
-
         self._update()
 
         return self
@@ -73,13 +76,13 @@ class _Performance:
         s = 1 if self.df.loc[self.i, 'type'] == 'buy' else -1
         p = self.df.loc[self.i, 'price']
         v = self.df.loc[self.i, 'volume']
-        f = self.df.loc[self.i, 'fee_pct'] if self.fee is not None else 0.
+        f = self.df.loc[self.i, 'fee_pct'] if self.fee == 'update' else self.fee
         self.pos += s
         self.vol_quote -= (s + f / 100) * v * p
         self.vol_base += s * v
         self.val = self.vol_base * p + self.vol_quote
         self.pnl_1 = self.val - self.val_1
-        self.pnl += self.pnl
+        self.pnl += self.pnl_1
 
 
 class TradingPerformance(_ClientTradingPerformance):

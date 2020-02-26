@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2019-04-26 08:49:26
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-02-17 19:17:35
+# @Last modified time: 2020-02-26 18:18:06
 
 # Built-in import
 import json
@@ -126,7 +126,7 @@ class DataRequests:
 
             time.sleep(1)
 
-            return self.get_data(**kwargs)
+            return self.get_data(*args, **kwargs)
 
     def __iter__(self):
         """ Set iterative method """
@@ -602,6 +602,10 @@ class DataExchangeManager:
     def _get_data(self, *args, **kwargs):
         data = self.req.get_data(*args, **kwargs)
         try:
+            if 'Eservice:Unavailable' in data['error']:
+                time.sleep(1)
+
+                return self._get_data(*args, **kwargs)
 
             return data['result']
 
