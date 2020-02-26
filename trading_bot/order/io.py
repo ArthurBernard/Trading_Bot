@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2020-02-25 14:09:58
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-02-25 17:26:13
+# @Last modified time: 2020-02-26 17:00:51
 
 """ Transforms order into recordable format. """
 
@@ -38,8 +38,11 @@ def set_df_from_order(order):
 
     """
     result = set_dict_from_order(order)
+    df = pd.DataFrame([result])
+    # df.loc[:, COLUMNS] = df.loc[:, COLUMNS]
 
-    return pd.DataFrame([result], columns=COLUMNS)
+    return df
+    # return pd.DataFrame([result], columns=COLUMNS)
 
 
 def update_df_from_order(order, path='.', name='orders_hist', ext='.dat'):
@@ -62,6 +65,10 @@ def update_df_from_order(order, path='.', name='orders_hist', ext='.dat'):
     # Set new order historic dataframe
     df_hist = df_hist.append(set_df_from_order(order), sort=False)
     df_hist = df_hist.reset_index(drop=True)
+    if (df_hist.columns[:len(COLUMNS)] != COLUMNS).any():
+        print('DATAFRAME NOT SORTED CORRECTLY')
+        other_columns = list(df_hist.columns.difference(COLUMNS))
+        df_hist = df_hist.reindex(columns=(COLUMNS + other_columns))
 
     # Save order historic dataframe
     save_df(df_hist, path, name, ext)
@@ -91,9 +98,10 @@ def set_dict_from_order(order):
         'ordertype': order.input['ordertype'],
         'leverage': order.input['leverage'],
         'end_time': int(time.time()),
-        'fee_pct': order.fee,
-        'strat_id': _get_id_strat(order.id),
+        # 'fee_pct': order.fee,
+        # 'strat_id': _get_id_strat(order.id),
     })
+    result.update(order.info)
 
     return result
 

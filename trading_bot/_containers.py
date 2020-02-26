@@ -4,12 +4,13 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2020-02-22 11:01:49
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-02-26 13:39:40
+# @Last modified time: 2020-02-26 17:06:16
 
 """ Module with specific containers objects. """
 
 # Built-in packages
 import logging
+# from pickle import Pickler, Unpickler
 
 # Third party packages
 
@@ -269,6 +270,20 @@ class OrderDict(dict):
             raise TypeError("{} must be an Order object".format(obj))
 
         return True
+
+    # def _load(self, path, name, ext='.dat'):
+    #    if path[-1] != '/':
+    #        path += '/'
+
+    #    with open(path + name + ext, 'rb') as f:
+    #        self.update(Unpickler(f).load())
+
+    # def _save(self, path, name, ext='.dat'):
+    #    if path[-1] != '/':
+    #        path += '/'
+
+    #    with open(path + name + ext, 'wb') as f:
+    #        Pickler(f, protocol=1).dump(self)
 
 
 class ConnDict(dict):

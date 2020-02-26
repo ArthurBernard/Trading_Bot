@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2019-05-12 22:57:20
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-02-26 13:32:34
+# @Last modified time: 2020-02-26 16:46:37
 
 """ Client to manage a financial strategy. """
 
@@ -182,8 +182,10 @@ class StrategyBot(_ClientStrategyBot):
 
     def __exit__(self, exc_type, exc_value, exc_tb):
         """ Exit. """
-        # TODO : wait until received all orders closed
-        self._wait_orders_closed()
+        # wait until received all orders closed
+        if not self.is_stop():
+            self._wait_orders_closed()
+
         self.logger.info('exit | Save configuration')
         # Save configuration and data
         self.set_general_cfg(self.path + '/configuration.yaml')
@@ -205,7 +207,21 @@ class StrategyBot(_ClientStrategyBot):
         while self.orders._waiting:
             time.sleep(0.1)
             t = time.time()
-            print('waiting {:.0f} seconds'.format(t - t0), end='\r')
+            txt = 'waiting {:.0f} seconds | thread is '.format(t - t0)
+            txt += 'alive' if self.conn_tbm.thread.is_alive() else 'not alive'
+
+            if not self.conn_tbm.thread.is_alive():
+                # TODO : improve it
+                self.logger.error('exit | force exit because thread to listen '
+                                  ' tbm is dead | some orders havent closed: '
+                                  '{}'.format(self.orders))
+                with open(self.path + '/list_unsaved_orders.dat', 'wb') as f:
+                    list_orders = [o for o in self.orders.values()]
+                    Pickler(f).dump(list_orders)
+
+                break
+
+            print(txt, end='\r')
 
     def set_config(self, path):
         """ Set configuration.
@@ -373,9 +389,15 @@ class StrategyBot(_ClientStrategyBot):
         """
         _id = self._set_id_order()
         time_force = self.frequency - 60 if self.frequency > 60 else None
-        order = self.Order(_id, input=kwargs, time_force=time_force)
-        order.fee = self.get_fee(kwargs['pair'], kwargs['ordertype'])
-        self.logger.debug('send_order | fee is {}'.format(order.fee))
+        info = {
+            'fee_pct': self.get_fee(kwargs['pair'], kwargs['ordertype']),
+            'ex_pos': self.current_pos,
+            'ex_vol': self.current_vol,
+            'strat_id': self.id,
+        }
+        order = self.Order(_id, input=kwargs, time_force=time_force, info=info)
+        # order.fee = self.get_fee(kwargs['pair'], kwargs['ordertype'])
+        # self.logger.debug('send_order | fee is {}'.format(order.fee))
         self.q_ord.put(order)
         self.orders.append(order)
         # self.ord_dict.append(order)

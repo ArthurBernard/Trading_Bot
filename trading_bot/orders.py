@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2020-02-06 11:57:48
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-02-25 20:04:40
+# @Last modified time: 2020-02-26 14:48:30
 
 """ Each order inherits from _BasisOrder object, and each order object has
 specified `update` method.
@@ -78,7 +78,7 @@ class _BasisOrder:
 
     """
 
-    def __init__(self, id, input={}, tol=0.001, time_force=None):
+    def __init__(self, id, input={}, tol=0.001, time_force=None, info={}):
         """ Initialize an order object.
 
         Parameters
@@ -94,9 +94,13 @@ class _BasisOrder:
             If set to None, then never force execute to the market price
             (actually it will be forced in more than 300years). Default is
             None.
+        info : dict, optional
+            Any additional informations (usefull to compute strategy
+            performance). Default is an empty dict.
 
         """
-        self.fee = None
+        self.info = info
+        # self.fee = None
         self.result_exec = {
             'txid': [],
             'price_exec': 0,

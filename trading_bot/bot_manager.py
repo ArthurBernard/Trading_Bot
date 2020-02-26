@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2020-01-27 09:58:03
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-02-26 11:59:34
+# @Last modified time: 2020-02-26 17:04:07
 
 """ Set a server and run each bot. """
 
@@ -191,10 +191,10 @@ class TradingBotManager(_TradingBotManager):
         self.logger.debug('client_manager | start')
         t = time.time()
         while not self.is_stop():
-            if time.time() - t > 5:
+            if time.time() - t > 0:
                 self.logger.debug('client_manager | {}'.format(self.conn_sb))
                 self.logger.debug('client_manager | {}'.format(self.conn_om))
-                t += 5
+                t += 30
 
             if self.q_from_cli.empty():
                 time.sleep(0.01)
