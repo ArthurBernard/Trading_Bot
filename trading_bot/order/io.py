@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2020-02-25 14:09:58
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-02-26 17:00:51
+# @Last modified time: 2020-02-27 11:20:18
 
 """ Transforms order into recordable format. """
 
@@ -45,7 +45,7 @@ def set_df_from_order(order):
     # return pd.DataFrame([result], columns=COLUMNS)
 
 
-def update_df_from_order(order, path='.', name='orders_hist', ext='.dat'):
+def update_hist_orders(order, path=None, name='orders_hist', ext='.dat'):
     """ Update a dataframe with the main information from a closed order.
 
     Parameters
@@ -56,6 +56,9 @@ def update_df_from_order(order, path='.', name='orders_hist', ext='.dat'):
     """
     # TODO : Save by year ? month ? day ?
     # TODO : Don't save per strategy ?
+    if path is None and 'path' in order.info:
+        path = order.info['path']
+
     if path[-1] != '/':
         path += '/'
 

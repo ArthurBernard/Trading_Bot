@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2020-01-28 16:47:55
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-02-27 10:13:49
+# @Last modified time: 2020-02-27 11:36:49
 
 """ Clients to connect to TradingBotServer. """
 
@@ -16,7 +16,7 @@ import os
 
 # Local packages
 from trading_bot._connection import ConnTradingBotManager
-from trading_bot._containers import OrderDict
+# from trading_bot._containers import OrderDict
 from trading_bot._server import TradingBotServer as TBS
 from trading_bot.data_requests import DataBaseManager, DataExchangeManager
 
@@ -88,7 +88,6 @@ class _ClientStrategyBot(_ClientBot):
         """ Initialize a client object and connect to TradingBotServer. """
         # TBS.register('get_proxy_fees')
         _ClientBot.__init__(self, address=address, authkey=authkey)
-        self.orders = OrderDict()
 
     def __enter__(self):
         self.conn_tbm = ConnTradingBotManager(self.id)

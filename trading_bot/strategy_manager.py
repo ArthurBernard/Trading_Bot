@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2019-05-12 22:57:20
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-02-27 10:56:37
+# @Last modified time: 2020-02-27 11:35:42
 
 """ Client to manage a financial strategy. """
 
@@ -20,10 +20,9 @@ import time
 
 # Local packages
 from trading_bot._client import _ClientStrategyBot
-from trading_bot._containers import OrderDict
+# from trading_bot._containers import OrderDict
 from trading_bot.data_requests import get_close
 from trading_bot.orders import OrderSL, OrderBestLimit
-from trading_bot.order.io import update_df_from_order
 from trading_bot.tools.io import load_config_params, dump_config_params
 from trading_bot.tools.time_tools import now, str_time
 
@@ -83,7 +82,7 @@ class StrategyBot(_ClientStrategyBot):
         # Set client and connect to the trading bot server
         _ClientStrategyBot.__init__(self, address=address, authkey=authkey)
         self.logger = logging.getLogger(__name__)
-        self.ord_dict = OrderDict()
+        # self.ord_dict = OrderDict()
 
     def __call__(self, name_strat, STOP=None, path='./strategies'):
         """ Set parameters of strategy.
@@ -181,8 +180,8 @@ class StrategyBot(_ClientStrategyBot):
     def __exit__(self, exc_type, exc_value, exc_tb):
         """ Exit. """
         # wait until received all orders closed
-        if not self.is_stop():
-            self._wait_orders_closed()
+        # if not self.is_stop():
+        #    self._wait_orders_closed()
 
         self.logger.info('Save configuration')
         # Save configuration and data
@@ -200,28 +199,25 @@ class StrategyBot(_ClientStrategyBot):
         super(StrategyBot, self).__exit__(exc_type, exc_value, exc_tb)
         self.conn_tbm.thread.join()
 
-    def _wait_orders_closed(self):
-        self.logger.debug('wait until all orders closed')
-        t0 = time.time()
-        while self.orders._waiting:
-            time.sleep(0.1)
-            t = time.time()
-            txt = 'waiting {:.0f} seconds | thread is '.format(t - t0)
-            txt += 'alive' if self.conn_tbm.thread.is_alive() else 'not alive'
+    # def _wait_orders_closed(self):
+    #    self.logger.debug('wait until all orders closed')
+    #    t0 = time.time()
+    #    while self.orders._waiting:
+    #        time.sleep(0.1)
+    #        t = time.time()
+    #        txt = 'waiting {:.0f} seconds | thread is '.format(t - t0)
+    #        txt += 'alive' if self.conn_tbm.thread.is_alive() else 'not alive'
 
-            if not self.conn_tbm.thread.is_alive():
-                # TODO : improve it
-                self.logger.error('force exit because thread to listen '
-                                  ' tbm is dead | some orders havent closed: '
-                                  '{}'.format(self.orders))
-                self.orders._save(self.path, '/list_unsaved_orders')
-                # with open(self.path + '/list_unsaved_orders.dat', 'wb') as f:
-                #    list_orders = [o for o in self.orders.values()]
-                #    Pickler(f).dump(list_orders)
+    #        if not self.conn_tbm.thread.is_alive():
+    #            # TODO : improve it
+    #            self.logger.error('force exit because thread to listen '
+    #                              ' tbm is dead | some orders havent closed: '
+    #                              '{}'.format(self.orders))
+    #            self.orders._save(self.path, '/list_unsaved_orders')
 
-                break
+    #            break
 
-            print(txt, end='\r')
+    #        print(txt, end='\r')
 
     def set_config(self, path):
         """ Set configuration.
@@ -249,7 +245,8 @@ class StrategyBot(_ClientStrategyBot):
         # Get general parameters and strategy state
         self.frequency = strat_cfg['frequency']
         self.id = strat_cfg['id_strat']
-        name_logger = __name__ + '.Strat-' + str(self.id)
+        _id = '0' * (3 - len(str(self.id))) + str(self.id)
+        name_logger = 'Strat-' + _id
         self.logger = logging.getLogger(name_logger)
         self.current_pos = strat_cfg['current_pos']
         self.current_vol = strat_cfg['current_vol']
@@ -401,7 +398,7 @@ class StrategyBot(_ClientStrategyBot):
         # order.fee = self.get_fee(kwargs['pair'], kwargs['ordertype'])
         # self.logger.debug('send_order | fee is {}'.format(order.fee))
         self.q_ord.put(order)
-        self.orders.append(order)
+        # self.orders.append(order)
         # self.ord_dict.append(order)
         self.logger.info('send {}'.format(order))
         # self.logger.info('Ord_Dict | {}'.format(self.ord_dict))
@@ -524,6 +521,7 @@ class StrategyBot(_ClientStrategyBot):
         return int(str(id_order) + str(id_strat))
 
     def listen_tbm(self):
+        """ Wait message from TBM. """
         self.logger.debug('starting listen tbm')
         for k, a in self.conn_tbm:
             self._handler_tbm(k, a)
@@ -536,14 +534,8 @@ class StrategyBot(_ClientStrategyBot):
         if k is None:
             pass
 
-        elif k == 'order':
-            # TODO : update volume to trade if reinvest volume
-            self.logger.debug('recv {}'.format(a))
-            update_df_from_order(a, path=self.path)
-            self.orders.pop(a.id)
-
         else:
-            self.logger.error('received unknown {}: {}'.format(k, a))
+            self.logger.error('received unknown message {}: {}'.format(k, a))
 
 
 if __name__ == '__main__':

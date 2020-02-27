@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2020-02-06 11:57:48
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-02-27 10:24:09
+# @Last modified time: 2020-02-27 11:27:32
 
 """ Module with different Order objects.
 
@@ -329,8 +329,8 @@ class _BasisOrder:
             raise OrderStatusError(self, 'get_result_exec')
 
         ans = self.get_closed(start=self.result_exec['start_time'])
-        self.logger.debug('executed info: {}'.format(ans))
         self._get_result_exec(ans['closed'])
+        self.logger.debug('execution info: {}'.format(self.result_exec))
 
     def _get_result_exec(self, closed_orders):
         self.result_exec['txid'] = list(closed_orders.keys())

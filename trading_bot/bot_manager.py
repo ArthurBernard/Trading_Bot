@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2020-01-27 09:58:03
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-02-27 10:55:32
+# @Last modified time: 2020-02-27 11:40:41
 
 """ Set a server and run each bot. """
 
@@ -16,12 +16,12 @@ import time
 # Third party packages
 
 # Local packages
-from trading_bot._server import _TradingBotManager, TradingBotServer as TBS
+from trading_bot._server import _TradingBotManager
 from trading_bot.strategy_manager import StrategyBot as SB
 from trading_bot.tools.time_tools import str_time
 
 __all__ = [
-    'TradingBotManager', 'start_order_manager', 'start_tradingbotserver',
+    'TradingBotManager', 'start_order_manager',
 ]
 
 
@@ -137,14 +137,6 @@ class TradingBotManager(_TradingBotManager):
                 self.state['balance'].update(a)
                 self.logger.debug('recv {}: {}'.format(k, a))
 
-            elif k == 'closed_order':
-                self.set_closed_order(a)
-
-            elif k == 'order':
-                self.logger.info('recv: {}'.format(a))
-                _id = _get_id_strat(a.id)
-                self.conn_sb[_id].send((k, a),)
-
             elif k is None:
                 pass
 
@@ -210,7 +202,7 @@ class TradingBotManager(_TradingBotManager):
         self.logger.debug('client_manager | stop')
 
     def setup_client(self, _id):
-        """ Setup a client thread (OrdersManager, StrategyBot, etc.).
+        """ Set up a client thread (OrdersManager, StrategyBot, etc.).
 
         Parameters
         ----------
@@ -266,25 +258,6 @@ class TradingBotManager(_TradingBotManager):
         conn.thread.join()
         self.logger.debug('shutdown Client ID {}'.format(_id))
 
-    def set_closed_order(self, result):
-        """ Update closed orders and send it to StrategyBot.
-
-        Parameters
-        ----------
-        result : dict
-            {'txid': list, 'price': float, 'vol_exec': float, 'fee': float,
-            'feeq': float, 'feeb': float, 'cost': float, 'start_time': int,
-            'userref': int, 'type': str, 'volume', float, 'pair': str,
-            'ordertype': str, 'level': int, 'end_time': int, 'fee_pct': float,
-            'strat_id': int}.
-
-        """
-        conn = self.conn_sb[result['strat_id']]
-        self.logger.debug('Order ID {}'.format(result['userref']))
-        update_order_hist(result, name=conn.name + '/', path='./strategies/')
-        conn.send(result)
-        # TODO : send it also to result manager ?
-
 
 def start_order_manager(path_log, exchange='kraken', address=('', 50000),
                         authkey=b'tradingbot'):
@@ -295,21 +268,6 @@ def start_order_manager(path_log, exchange='kraken', address=('', 50000),
     om.start_loop()
 
     return None
-
-
-def start_tradingbotserver(address=('', 50000), authkey=b'tradingbot'):
-    """ Set the trading bot server. """
-    q_orders = Queue()
-    TBS.register('get_queue_orders', callable=lambda: q_orders)
-    # q2 = Queue()
-    # TradingBotManager.register('get_queue2', callable=lambda: q2)
-    m = TBS(address=address, authkey=authkey)
-    s = m.get_server()
-    s.serve_forever()
-
-
-def _get_id_strat(id_order, n=3):
-    return int(str(id_order)[-n:])
 
 
 if __name__ == '__main__':

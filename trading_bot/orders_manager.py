@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2019-04-29 23:42:09
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-02-27 10:56:21
+# @Last modified time: 2020-02-27 11:37:23
 
 """ Client to manage orders execution. """
 
@@ -18,7 +18,9 @@ import time
 # Internal packages
 from trading_bot._client import _ClientOrdersManager
 from trading_bot._containers import OrderDict
+from trading_bot._exceptions import OrderError
 from trading_bot.exchanges.API_kraken import KrakenClient
+from trading_bot.order.io import update_hist_orders
 from trading_bot.tools.call_counters import KrakenCallCounter
 from trading_bot.tools.time_tools import str_time
 
@@ -223,8 +225,9 @@ class OrdersManager(_ClientOrdersManager):
                 order.get_result_exec()
                 # res = self._set_result(order)
                 # self.conn_tbm.send(('closed_order': res),)
-                self.conn_tbm.send(('order', order),)
-                # TODO : save order object
+                # self.conn_tbm.send(('order', order),)
+                # save closed orders to dataframe
+                update_hist_orders(order)
                 # TODO : update results_manager
                 self.logger.debug('remove {}'.format(order))
 
