@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2019-05-12 22:57:20
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-02-27 11:35:42
+# @Last modified time: 2020-02-27 18:19:48
 
 """ Client to manage a financial strategy. """
 
@@ -393,6 +393,7 @@ class StrategyBot(_ClientStrategyBot):
             'strat_id': self.id,
             'strat_name': self.name_strat,
             'path': self.path,
+            'TS': self.next - self.frequency
         }
         order = self.Order(_id, input=kwargs, time_force=time_force, info=info)
         # order.fee = self.get_fee(kwargs['pair'], kwargs['ordertype'])
