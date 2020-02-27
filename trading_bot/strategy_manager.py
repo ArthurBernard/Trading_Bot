@@ -4,15 +4,13 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2019-05-12 22:57:20
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-02-26 19:50:35
+# @Last modified time: 2020-02-27 10:56:37
 
 """ Client to manage a financial strategy. """
 
 # Built-in packages
 import importlib
 import logging
-from multiprocessing import Pipe
-from os import getpid, getppid
 from pickle import Pickler, Unpickler
 import sys
 from threading import Thread
@@ -70,6 +68,7 @@ class StrategyBot(_ClientStrategyBot):
         'submit_and_leave': OrderSL,
         'best_limit': OrderBestLimit,
     }
+    _handler_pos = ['neutral', 'long', 'short']
 
     # TODO : Load strategy config
     def __init__(self, address=('', 50000), authkey=b'tradingbot'):
@@ -84,7 +83,6 @@ class StrategyBot(_ClientStrategyBot):
         # Set client and connect to the trading bot server
         _ClientStrategyBot.__init__(self, address=address, authkey=authkey)
         self.logger = logging.getLogger(__name__)
-        self.logger.info('init | PID: {} PPID: {}'.format(getpid(), getppid()))
         self.ord_dict = OrderDict()
 
     def __call__(self, name_strat, STOP=None, path='./strategies'):
@@ -111,7 +109,7 @@ class StrategyBot(_ClientStrategyBot):
             'strategies.' + name_strat + '.strategy'
         )
         self.get_order_params = strat.get_order_params
-        self.logger.info('call | Load {} function'.format(name_strat))
+        self.logger.info('Load {} strategy function'.format(name_strat))
 
         self.name_strat = name_strat
         self.STOP = STOP
@@ -124,7 +122,7 @@ class StrategyBot(_ClientStrategyBot):
         self.t = 0
         self.TS = now(self.frequency)
         self.next = self.TS + self.frequency
-        self.logger.info('iter | Start now and stop in {}'.format(
+        self.logger.info('Start now and stop in {}'.format(
             str_time(int(self.time_stop()))
         ))
 
@@ -143,8 +141,8 @@ class StrategyBot(_ClientStrategyBot):
         server_stop = self.is_stop()
         strat_stop = self.t >= self.STOP
         if server_stop or strat_stop:
-            self.logger.debug('next | Server stop : {}'.format(server_stop))
-            self.logger.debug('next | Strategy stop : {}'.format(strat_stop))
+            self.logger.debug('Server stop : {}'.format(server_stop))
+            self.logger.debug('Strategy stop : {}'.format(strat_stop))
 
             raise StopIteration
 
@@ -152,9 +150,8 @@ class StrategyBot(_ClientStrategyBot):
         if self.next <= self.TS:
             self.next += self.frequency
             self.t += 1
-            self.logger.info('next | {}/{}iteration'.format(self.t, self.STOP))
-            self.logger.info('next | Stop in {}'.format(
-                str_time(int(self.time_stop()))
+            self.logger.info('{}/{}iteration, stop in {}'.format(
+                self.t, self.STOP, str_time(int(self.time_stop()))
             ))
             # TODO : Debug/find solution to request data correctly.
             #        Need to choose between request a database, server,
@@ -168,13 +165,14 @@ class StrategyBot(_ClientStrategyBot):
     def __enter__(self):
         """ Enter. """
         # TODO : Load precedent data
-        self.logger.info('enter | Load configuration and history')
+        self.logger.info('Load configuration')
         self.set_config(self.path + '/configuration.yaml')
         super(StrategyBot, self).__enter__()
         self.conn_tbm.thread = Thread(target=self.listen_tbm, daemon=True)
         self.conn_tbm.thread.start()
         # send name of strategy to TBM
         self.conn_tbm.send(('name', name),)
+        # TODO : load history ? Is it necessary ?
         # self.get_histo_orders(self.path + '/orders_hist.dat')
         # self.get_histo_result(self.path + '/result_hist.dat')
 
@@ -186,23 +184,24 @@ class StrategyBot(_ClientStrategyBot):
         if not self.is_stop():
             self._wait_orders_closed()
 
-        self.logger.info('exit | Save configuration')
+        self.logger.info('Save configuration')
         # Save configuration and data
         self.set_general_cfg(self.path + '/configuration.yaml')
-        # TODO: Save data
+        # TODO: Save history ? Only if loaded it is necessary
         # self.set_histo_orders(self.path + '/orders_hist.dat')
         # self.set_histo_result(self.path + '/result_hist.dat')
         if exc_type is not None:
-            self.logger.error('exit | {}: {}\n{}'.format(
-                exc_type, exc_value, exc_tb
-            ))
+            self.logger.error(
+                '{}: {}'.format(exc_type, exc_value),
+                exc_info=True
+            )
 
-        self.logger.info('exit | end')
+        self.logger.info('end')
         super(StrategyBot, self).__exit__(exc_type, exc_value, exc_tb)
         self.conn_tbm.thread.join()
 
     def _wait_orders_closed(self):
-        self.logger.debug('exit | wait until all orders closed')
+        self.logger.debug('wait until all orders closed')
         t0 = time.time()
         while self.orders._waiting:
             time.sleep(0.1)
@@ -212,7 +211,7 @@ class StrategyBot(_ClientStrategyBot):
 
             if not self.conn_tbm.thread.is_alive():
                 # TODO : improve it
-                self.logger.error('exit | force exit because thread to listen '
+                self.logger.error('force exit because thread to listen '
                                   ' tbm is dead | some orders havent closed: '
                                   '{}'.format(self.orders))
                 self.orders._save(self.path, '/list_unsaved_orders')
@@ -233,7 +232,7 @@ class StrategyBot(_ClientStrategyBot):
             Path to load the YAML configuration file.
 
         """
-        self.logger.info('set_config | Strat {}'.format(self.name_strat))
+        self.logger.info('set_config Strat {}'.format(self.name_strat))
         self.cfg = load_config_params(path)
         # Set general configuration
         self._get_general_cfg(self.cfg['strat_manager_instance'])
@@ -255,8 +254,8 @@ class StrategyBot(_ClientStrategyBot):
         self.current_pos = strat_cfg['current_pos']
         self.current_vol = strat_cfg['current_vol']
         self.Order = self._handler_order[strat_cfg['order']]
-        self.logger.info('_get_general_cfg | pos: {}'.format(self.current_pos))
-        self.logger.info('_get_general_cfg | vol: {}'.format(self.current_vol))
+        self.logger.info('current position is {}'.format(self.current_pos))
+        self.logger.info('current volume is {}'.format(self.current_vol))
         if self.STOP is None:
             self.STOP = strat_cfg['STOP']
 
@@ -271,8 +270,8 @@ class StrategyBot(_ClientStrategyBot):
         """
         self.cfg['strat_manager_instance']['current_pos'] = self.current_pos
         self.cfg['strat_manager_instance']['current_vol'] = self.current_vol
-        self.logger.info('set_general_cfg | pos: {}'.format(self.current_pos))
-        self.logger.info('set_general_cfg | vol: {}'.format(self.current_vol))
+        self.logger.info('current position is {}'.format(self.current_pos))
+        self.logger.info('current volume is {}'.format(self.current_vol))
         dump_config_params(self.cfg, path)
 
     def _strat_cfg(self, strat_cfg):
@@ -404,7 +403,7 @@ class StrategyBot(_ClientStrategyBot):
         self.q_ord.put(order)
         self.orders.append(order)
         # self.ord_dict.append(order)
-        self.logger.info('send_order | {}'.format(order))
+        self.logger.info('send {}'.format(order))
         # self.logger.info('Ord_Dict | {}'.format(self.ord_dict))
 
         return self._set_output(kwargs)
@@ -454,7 +453,7 @@ class StrategyBot(_ClientStrategyBot):
 
         request_from = kwargs.pop('source_data').lower()
         self.DM = self._handler[request_from](**kwargs)
-        self.logger.info('set_data_manager | {} init'.format(request_from))
+        self.logger.info('Initialize {}'.format(request_from))
 
         return self
 
@@ -525,13 +524,13 @@ class StrategyBot(_ClientStrategyBot):
         return int(str(id_order) + str(id_strat))
 
     def listen_tbm(self):
-        self.logger.debug('listen_tbm | starting')
+        self.logger.debug('starting listen tbm')
         for k, a in self.conn_tbm:
             self._handler_tbm(k, a)
             if self.is_stop():
                 self.conn_tbm.shutdown()
 
-        self.logger.debug('listen_tbm | end loop')
+        self.logger.debug('stopping listen tbm')
 
     def _handler_tbm(self, k, a):
         if k is None:
@@ -539,12 +538,12 @@ class StrategyBot(_ClientStrategyBot):
 
         elif k == 'order':
             # TODO : update volume to trade if reinvest volume
-            self.logger.debug('listen_tbm | {}: {}'.format(k, a))
+            self.logger.debug('recv {}'.format(a))
             update_df_from_order(a, path=self.path)
             self.orders.pop(a.id)
 
         else:
-            self.logger.error('listen_tbm | unknown {}: {}'.format(k, a))
+            self.logger.error('received unknown {}: {}'.format(k, a))
 
 
 if __name__ == '__main__':

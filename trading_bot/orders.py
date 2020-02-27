@@ -4,10 +4,12 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2020-02-06 11:57:48
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-02-26 14:48:30
+# @Last modified time: 2020-02-27 10:24:09
 
-""" Each order inherits from _BasisOrder object, and each order object has
-specified `update` method.
+""" Module with different Order objects.
+
+Each order inherits from _BasisOrder object, and each order object has
+specified `update` method and some specific attributes.
 
 """
 
@@ -111,7 +113,7 @@ class _BasisOrder:
             'cost': 0,
             'start_time': int(time.time())
         }
-        self.logger = logging.getLogger(__name__ + '.Order-' + str(id))
+        self.logger = logging.getLogger('Order-' + str(id))
         self.id = id
         self.input = input
         self.tol = tol
@@ -136,7 +138,7 @@ class _BasisOrder:
         self.state = None
         self.status = None
         self.hist = []
-        self.logger.debug('init')
+        self.logger.debug('initialized')
 
     def __repr__(self):
         """ Represent the order. """
@@ -152,13 +154,11 @@ class _BasisOrder:
             self._update_status('open')
             self.state = ans
             if self.input.get('validate'):
-                self.logger.debug('execute | validate order')
+                self.logger.debug('order is validate mode')
                 self._update_status('closed')
                 if self.price == 'market':
                     self.price = get_close(self.pair)
-                    self.logger.debug(
-                        'execute | set price {}'.format(self.price)
-                    )
+                    self.logger.debug('set close price {}'.format(self.price))
 
         else:
             raise OrderStatusError(self, 'execute')
@@ -247,7 +247,7 @@ class _BasisOrder:
             raise OrderError(self, msg_prefix='too many volume executed: ')
 
         else:
-            self.logger.debug('check_vol_exec | ex vol={}, new vol={}'.format(
+            self.logger.debug('check executed vol: exVol={}, newVol={}'.format(
                 self.input['volume'], self.volume - self.vol_exec
             ))
             self.input['volume'] = self.volume - self.vol_exec
@@ -293,28 +293,28 @@ class _BasisOrder:
 
     def _update_status(self, status):
         if self.status == status:
-            self.logger.error('update_status | already {}'.format(status))
+            self.logger.error('cant update status, already {}'.format(status))
             raise OrderStatusError(self, status)
 
         elif self.status == 'closed':
             self.logger.error(
-                'update_status | cant {} if closed'.format(status)
+                'cant {} status if closed'.format(status)
             )
             raise OrderStatusError(self, status)
 
         elif status not in ['closed', 'open', 'canceled']:
-            self.logger.error('update_status | {} not allowed'.format(status))
+            self.logger.error('{} status not allowed'.format(status))
             raise OrderStatusError(self, status)
 
         elif status in ['canceled', 'closed'] and self.status != 'open':
             self.logger.error(
-                'update_status | cant {} if not open'.format(status)
+                'cant {} status if not open'.format(status)
             )
             raise OrderStatusError(self, status)
 
         else:
             self.logger.debug(
-                'update_status | from {} to {}'.format(self.status, status)
+                'from {} status to {}'.format(self.status, status)
             )
             self.status = status
 
@@ -329,7 +329,7 @@ class _BasisOrder:
             raise OrderStatusError(self, 'get_result_exec')
 
         ans = self.get_closed(start=self.result_exec['start_time'])
-        self.logger.debug('get_result_exec | ' + str(ans))
+        self.logger.debug('executed info: {}'.format(ans))
         self._get_result_exec(ans['closed'])
 
     def _get_result_exec(self, closed_orders):
@@ -404,6 +404,7 @@ class OrderSL(_BasisOrder):
         market price.
 
     """
+
     def update(self):
         """ Check if the volume has been executed and set corresponding status.
 

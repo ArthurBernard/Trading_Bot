@@ -4,25 +4,20 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2019-04-29 23:42:09
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-02-25 17:13:56
+# @Last modified time: 2020-02-27 10:56:21
 
 """ Client to manage orders execution. """
 
 # Built-in packages
 import logging
-from multiprocessing import Pipe
-from os import getpid, getppid
-from pickle import Pickler, Unpickler
 import time
 
 # External packages
-import numpy as np
+# import numpy as np
 
 # Internal packages
 from trading_bot._client import _ClientOrdersManager
-from trading_bot._exceptions import MissingOrderError, OrderError
 from trading_bot._containers import OrderDict
-from trading_bot.data_requests import get_close
 from trading_bot.exchanges.API_kraken import KrakenClient
 from trading_bot.tools.call_counters import KrakenCallCounter
 from trading_bot.tools.time_tools import str_time
@@ -61,7 +56,6 @@ class OrdersManager(_ClientOrdersManager):
 
     Attributs
     ---------
-    id_max : int
         Number max for an id_order (32-bit).
     path : str
         Path where API key and secret are saved.
@@ -90,9 +84,6 @@ class OrdersManager(_ClientOrdersManager):
         # Set client and connect to the trading bot server
         _ClientOrdersManager.__init__(self, address=address, authkey=authkey)
         self.logger = logging.getLogger(__name__)
-        self.logger.info('init | PID: {} PPID: {}'.format(getpid(), getppid()))
-
-        self.id_max = 2147483647
         self.start = int(time.time())
 
     def __call__(self, exchange, path_log):
@@ -122,7 +113,7 @@ class OrdersManager(_ClientOrdersManager):
         self.call_counter = self._handler_call_counters.get(exchange.lower())
 
         self.K.load_key(path_log)
-        self.logger.debug('call | {} client loaded'.format(exchange))
+        self.logger.debug('{} client API loaded'.format(exchange))
 
         return self
 
@@ -130,9 +121,16 @@ class OrdersManager(_ClientOrdersManager):
         """ Enter to context manager. """
         super(OrdersManager, self).__enter__()
         # TODO : load config and data
-        self.logger.info('enter | Load configuration')
-        # TODO : load orders to verify
-        self.logger.debug('enter | order: {}'.format(self.orders))
+        self.logger.info('Load configuration')
+        # Load unexecuted orders
+        try:
+            self.orders._load('./strategies/', 'unexecuted_orders', ext='.dat')
+            self.logger.debug('load unexecuted orders: {}'.format(self.orders))
+
+        except FileNotFoundError:
+
+            pass
+
         # Setup fees and balance
         self.get_fees()
         self.get_balance()
@@ -141,20 +139,22 @@ class OrdersManager(_ClientOrdersManager):
 
     def __exit__(self, exc_type, exc_value, exc_tb):
         """ Exit from context manager. """
-        self.logger.debug('exit | order: {}'.format(self.orders))
+        # Save unexecuted orders
+        self.logger.debug('save unexecuted orders: {}'.format(self.orders))
+        self.orders._save('./strategies/', 'unexecuted_orders', ext='.dat')
         # TODO : save config and data
-        self.logger.info('exit | Save configuration')
+        self.logger.info('Save configuration')
         if exc_type is not None:
-            self.logger.error('exit | {}: {}\n{}'.format(
-                exc_type, exc_value, exc_tb
-            ))
+            self.logger.error(
+                '{}: {}'.format(exc_type, exc_value),
+                exc_info=True
+            )
 
-        self.logger.info('exit | end')
         super(OrdersManager, self).__exit__(exc_type, exc_value, exc_tb)
 
     def __iter__(self):
         """ Iterate until server stop. """
-        self.logger.info('iter | Starting to wait orders')
+        self.logger.info('Starting to wait orders')
 
         return self
 
@@ -189,7 +189,7 @@ class OrdersManager(_ClientOrdersManager):
 
     def loop(self):
         """ Run a loop until TradingBotServer closed. """
-        self.logger.info('loop | start to wait orders')
+        self.logger.info('start loop method')
         # TODO : get last order
         last_order = 0
         for order in self:
@@ -241,19 +241,19 @@ class OrdersManager(_ClientOrdersManager):
             pair='all'
         )
         self.call_counter('TradeVolume')
-        self.logger.debug('get_fees | fees are loaded')
+        self.logger.debug('fees are loaded')
 
         self.conn_tbm.send(('fees', self.fees),)
-        self.logger.debug('get_fees | fees are sent to TradingBotManager')
+        self.logger.debug('fees are sent to TBM')
 
     def get_balance(self):
         """ Load current balance. """
         self.balance = self.K.query_private('Balance')
         self.call_counter('Balance')
-        self.logger.debug('get_balance | Loaded {}'.format(self.balance))
+        self.logger.debug('balance is loaded: {}'.format(self.balance))
 
         self.conn_tbm.send(('balance', self.balance),)
-        self.logger.debug('get_balance | Sent balance to TradingBotManager')
+        self.logger.debug('sent balance to TBM')
 
     def _set_result(self, order):
         """ Add informations to output of query order.

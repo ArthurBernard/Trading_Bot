@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2020-02-20 16:35:31
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-02-26 13:44:47
+# @Last modified time: 2020-02-27 10:29:33
 
 """ Objects to send and receive objetcs between clients. """
 
@@ -59,14 +59,14 @@ class _BasisConnection:
         self.state = 'up'
         self.r = reader
         self.w = writer
-        self.logger.debug('setup | {}'.format(self))
+        self.logger.debug('setup {}'.format(self))
 
     def shutdown(self, msg=None):
         self.state = 'down'
         if msg is not None:
-            self.logger.debug('shutdown | {}'.format(msg))
+            self.logger.debug('shutdown because {}'.format(msg))
 
-        self.logger.debug('shutdown | {}'.format(self))
+        self.logger.debug('shutdown {}'.format(self))
         self._shutdown()
 
     def recv(self):
@@ -93,14 +93,14 @@ class _BasisConnection:
         if self.w is not None:
             self.state = 'up'
 
-        self.logger.debug('setup | {}'.format(self))
+        self.logger.debug('set reader {}'.format(self))
 
     def _set_writer(self, writer):
         self.w = writer
         if self.r is not None:
             self.state = 'up'
 
-        self.logger.debug('setup | {}'.format(self))
+        self.logger.debug('set writer {}'.format(self))
 
     def _shutdown(self):
         self.r.close()

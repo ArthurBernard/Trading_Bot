@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2020-02-22 11:01:49
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-02-26 19:44:09
+# @Last modified time: 2020-02-27 10:28:08
 
 """ Module with specific containers objects. """
 
@@ -320,7 +320,7 @@ class ConnDict(dict):
             The Connection object to append collect.
 
         """
-        self.logger.debug('set | {}'.format(conn))
+        self.logger.debug('set {}'.format(conn))
         self._is_conn(conn)
         dict.__setitem__(self, _id, conn)
 
@@ -370,29 +370,9 @@ class ConnDict(dict):
             self[conn.id] = conn
 
         else:
-            self.logger.error('append | {} is already stored'.format(conn))
+            self.logger.error('{} is already stored'.format(conn))
 
             raise ValueError('{} and {}'.format(conn, self[conn.id]))
-
-    # def switch_id(self, new_id, ex_id):
-    #    """ Remove `ex_id` ID and append `new_id` ID of a connection.
-    #
-    #    Parameters
-    #    ----------
-    #    new_id : int
-    #        New ID of the connection object.
-    #    ex_id : int
-    #        Old ID of the connection to remove.
-    #
-    #    """
-    #    self.logger.debug('switch_id | {} to {}'.format(ex_id, new_id))
-    #    if new_id not in self.keys():
-    #        self[new_id] = self.pop(ex_id)
-
-    #    else:
-    #        txt_err = 'ID-{} is already stored'.format(new_id)
-    #        self.logger.error(txt_err)
-    #        self[ex_id].send(('stop', txt_err),)
 
     def update(self, *conn, **kwconn):
         """ Update self with conn objects or an other collection of conn.

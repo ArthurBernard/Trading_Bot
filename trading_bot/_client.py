@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2020-01-28 16:47:55
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-02-26 13:04:05
+# @Last modified time: 2020-02-27 10:13:49
 
 """ Clients to connect to TradingBotServer. """
 
@@ -34,7 +34,7 @@ class _ClientBot:
         # self.id = randrange(100, 1e9) if _id is None else _id
         self.logger = logging.getLogger(__name__)
         self.logger.info(
-            'init | PID: {} | PPID: {}'.format(os.getpid(), os.getppid())
+            'PID: {} | PPID: {}'.format(os.getpid(), os.getppid())
         )
 
         # register methods
@@ -68,7 +68,7 @@ class _ClientBot:
         if self.conn_tbm.state == 'up':
             self.conn_tbm.shutdown(msg=exc_type)
 
-        self.logger.info('exit | closed connection to TBM and thread')
+        self.logger.info('closed connection to TBM and thread')
 
     def is_stop(self):
         """ Check if the server is stopped. """

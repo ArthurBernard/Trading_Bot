@@ -4,13 +4,13 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2020-01-27 09:58:03
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-02-26 11:56:53
+# @Last modified time: 2020-02-27 10:26:27
 
 """ Base object for trading bot server. """
 
 # Built-in packages
 import logging
-from multiprocessing.managers import BaseManager, BaseProxy
+from multiprocessing.managers import BaseManager
 from multiprocessing import Pipe
 import os
 from queue import Queue
@@ -33,6 +33,7 @@ class TradingBotServer(BaseManager):
 
 class _TradingBotManager:
     """ Base class of trading bot manager. """
+
     conn_sb = ConnDict()
     conn_om = ConnOrderManager()
 
@@ -40,7 +41,7 @@ class _TradingBotManager:
         """ Initialize the trading bot manager. """
         self.logger = logging.getLogger(__name__)
         self.logger.info(
-            'init | PID: {} | PPID: {}'.format(os.getpid(), os.getppid())
+            'PID: {} | PPID: {}'.format(os.getpid(), os.getppid())
         )
 
         # Set queue for orders
@@ -65,10 +66,6 @@ class _TradingBotManager:
         self.state = {'stop': True, 'balance': {}, 'fees': {}}
         TradingBotServer.register('get_state', callable=lambda: self.state)
 
-        # Set proxy to share fees dictionary
-        # self.fees = {}
-        # TradingBotServer.register('get_proxy_fees', callable=lambda: self.fees)
-
         # Set client and server threads
         self.server_thread = Thread(
             target=self.set_server,
@@ -82,7 +79,7 @@ class _TradingBotManager:
     def __exit__(self, exc_type, exc_value, exc_tb):
         """ Exit from TradingBotManager. """
         self.state['stop'] = True
-        self.logger.debug('exit | stop propageted')
+        self.logger.debug('stop is propageted')
         time.sleep(1)
         self.s.stop_event.set()
         self.server_thread.join()
@@ -95,10 +92,10 @@ class _TradingBotManager:
         """ Initialize a server connection. """
         self.m = TradingBotServer(address=address, authkey=authkey)
         self.s = self.m.get_server()
-        self.logger.info('set_server | started')
+        self.logger.info('server started')
         self.state['stop'] = False
         self.s.serve_forever()
-        self.logger.info('set_server | stopped')
+        self.logger.info('server stopped')
 
     def get_writer(self, _id):
         """ Set a pipe, returns the writer and store the reader.
@@ -126,7 +123,7 @@ class _TradingBotManager:
                 self.conn_sb[_id]._set_reader(r)
 
             else:
-                self.logger.error('get_writer | {} already exists'.format(_id))
+                self.logger.error('writer to {} already exists'.format(_id))
 
                 raise ConnRefused(_id, msg='already connected to TBM')
 
@@ -158,28 +155,8 @@ class _TradingBotManager:
                 self.conn_sb[_id]._set_writer(w)
 
             else:
-                self.logger.error('get_reader | {} already exists'.format(_id))
+                self.logger.error('reader to {} already exists'.format(_id))
 
                 raise ConnRefused(_id, msg='already connected to TBM')
 
         return r
-
-
-class BoolProxy(BaseProxy):
-    value = None
-
-    def get_value(self):
-        return self.value
-
-    def set_value(self, value):
-        self.value = value
-
-
-class DictProxy(BaseProxy):
-    value = {}
-
-    def get_value(self, key):
-        return self.value[key]
-
-    def set_value(self, key, value):
-        self.value[key] = value
