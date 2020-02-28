@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2020-02-25 10:38:17
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-02-28 11:21:03
+# @Last modified time: 2020-02-28 18:54:19
 
 """ Objects to measure and display trading performance. """
 
@@ -21,7 +21,7 @@ from trading_bot._client import _ClientTradingPerformance
 # from trading_bot.tools.io import get_df
 
 
-class _PerfMonoUnderlying:
+class _PnLI:
     """ Object to compute performance of only one asset. """
 
     _handler = {
@@ -31,17 +31,142 @@ class _PerfMonoUnderlying:
         'fee': 'fee_pct',
     }
 
-    def __init__(self, data, freq=None, timestep=None, v0=0):
+    def __init__(self, data, v0=None):
         """ Initialize the perf object.
 
         Parameters
         ----------
-        freq: str or DateOffset
-            Frequency strings can have multiples, e.g. ‘5H’. See here
-            (https://pandas.pydata.org/pandas-docs/stable/user_guide/timeseries
-            .html#timeseries-offset-aliases) for a list of frequency aliases.
-            Default is None, meaning that check the smaller frequency in
-            available data.
+        data : pd.DataFrame
+            DataFrame containing the orders history.
+        v0 : float, optional
+            Initial value available of the trading strategy.
+
+        """
+        self.columns = ['price', 'returns', 'volume_pos', 'exchanged_volume',
+                        'position', 'signal', 'delta_signal', 'fee', 'PnL',
+                        'cumPnL', 'value']
+        self.index = data.loc[:, 'TS'].drop_duplicates()
+        if v0 is None:
+            v0 = data.ex_vol[0] * data.price[0] if data.ex_vol != 0. else 0.
+
+        self.exch_vol = self._get_exch_vol(data)
+        self.price = self._get_price(data, self.exch_vol)
+        self.returns = self._get_returns()
+        self.d_signal = self._get_delta_signal(data)
+        self.fee = self._get_fee(data, self.price)  # self.exch_vol)
+        self.signal = self._get_signal(self.d_signal, data.ex_pos[0])
+        self.pos = self._get_pos(data)
+        self.vol_pos = self._get_vol_pos(data)
+        self.pnl = self._get_PnL(self.returns, self.pos, self.vol_pos,
+                                 self.fee)
+        self.cumpnl = np.cumsum(self.pnl)
+        self.value = self.cumpnl + v0
+        self._set_df()
+        if (self.pos[1:] != self.signal[:-1]).any():
+
+            raise ValueError('position at t + 1 does not match signal at t')
+
+    def _set_df(self):
+        self.df = pd.DataFrame(
+            0,
+            index=self.index,
+            columns=self.columns
+        )
+        self.df.loc[:, 'exchanged_volume'] = self.exch_vol
+        self.df.loc[:, 'price'] = self.price
+        self.df.loc[:, 'returns'] = self.returns
+        self.df.loc[:, 'delta_signal'] = self.d_signal
+        self.df.loc[:, 'fee'] = self.fee
+        self.df.loc[:, 'signal'] = self.signal
+        self.df.loc[:, 'position'] = self.pos
+        self.df.loc[:, 'volume_pos'] = self.vol_pos
+        self.df.loc[:, 'PnL'] = self.pnl
+        self.df.loc[:, 'cumPnL'] = self.cumpnl
+        self.df.loc[:, 'value'] = self.value
+
+    def __repr__(self):
+        return self.df.__repr__()
+
+    def _get_pos(self, data):
+        df = data.loc[:, ('ex_pos', 'TS', 'userref')].sort_values(by='userref')
+        df = df.drop_duplicates(subset='TS', keep='first')
+
+        return df.loc[:, ('ex_pos',)].values
+
+    def _get_vol_pos(self, data):
+        df = data.loc[:, ('ex_vol', 'TS', 'userref')].sort_values(by='userref')
+        df = df.drop_duplicates(subset='TS', keep='first')
+
+        return df.loc[:, ('ex_vol',)].values
+
+    def _get_exch_vol(self, data):
+        df = data.loc[:, (self._handler['volume'], 'TS')]
+
+        return df.groupby(by='TS').sum().values
+
+    def _get_price(self, data, exch_vol):
+        df = data.loc[:, (self._handler['price'], 'TS')]
+        volume = data.loc[:, self._handler['volume']].values
+        df.loc[:, self._handler['price']] *= volume
+
+        return df.groupby(by='TS').sum().values / exch_vol
+
+    def _get_returns(self):
+        r = np.zeros(self.price.shape)
+        r[1:] = self.price[1:] - self.price[:-1]
+
+        return r
+
+    def _get_delta_signal(self, data):
+        df = data.loc[:, (self._handler['d_signal'], 'TS')]
+        df.loc[:, 'd_signal'] = df.loc[:, self._handler['d_signal']].apply(
+            lambda x: 1 if x == 'buy' else -1
+        )
+
+        return df.loc[:, ('d_signal', 'TS')].groupby('TS').sum().values
+
+    def _get_signal(self, d_signal, pos_init):
+        return np.cumsum(d_signal, axis=0) + pos_init
+
+    def _get_fee(self, data, price):
+        df = data.loc[:, (self._handler['fee'], 'TS')]
+        volume = data.loc[:, self._handler['volume']].values
+        df.loc[:, self._handler['fee']] *= volume
+
+        return df.groupby(by='TS').sum().values * price / 100
+
+    def _get_PnL(self, returns, pos, vol_pos, fee):
+        return vol_pos * returns * pos - fee
+
+
+class _PnLR(_PnLI):
+    """ Object to compute PnL of only one asset. """
+
+    _handler = {
+        'price': 'price_exec',
+        'volume': 'vol_exec',
+        'd_signal': 'type',
+        'fee': 'fee',
+    }
+
+    def _get_fee(self, data, *args):
+        df = data.loc[:, (self._handler['fee'], 'TS')]
+
+        return df.groupby(by='TS').sum().values
+
+
+class _FullPnL:
+    def __init__(self, data, p=None, v0=None, timestep=None, real=True):
+        """ Initialize a FullPnl object.
+
+        Parameters
+        ----------
+        data : pd.DataFrame
+            DataFrame containing the orders history.
+        v0 : float, optional
+            Initial value available of the trading strategy.
+        timestep : int, optional
+            Minimal number of seconds between two observations.
 
         """
         self.t_idx = data.loc[:, 'TS'].drop_duplicates()
@@ -50,146 +175,50 @@ class _PerfMonoUnderlying:
             timestep = self.t_idx.sort_values().diff().min()
 
         # time_range = pd.date_range()
-        # self.index = range(self.t0, self.T + 1, timestep)
-        self.df = pd.DataFrame(
-            0,
-            index=self.t_idx,  # self.index,
-            columns=['price', 'returns', 'volume_pos', 'exchanged_volume',
-                     'position', 'signal', 'd_signal', 'fee', 'PnL', 'cumPnL',
-                     'value']
-        )
-        exch_vol = self._get_exch_vol(data)
-        p = self._get_price(data)
-        s = self._get_signal(data)
-        f = self._get_fee(data)
-        pos = self._get_pos(data)
-        vol_pos = self._get_vol_pos(data)
-        self.df.loc[:, 'exchanged_volume'] = exch_vol.values
-        self.df.loc[:, 'price'] = p.values / exch_vol.values
-        self.df.loc[:, 'returns'] = self.df.loc[:, 'price'].diff().fillna(0)
-        self.df.loc[:, 'd_signal'] = s.values
-        self.df.loc[:, 'fee'] = f.values / exch_vol.values
-        self.df.loc[:, 'signal'] += np.cumsum(s.values) + data.ex_pos[0]
-        self.df.loc[:, 'position'] = pos.values
-        self.df.loc[:, 'volume_pos'] = vol_pos.values
-        self.df.loc[:, 'PnL'] = self._get_PnL()
-        self.df.loc[:, 'cumPnL'] = self.df.loc[:, 'PnL'].cumsum()
-        self.df.loc[:, 'value'] = self.df.loc[:, 'cumPnL'].values + v0
-
-    def __repr__(self):
-        return self.df.__repr__()
-
-    def _get_pos(self, data):
-        df = data.loc[:, ('ex_pos', 'TS', 'userref')].sort_values(by='userref')
-
-        return df.drop_duplicates(subset='TS', keep='first').loc[:, 'ex_pos']
-
-    def _get_vol_pos(self, data):
-        df = data.loc[:, ('ex_vol', 'TS', 'userref')].sort_values(by='userref')
-
-        return df.drop_duplicates(subset='TS', keep='first').loc[:, 'ex_vol']
-
-    def _get_exch_vol(self, data):
-        df = data.loc[:, (self._handler['volume'], 'TS')]
-
-        return df.groupby(by='TS').sum()
-
-    def _get_price(self, data):
-        df = data.loc[:, (self._handler['price'], 'TS')]
-        volume = data.loc[:, self._handler['volume']].values
-        df.loc[:, self._handler['price']] *= volume
-
-        return df.groupby(by='TS').sum()
-
-    def _get_signal(self, data):
-        df = data.loc[:, (self._handler['d_signal'], 'TS')]
-        df.loc[:, 'd_signal'] = df.loc[:, self._handler['d_signal']].apply(
-            lambda x: 1 if x == 'buy' else -1
-        )
-
-        return df.loc[:, ('d_signal', 'TS')].groupby('TS').sum()
-
-    def _get_fee(self, data):
-        df = data.loc[:, (self._handler['fee'], 'TS')]
-        volume = data.loc[:, self._handler['volume']].values
-        df.loc[:, self._handler['fee']] *= volume
-
-        return df.groupby(by='TS').sum()
-
-    def _get_PnL(self):
-        pnl = self.df.loc[:, ('volume_pos', 'returns', 'position')]
-        pnl = pnl.prod(axis=1).values
-        f = self.df.loc[:, ('exchanged_volume', 'fee', 'price')].prod(axis=1)
-        # pnl *= (1. - self.df.loc[:, ('d_signal', 'fee')].prod(axis=1) / 100)
-
-        return pnl - f.values / 100
-
-
-class _TheoricPerformance:
-    """ Object to compute theorical performance of a strategy. """
-
-    def __init__(self, df, t=0, fee=None):
-        self.df = df
-        self.t0 = t
-        i = self.df.index[t]
-        if df.loc[i, 'ex_vol'] != 0:
-            self.val_0 = df.loc[i, 'ex_vol'] * df.loc[i, 'price']
+        self.index = range(self.t0, self.T + 1, timestep)
+        if real:
+            pnl = _PnLR(data, v0=v0)
 
         else:
-            raise ValueError('ex_vol = 0')
+            pnl = _PnLI(data, v0=v0)
 
-        if 'fee_pct' in self.df.columns:
-            self.fee = 'update'
+        self.df = pd.DataFrame(index=self.index, columns=pnl.columns)
+        self.df.loc[pnl.index, :] = pnl.df.values
+        self._fillna('volume_pos', 'signal', method='ffill')
+        self._fillna('exchanged_volume', 'delta_signal', 'fee', value=0.)
+        self._fillna('position', method='bfill')
+        self._check_signal_position()
+        self._fillna_price(p)
+        self['returns'] = self['price'].diff().fillna(value=0).values
+        self._set_pnl()
+        self['cumPnL'] = np.cumsum(self['PnL'].values)
+        self['value'] = self['cumPnL'].values + v0
 
-        elif fee is None:
-            self.fee = 0.
+    def _set_pnl(self):
+        pnl = self[('volume_pos', 'returns', 'position')].prod(axis=1).values
+        self['PnL'] = pnl - self['fee']
 
-        else:
-            self.fee = fee
+    def _fillna(self, *args, **kwargs):
+        self.df.loc[:, args] = self.df.loc[:, args].fillna(**kwargs)
 
-        self.pos_0 = self.df.loc[i, 'ex_pos']
+    def _fillna_price(self, p):
+        if p is not None:
+            p.loc[self.t0: self.T]
+            na_idx = p.index[self.df.loc[p.index, 'price'].isna()]
+            self.df.loc[na_idx, 'price'] = p.loc[na_idx, 'price'].values
 
-    def __iter__(self):
-        self.t = self.t0
-        self.i = self.df.index[self.t]
-        self.T = self.df.index.size
-        self.pos = self.pos_0
-        self.val = self.val_0
-        self.vol_quote = (1 - self.pos) * self.val_0
-        self.vol_base = self.pos * self.val_0 / self.df.loc[self.i, 'price']
-        self.pnl = 0
-        self._update()
+        self._fillna('price', method='ffill')
 
-        return self
+    def _check_signal_position(self):
+        if (self['position'].values[1:] != self['signal'].values[:-1]).any():
 
-    def __next__(self):
-        self.t += 1
-        if self.t >= self.T:
+            raise ValueError('position at t + 1 does not match signal at t')
 
-            raise StopIteration
+    def __setitem__(self, key, value):
+        self.df.loc[:, key] = value
 
-        self.i = self.df.index[self.t]
-        self._update()
-
-    def __repr__(self):
-        txt = ('Position={self.pos:2}, Base Volume={self.vol_base:8.6f}, Quote'
-               ' Volume={self.vol_quote:8.2f}, Value={self.val:6.2f}, Pnl='
-               '{self.pnl:6.2f}, DeltaPnL={self.pnl_1:6.2f}'.format(self=self))
-
-        return txt
-
-    def _update(self):
-        self.val_1 = self.val
-        s = 1 if self.df.loc[self.i, 'type'] == 'buy' else -1
-        p = self.df.loc[self.i, 'price']
-        v = self.df.loc[self.i, 'volume']
-        f = self.df.loc[self.i, 'fee_pct'] if self.fee == 'update' else self.fee
-        self.pos += s
-        self.vol_quote -= (s + f / 100) * v * p
-        self.vol_base += s * v
-        self.val = self.vol_base * p + self.vol_quote
-        self.pnl_1 = self.val - self.val_1
-        self.pnl += self.pnl_1
+    def __getitem__(self, key):
+        return self.df.loc[:, key]
 
 
 class ResultManager:
@@ -417,3 +446,75 @@ class TradingPerformance(_ClientTradingPerformance):
             authkey=authkey
         )
         self.logger = logging.getLogger(__name__)
+
+
+# =========================================================================== #
+#                                 deprecated                                  #
+# =========================================================================== #
+
+
+class _TheoricPerformance:
+    """ Object to compute theorical performance of a strategy. """
+
+    def __init__(self, df, t=0, fee=None):
+        self.df = df
+        self.t0 = t
+        i = self.df.index[t]
+        if df.loc[i, 'ex_vol'] != 0:
+            self.val_0 = df.loc[i, 'ex_vol'] * df.loc[i, 'price']
+
+        else:
+            raise ValueError('ex_vol = 0')
+
+        if 'fee_pct' in self.df.columns:
+            self.fee = 'update'
+
+        elif fee is None:
+            self.fee = 0.
+
+        else:
+            self.fee = fee
+
+        self.pos_0 = self.df.loc[i, 'ex_pos']
+
+    def __iter__(self):
+        self.t = self.t0
+        self.i = self.df.index[self.t]
+        self.T = self.df.index.size
+        self.pos = self.pos_0
+        self.val = self.val_0
+        self.vol_quote = (1 - self.pos) * self.val_0
+        self.vol_base = self.pos * self.val_0 / self.df.loc[self.i, 'price']
+        self.pnl = 0
+        self._update()
+
+        return self
+
+    def __next__(self):
+        self.t += 1
+        if self.t >= self.T:
+
+            raise StopIteration
+
+        self.i = self.df.index[self.t]
+        self._update()
+
+    def __repr__(self):
+        txt = ('Position={self.pos:2}, Base Volume={self.vol_base:8.6f}, Quote'
+               ' Volume={self.vol_quote:8.2f}, Value={self.val:6.2f}, Pnl='
+               '{self.pnl:6.2f}, DeltaPnL={self.pnl_1:6.2f}'.format(self=self))
+
+        return txt
+
+    def _update(self):
+        self.val_1 = self.val
+        s = 1 if self.df.loc[self.i, 'type'] == 'buy' else -1
+        p = self.df.loc[self.i, 'price']
+        v = self.df.loc[self.i, 'volume']
+        f = self.df.loc[self.i, 'fee_pct'] if self.fee == 'update' else self.fee
+        self.pos += s
+        self.vol_quote -= (s + f / 100) * v * p
+        self.vol_base += s * v
+        self.val = self.vol_base * p + self.vol_quote
+        self.pnl_1 = self.val - self.val_1
+        self.pnl += self.pnl_1
