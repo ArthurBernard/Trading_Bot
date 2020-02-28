@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2019-05-12 22:57:20
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-02-27 18:19:48
+# @Last modified time: 2020-02-28 18:48:48
 
 """ Client to manage a financial strategy. """
 
@@ -286,6 +286,12 @@ class StrategyBot(_ClientStrategyBot):
         **kwargs : keyword arguments
             Parameters for order, e.g. volume, order type, etc.
 
+        Returns
+        -------
+        list or float
+            If one or several orders are sent, returns list with information
+            about them, otherwise returns the current price of underlying.
+
         """
         out = []
         # Up move
@@ -305,6 +311,10 @@ class StrategyBot(_ClientStrategyBot):
 
             if s < 0:
                 out += self._set_short(s, **kwargs.copy())
+
+        if not out:
+
+            return self._set_output(kwargs)['price']
 
         return out
 
@@ -382,6 +392,11 @@ class StrategyBot(_ClientStrategyBot):
         ----------
         **kwargs : keyword arguments
             Parameters for order, e.g. volume, order type, etc.
+
+        returns
+        -------
+        dict
+            Information about the executed order.
 
         """
         _id = self._set_id_order()
@@ -474,8 +489,16 @@ class StrategyBot(_ClientStrategyBot):
             if s is not None:
                 self.logger.info('Signal: {} | Parameters: {}'.format(s, kw))
                 output = self.set_order(s, **kw, **self.ord_kwrds)
-                if output:
+                if isinstance(output, list):
                     self.logger.info('Executed order : {}'.format(output))
+                    price = output[0]['price']
+
+                else:
+                    price = output
+
+                TS = self.next - self.frequency
+                with open(self.path + '/price.txt', 'a') as f:
+                    f.write(str(TS) + ',' + str(price) + '\n')
 
             txt = '{} | Next signal in {:.1f}'.format(
                 time.strftime('%y-%m-%d %H:%M:%S'),
@@ -558,17 +581,24 @@ if __name__ == '__main__':
 
     sm = StrategyBot()
     with sm(name):
-        # sm.set_config('./strategies/' + name + '/configuration.yaml')
         for s, kw in sm:
             if s is not None:
-                sm.logger.info(' | Signal: {} | Parameters: {}'.format(s, kw))
+                sm.logger.info('Signal: {} | Parameters: {}'.format(s, kw))
                 output = sm.set_order(s, **kw, **sm.ord_kwrds)
 
-                if output:
-                    sm.logger.info(' | Executed order : {}'.format(output))
+                if isinstance(output, list):
+                    sm.logger.info('Executed order : {}'.format(output))
+                    price = output[0]['price']
+
+                else:
+                    price = output
+
+                TS = sm.next - sm.frequency
+                with open(sm.path + '/price.txt', 'a') as f:
+                    f.write(str(TS) + ',' + str(price) + '\n')
 
             txt = time.strftime('%y-%m-%d %H:%M:%S')
-            txt += ' | Next signal in {:.1f}'.format(sm.next - time.time())
+            txt += ' | Next signal in {:}'.format(str_time(sm.next - sm.TS))
             print(txt, end='\r')
             time.sleep(0.01)
 
