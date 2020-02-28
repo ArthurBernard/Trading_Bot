@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2020-02-06 11:57:48
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-02-27 11:27:32
+# @Last modified time: 2020-02-28 17:34:18
 
 """ Module with different Order objects.
 
@@ -153,6 +153,7 @@ class _BasisOrder:
             ans = self._request('AddOrder', userref=self.id, **self.input)
             self._update_status('open')
             self.state = ans
+            # Only if order is in validate mode
             if self.input.get('validate'):
                 self.logger.debug('order is validate mode')
                 self._update_status('closed')
@@ -424,19 +425,19 @@ class OrderSL(_BasisOrder):
             raise OrderStatusError(self, 'update')
 
         if time.time() > self.time_force:
-            if self.get_open():
+            if self.get_open()['open']:
                 self.cancel()
 
             self.check_vol_exec()
 
             if self.status != 'closed':
-                if time.time() > self.time_force:
-                    self.input['type'] = 'market'
-                    self.input.remove('price')
+                self.logger.info('force exec market')
+                self.input['type'] = 'market'
+                self.input.remove('price')
 
                 self.execute()
 
-        elif not self.get_open():
+        elif not self.get_open()['open']:
             self.check_vol_exec()
 
 
@@ -514,20 +515,29 @@ class OrderBestLimit(_BasisOrder):
 
             raise OrderStatusError(self, 'replace')
 
-        if self.get_open():
+        if self.get_open()['open']:
             self.cancel()
 
         self.check_vol_exec()
 
         if self.status != 'closed':
+            if 'post' in self.input.get('oflags') and self.status == 'open':
+                self.logger.warning('flag postonly specified')
+                self._update_status('canceled')
+
             if price == 'market' or time.time() > self.time_force:
+                self.logger.info('force exec market')
                 self.input['type'] = 'market'
                 self.input.remove('price')
 
             elif price == 'best':
                 self.input['price'] = self._handler_best[self.type](self.pair)
+                self.logger.info('update best price {}'.format(
+                    self.input['price'])
+                )
 
             else:
                 self.input['price'] = price
+                self.logger.info('update price {}'.format(self.input['price']))
 
             self.execute()
