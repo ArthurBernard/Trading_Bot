@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2019-05-12 22:57:20
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-02-28 18:48:48
+# @Last modified time: 2020-02-28 20:01:45
 
 """ Client to manage a financial strategy. """
 
@@ -145,7 +145,7 @@ class StrategyBot(_ClientStrategyBot):
 
             raise StopIteration
 
-        self.TS = int(time.time())
+        self.TS = int(time.time())  # + 7200  # force to send signal
         if self.next <= self.TS:
             self.next += self.frequency
             self.t += 1

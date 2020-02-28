@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2019-05-06 20:53:46
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-02-17 15:38:04
+# @Last modified time: 2020-02-28 20:15:53
 
 """ Kraken Client API object. """
 
@@ -119,7 +119,12 @@ class KrakenClient:
 
         try:
             r = requests.post(url, headers=headers, data=data, timeout=timeout)
-            if r.json()['error']:
+            if 'EOrder:Unknown order' in r.json()['error']:
+                self.logger.error(method + ': EOrder:Unknown order')
+
+                return r.json()
+
+            elif r.json()['error']:
 
                 self.logger.error('ANSWERE: ' + str(r.json()))
                 self.logger.error('URL: ' + str(url))

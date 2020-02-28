@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2020-02-25 14:09:58
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-02-27 11:20:18
+# @Last modified time: 2020-02-28 20:29:33
 
 """ Transforms order into recordable format. """
 
@@ -99,7 +99,7 @@ def set_dict_from_order(order):
         'volume': order.volume,
         'pair': order.pair,
         'ordertype': order.input['ordertype'],
-        'leverage': order.input['leverage'],
+        'leverage': order.input.get('leverage'),
         'end_time': int(time.time()),
         # 'fee_pct': order.fee,
         # 'strat_id': _get_id_strat(order.id),

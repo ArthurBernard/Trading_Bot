@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2020-02-06 11:57:48
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-02-28 17:34:18
+# @Last modified time: 2020-02-28 20:25:19
 
 """ Module with different Order objects.
 
@@ -131,8 +131,9 @@ class _BasisOrder:
         else:
             self.price = input['price']
 
-        if self.input['leverage'] == 1:
-            self.input['leverage'] = None
+        if self.input.get('leverage') == 1:
+            # self.input['leverage'] = None
+            self.input.pop('leverage')
 
         self.time_force += self.result_exec['start_time']
         self.state = None
@@ -161,6 +162,10 @@ class _BasisOrder:
                     self.price = get_close(self.pair)
                     self.logger.debug('set close price {}'.format(self.price))
 
+            elif self.input.get('validate') is not None:
+                self.logger.warning('validate is set to false, so remove it')
+                self.input.pop('validate')
+
         else:
             raise OrderStatusError(self, 'execute')
 
@@ -168,7 +173,11 @@ class _BasisOrder:
         """ Cancel the order. """
         if self.status == 'open':
             ans = self._request('CancelOrder', txid=self.id)
-            if ans['count'] == 0:
+            if 'EOrder:Unknown order' in ans.get('error', default=[]):
+
+                return ans
+
+            elif ans['count'] == 0:
 
                 raise OrderError(self, 'no order canceled')
 
@@ -276,7 +285,7 @@ class _BasisOrder:
     def _get_vol_exec(self, closed_orders):
         self._last = int(time.time())
         for v in closed_orders.values():
-            self.vol_exec += v['vol_exec']
+            self.vol_exec += float(v['vol_exec'])
 
     def _request(self, method, **kwargs):
         if 'exchange_client' not in self.__dict__.keys():
@@ -337,21 +346,21 @@ class _BasisOrder:
         self.result_exec['txid'] = list(closed_orders.keys())
         for v in closed_orders.values():
             if 'viqc' in v['oflags']:
-                v['price'] = 1 / v['price']
-                v['vol_exec'] *= v['price']
-                v['cost'] *= v['price']
+                v['price'] = 1 / float(v['price'])
+                v['vol_exec'] = float(v['vol_exec']) * v['price']
+                v['cost'] = float(v['cost']) * v['price']
                 v['oflags'].remove('viqc')
 
-            self.result_exec['vol_exec'] += v['vol_exec']
-            self.result_exec['price_exec'] += v['price'] * v['vol_exec']
-            self.result_exec['fee'] += v['fee']
-            self.result_exec['cost'] += v['cost']
+            self.result_exec['vol_exec'] += float(v['vol_exec'])
+            self.result_exec['price_exec'] += float(v['price']) * float(v['vol_exec'])
+            self.result_exec['fee'] += float(v['fee'])
+            self.result_exec['cost'] += float(v['cost'])
 
             if 'fciq' in v['oflags']:
-                self.result_exec['feeq'] += v['fee']
+                self.result_exec['feeq'] += float(v['fee'])
 
             elif 'fcib' in v['oflags']:
-                self.result_exec['feeb'] += v['fee'] / v['price']
+                self.result_exec['feeb'] += float(v['fee']) / float(v['price'])
 
         if self.result_exec['vol_exec'] > 0.:
             self.result_exec['price_exec'] /= self.result_exec['vol_exec']
