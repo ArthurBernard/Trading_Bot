@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2020-02-25 10:38:17
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-02-27 18:55:23
+# @Last modified time: 2020-02-28 11:21:03
 
 """ Objects to measure and display trading performance. """
 
@@ -31,7 +31,7 @@ class _PerfMonoUnderlying:
         'fee': 'fee_pct',
     }
 
-    def __init__(self, data, freq=None, timestep=None, last_pos=0):
+    def __init__(self, data, freq=None, timestep=None, v0=0):
         """ Initialize the perf object.
 
         Parameters
@@ -50,23 +50,46 @@ class _PerfMonoUnderlying:
             timestep = self.t_idx.sort_values().diff().min()
 
         # time_range = pd.date_range()
-        self.index = range(self.t0, self.T + 1, timestep)
+        # self.index = range(self.t0, self.T + 1, timestep)
         self.df = pd.DataFrame(
             0,
-            index=self.index,
-            columns=['price', 'volume', 'signal', 'd_signal', 'fee', 'value']
+            index=self.t_idx,  # self.index,
+            columns=['price', 'returns', 'volume_pos', 'exchanged_volume',
+                     'position', 'signal', 'd_signal', 'fee', 'PnL', 'cumPnL',
+                     'value']
         )
-        v = self._get_volume(data)
+        exch_vol = self._get_exch_vol(data)
         p = self._get_price(data)
         s = self._get_signal(data)
         f = self._get_fee(data)
-        self.df.loc[v.index, 'volume'] = v.values
-        self.df.loc[p.index, 'price'] = p.values / v.values
-        self.df.loc[s.index, 'd_signal'] = s.values
-        self.df.loc[f.index, 'fee'] = f.values / v.values
-        self.df.loc[s.index, 'signal'] += np.cumsum(s.values) + last_pos
+        pos = self._get_pos(data)
+        vol_pos = self._get_vol_pos(data)
+        self.df.loc[:, 'exchanged_volume'] = exch_vol.values
+        self.df.loc[:, 'price'] = p.values / exch_vol.values
+        self.df.loc[:, 'returns'] = self.df.loc[:, 'price'].diff().fillna(0)
+        self.df.loc[:, 'd_signal'] = s.values
+        self.df.loc[:, 'fee'] = f.values / exch_vol.values
+        self.df.loc[:, 'signal'] += np.cumsum(s.values) + data.ex_pos[0]
+        self.df.loc[:, 'position'] = pos.values
+        self.df.loc[:, 'volume_pos'] = vol_pos.values
+        self.df.loc[:, 'PnL'] = self._get_PnL()
+        self.df.loc[:, 'cumPnL'] = self.df.loc[:, 'PnL'].cumsum()
+        self.df.loc[:, 'value'] = self.df.loc[:, 'cumPnL'].values + v0
 
-    def _get_volume(self, data):
+    def __repr__(self):
+        return self.df.__repr__()
+
+    def _get_pos(self, data):
+        df = data.loc[:, ('ex_pos', 'TS', 'userref')].sort_values(by='userref')
+
+        return df.drop_duplicates(subset='TS', keep='first').loc[:, 'ex_pos']
+
+    def _get_vol_pos(self, data):
+        df = data.loc[:, ('ex_vol', 'TS', 'userref')].sort_values(by='userref')
+
+        return df.drop_duplicates(subset='TS', keep='first').loc[:, 'ex_vol']
+
+    def _get_exch_vol(self, data):
         df = data.loc[:, (self._handler['volume'], 'TS')]
 
         return df.groupby(by='TS').sum()
@@ -92,6 +115,14 @@ class _PerfMonoUnderlying:
         df.loc[:, self._handler['fee']] *= volume
 
         return df.groupby(by='TS').sum()
+
+    def _get_PnL(self):
+        pnl = self.df.loc[:, ('volume_pos', 'returns', 'position')]
+        pnl = pnl.prod(axis=1).values
+        f = self.df.loc[:, ('exchanged_volume', 'fee', 'price')].prod(axis=1)
+        # pnl *= (1. - self.df.loc[:, ('d_signal', 'fee')].prod(axis=1) / 100)
+
+        return pnl - f.values / 100
 
 
 class _TheoricPerformance:
