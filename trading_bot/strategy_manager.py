@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2019-05-12 22:57:20
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-02-28 20:01:45
+# @Last modified time: 2020-03-01 21:31:56
 
 """ Client to manage a financial strategy. """
 
@@ -393,7 +393,7 @@ class StrategyBot(_ClientStrategyBot):
         **kwargs : keyword arguments
             Parameters for order, e.g. volume, order type, etc.
 
-        returns
+        Returns
         -------
         dict
             Information about the executed order.

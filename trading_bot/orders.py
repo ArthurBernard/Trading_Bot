@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2020-02-06 11:57:48
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-02-28 20:25:19
+# @Last modified time: 2020-03-01 21:11:40
 
 """ Module with different Order objects.
 
@@ -173,7 +173,7 @@ class _BasisOrder:
         """ Cancel the order. """
         if self.status == 'open':
             ans = self._request('CancelOrder', txid=self.id)
-            if 'EOrder:Unknown order' in ans.get('error', default=[]):
+            if 'EOrder:Unknown order' in ans.get('error', []):
 
                 return ans
 
@@ -242,11 +242,9 @@ class _BasisOrder:
 
         if self.vol_exec == self.volume:
             self._update_status('closed')
-            self._get_result_exec(ans['closed'])
 
         elif 1 - self.vol_exec / self.volume < self.tol:
             self._update_status('closed')
-            self._get_result_exec(ans['closed'])
             not_exec_vol = 1 - self.vol_exec / self.volume
             self.logger.warning("{:.6%} of the volume was not executed but is "
                                 "less than tolerance's threshold {:%}"
@@ -442,7 +440,7 @@ class OrderSL(_BasisOrder):
             if self.status != 'closed':
                 self.logger.info('force exec market')
                 self.input['type'] = 'market'
-                self.input.remove('price')
+                self.input.pop('price')
 
                 self.execute()
 
@@ -537,7 +535,7 @@ class OrderBestLimit(_BasisOrder):
             if price == 'market' or time.time() > self.time_force:
                 self.logger.info('force exec market')
                 self.input['type'] = 'market'
-                self.input.remove('price')
+                self.input.pop('price')
 
             elif price == 'best':
                 self.input['price'] = self._handler_best[self.type](self.pair)
