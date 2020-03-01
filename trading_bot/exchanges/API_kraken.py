@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2019-05-06 20:53:46
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-02-28 20:15:53
+# @Last modified time: 2020-03-01 21:30:50
 
 """ Kraken Client API object. """
 
@@ -20,6 +20,7 @@ from json.decoder import JSONDecodeError
 import requests
 from requests import HTTPError
 from requests import ReadTimeout
+from requests.exceptions import SSLError, ConnectionError
 
 # Internal packages
 
@@ -160,7 +161,7 @@ class KrakenClient:
 
             return self.query_private(method, timeout=30, **data)
 
-        except (HTTPError, ReadTimeout) as e:
+        except (HTTPError, ReadTimeout, SSLError, ConnectionError) as e:
             error_msg = 'Connection error: {} | Retry request.'.format(type(e))
             self.logger.error(error_msg)
             time.sleep(5)
