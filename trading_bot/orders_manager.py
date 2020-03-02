@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2019-04-29 23:42:09
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-02-27 11:37:23
+# @Last modified time: 2020-03-02 22:30:17
 
 """ Client to manage orders execution. """
 
@@ -212,7 +212,6 @@ class OrdersManager(_ClientOrdersManager):
 
             elif order.status == 'open' or order.status == 'canceled':
                 order.update()
-
                 self.orders.append(order)
 
             elif order.status == 'canceled':

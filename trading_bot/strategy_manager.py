@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2019-05-12 22:57:20
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-03-01 21:31:56
+# @Last modified time: 2020-03-02 23:23:15
 
 """ Client to manage a financial strategy. """
 
@@ -399,8 +399,9 @@ class StrategyBot(_ClientStrategyBot):
             Information about the executed order.
 
         """
+        # Set order parameters
         _id = self._set_id_order()
-        time_force = self.frequency - 60 if self.frequency > 60 else None
+        # time_force = self.frequency - 60 if self.frequency > 60 else None
         info = {
             'fee_pct': self.get_fee(kwargs['pair'], kwargs['ordertype']),
             'ex_pos': self.current_pos,
@@ -410,14 +411,12 @@ class StrategyBot(_ClientStrategyBot):
             'path': self.path,
             'TS': self.next - self.frequency
         }
-        order = self.Order(_id, input=kwargs, time_force=time_force, info=info)
-        # order.fee = self.get_fee(kwargs['pair'], kwargs['ordertype'])
-        # self.logger.debug('send_order | fee is {}'.format(order.fee))
+        order_params = kwargs.pop('order_params')
+        # Set order
+        order = self.Order(_id, input=kwargs, info=info, **order_params)
+        # Send order to OrdersManager
         self.q_ord.put(order)
-        # self.orders.append(order)
-        # self.ord_dict.append(order)
         self.logger.info('send {}'.format(order))
-        # self.logger.info('Ord_Dict | {}'.format(self.ord_dict))
 
         return self._set_output(kwargs)
 

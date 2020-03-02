@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2020-02-06 11:57:48
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-03-01 21:11:40
+# @Last modified time: 2020-03-02 22:58:12
 
 """ Module with different Order objects.
 
@@ -492,6 +492,9 @@ class OrderBestLimit(_BasisOrder):
     time_force : int
         Timestamp after which the order will be forced to be executed at the
         market price.
+    wait : float, optional
+        Number of seconds to wait before updating the order since the last
+        order execution. Default is 0.
 
     """
 
@@ -499,6 +502,34 @@ class OrderBestLimit(_BasisOrder):
         'buy': get_bid,
         'sell': get_ask,
     }
+
+    def __init__(self, id, input={}, tol=0.001, time_force=None, info={},
+                 wait=0.):
+        """ Initialize an order object.
+
+        Parameters
+        ----------
+        id : int
+            ID of the order (32-bit signed integer).
+        input : dict, optional
+            Input to request order.
+        tol : float, optional
+            Tolerance's threshold for non-executed volume. Default is 0.1%.
+        time_force : int, optional
+            Number of seconds to wait before force execute to the market price.
+            If set to None, then never force execute to the market price
+            (actually it will be forced in more than 300years). Default is
+            None.
+        info : dict, optional
+            Any additional informations (usefull to compute strategy
+            performance). Default is an empty dict.
+        wait : float, optional
+            Number of seconds to wait before updating the order since the last
+            order execution. Default is 0.
+
+        """
+        super(OrderBestLimit, self).__init__(id, input, tol, time_force, info)
+        self.wait = wait
 
     def update(self, price='best'):
         """ Cancel the open or pending order and add a new order.
@@ -516,6 +547,9 @@ class OrderBestLimit(_BasisOrder):
             Price to add the new order. If 'market' then the order will be at
             market price, if 'best' then the order will be at the best ask/bid
             price. Default is 'best'.
+        wait : float, optional
+            Number of seconds to wait before updating the order since the last
+            order execution. Default is 0.
 
         """
         if self.status is None or self.status == 'closed':
@@ -523,6 +557,11 @@ class OrderBestLimit(_BasisOrder):
             raise OrderStatusError(self, 'replace')
 
         if self.get_open()['open']:
+            t = time.time() - self._last
+            if t < self.wait:
+                self.logger.debug('wait {:.2f} seconds'.format(self.wait - t))
+                time.sleep(self.wait - t)
+
             self.cancel()
 
         self.check_vol_exec()
