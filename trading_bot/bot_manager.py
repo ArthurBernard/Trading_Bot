@@ -4,12 +4,13 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2020-01-27 09:58:03
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-02-27 11:40:41
+# @Last modified time: 2020-03-05 23:03:03
 
 """ Set a server and run each bot. """
 
 # Built-in packages
 import logging
+from multiprocessing import Process
 from threading import Thread
 import time
 
@@ -42,16 +43,18 @@ class TradingBotManager(_TradingBotManager):
         # 'switch_id': _TradingBotManager.conn_sb.switch_id,
     }
 
-    def __init__(self, address=('', 50000), authkey=b'tradingbot'):
+    def __init__(self, address=('', 50000), authkey=b'tradingbot', auto=False):
         """ Initialize Trading Bot Manager object. """
         _TradingBotManager.__init__(self, address=address, authkey=authkey)
 
         self.logger = logging.getLogger(__name__)
-        self.t = time.time()
-        self.path_log = '~/Strategies/Data_Server/Untitled_Document2.txt'
+        self.t = int(time.time())
+        self.path_log = ('/home/arthur/Strategies/Data_Server/'
+                         'Untitled_Document2.txt')
         self.address = address
         self.authkey = authkey
         self.txt = {}
+        self.auto = auto
         self.client_thread = Thread(target=self.client_manager, daemon=True)
 
     def __enter__(self):
@@ -81,19 +84,24 @@ class TradingBotManager(_TradingBotManager):
         # TODO : Run OrderManagerClient object
         # TODO : Run all StrategyManagerClient objects
         self.logger.debug('start')
-        # Start bot OrdersManager
-        # p_om = Process(
-        #    target=start_order_manager,
-        #    name='truc',
-        #    args=(self.path_log,),
-        #    kwargs={'address': self.address, 'authkey': self.authkey}
-        # )
-        # p_om.start()
+        if self.auto:
+            # Start bot OrdersManager
+            p_om = Process(
+                target=start_order_manager,
+                name='truc',
+                args=(self.path_log,),
+                kwargs={'address': self.address, 'authkey': self.authkey}
+            )
+            p_om.start()
+
         while time.time() - self.t < s:
             # print('{:.1f} sec.'.format(time.time() - self.t), end='\r')
             txt = '{} | Have been started {} ago'.format(
                 time.strftime('%y-%m-%d %H:%M:%S'),
                 str_time(int(time.time() - self.t)),
+            )
+            txt += ' | Stop in {} seconds'.format(
+                str_time(self.t + s - int(time.time()))
             )
             print(txt, end='\r')
             time.sleep(0.01)
@@ -180,7 +188,7 @@ class TradingBotManager(_TradingBotManager):
             if time.time() - t > 0:
                 self.logger.debug('StrategyBot: {}'.format(self.conn_sb))
                 self.logger.debug('OrdersManager: {}'.format(self.conn_om))
-                t += 30
+                t += 300
 
             if self.q_from_cli.empty():
                 time.sleep(0.01)
@@ -264,8 +272,9 @@ def start_order_manager(path_log, exchange='kraken', address=('', 50000),
     """ Start order manager client. """
     from orders_manager import OrdersManager as OM
 
-    om = OM(path_log, exchange=exchange, address=address, authkey=authkey)
-    om.start_loop()
+    om = OM(address=address, authkey=authkey)
+    with om(exchange, path_log):
+        om.loop()
 
     return None
 
@@ -274,14 +283,28 @@ if __name__ == '__main__':
 
     import logging.config
     import yaml
+    import sys
 
     with open('./trading_bot/logging.ini', 'rb') as f:
         config = yaml.safe_load(f.read())
 
     logging.config.dictConfig(config)
 
-    # start_tradingbotmanager()
-    tbm = TradingBotManager()
+    if len(sys.argv) > 1 and 'auto' in sys.argv[1:]:
+        auto = True
+
+    else:
+        auto = False
+
+    if len(sys.argv) > 1 and isinstance(sys.argv[1], int):
+        s = sys.argv[1]
+
+    elif len(sys.argv) > 2 and isinstance(sys.argv[2], int):
+        s = sys.argv[2]
+
+    else:
+        s = 1e8
+
+    tbm = TradingBotManager(auto=auto)
     with tbm:
-        tbm.runtime(s=2000)
-    # tbm.run()
+        tbm.runtime(s=s)
