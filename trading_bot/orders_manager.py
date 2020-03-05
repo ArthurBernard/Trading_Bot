@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2019-04-29 23:42:09
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-03-02 22:30:17
+# @Last modified time: 2020-03-05 22:46:07
 
 """ Client to manage orders execution. """
 
@@ -196,10 +196,6 @@ class OrdersManager(_ClientOrdersManager):
         last_order = 0
         for order in self:
             if order is None:
-                # DO SOMETHING ELSE (e.g. display results_manager)
-                txt = time.strftime('%y-%m-%d %H:%M:%S') + ' | Last order was '
-                txt += str_time(int(time.time() - last_order)) + ' ago'
-                print(txt, end='\r')
                 time.sleep(0.01)
 
                 continue
@@ -222,10 +218,6 @@ class OrdersManager(_ClientOrdersManager):
 
             elif order.status == 'closed':
                 order.get_result_exec()
-                # res = self._set_result(order)
-                # self.conn_tbm.send(('closed_order': res),)
-                # self.conn_tbm.send(('order', order),)
-                # save closed orders to dataframe
                 update_hist_orders(order)
                 # TODO : update results_manager
                 self.logger.debug('remove {}'.format(order))
@@ -302,4 +294,43 @@ if __name__ == '__main__':
     path_log = '/home/arthur/Strategies/Data_Server/Untitled_Document2.txt'
     om = OrdersManager()
     with om('kraken', path_log):
-        om.loop()
+        om.logger.info('start loop method')
+        # TODO : get last order
+        last_order = 0
+        for order in om:
+            if order is None:
+                # DO SOMETHING ELSE (e.g. display results_manager)
+                txt = time.strftime('%y-%m-%d %H:%M:%S') + ' | Last order was '
+                txt += str_time(int(time.time() - last_order)) + ' ago'
+                print(txt, end='\r')
+                time.sleep(0.01)
+
+                continue
+
+            elif order.status is None:
+                om.logger.debug('execute {}'.format(order))
+                order.execute()
+                last_order = time.time()
+                om.orders.append(order)
+
+            elif order.status == 'open' or order.status == 'canceled':
+                order.update()
+                om.orders.append(order)
+
+            elif order.status == 'canceled':
+                # TODO: check vol, replace order
+                om.logger.debug('replace {}'.format(order))
+                order.replace('best')
+                om.orders.append(order)
+
+            elif order.status == 'closed':
+                order.get_result_exec()
+                update_hist_orders(order)
+                # TODO : update results_manager
+                om.logger.debug('remove {}'.format(order))
+
+            else:
+
+                raise OrderError(order, 'unknown state')
+
+        om.logger.info('OrdersManager stopped.')
