@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2019-05-12 22:57:20
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-03-02 23:23:15
+# @Last modified time: 2020-03-05 22:55:03
 
 """ Client to manage a financial strategy. """
 
@@ -82,7 +82,6 @@ class StrategyBot(_ClientStrategyBot):
         # Set client and connect to the trading bot server
         _ClientStrategyBot.__init__(self, address=address, authkey=authkey)
         self.logger = logging.getLogger(__name__)
-        # self.ord_dict = OrderDict()
 
     def __call__(self, name_strat, STOP=None, path='./strategies'):
         """ Set parameters of strategy.
@@ -199,26 +198,6 @@ class StrategyBot(_ClientStrategyBot):
         super(StrategyBot, self).__exit__(exc_type, exc_value, exc_tb)
         self.conn_tbm.thread.join()
 
-    # def _wait_orders_closed(self):
-    #    self.logger.debug('wait until all orders closed')
-    #    t0 = time.time()
-    #    while self.orders._waiting:
-    #        time.sleep(0.1)
-    #        t = time.time()
-    #        txt = 'waiting {:.0f} seconds | thread is '.format(t - t0)
-    #        txt += 'alive' if self.conn_tbm.thread.is_alive() else 'not alive'
-
-    #        if not self.conn_tbm.thread.is_alive():
-    #            # TODO : improve it
-    #            self.logger.error('force exit because thread to listen '
-    #                              ' tbm is dead | some orders havent closed: '
-    #                              '{}'.format(self.orders))
-    #            self.orders._save(self.path, '/list_unsaved_orders')
-
-    #            break
-
-    #        print(txt, end='\r')
-
     def set_config(self, path):
         """ Set configuration.
 
@@ -255,6 +234,10 @@ class StrategyBot(_ClientStrategyBot):
         self.logger.info('current volume is {}'.format(self.current_vol))
         if self.STOP is None:
             self.STOP = strat_cfg['STOP']
+
+        elif isinstance(self.STOP, int):
+            self.logger.info('Strategy will never stop')
+            self.STOP = 1e8
 
     def set_general_cfg(self, path):
         """ Save configuration with respect to new position and volume.
