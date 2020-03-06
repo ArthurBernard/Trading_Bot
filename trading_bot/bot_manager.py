@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2020-01-27 09:58:03
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-03-05 23:03:03
+# @Last modified time: 2020-03-06 08:41:08
 
 """ Set a server and run each bot. """
 
@@ -83,17 +83,7 @@ class TradingBotManager(_TradingBotManager):
         """ Do something. """
         # TODO : Run OrderManagerClient object
         # TODO : Run all StrategyManagerClient objects
-        self.logger.debug('start')
-        if self.auto:
-            # Start bot OrdersManager
-            p_om = Process(
-                target=start_order_manager,
-                name='truc',
-                args=(self.path_log,),
-                kwargs={'address': self.address, 'authkey': self.authkey}
-            )
-            p_om.start()
-
+        self.logger.debug('start runtime loop')
         while time.time() - self.t < s:
             # print('{:.1f} sec.'.format(time.time() - self.t), end='\r')
             txt = '{} | Have been started {} ago'.format(
@@ -184,11 +174,28 @@ class TradingBotManager(_TradingBotManager):
         """ Listen client (OrderManager and StrategyManager). """
         self.logger.debug('start')
         t = time.time()
+        p_om = None
         while not self.is_stop():
             if time.time() - t > 0:
                 self.logger.debug('StrategyBot: {}'.format(self.conn_sb))
                 self.logger.debug('OrdersManager: {}'.format(self.conn_om))
-                t += 300
+                t += 900
+
+            if self.auto and p_om is None:
+                # Start bot OrdersManager
+                self.logger.debug('Setup process OrdersManager:')
+                p_om = Process(
+                    target=start_order_manager,
+                    name='truc',
+                    args=(self.path_log,),
+                    kwargs={'address': self.address, 'authkey': self.authkey}
+                )
+                p_om.start()
+
+            elif self.auto and not p_om.is_alive():
+                self.logger.debug('Process OrdersManager is not alive')
+                p_om.join()
+                p_om = None
 
             if self.q_from_cli.empty():
                 time.sleep(0.01)
