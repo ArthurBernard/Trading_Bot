@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2020-02-25 10:38:17
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-02-28 18:54:19
+# @Last modified time: 2020-03-08 21:56:29
 
 """ Objects to measure and display trading performance. """
 
@@ -42,7 +42,7 @@ class _PnLI:
             Initial value available of the trading strategy.
 
         """
-        self.columns = ['price', 'returns', 'volume_pos', 'exchanged_volume',
+        self.columns = ['price', 'returns', 'volume', 'exchanged_volume',
                         'position', 'signal', 'delta_signal', 'fee', 'PnL',
                         'cumPnL', 'value']
         self.index = data.loc[:, 'TS'].drop_duplicates()
@@ -79,7 +79,7 @@ class _PnLI:
         self.df.loc[:, 'fee'] = self.fee
         self.df.loc[:, 'signal'] = self.signal
         self.df.loc[:, 'position'] = self.pos
-        self.df.loc[:, 'volume_pos'] = self.vol_pos
+        self.df.loc[:, 'volume'] = self.vol_pos
         self.df.loc[:, 'PnL'] = self.pnl
         self.df.loc[:, 'cumPnL'] = self.cumpnl
         self.df.loc[:, 'value'] = self.value
@@ -169,6 +169,7 @@ class _FullPnL:
             Minimal number of seconds between two observations.
 
         """
+        data = data.sort_values('userref').reset_index(drop=True)
         self.t_idx = data.loc[:, 'TS'].drop_duplicates()
         self.t0, self.T = self.t_idx.min(), self.t_idx.max()
         if timestep is None:
@@ -184,7 +185,7 @@ class _FullPnL:
 
         self.df = pd.DataFrame(index=self.index, columns=pnl.columns)
         self.df.loc[pnl.index, :] = pnl.df.values
-        self._fillna('volume_pos', 'signal', method='ffill')
+        self._fillna('volume', 'signal', method='ffill')
         self._fillna('exchanged_volume', 'delta_signal', 'fee', value=0.)
         self._fillna('position', method='bfill')
         self._check_signal_position()
@@ -195,7 +196,7 @@ class _FullPnL:
         self['value'] = self['cumPnL'].values + v0
 
     def _set_pnl(self):
-        pnl = self[('volume_pos', 'returns', 'position')].prod(axis=1).values
+        pnl = self[('volume', 'returns', 'position')].prod(axis=1).values
         self['PnL'] = pnl - self['fee']
 
     def _fillna(self, *args, **kwargs):
@@ -203,7 +204,7 @@ class _FullPnL:
 
     def _fillna_price(self, p):
         if p is not None:
-            p.loc[self.t0: self.T]
+            p = p.loc[self.t0: self.T]
             na_idx = p.index[self.df.loc[p.index, 'price'].isna()]
             self.df.loc[na_idx, 'price'] = p.loc[na_idx, 'price'].values
 
@@ -261,7 +262,8 @@ class ResultManager:
         self.period = period
         self.metrics = metrics
         self.periods = periods
-        self.perf = _TheoricPerformance(df)
+        # self.perf = _TheoricPerformance(df)
+        self.df = df
         self.logger = logging.getLogger(__name__)
 
     def set_current_price(self):
@@ -332,9 +334,9 @@ class ResultManager:
         txt += self.set_current_value()
         txt += self.set_current_stats()
 
-        self.logger.info(txt)
+        # self.logger.info(txt)
 
-        return self
+        return txt
 
     def _set_stats_result(self, df, head):
         """ Set statistics in a table with header. """
