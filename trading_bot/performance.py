@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2020-02-25 10:38:17
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-03-08 21:56:29
+# @Last modified time: 2020-03-10 23:31:17
 
 """ Objects to measure and display trading performance. """
 
@@ -173,10 +173,18 @@ class _FullPnL:
         self.t_idx = data.loc[:, 'TS'].drop_duplicates()
         self.t0, self.T = self.t_idx.min(), self.t_idx.max()
         if timestep is None:
-            timestep = self.t_idx.sort_values().diff().min()
+            self.ts = self.t_idx.sort_values().diff().min()
 
-        # time_range = pd.date_range()
-        self.index = range(self.t0, self.T + 1, timestep)
+        else:
+            self.ts = timestep
+
+        if p is not None:
+            T = max(p.index.max(), self.T)
+
+        else:
+            T = self.T
+
+        self.index = range(self.t0, T + 1, self.ts)
         if real:
             pnl = _PnLR(data, v0=v0)
 
@@ -188,6 +196,7 @@ class _FullPnL:
         self._fillna('volume', 'signal', method='ffill')
         self._fillna('exchanged_volume', 'delta_signal', 'fee', value=0.)
         self._fillna('position', method='bfill')
+        self._fillna('position', value=self['signal'].values[-1])
         self._check_signal_position()
         self._fillna_price(p)
         self['returns'] = self['price'].diff().fillna(value=0).values
@@ -204,14 +213,19 @@ class _FullPnL:
 
     def _fillna_price(self, p):
         if p is not None:
-            p = p.loc[self.t0: self.T]
+            p = p.loc[self.t0:]
             na_idx = p.index[self.df.loc[p.index, 'price'].isna()]
             self.df.loc[na_idx, 'price'] = p.loc[na_idx, 'price'].values
 
         self._fillna('price', method='ffill')
 
     def _check_signal_position(self):
-        if (self['position'].values[1:] != self['signal'].values[:-1]).any():
+        if not np.array_equiv(
+            self.df.loc[self.t0 + self.ts: self.T, 'position'].values,
+            self.df.loc[self.t0: self.T - self.ts, 'signal'].values
+        ):
+            print(self['position'].values[1: self.T])
+            print(self['signal'].values[:self.T - 1])
 
             raise ValueError('position at t + 1 does not match signal at t')
 
@@ -238,7 +252,7 @@ class ResultManager:
 
     """
 
-    def __init__(self, df, period=252, metrics=[], periods=[], t=0, fee=None):
+    def __init__(self, df, period=252, metrics=[], periods=[]):
         """ Initialize object.
 
         Parameters
@@ -262,7 +276,6 @@ class ResultManager:
         self.period = period
         self.metrics = metrics
         self.periods = periods
-        # self.perf = _TheoricPerformance(df)
         self.df = df
         self.logger = logging.getLogger(__name__)
 
@@ -271,7 +284,7 @@ class ResultManager:
         txt = 'Display results\n' + _set_text(
             ['-'],
             ['Price of the underlying: {:.2f}'.format(self.df.price.iloc[-1])],
-            ['Current fees: {:.2}%'.format(self.df.fee.iloc[-1])],
+            ['Current fees: {:.2}%'.format(self._get_current_fee())],
             ['-'],
         )
 
@@ -399,6 +412,12 @@ class ResultManager:
 
         """
         return float(self.df.value.iloc[-1] / self.df.price.iloc[-1])
+
+    def _get_current_fee(self):
+        fee = self.df.loc[self.df.fee != 0., 'fee'].values[-1]
+        volume = self.df.volume.values[-1]
+
+        return fee * volume
 
 
 def _set_text(*args):
