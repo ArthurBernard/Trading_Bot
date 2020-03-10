@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2019-05-12 22:57:20
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-03-05 22:55:03
+# @Last modified time: 2020-03-10 23:55:42
 
 """ Client to manage a financial strategy. """
 
@@ -545,7 +545,7 @@ class StrategyBot(_ClientStrategyBot):
 
 
 if __name__ == '__main__':
-
+    # Load logging configuration
     import logging.config
     import yaml
 
@@ -561,13 +561,18 @@ if __name__ == '__main__':
     else:
         name = sys.argv[1]
 
+    # Start running a strategy bot
     sm = StrategyBot()
+    p = None
+    display_results = False
     with sm(name):
         for s, kw in sm:
             if s is not None:
+                # send orders
                 sm.logger.info('Signal: {} | Parameters: {}'.format(s, kw))
                 output = sm.set_order(s, **kw, **sm.ord_kwrds)
 
+                # get last price
                 if isinstance(output, list):
                     sm.logger.info('Executed order : {}'.format(output))
                     price = output[0]['price']
@@ -575,10 +580,44 @@ if __name__ == '__main__':
                 else:
                     price = output
 
+                # Save price
                 TS = sm.next - sm.frequency
                 with open(sm.path + '/price.txt', 'a') as f:
                     f.write(str(TS) + ',' + str(price) + '\n')
 
+                # TODO: display results
+                if display_results:
+                    if p is None:
+                        p = pd.read_csv(
+                            sm.path + '/price.txt',
+                            sep=',',
+                            names=['TS', 'price']
+                        )
+                        p = p.set_index('TS')
+
+                    else:
+                        p.loc[TS, 'price'] = price
+
+                    df = get_df(path=sm.path, name='orders_hist', ext='.dat')
+                    df = df.drop(columns=['txid', 'path', 'strat_name'])
+                    df = df.sort_values('userref')
+                    # FIXME : how get v0 when reinvest profit ?
+                    perf = _FullPnL(
+                        df, p=p, timestep=sm.frequency, v0=sm.current_vol
+                    )
+                    rm = ResultManager(
+                        perf.df,
+                        period=int(364 * 86400 / sm.frequency),
+                        metrics=['Return', 'Perf', 'Sharpe', 'Calmar', 'MaxDD'],
+                        periods=['Daily', 'Weekly', 'Monthly', 'Yearly', 'Total']
+                    )
+                    if False:  # sm.reinvest_profit
+                        # TODO : how to set new volume
+                        new_vol = rm.get_current_volume()
+
+                    print(rm.print_stats())
+
+            # Display time
             txt = time.strftime('%y-%m-%d %H:%M:%S')
             txt += ' | Next signal in {:}'.format(str_time(sm.next - sm.TS))
             print(txt, end='\r')
