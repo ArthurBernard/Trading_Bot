@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2019-04-29 23:42:09
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-03-05 22:46:07
+# @Last modified time: 2020-03-11 23:57:07
 
 """ Client to manage orders execution. """
 
@@ -201,20 +201,20 @@ class OrdersManager(_ClientOrdersManager):
                 continue
 
             elif order.status is None:
+                self.orders.append(order)
                 self.logger.debug('execute {}'.format(order))
                 order.execute()
                 last_order = time.time()
-                self.orders.append(order)
 
             elif order.status == 'open' or order.status == 'canceled':
-                order.update()
                 self.orders.append(order)
+                order.update()
 
             elif order.status == 'canceled':
+                self.orders.append(order)
                 # TODO: check vol, replace order
                 self.logger.debug('replace {}'.format(order))
                 order.replace('best')
-                self.orders.append(order)
 
             elif order.status == 'closed':
                 order.get_result_exec()
