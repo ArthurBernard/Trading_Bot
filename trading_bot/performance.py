@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2020-02-25 10:38:17
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-03-10 23:31:17
+# @Last modified time: 2020-03-12 23:26:15
 
 """ Objects to measure and display trading performance. """
 
@@ -46,8 +46,14 @@ class _PnLI:
                         'position', 'signal', 'delta_signal', 'fee', 'PnL',
                         'cumPnL', 'value']
         self.index = data.loc[:, 'TS'].drop_duplicates()
-        if v0 is None:
-            v0 = data.ex_vol[0] * data.price[0] if data.ex_vol != 0. else 0.
+        if v0 is None and data.ex_vol[0] != 0.:
+            self.v0 = data.ex_vol[0] * data.price[0]
+
+        elif v0 is None:
+            self.v0 = data.volume[0] * data.price[0]
+
+        else:
+            self.v0 = v0
 
         self.exch_vol = self._get_exch_vol(data)
         self.price = self._get_price(data, self.exch_vol)
@@ -60,7 +66,7 @@ class _PnLI:
         self.pnl = self._get_PnL(self.returns, self.pos, self.vol_pos,
                                  self.fee)
         self.cumpnl = np.cumsum(self.pnl)
-        self.value = self.cumpnl + v0
+        self.value = self.cumpnl + self.v0
         self._set_df()
         if (self.pos[1:] != self.signal[:-1]).any():
 
@@ -156,21 +162,19 @@ class _PnLR(_PnLI):
 
 
 class _FullPnL:
-    def __init__(self, data, p=None, v0=None, timestep=None, real=True):
+    def __init__(self, orders, prices=None, timestep=None, v0=None, real=True):
         """ Initialize a FullPnl object.
 
         Parameters
         ----------
-        data : pd.DataFrame
+        orders : pd.DataFrame
             DataFrame containing the orders history.
-        v0 : float, optional
-            Initial value available of the trading strategy.
-        timestep : int, optional
-            Minimal number of seconds between two observations.
+        prices : pd.DataFrame or pd.Series
+            Series of prices.
 
         """
-        data = data.sort_values('userref').reset_index(drop=True)
-        self.t_idx = data.loc[:, 'TS'].drop_duplicates()
+        orders = orders.sort_values('userref').reset_index(drop=True)
+        self.t_idx = orders.loc[:, 'TS'].drop_duplicates()
         self.t0, self.T = self.t_idx.min(), self.t_idx.max()
         if timestep is None:
             self.ts = self.t_idx.sort_values().diff().min()
@@ -178,18 +182,18 @@ class _FullPnL:
         else:
             self.ts = timestep
 
-        if p is not None:
-            T = max(p.index.max(), self.T)
+        if prices is not None:
+            T = max(prices.index.max(), self.T)
 
         else:
             T = self.T
 
         self.index = range(self.t0, T + 1, self.ts)
         if real:
-            pnl = _PnLR(data, v0=v0)
+            pnl = _PnLR(orders, v0=v0)
 
         else:
-            pnl = _PnLI(data, v0=v0)
+            pnl = _PnLI(orders, v0=v0)
 
         self.df = pd.DataFrame(index=self.index, columns=pnl.columns)
         self.df.loc[pnl.index, :] = pnl.df.values
@@ -198,11 +202,11 @@ class _FullPnL:
         self._fillna('position', method='bfill')
         self._fillna('position', value=self['signal'].values[-1])
         self._check_signal_position()
-        self._fillna_price(p)
+        self._fillna_price(prices)
         self['returns'] = self['price'].diff().fillna(value=0).values
         self._set_pnl()
         self['cumPnL'] = np.cumsum(self['PnL'].values)
-        self['value'] = self['cumPnL'].values + v0
+        self['value'] = self['cumPnL'].values + pnl.v0
 
     def _set_pnl(self):
         pnl = self[('volume', 'returns', 'position')].prod(axis=1).values
@@ -211,11 +215,11 @@ class _FullPnL:
     def _fillna(self, *args, **kwargs):
         self.df.loc[:, args] = self.df.loc[:, args].fillna(**kwargs)
 
-    def _fillna_price(self, p):
-        if p is not None:
-            p = p.loc[self.t0:]
-            na_idx = p.index[self.df.loc[p.index, 'price'].isna()]
-            self.df.loc[na_idx, 'price'] = p.loc[na_idx, 'price'].values
+    def _fillna_price(self, prices):
+        if prices is not None:
+            prices = prices.loc[self.t0:]
+            na_idx = prices.index[self.df.loc[prices.index, 'price'].isna()]
+            self.df.loc[na_idx, 'price'] = prices.loc[na_idx, 'price'].values
 
         self._fillna('price', method='ffill')
 
@@ -224,8 +228,6 @@ class _FullPnL:
             self.df.loc[self.t0 + self.ts: self.T, 'position'].values,
             self.df.loc[self.t0: self.T - self.ts, 'signal'].values
         ):
-            print(self['position'].values[1: self.T])
-            print(self['signal'].values[:self.T - 1])
 
             raise ValueError('position at t + 1 does not match signal at t')
 
@@ -236,47 +238,124 @@ class _FullPnL:
         return self.df.loc[:, key]
 
 
-class ResultManager:
-    """ Manager object of historical results of strategy.
+class PnL(_FullPnL):
+    """ Object to compute profit and loss of trading bot.
+
+    Attributes
+    ----------
+    df : pandas.DataFrame
+        Data with each series to compute profit and loss.
+    ts : int
+        Number of seconds between two observations.
+    t0, T : int
+        Respectively first and last trade.
 
     Methods
     -------
-    update_result_hist(order_results)
-        Load, merge and save result historic strategy.
-    save_result_hist()
-        Save historical results.
-    print_stats()
-        Print some statistics of historical results strategy.
-    get_current_value()
-        Get current value of the portfolio strategy.
+    get_current_volume
+    load
+
+    TODO
+    ----
+    If necessary, methods to save and update.
 
     """
 
-    def __init__(self, df, period=252, metrics=[], periods=[]):
+    def __init__(self, path, timestep=None, v0=None, real=True):
+        """ Initialize a FullPnl object.
+
+        Parameters
+        ----------
+        v0 : float
+            Initial value available of the trading strategy.
+        timestep : int
+            Minimal number of seconds between two observations.
+        real : bool, optional
+            Set to False if the trading bot is in valide mode.
+
+        """
+        orders, prices = self.load(path)
+        super(PnL, self).__init__(
+            orders, prices, v0=v0, timestep=timestep, real=real
+        )
+
+    def get_current_volume(self):
+        """ Get current volume of the portfolio strategy.
+
+        Returns
+        -------
+        float
+            Current volume of the portfolio.
+
+        """
+        return float(self.df.value.iloc[-1] / self.df.price.iloc[-1])
+
+    def load(self, path):
+        orders = get_df(path=path, name='orders_hist', ext='.dat')
+        orders = orders.drop(columns=['txid', 'path', 'strat_name'])
+        if path[-1] != '/':
+            path += '/'
+
+        path += 'price.txt'
+        prices = pd.read_csv(path, sep=',', names=['TS', 'price'])
+
+        return orders.sort_values('userref'), prices.set_index('TS')
+
+
+class ResultManager:
+    """ Manager object of historical results of strategy.
+
+    Attributes
+    ----------
+    df : pandas.DataFrame
+        Data with each series to compute performances.
+    period : int
+        Maximal number of trading periods per year
+    metrics : list of str
+        List of metrics to compute performance. The following are available:
+        'return', 'perf', 'sharpe', 'calmar', and 'mdd'.
+    periods : list of str
+        Frequency to compute performances. The following are available:
+        'daily', 'weekly', 'monthly', 'yearly' and 'total'.
+
+    Methods
+    -------
+    print_stats
+    set_current_price
+    set_current_value
+    set_current_stats
+
+    """
+
+    def __init__(self, pnl, metrics=[], periods=[], period=252):
         """ Initialize object.
 
         Parameters
         ----------
-        path : str
-            Path of the file to load and save results.
-        init_vol : float, optional
-            Initial value invested to the strategy.
-        period : int, optional
-            Number of period per year, default is 252 (trading days).
+        pnl : PnL object or pd.DataFrame
+            Object to compute and store profit and loss of a trading bot.
         metrics : list of str
             List of metrics to display results. Is available 'return', 'perf',
             'sharpe', 'calmar' and 'maxdd'.
         periods : list of str
             List of periods to compte metrics. Is available 'daily', 'weekly',
             'monthly', 'yearly' and 'total'.
-        reinvest_profit : bool, optional
-            If true reinvest profit.
+        period : int, optional
+            Number of trading days per year, i.e 252 if trading on classical
+            market and 364 for crypto-currencies market. Default is 252.
 
         """
-        self.period = period
+        if isinstance(pnl, PnL):
+            self.df = pnl.df
+            self.period = period * 86400 / pnl.ts
+
+        elif isinstance(pnl, pd.DataFrame):
+            self.df = pnl
+            self.period = period
+
         self.metrics = metrics
         self.periods = periods
-        self.df = df
+        self.df = pnl.df
         self.logger = logging.getLogger(__name__)
 
     def set_current_price(self):
@@ -402,17 +481,6 @@ class ResultManager:
 
         return _rounder(*metric_values, dec=2)
 
-    def get_current_volume(self):
-        """ Get current volume of the portfolio strategy.
-
-        Returns
-        -------
-        float
-            Current volume of the portfolio.
-
-        """
-        return float(self.df.value.iloc[-1] / self.df.price.iloc[-1])
-
     def _get_current_fee(self):
         fee = self.df.loc[self.df.fee != 0., 'fee'].values[-1]
         volume = self.df.volume.values[-1]
@@ -467,75 +535,3 @@ class TradingPerformance(_ClientTradingPerformance):
             authkey=authkey
         )
         self.logger = logging.getLogger(__name__)
-
-
-# =========================================================================== #
-#                                 deprecated                                  #
-# =========================================================================== #
-
-
-class _TheoricPerformance:
-    """ Object to compute theorical performance of a strategy. """
-
-    def __init__(self, df, t=0, fee=None):
-        self.df = df
-        self.t0 = t
-        i = self.df.index[t]
-        if df.loc[i, 'ex_vol'] != 0:
-            self.val_0 = df.loc[i, 'ex_vol'] * df.loc[i, 'price']
-
-        else:
-            raise ValueError('ex_vol = 0')
-
-        if 'fee_pct' in self.df.columns:
-            self.fee = 'update'
-
-        elif fee is None:
-            self.fee = 0.
-
-        else:
-            self.fee = fee
-
-        self.pos_0 = self.df.loc[i, 'ex_pos']
-
-    def __iter__(self):
-        self.t = self.t0
-        self.i = self.df.index[self.t]
-        self.T = self.df.index.size
-        self.pos = self.pos_0
-        self.val = self.val_0
-        self.vol_quote = (1 - self.pos) * self.val_0
-        self.vol_base = self.pos * self.val_0 / self.df.loc[self.i, 'price']
-        self.pnl = 0
-        self._update()
-
-        return self
-
-    def __next__(self):
-        self.t += 1
-        if self.t >= self.T:
-
-            raise StopIteration
-
-        self.i = self.df.index[self.t]
-        self._update()
-
-    def __repr__(self):
-        txt = ('Position={self.pos:2}, Base Volume={self.vol_base:8.6f}, Quote'
-               ' Volume={self.vol_quote:8.2f}, Value={self.val:6.2f}, Pnl='
-               '{self.pnl:6.2f}, DeltaPnL={self.pnl_1:6.2f}'.format(self=self))
-
-        return txt
-
-    def _update(self):
-        self.val_1 = self.val
-        s = 1 if self.df.loc[self.i, 'type'] == 'buy' else -1
-        p = self.df.loc[self.i, 'price']
-        v = self.df.loc[self.i, 'volume']
-        f = self.df.loc[self.i, 'fee_pct'] if self.fee == 'update' else self.fee
-        self.pos += s
-        self.vol_quote -= (s + f / 100) * v * p
-        self.vol_base += s * v
-        self.val = self.vol_base * p + self.vol_quote
-        self.pnl_1 = self.val - self.val_1
-        self.pnl += self.pnl_1
