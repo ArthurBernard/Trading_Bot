@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2020-01-27 09:58:03
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-03-06 08:41:08
+# @Last modified time: 2020-03-12 23:41:54
 
 """ Set a server and run each bot. """
 
@@ -134,6 +134,10 @@ class TradingBotManager(_TradingBotManager):
             elif k == 'balance':
                 self.state['balance'].update(a)
                 self.logger.debug('recv {}: {}'.format(k, a))
+
+            elif k == 'order':
+                _id = int(str(a)[-3:])
+                self.conn_sb[_id].send((k, a),)
 
             elif k is None:
                 pass

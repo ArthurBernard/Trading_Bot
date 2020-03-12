@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2019-05-12 22:57:20
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-03-10 23:55:42
+# @Last modified time: 2020-03-12 23:45:07
 
 """ Client to manage a financial strategy. """
 
@@ -68,6 +68,7 @@ class StrategyBot(_ClientStrategyBot):
         'best_limit': OrderBestLimit,
     }
     _handler_pos = ['neutral', 'long', 'short']
+    order_send = []
 
     # TODO : Load strategy config
     def __init__(self, address=('', 50000), authkey=b'tradingbot'):
@@ -399,6 +400,7 @@ class StrategyBot(_ClientStrategyBot):
         order = self.Order(_id, input=kwargs, info=info, **order_params)
         # Send order to OrdersManager
         self.q_ord.put(order)
+        self.order_sent += [_id]
         self.logger.info('send {}'.format(order))
 
         return self._set_output(kwargs)
@@ -539,6 +541,12 @@ class StrategyBot(_ClientStrategyBot):
     def _handler_tbm(self, k, a):
         if k is None:
             pass
+
+        elif k == 'order':
+            self.order_sent.pop(a)
+            if not self.order_sent:
+                # TODO : compute PnL
+                pass
 
         else:
             self.logger.error('received unknown message {}: {}'.format(k, a))
