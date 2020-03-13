@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2019-05-12 22:57:20
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-03-12 23:45:07
+# @Last modified time: 2020-03-13 08:39:24
 
 """ Client to manage a financial strategy. """
 
@@ -23,6 +23,7 @@ from trading_bot._client import _ClientStrategyBot
 # from trading_bot._containers import OrderDict
 from trading_bot.data_requests import get_close
 from trading_bot.orders import OrderSL, OrderBestLimit
+from trading_bot.performance import PnL, ResultManager
 from trading_bot.tools.io import load_config_params, dump_config_params
 from trading_bot.tools.time_tools import now, str_time
 
@@ -218,6 +219,8 @@ class StrategyBot(_ClientStrategyBot):
         self._strat_cfg(self.cfg['strategy_instance'])
         # Set parameters for orders
         self.ord_kwrds = self.cfg['order_instance']
+        # Set parameters display results
+        self.result_kwrds = self.cfg['result_instance']
         # TODO : Set ResultManager
         self.logger.info('set_config | Strategy is configured')
 
@@ -231,6 +234,7 @@ class StrategyBot(_ClientStrategyBot):
         self.current_pos = strat_cfg['current_pos']
         self.current_vol = strat_cfg['current_vol']
         self.Order = self._handler_order[strat_cfg['order']]
+        self.reinvest = strat_cfg['reinvest']
         self.logger.info('current position is {}'.format(self.current_pos))
         self.logger.info('current volume is {}'.format(self.current_vol))
         if self.STOP is None:
@@ -325,6 +329,10 @@ class StrategyBot(_ClientStrategyBot):
 
     def _set_long(self, signal, **kwargs):
         """ Set long order. """
+        # Set volume if reinvest profit
+        if self.reinvest and self.pnl is not None:
+            kwargs['volume'] = self.pnl.get_current_volume()
+
         result = self.send_order(**kwargs)
 
         # Set current volume
@@ -358,6 +366,11 @@ class StrategyBot(_ClientStrategyBot):
         # Set leverage to short
         leverage = kwargs.pop('leverage')
         kwargs['leverage'] = 2 if leverage is None else leverage + 1
+
+        # Set volume if reinvest profit
+        if self.reinvest and self.pnl is not None:
+            kwargs['volume'] = self.pnl.get_current_volume()
+
         result = self.send_order(**kwargs)
 
         # Set current volume
@@ -545,8 +558,11 @@ class StrategyBot(_ClientStrategyBot):
         elif k == 'order':
             self.order_sent.pop(a)
             if not self.order_sent:
-                # TODO : compute PnL
-                pass
+                # Compute PnL
+                self.pnl = PnL(self.path)
+                # Display performances
+                rm = ResultManager(self.pnl, **self.result_kwrds)
+                print(rm.print_stats())
 
         else:
             self.logger.error('received unknown message {}: {}'.format(k, a))
