@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2020-02-25 10:38:17
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-03-12 23:26:15
+# @Last modified time: 2020-03-13 08:17:24
 
 """ Objects to measure and display trading performance. """
 
@@ -18,7 +18,7 @@ import pandas as pd
 
 # Local packages
 from trading_bot._client import _ClientTradingPerformance
-# from trading_bot.tools.io import get_df
+from trading_bot.tools.io import get_df
 
 
 class _PnLI:
