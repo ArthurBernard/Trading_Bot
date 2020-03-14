@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2019-05-12 22:57:20
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-03-14 20:18:25
+# @Last modified time: 2020-03-14 23:44:26
 
 """ Client to manage a financial strategy. """
 
@@ -563,14 +563,12 @@ class StrategyBot(_ClientStrategyBot):
             self.order_sent.remove(a)
             if not self.order_sent:
                 # Compute PnL
-                real = not self.cfg['strat_manager_instance'].get('validate',
-                                                                  False)
-                self.pnl = PnL(self.path, real=real)
+                real = not self.ord_kwrds.get('validate', False)
+                self.pnl = PnL(self.path, timestep=self.frequency, real=real)
                 self.pnl = self.pnl if self.pnl.df is not None else None
                 self.logger.debug('pnl ok')
                 # Display performances
                 if self.pnl is not None:
-                    print(self.pnl.df)
                     rm = ResultManager(self.pnl, **self.result_kwrds)
                     self.logger.debug('result manager ok')
                     print(rm.print_stats())

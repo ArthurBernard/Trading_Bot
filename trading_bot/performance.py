@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2020-02-25 10:38:17
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-03-14 22:07:37
+# @Last modified time: 2020-03-14 23:43:58
 
 """ Objects to measure and display trading performance. """
 
@@ -114,8 +114,9 @@ class _PnLI:
         df = data.loc[:, (self._handler['price'], 'TS')]
         volume = data.loc[:, self._handler['volume']].values
         df.loc[:, self._handler['price']] *= volume
+        pv = df.groupby(by='TS').sum().values
 
-        return df.groupby(by='TS').sum().values / exch_vol
+        return pv / exch_vol
 
     def _get_returns(self):
         r = np.zeros(self.price.shape)
@@ -292,7 +293,10 @@ class PnL(_FullPnL):
             Current volume of the portfolio.
 
         """
-        return float(self.df.value.iloc[-1] / self.df.price.iloc[-1])
+        v = self.df.value.iloc[-1]
+        p = self.df.price.iloc[-1]
+
+        return round(float(v / p), 8)
 
     def load(self, path):
         # load orders
@@ -493,7 +497,7 @@ class ResultManager:
     def _get_current_fee(self):
         fee = self.df.loc[self.df.fee != 0., 'fee'].values
         val = self.df.value.values
-        if not isinstance(fee, np.ndarray):
+        if not fee.size:
 
             return 0.
 
