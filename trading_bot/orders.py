@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2020-02-06 11:57:48
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-03-02 22:58:12
+# @Last modified time: 2020-03-14 18:36:16
 
 """ Module with different Order objects.
 
@@ -204,7 +204,20 @@ class _BasisOrder:
             Closed orders.
 
         """
-        return self._request('ClosedOrders', userref=self.id, start=start)
+        closed = self._request('ClosedOrders', userref=self.id, start=start)
+        if 'error' in closed:
+            self.logger.error('API kraken: {}'.format(closed['error']))
+            if 'EService:Unavailable' in closed['error']:
+                time.sleep(3)
+
+                return self.get_closed(start)
+
+            elif 'EService:Busy' in closed['error']:
+                time.sleep(1)
+
+                return self.get_closed(start)
+
+        return closed
 
     def get_open(self):
         """ Get the open orders corresponding to the ID.
@@ -215,7 +228,20 @@ class _BasisOrder:
             Open orders.
 
         """
-        return self._request('OpenOrders', userref=self.id)
+        opened = self._request('OpenOrders', userref=self.id)
+        if 'error' in opened:
+            self.logger.error('API kraken: {}'.format(opened['error']))
+            if 'EService:Unavailable' in opened['error']:
+                time.sleep(3)
+
+                return self.get_open()
+
+            elif 'EService:Busy' in opened['error']:
+                time.sleep(1)
+
+                return self.get_open()
+
+        return opened
 
     def check_vol_exec(self):
         """ Check if the volume has been executed and set corresponding status.
@@ -350,7 +376,8 @@ class _BasisOrder:
                 v['oflags'].remove('viqc')
 
             self.result_exec['vol_exec'] += float(v['vol_exec'])
-            self.result_exec['price_exec'] += float(v['price']) * float(v['vol_exec'])
+            price_exec = float(v['price']) * float(v['vol_exec'])
+            self.result_exec['price_exec'] += price_exec
             self.result_exec['fee'] += float(v['fee'])
             self.result_exec['cost'] += float(v['cost'])
 

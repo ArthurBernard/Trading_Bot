@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2019-05-06 20:53:46
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-03-01 21:30:50
+# @Last modified time: 2020-03-14 21:03:24
 
 """ Kraken Client API object. """
 
@@ -44,6 +44,12 @@ class KrakenClient:
     query_prive
 
     """
+
+    error_list = [
+        'EService:Unavailable',
+        'EOrder:Unknown order',
+        'EService:Busy',
+    ]
 
     def __init__(self, key=None, secret=None):
         """ Initialize parameters.
@@ -120,12 +126,12 @@ class KrakenClient:
 
         try:
             r = requests.post(url, headers=headers, data=data, timeout=timeout)
-            if 'EOrder:Unknown order' in r.json()['error']:
-                self.logger.error(method + ': EOrder:Unknown order')
+            if r.json()['error']:
+                for error in self.error_list:
+                    if error in r.json()['error']:
+                        self.logger.error('{}: {}'.format(method, error))
 
-                return r.json()
-
-            elif r.json()['error']:
+                        return r.json()
 
                 self.logger.error('ANSWERE: ' + str(r.json()))
                 self.logger.error('URL: ' + str(url))

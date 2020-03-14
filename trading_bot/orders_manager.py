@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2019-04-29 23:42:09
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-03-12 23:41:48
+# @Last modified time: 2020-03-14 16:37:14
 
 """ Client to manage orders execution. """
 
@@ -220,7 +220,7 @@ class OrdersManager(_ClientOrdersManager):
                 order.get_result_exec()
                 update_hist_orders(order)
                 # TODO : update results_manager
-                self.conn_tbm(('order', order.id),)
+                self.conn_tbm.send(('order', order.id),)
                 self.logger.debug('remove {}'.format(order))
 
             else:
