@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2020-02-25 10:38:17
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-03-13 08:17:24
+# @Last modified time: 2020-03-14 22:07:37
 
 """ Objects to measure and display trading performance. """
 
@@ -177,7 +177,7 @@ class _FullPnL:
         self.t_idx = orders.loc[:, 'TS'].drop_duplicates()
         self.t0, self.T = self.t_idx.min(), self.t_idx.max()
         if timestep is None:
-            self.ts = self.t_idx.sort_values().diff().min()
+            self.ts = int(self.t_idx.sort_values().diff().min())
 
         else:
             self.ts = timestep
@@ -275,9 +275,13 @@ class PnL(_FullPnL):
 
         """
         orders, prices = self.load(path)
-        super(PnL, self).__init__(
-            orders, prices, v0=v0, timestep=timestep, real=real
-        )
+        if orders.index.size > 2:
+            super(PnL, self).__init__(
+                orders, prices, v0=v0, timestep=timestep, real=real
+            )
+
+        else:
+            self.df = None
 
     def get_current_volume(self):
         """ Get current volume of the portfolio strategy.
@@ -291,15 +295,20 @@ class PnL(_FullPnL):
         return float(self.df.value.iloc[-1] / self.df.price.iloc[-1])
 
     def load(self, path):
+        # load orders
         orders = get_df(path=path, name='orders_hist', ext='.dat')
         orders = orders.drop(columns=['txid', 'path', 'strat_name'])
         if path[-1] != '/':
             path += '/'
 
         path += 'price.txt'
+        # load prices
         prices = pd.read_csv(path, sep=',', names=['TS', 'price'])
 
         return orders.sort_values('userref'), prices.set_index('TS')
+
+    def update(self, path):
+        orders, prices = self.load(path)
 
 
 class ResultManager:
@@ -482,10 +491,13 @@ class ResultManager:
         return _rounder(*metric_values, dec=2)
 
     def _get_current_fee(self):
-        fee = self.df.loc[self.df.fee != 0., 'fee'].values[-1]
-        volume = self.df.volume.values[-1]
+        fee = self.df.loc[self.df.fee != 0., 'fee'].values
+        val = self.df.value.values
+        if not isinstance(fee, np.ndarray):
 
-        return fee * volume
+            return 0.
+
+        return 100 * fee[-1] / val[-1]
 
 
 def _set_text(*args):
@@ -524,6 +536,15 @@ def _set_text(*args):
 def _rounder(*args, dec=0):
     """ Round each element of a list. """
     return [round(float(arg), dec) for arg in args]
+
+
+# TODO:
+# Set client perf manager
+#   receive list of strategy to manage
+#   update value available (pnl)
+# Set displayer manager
+#   print performances
+#   CLI
 
 
 class TradingPerformance(_ClientTradingPerformance):
