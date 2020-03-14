@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2019-05-12 22:57:20
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-03-13 08:39:24
+# @Last modified time: 2020-03-14 20:18:25
 
 """ Client to manage a financial strategy. """
 
@@ -69,7 +69,8 @@ class StrategyBot(_ClientStrategyBot):
         'best_limit': OrderBestLimit,
     }
     _handler_pos = ['neutral', 'long', 'short']
-    order_send = []
+    order_sent = []
+    pnl = None
 
     # TODO : Load strategy config
     def __init__(self, address=('', 50000), authkey=b'tradingbot'):
@@ -409,6 +410,9 @@ class StrategyBot(_ClientStrategyBot):
             'TS': self.next - self.frequency
         }
         order_params = kwargs.pop('order_params')
+        if order_params is None:
+            order_params = {}
+
         # Set order
         order = self.Order(_id, input=kwargs, info=info, **order_params)
         # Send order to OrdersManager
@@ -556,13 +560,20 @@ class StrategyBot(_ClientStrategyBot):
             pass
 
         elif k == 'order':
-            self.order_sent.pop(a)
+            self.order_sent.remove(a)
             if not self.order_sent:
                 # Compute PnL
-                self.pnl = PnL(self.path)
+                real = not self.cfg['strat_manager_instance'].get('validate',
+                                                                  False)
+                self.pnl = PnL(self.path, real=real)
+                self.pnl = self.pnl if self.pnl.df is not None else None
+                self.logger.debug('pnl ok')
                 # Display performances
-                rm = ResultManager(self.pnl, **self.result_kwrds)
-                print(rm.print_stats())
+                if self.pnl is not None:
+                    print(self.pnl.df)
+                    rm = ResultManager(self.pnl, **self.result_kwrds)
+                    self.logger.debug('result manager ok')
+                    print(rm.print_stats())
 
         else:
             self.logger.error('received unknown message {}: {}'.format(k, a))
