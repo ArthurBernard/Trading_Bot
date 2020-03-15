@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2020-01-28 16:47:55
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-02-27 11:36:49
+# @Last modified time: 2020-03-15 12:00:10
 
 """ Clients to connect to TradingBotServer. """
 
@@ -31,7 +31,6 @@ class _ClientBot:
 
     def __init__(self, address=('', 50000), authkey=b'tradingbot'):
         """ Initialize a client object and connect to the TradingBotServer. """
-        # self.id = randrange(100, 1e9) if _id is None else _id
         self.logger = logging.getLogger(__name__)
         self.logger.info(
             'PID: {} | PPID: {}'.format(os.getpid(), os.getppid())
@@ -39,6 +38,7 @@ class _ClientBot:
 
         # register methods
         TBS.register('get_queue_orders')
+        TBS.register('get_queue_sb_to_tpm')
         TBS.register('get_queue_cli_to_tbm')
         TBS.register('get_state')
         TBS.register('get_reader_tbm')
@@ -53,8 +53,6 @@ class _ClientBot:
             self.m.get_reader_tbm(self.id),
             self.m.get_writer_tbm(self.id)
         )
-        # get queue to send order to OrdersManager
-        self.q_ord = self.m.get_queue_orders()
         # get state of server process
         self.p_state = self.m.get_state()
         # get queue to notify new client to TBM
@@ -86,13 +84,15 @@ class _ClientStrategyBot(_ClientBot):
 
     def __init__(self, address=('', 50000), authkey=b'tradingbot'):
         """ Initialize a client object and connect to TradingBotServer. """
-        # TBS.register('get_proxy_fees')
         _ClientBot.__init__(self, address=address, authkey=authkey)
 
     def __enter__(self):
         self.conn_tbm = ConnTradingBotManager(self.id)
         super(_ClientStrategyBot, self).__enter__()
-        # self.p_fees = self.m.get_proxy_fees()
+        # get queue to send orders to OrdersManager
+        self.q_ord = self.m.get_queue_orders()
+        # get queue to send orders to PerformanceManager
+        self.q_tpm = self.m.get_queue_sb_to_tpm()
 
     def get_fee(self, pair, order_type):
         """ Get current the fee for a pair and an order type.
@@ -129,11 +129,21 @@ class _ClientOrdersManager(_ClientBot):
         _ClientBot.__init__(self, address=address, authkey=authkey)
         self.conn_tbm = ConnTradingBotManager(self.id)
 
+    def __enter__(self):
+        super(_ClientOrdersManager, self).__enter__()
+        # get queue to receive orders from StrategyBot
+        self.q_ord = self.m.get_queue_orders()
 
-class _ClientTradingPerformance(_ClientBot):
-    """ Base class for an TradingPerformance object. """
+
+class _ClientPerformanceManager(_ClientBot):
+    """ Base class for a TradingPerformanceManager object. """
 
     def __init__(self, address=('', 50000), authkey=b'tradingbot'):
         self.id = -1
         _ClientBot.__init__(self, address=address, authkey=authkey)
         self.conn_tbm = ConnTradingBotManager(self.id)
+
+    def __enter__(self):
+        super(_ClientPerformanceManager, self).__enter__()
+        # get queue to receive orders from StrategyBot
+        self.q_tpm = self.m.get_queue_sb_to_tpm()

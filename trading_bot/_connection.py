@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2020-02-20 16:35:31
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-02-27 10:29:33
+# @Last modified time: 2020-03-15 11:20:00
 
 """ Objects to send and receive objetcs between clients. """
 
@@ -17,7 +17,8 @@ import time
 # Local packages
 
 __all__ = [
-    'ConnStrategyBot', 'ConnOrderManager', 'ConnTradingBotManager'
+    'ConnStrategyBot', 'ConnOrderManager', 'ConnTradingBotManager',
+    'ConnPerformanceManager',
 ]
 
 
@@ -116,6 +117,13 @@ class ConnOrderManager(_BasisConnection):
     # def shutdown(self, msg=None):
     #    self.send(('stop', msg),)
     #    super(ConnectionOrderManager, self)._shutdown(msg=msg)
+
+
+class ConnPerformanceManager(_BasisConnection):
+    """ Connection object to TradingPerformanceManager object. """
+
+    def __init__(self):
+        super(ConnPerformanceManager, self).__init__(-1, name='perf_manager')
 
 
 class ConnStrategyBot(_BasisConnection):

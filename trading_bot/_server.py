@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2020-01-27 09:58:03
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-02-27 10:26:27
+# @Last modified time: 2020-03-15 11:25:23
 
 """ Base object for trading bot server. """
 
@@ -20,7 +20,8 @@ import time
 # Third party packages
 
 # Local packages
-from trading_bot._connection import ConnOrderManager, ConnStrategyBot
+from trading_bot._connection import (ConnOrderManager, ConnStrategyBot,
+                                     ConnPerformanceManager)
 from trading_bot._containers import ConnDict
 from trading_bot._exceptions import ConnRefused
 
@@ -36,6 +37,7 @@ class _TradingBotManager:
 
     conn_sb = ConnDict()
     conn_om = ConnOrderManager()
+    conn_tpm = ConnPerformanceManager()
 
     def __init__(self, address=('', 50000), authkey=b'tradingbot'):
         """ Initialize the trading bot manager. """
@@ -49,6 +51,13 @@ class _TradingBotManager:
         TradingBotServer.register(
             'get_queue_orders',
             callable=lambda: self.q_ord
+        )
+
+        # Set queue for performances
+        self.q_sb_to_tpm = Queue()
+        TradingBotServer.register(
+            'get_queue_sb_to_tpm',
+            callable=lambda: self.q_sb_to_tpm,
         )
 
         # Set queue for strategies
@@ -115,6 +124,9 @@ class _TradingBotManager:
         if _id == 0:
             self.conn_om._set_reader(r)
 
+        elif _id == -1:
+            self.conn_tpm._set_reader(r)
+
         else:
             if _id not in self.conn_sb.keys():
                 self.conn_sb.append(ConnStrategyBot(_id))
@@ -146,6 +158,9 @@ class _TradingBotManager:
         r, w = Pipe(duplex=False)
         if _id == 0:
             self.conn_om._set_writer(w)
+
+        elif _id == -1:
+            self.conn_tpm._set_writer(w)
 
         else:
             if _id not in self.conn_sb.keys():
