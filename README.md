@@ -22,10 +22,11 @@ Initially `Trading_Bot` will be used with the Kraken crypto-currency exchange pl
     - 3.7
 
 - Python package:
-    - requests
+    - blessed
+    - fynance
     - numpy
     - pandas
-    - fynance
+    - requests
 
 ## Installation
 
@@ -80,6 +81,12 @@ $ python ./trading_bot/strategy_manager.py YOUR_STRATEGY_NAME
 
 Documentation is available at [comming soon].
 
+## Disclaimer
+
+Do not risk money which you are afraid to lose.
+Use the trading bot at your own risk, the authors assume no responsibility for your trading results.
+Read the source code and make sure there are not undesirable behaviors.
+
 ## TODO list
 
 - General: 
@@ -88,16 +95,12 @@ Documentation is available at [comming soon].
     - Make GUI.
 - `bot_manager.py`:
     - Clean object;
-    - Start automatically `OrdersManager` client on an other process;
     - Start automatically several `StrategyManager` clients on several process;
-    - Receive update from `OrdersManager` client;
-    - Send update to `StrategyManager` clients.
 - `orders_manager.py`:
     - Verify if the volume to order is available; 
 - `_order.py`:
-    - Make algorithms of execution order (not just 'submit and leaves'). Something like vwap or twap.
     - Use WebSockets instead of REST API.
 - `result_manager.py`:
     - Make an object to display PnL of strategies and portfolio.
 - `strategy_manager.py`:
-    - Receive update from `BotManager`.
+    - Choose invested value in quote or base currency.
