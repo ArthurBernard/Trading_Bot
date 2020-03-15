@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2020-01-27 09:58:03
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-03-12 23:41:54
+# @Last modified time: 2020-03-15 13:04:22
 
 """ Set a server and run each bot. """
 
@@ -136,8 +136,13 @@ class TradingBotManager(_TradingBotManager):
                 self.logger.debug('recv {}: {}'.format(k, a))
 
             elif k == 'order':
+                # FIXME: make a function to get strategy bot ID
                 _id = int(str(a)[-3:])
-                self.conn_sb[_id].send((k, a),)
+                if _id in self.conn_sb:
+                    self.conn_sb[_id].send((k, a),)
+
+                else:
+                    self.logger.error('no connection with SB {}'.format(_id))
 
             elif k is None:
                 pass
@@ -159,9 +164,6 @@ class TradingBotManager(_TradingBotManager):
             if k in self._handler_sb.keys():
                 self._handler_sb[k](a, _id)
                 self.logger.debug(_msg + '{}: {}'.format(k, a))
-                # if _id != conn.id:
-                #    _id = conn.id
-                #    _msg = 'listen_sb {} | '.format(_id)
 
             elif k is None:
                 pass
@@ -179,27 +181,21 @@ class TradingBotManager(_TradingBotManager):
         self.logger.debug('start')
         t = time.time()
         p_om = None
+        p_tpm = None
         while not self.is_stop():
             if time.time() - t > 0:
                 self.logger.debug('StrategyBot: {}'.format(self.conn_sb))
                 self.logger.debug('OrdersManager: {}'.format(self.conn_om))
                 t += 900
 
-            if self.auto and p_om is None:
-                # Start bot OrdersManager
-                self.logger.debug('Setup process OrdersManager:')
-                p_om = Process(
-                    target=start_order_manager,
-                    name='truc',
-                    args=(self.path_log,),
-                    kwargs={'address': self.address, 'authkey': self.authkey}
-                )
-                p_om.start()
-
-            elif self.auto and not p_om.is_alive():
-                self.logger.debug('Process OrdersManager is not alive')
-                p_om.join()
-                p_om = None
+            p_om = self.check_up_process(
+                p_om, start_order_manager, 'OrdersManager', self.path_log,
+                address=self.address, authkey=self.authkey
+            )
+            p_tpm = self.check_up_process(
+                p_tpm, start_performance_manager, 'TradingPerformanceManager',
+                address=self.address, authkey=self.authkey
+            )
 
             if self.q_from_cli.empty():
                 time.sleep(0.01)
@@ -219,6 +215,20 @@ class TradingBotManager(_TradingBotManager):
                 raise ValueError('Unknown action: {}'.format(action))
 
         self.logger.debug('client_manager | stop')
+
+    def check_up_process(self, p, target, name, *args, **kwargs):
+        if self.auto and p is None:
+            # Start bot OrdersManager
+            self.logger.debug('Setup process {}'.format(name))
+            p = Process(target=target, name=name, args=args, kwargs=kwargs)
+            p.start()
+
+        elif self.auto and not p.is_alive():
+            self.logger.debug('Process {} is not alive'.format(name))
+            p.join()
+            p = None
+
+        return p
 
     def setup_client(self, _id):
         """ Set up a client thread (OrdersManager, StrategyBot, etc.).
@@ -241,6 +251,7 @@ class TradingBotManager(_TradingBotManager):
 
         elif _id == -1:
             # TradingPerformance started
+            # not need to run a thread ?
             pass
 
         else:
@@ -265,6 +276,9 @@ class TradingBotManager(_TradingBotManager):
         if _id == 0:
             conn = self.conn_om
 
+        elif _id == -1:
+            conn = self.conn_tpm
+
         else:
             conn = self.conn_sb.pop(_id)
 
@@ -274,7 +288,9 @@ class TradingBotManager(_TradingBotManager):
         if conn.state == 'up':
             conn.shutdown()
 
-        conn.thread.join()
+        if conn.thread is not None:
+            conn.thread.join()
+
         self.logger.debug('shutdown Client ID {}'.format(_id))
 
 
@@ -286,6 +302,17 @@ def start_order_manager(path_log, exchange='kraken', address=('', 50000),
     om = OM(address=address, authkey=authkey)
     with om(exchange, path_log):
         om.loop()
+
+    return None
+
+
+def start_performance_manager(address=('', 50000), authkey=b'tradingbot'):
+    """ Start trading performance manager client. """
+    from performance import TradingPerformanceManager as TPM
+
+    tpm = TPM(address=address, authkey=authkey)
+    with tpm:
+        tpm.loop()
 
     return None
 

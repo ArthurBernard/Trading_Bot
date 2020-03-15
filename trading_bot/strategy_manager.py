@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2019-05-12 22:57:20
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-03-14 23:44:26
+# @Last modified time: 2020-03-15 13:10:31
 
 """ Client to manage a financial strategy. """
 
@@ -331,8 +331,8 @@ class StrategyBot(_ClientStrategyBot):
     def _set_long(self, signal, **kwargs):
         """ Set long order. """
         # Set volume if reinvest profit
-        if self.reinvest and self.pnl is not None:
-            kwargs['volume'] = self.pnl.get_current_volume()
+        if self.reinvest:  # and self.pnl is not None:
+            kwargs['volume'] = self.get_current_volume(kwargs['volume'])
 
         result = self.send_order(**kwargs)
 
@@ -369,8 +369,8 @@ class StrategyBot(_ClientStrategyBot):
         kwargs['leverage'] = 2 if leverage is None else leverage + 1
 
         # Set volume if reinvest profit
-        if self.reinvest and self.pnl is not None:
-            kwargs['volume'] = self.pnl.get_current_volume()
+        if self.reinvest:  # and self.pnl is not None:
+            kwargs['volume'] = self.get_current_volume(kwargs['volume'])
 
         result = self.send_order(**kwargs)
 
@@ -382,6 +382,21 @@ class StrategyBot(_ClientStrategyBot):
         self.logger.info('_set_short | pos: {}'.format(self.current_pos))
 
         return [result]
+
+    def get_current_volume(self, volume):
+        path = self.path
+        if path[-1] != '/':
+            path += '/'
+
+        try:
+            with open(path + 'current_volume.dat', 'rb') as f:
+
+                return Unpickler(f).load()
+
+        except FileNotFoundError:
+            self.logger.error('file not found to load current volume')
+
+            return volume
 
     def send_order(self, **kwargs):
         """ Send the ID of strategy and order parameters to OrdersManager.
@@ -563,15 +578,20 @@ class StrategyBot(_ClientStrategyBot):
             self.order_sent.remove(a)
             if not self.order_sent:
                 # Compute PnL
-                real = not self.ord_kwrds.get('validate', False)
-                self.pnl = PnL(self.path, timestep=self.frequency, real=real)
-                self.pnl = self.pnl if self.pnl.df is not None else None
-                self.logger.debug('pnl ok')
+                # real = not self.ord_kwrds.get('validate', False)
+                self.q_tpm.put({
+                    'path': self.path,
+                    'timestep': self.frequency,
+                    'real': not self.ord_kwrds.get('validate', False),
+                })
+                # self.pnl = PnL(self.path, timestep=self.frequency, real=real)
+                # self.pnl = self.pnl if self.pnl.df is not None else None
+                # self.logger.debug('pnl ok')
                 # Display performances
-                if self.pnl is not None:
-                    rm = ResultManager(self.pnl, **self.result_kwrds)
-                    self.logger.debug('result manager ok')
-                    print(rm.print_stats())
+                # if self.pnl is not None:
+                #    rm = ResultManager(self.pnl, **self.result_kwrds)
+                #    self.logger.debug('result manager ok')
+                #    print(rm.print_stats())
 
         else:
             self.logger.error('received unknown message {}: {}'.format(k, a))
@@ -596,8 +616,6 @@ if __name__ == '__main__':
 
     # Start running a strategy bot
     sm = StrategyBot()
-    p = None
-    display_results = False
     with sm(name):
         for s, kw in sm:
             if s is not None:
@@ -617,38 +635,6 @@ if __name__ == '__main__':
                 TS = sm.next - sm.frequency
                 with open(sm.path + '/price.txt', 'a') as f:
                     f.write(str(TS) + ',' + str(price) + '\n')
-
-                # TODO: display results
-                if display_results:
-                    if p is None:
-                        p = pd.read_csv(
-                            sm.path + '/price.txt',
-                            sep=',',
-                            names=['TS', 'price']
-                        )
-                        p = p.set_index('TS')
-
-                    else:
-                        p.loc[TS, 'price'] = price
-
-                    df = get_df(path=sm.path, name='orders_hist', ext='.dat')
-                    df = df.drop(columns=['txid', 'path', 'strat_name'])
-                    df = df.sort_values('userref')
-                    # FIXME : how get v0 when reinvest profit ?
-                    perf = _FullPnL(
-                        df, p=p, timestep=sm.frequency, v0=sm.current_vol
-                    )
-                    rm = ResultManager(
-                        perf.df,
-                        period=int(364 * 86400 / sm.frequency),
-                        metrics=['Return', 'Perf', 'Sharpe', 'Calmar', 'MaxDD'],
-                        periods=['Daily', 'Weekly', 'Monthly', 'Yearly', 'Total']
-                    )
-                    if False:  # sm.reinvest_profit
-                        # TODO : how to set new volume
-                        new_vol = rm.get_current_volume()
-
-                    print(rm.print_stats())
 
             # Display time
             txt = time.strftime('%y-%m-%d %H:%M:%S')

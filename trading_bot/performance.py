@@ -4,12 +4,14 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2020-02-25 10:38:17
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-03-14 23:43:58
+# @Last modified time: 2020-03-15 13:14:17
 
 """ Objects to measure and display trading performance. """
 
 # Built-in packages
 import logging
+from pickle import Pickler
+import time
 
 # Third party packages
 import fynance as fy
@@ -17,7 +19,7 @@ import numpy as np
 import pandas as pd
 
 # Local packages
-from trading_bot._client import _ClientTradingPerformance
+from trading_bot._client import _ClientPerformanceManager
 from trading_bot.tools.io import get_df
 
 
@@ -551,12 +553,76 @@ def _rounder(*args, dec=0):
 #   CLI
 
 
-class TradingPerformance(_ClientTradingPerformance):
-    """ TradingPerformance object. """
+class TradingPerformanceManager(_ClientPerformanceManager):
+    """ TradingPerformanceManager object compute performances of trading bots.
+
+    Attributes
+    ----------
+
+    Methods
+    -------
+
+    """
 
     def __init__(self, address=('', 50000), authkey=b'tradingbot'):
-        super(TradingPerformance, self).__inti__(
+        super(TradingPerformanceManager, self).__init__(
             address=address,
             authkey=authkey
         )
         self.logger = logging.getLogger(__name__)
+
+    def listen_sb(self):
+        # listen queue to update pnl
+        pass
+
+    def listen_tbm(self):
+        # listen tbm to add or remove a pnl to compute into dict of pnl
+        pass
+
+    def loop(self):
+        self.logger.info('Start loop TradingPerformanceManager')
+        while not self.is_stop():
+            if self.q_tpm.empty():
+                time.sleep(0.01)
+
+                continue
+
+            kwrds = self.q_tpm.get()
+            path = kwrds['path']
+            name = path.split('/')[-1]
+            self.logger.info('receive info to compute PnL {}'.format(name))
+            pnl = PnL(**kwrds)
+            v = pnl.get_current_volume()
+            if path[-1] != '/':
+                path += '/'
+
+            with open(path + 'current_volume.dat', 'wb') as f:
+                Pickler(f).dump(v)
+
+            self.logger.info('Current volume updated: {}'.format(name))
+
+        self.logger.info('Stop loop TradingPerformanceManager')
+
+    def _add_pnl(self, _id):
+        # add a new pnl to compute
+        pass
+
+    def _rm_pnl(self, _id):
+        # remove a pnl to compute
+        pass
+
+
+if __name__ == '__main__':
+    # Load logging configuration
+    import logging.config
+    import yaml
+
+    with open('./trading_bot/logging.ini', 'rb') as f:
+        config = yaml.safe_load(f.read())
+
+    logging.config.dictConfig(config)
+
+    # Start running a trading performance manager
+    tpm = TradingPerformanceManager()
+    with tpm:
+        tpm.loop()
