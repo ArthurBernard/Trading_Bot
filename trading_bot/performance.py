@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2020-02-25 10:38:17
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-03-15 13:14:17
+# @Last modified time: 2020-03-18 08:51:38
 
 """ Objects to measure and display trading performance. """
 
@@ -177,21 +177,21 @@ class _FullPnL:
 
         """
         orders = orders.sort_values('userref').reset_index(drop=True)
-        self.t_idx = orders.loc[:, 'TS'].drop_duplicates()
-        self.t0, self.T = self.t_idx.min(), self.t_idx.max()
+        t_idx = orders.loc[:, 'TS'].drop_duplicates()
+        self.t0, T = t_idx.min(), t_idx.max()
         if timestep is None:
-            self.ts = int(self.t_idx.sort_values().diff().min())
+            self.ts = int(t_idx.sort_values().diff().min())
 
         else:
             self.ts = timestep
 
         if prices is not None:
-            T = max(prices.index.max(), self.T)
+            self.T = max(prices.index.max(), T)
 
         else:
-            T = self.T
+            self.T = T
 
-        self.index = range(self.t0, T + 1, self.ts)
+        self.index = range(self.t0, self.T + 1, self.ts)
         if real:
             pnl = _PnLR(orders, v0=v0)
 
@@ -204,7 +204,7 @@ class _FullPnL:
         self._fillna('exchanged_volume', 'delta_signal', 'fee', value=0.)
         self._fillna('position', method='bfill')
         self._fillna('position', value=self['signal'].values[-1])
-        self._check_signal_position()
+        self._check_signal_position(T=T)
         self._fillna_price(prices)
         self['returns'] = self['price'].diff().fillna(value=0).values
         self._set_pnl()
@@ -226,10 +226,10 @@ class _FullPnL:
 
         self._fillna('price', method='ffill')
 
-    def _check_signal_position(self):
+    def _check_signal_position(self, T):
         if not np.array_equiv(
-            self.df.loc[self.t0 + self.ts: self.T, 'position'].values,
-            self.df.loc[self.t0: self.T - self.ts, 'signal'].values
+            self.df.loc[self.t0 + self.ts: T, 'position'].values,
+            self.df.loc[self.t0: T - self.ts, 'signal'].values
         ):
 
             raise ValueError('position at t + 1 does not match signal at t')
@@ -277,7 +277,25 @@ class PnL(_FullPnL):
             Set to False if the trading bot is in valide mode.
 
         """
-        orders, prices = self.load(path)
+        if path[-1] != '/':
+            path += '/'
+
+        self.path = path
+        # try:
+        #    # load pnl
+        #    with open(self.path, 'rb') as f:
+        #        self.df = Unpickler(f).load()
+
+        #    self.index = self.df.index
+        #    self.t0, self.T = self.index.min(), self.index.max()
+        #    if timestep is None:
+        #        self.ts = int(t_idx.sort_values().diff().min())
+
+        #    else:
+        #        self.ts = timestep
+
+        # except FileNotFoundError:
+        orders, prices = self._load()
         if orders.index.size > 2:
             super(PnL, self).__init__(
                 orders, prices, v0=v0, timestep=timestep, real=real
@@ -300,24 +318,108 @@ class PnL(_FullPnL):
 
         return round(float(v / p), 8)
 
-    def load(self, path):
+    def _load(self):
         # load orders
-        orders = get_df(path=path, name='orders_hist', ext='.dat')
+        orders = get_df(path=self.path, name='orders_hist', ext='.dat')
         orders = orders.drop(columns=['txid', 'path', 'strat_name'])
-        if path[-1] != '/':
-            path += '/'
 
-        path += 'price.txt'
+        path = self.path + 'price.txt'
         # load prices
         prices = pd.read_csv(path, sep=',', names=['TS', 'price'])
 
         return orders.sort_values('userref'), prices.set_index('TS')
 
-    def update(self, path):
-        orders, prices = self.load(path)
+    def save(self):
+        if self.df is not None:
+            with open(self.path + 'PnL.dat', 'wb') as f:
+                Pickler(f).dump(self.df)
+
+        else:
+            print('not yet dataframe PnL to save')
 
 
-class ResultManager:
+# TODO:
+# Set client perf manager
+#   receive list of strategy to manage
+#   update value available (pnl)
+# Set displayer manager
+#   print performances
+#   CLI
+
+
+class TradingPerformanceManager(_ClientPerformanceManager):
+    """ TradingPerformanceManager object compute performances of trading bots.
+
+    Attributes
+    ----------
+
+    Methods
+    -------
+
+    """
+
+    def __init__(self, address=('', 50000), authkey=b'tradingbot'):
+        super(TradingPerformanceManager, self).__init__(
+            address=address,
+            authkey=authkey
+        )
+        self.logger = logging.getLogger(__name__)
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        if self.is_stop():
+
+            raise StopIteration
+
+        elif not self.q_tpm.empty():
+
+            return self.q_tpm.get()
+
+        return None
+
+    def loop(self):
+        self.logger.info('Start loop TradingPerformanceManager')
+        # while not self.is_stop():
+        for kwrds in self:
+            # if self.q_tpm.empty():
+            if kwrds is None:
+                time.sleep(0.01)
+
+                continue
+
+            # kwrds = self.q_tpm.get()
+            path = kwrds['path']
+            name = path.split('/')[-1]
+            self.logger.info('receive info to compute PnL {}'.format(name))
+            pnl = PnL(**kwrds)
+            pnl.save()
+            if pnl.df is not None:
+                v = pnl.get_current_volume()
+                if path[-1] != '/':
+                    path += '/'
+
+                with open(path + 'current_volume.dat', 'wb') as f:
+                    Pickler(f).dump(v)
+
+                self.logger.info('Current volume updated: {}'.format(name))
+
+        self.logger.info('Stop loop TradingPerformanceManager')
+
+    def _add_pnl(self, _id):
+        # add a new pnl to compute
+        pass
+
+    def _rm_pnl(self, _id):
+        # remove a pnl to compute
+        pass
+
+
+# DEPRECATED OBJECT AND FUNCTION #
+
+
+class _dep_ResultManager:
     """ Manager object of historical results of strategy.
 
     Attributes
@@ -506,7 +608,7 @@ class ResultManager:
         return 100 * fee[-1] / val[-1]
 
 
-def _set_text(*args):
+def _dep_set_text(*args):
     """ Set a table. """
     n = max(len(arg) for arg in args)
     k_list = ['| ' if len(arg[0]) > 1 else '+' for arg in args]
@@ -539,77 +641,9 @@ def _set_text(*args):
     return '\n'.join(k_list)
 
 
-def _rounder(*args, dec=0):
+def _dep_rounder(*args, dec=0):
     """ Round each element of a list. """
     return [round(float(arg), dec) for arg in args]
-
-
-# TODO:
-# Set client perf manager
-#   receive list of strategy to manage
-#   update value available (pnl)
-# Set displayer manager
-#   print performances
-#   CLI
-
-
-class TradingPerformanceManager(_ClientPerformanceManager):
-    """ TradingPerformanceManager object compute performances of trading bots.
-
-    Attributes
-    ----------
-
-    Methods
-    -------
-
-    """
-
-    def __init__(self, address=('', 50000), authkey=b'tradingbot'):
-        super(TradingPerformanceManager, self).__init__(
-            address=address,
-            authkey=authkey
-        )
-        self.logger = logging.getLogger(__name__)
-
-    def listen_sb(self):
-        # listen queue to update pnl
-        pass
-
-    def listen_tbm(self):
-        # listen tbm to add or remove a pnl to compute into dict of pnl
-        pass
-
-    def loop(self):
-        self.logger.info('Start loop TradingPerformanceManager')
-        while not self.is_stop():
-            if self.q_tpm.empty():
-                time.sleep(0.01)
-
-                continue
-
-            kwrds = self.q_tpm.get()
-            path = kwrds['path']
-            name = path.split('/')[-1]
-            self.logger.info('receive info to compute PnL {}'.format(name))
-            pnl = PnL(**kwrds)
-            v = pnl.get_current_volume()
-            if path[-1] != '/':
-                path += '/'
-
-            with open(path + 'current_volume.dat', 'wb') as f:
-                Pickler(f).dump(v)
-
-            self.logger.info('Current volume updated: {}'.format(name))
-
-        self.logger.info('Stop loop TradingPerformanceManager')
-
-    def _add_pnl(self, _id):
-        # add a new pnl to compute
-        pass
-
-    def _rm_pnl(self, _id):
-        # remove a pnl to compute
-        pass
 
 
 if __name__ == '__main__':

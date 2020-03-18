@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2020-03-17 12:23:25
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-03-17 12:26:25
+# @Last modified time: 2020-03-18 08:34:59
 
 """ A (very) light Graphical User Interface. """
 
@@ -241,3 +241,13 @@ def _set_text(*args):
 def _rounder(*args, dec=0):
     """ Round each element of a list. """
     return [round(float(arg), dec) for arg in args]
+
+
+class GUI(_ClientGUI):
+    pass
+
+
+if __name__ == "__main__":
+
+    gui = GUI()
+    pass
