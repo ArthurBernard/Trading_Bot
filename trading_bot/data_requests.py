@@ -4,14 +4,15 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2019-04-26 08:49:26
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-02-26 18:18:06
+# @Last modified time: 2020-03-18 08:31:30
 
 # Built-in import
 import json
-import time
-import sys
-from pickle import Pickler, Unpickler
+import logging
 from os import listdir
+from pickle import Pickler, Unpickler
+import sys
+import time
 
 # External import
 import requests
@@ -587,6 +588,7 @@ class DataExchangeManager:
 
     def __init__(self, assets, path="https://api.kraken.com/0/public",
                  frequency=None, n_min_obs=1, ohlcv='ohlcv'):
+        self.logger = logging.getLogger(__name__)
         self.assets = assets
         self.req = DataRequests(path, stop_step=1)
         self.frequency = frequency
@@ -594,9 +596,23 @@ class DataExchangeManager:
         self.ohlcv = [i for i in ohlcv]
 
     def get_data(self, *args, **kwargs):
+        """
+
+        Returns
+        -------
+        np.array
+
+        """
         data = self._get_data(*args, **kwargs)
 
-        return self.clean_data(data)
+        try:
+
+            return self.clean_data(data)
+
+        except NotLatestDataError as e:
+            self.logger.error('Get not the most recent data {}'.format(e.args))
+
+            return self.get_data(*args, **kwargs)
 
     # TODO : to finish
     def _get_data(self, *args, **kwargs):
@@ -610,14 +626,21 @@ class DataExchangeManager:
             return data['result']
 
         except Exception as e:
-            print('UNKNOWN ERROR !\n' + '-' * 15 + '\n')
+            self.logger.error('UNKNOWN ERROR !\n' + '-' * 15 + '\n')
             # print('Error is', e, type(e))
-            print('Answere is', data)
-            print('Args are', args)
-            print('Kwargs are', kwargs)
+            self.logger.error('Answere is', data)
+            self.logger.error('Args are', args)
+            self.logger.error('Kwargs are', kwargs)
             raise e
 
     def clean_data(self, data):
+        """ Clean data.
+
+        Returns
+        -------
+        np.array
+
+        """
         # TODO : to finish
         # to make copy of asset
         # to loop for several assets
@@ -630,11 +653,18 @@ class DataExchangeManager:
 
         if df.index[-1] < now() - self.frequency:
 
-            raise ValueError('Too old data: ', df.index[-1])
+            raise NotLatestDataError('Too old data: ', df.index[-1])
 
         else:
+            self.logger.debug('Timestamp is {}'.format(now()))
+            self.logger.debug(df.loc[:, self.ohlcv].tail())
 
             return df.loc[:, self.ohlcv].values[-self.n_min_obs:]
+
+
+class NotLatestDataError(Exception):
+    """ Error raised when the data are not the most recent. """
+    pass
 
 
 def get_open(pair, path="https://api.kraken.com/0/public"):
