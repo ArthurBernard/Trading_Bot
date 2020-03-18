@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2019-05-12 22:57:20
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-03-15 13:10:31
+# @Last modified time: 2020-03-18 08:29:49
 
 """ Client to manage a financial strategy. """
 
@@ -23,7 +23,7 @@ from trading_bot._client import _ClientStrategyBot
 # from trading_bot._containers import OrderDict
 from trading_bot.data_requests import get_close
 from trading_bot.orders import OrderSL, OrderBestLimit
-from trading_bot.performance import PnL, ResultManager
+from trading_bot.performance import PnL
 from trading_bot.tools.io import load_config_params, dump_config_params
 from trading_bot.tools.time_tools import now, str_time
 
@@ -331,7 +331,7 @@ class StrategyBot(_ClientStrategyBot):
     def _set_long(self, signal, **kwargs):
         """ Set long order. """
         # Set volume if reinvest profit
-        if self.reinvest:  # and self.pnl is not None:
+        if self.reinvest:
             kwargs['volume'] = self.get_current_volume(kwargs['volume'])
 
         result = self.send_order(**kwargs)
@@ -369,7 +369,7 @@ class StrategyBot(_ClientStrategyBot):
         kwargs['leverage'] = 2 if leverage is None else leverage + 1
 
         # Set volume if reinvest profit
-        if self.reinvest:  # and self.pnl is not None:
+        if self.reinvest:
             kwargs['volume'] = self.get_current_volume(kwargs['volume'])
 
         result = self.send_order(**kwargs)
@@ -390,6 +390,7 @@ class StrategyBot(_ClientStrategyBot):
 
         try:
             with open(path + 'current_volume.dat', 'rb') as f:
+                self.logger.debug('load current volume')
 
                 return Unpickler(f).load()
 
@@ -414,7 +415,6 @@ class StrategyBot(_ClientStrategyBot):
         """
         # Set order parameters
         _id = self._set_id_order()
-        # time_force = self.frequency - 60 if self.frequency > 60 else None
         info = {
             'fee_pct': self.get_fee(kwargs['pair'], kwargs['ordertype']),
             'ex_pos': self.current_pos,
@@ -577,21 +577,12 @@ class StrategyBot(_ClientStrategyBot):
         elif k == 'order':
             self.order_sent.remove(a)
             if not self.order_sent:
-                # Compute PnL
-                # real = not self.ord_kwrds.get('validate', False)
+                # Send info to compute PnL
                 self.q_tpm.put({
                     'path': self.path,
                     'timestep': self.frequency,
                     'real': not self.ord_kwrds.get('validate', False),
                 })
-                # self.pnl = PnL(self.path, timestep=self.frequency, real=real)
-                # self.pnl = self.pnl if self.pnl.df is not None else None
-                # self.logger.debug('pnl ok')
-                # Display performances
-                # if self.pnl is not None:
-                #    rm = ResultManager(self.pnl, **self.result_kwrds)
-                #    self.logger.debug('result manager ok')
-                #    print(rm.print_stats())
 
         else:
             self.logger.error('received unknown message {}: {}'.format(k, a))

@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2020-01-27 09:58:03
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-03-15 13:04:22
+# @Last modified time: 2020-03-18 08:47:01
 
 """ Set a server and run each bot. """
 
@@ -121,7 +121,7 @@ class TradingBotManager(_TradingBotManager):
 
     def listen_om(self):
         """ Update fees and balance when received them from OrdersManager. """
-        self.logger.debug('start')
+        self.logger.debug('start listen OrderManager')
         for k, a in self.conn_om:
             if k in self._handler_om.keys():
                 self._handler_om[k](a)
@@ -142,7 +142,8 @@ class TradingBotManager(_TradingBotManager):
                     self.conn_sb[_id].send((k, a),)
 
                 else:
-                    self.logger.error('no connection with SB {}'.format(_id))
+                    self.logger.error('Cannot compute PnL, no connection with '
+                                      'ID {} StrategyBot'.format(_id))
 
             elif k is None:
                 pass
@@ -153,7 +154,7 @@ class TradingBotManager(_TradingBotManager):
             if self.is_stop():
                 self.conn_om.shutdown()
 
-        self.logger.debug('end')
+        self.logger.debug('end listen OrderManager')
 
     def listen_sb(self, _id):
         """ Update fees and balance when received them from OrdersManager. """
@@ -175,6 +176,23 @@ class TradingBotManager(_TradingBotManager):
                 conn.shutdown()
 
         self.logger.debug(_msg + 'end loop')
+
+    def listen_gui(self):
+        self.logger.debug('start listen GUI')
+        for k, a in self.conn_gui:
+            if k is None:
+                pass
+
+            elif k == 'update':
+                self.conn_gui.send({c.id: c.name for c in self.conn_sb})
+
+            else:
+                self.logger.error('Unknown command {}: {}'.format(k, a))
+
+            if self.is_stop():
+                self.conn_gui.shutdown()
+
+        self.logger.debug('end listen GUI')
 
     def client_manager(self):
         """ Listen client (OrderManager and StrategyManager). """
@@ -240,7 +258,7 @@ class TradingBotManager(_TradingBotManager):
             setup a StrategyBot.
 
         """
-        self.logger.debug('Client ID-{}'.format(_id))
+        self.logger.debug('Client ID {}'.format(_id))
         if _id == 0:
             # start thread listen OrderManager
             self.conn_om.thread = Thread(
@@ -253,6 +271,14 @@ class TradingBotManager(_TradingBotManager):
             # TradingPerformance started
             # not need to run a thread ?
             pass
+
+        elif _id == -2:
+            # start thread for GUI
+            self.conn_gui.thread = Thread(
+                target=self.listen_gui,
+                daemon=True,
+            )
+            self.conn_gui.thread.start()
 
         else:
             # start thread listen StrategyBot
@@ -277,7 +303,11 @@ class TradingBotManager(_TradingBotManager):
             conn = self.conn_om
 
         elif _id == -1:
-            conn = self.conn_tpm
+            # NOTHING NEEDED HERE ?
+            pass
+
+        elif _id == -2:
+            conn = self.conn_gui
 
         else:
             conn = self.conn_sb.pop(_id)
