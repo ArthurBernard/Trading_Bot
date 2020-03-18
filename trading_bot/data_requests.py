@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2019-04-26 08:49:26
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-03-18 08:31:30
+# @Last modified time: 2020-03-18 19:26:34
 
 # Built-in import
 import json
@@ -16,6 +16,7 @@ import time
 
 # External import
 import requests
+from requests.exceptions import ConnectionError as RequestsConnectionError
 import pandas as pd
 import numpy as np
 
@@ -604,21 +605,39 @@ class DataExchangeManager:
 
         """
         data = self._get_data(*args, **kwargs)
+        if 'interval' in kwargs:
+            interval = kwargs['interval']
+
+        else:
+            self.logger.warning('INTERVAL not specified in kwargs to get data')
+            interval = 1
 
         try:
 
-            return self.clean_data(data)
+            return self.clean_data(data, interval=interval * 60)
 
         except NotLatestDataError as e:
-            self.logger.error('Get not the most recent data {}'.format(e.args))
+            self.logger.error(
+                'Get not the most recent data {}, wait 1 sec'.format(e.args)
+            )
+            time.sleep(1)
 
             return self.get_data(*args, **kwargs)
 
     # TODO : to finish
     def _get_data(self, *args, **kwargs):
-        data = self.req.get_data(*args, **kwargs)
+        try:
+            data = self.req.get_data(*args, **kwargs)
+
+        except RequestsConnectionError:
+            self.logger.error('Requests failed, ConnectionError, wait 3 sec')
+            time.sleep(3)
+
+            return self._get_data(*args, **kwargs)
+
         try:
             if 'Eservice:Unavailable' in data['error']:
+                self.logger.error('eservice unvailable, wait 1 sec')
                 time.sleep(1)
 
                 return self._get_data(*args, **kwargs)
@@ -633,7 +652,35 @@ class DataExchangeManager:
             self.logger.error('Kwargs are', kwargs)
             raise e
 
-    def clean_data(self, data):
+    def clean_data(self, data, interval=60):
+        """ Clean data.
+
+        Returns
+        -------
+        np.array
+
+        """
+        # TODO : to finish
+        # to make copy of asset
+        # to loop for several assets
+        rename = {0: 'TS', 1: 'o', 2: 'h', 3: 'l', 4: 'c', 6: 'v'}
+        df = set_dataframe(
+            data[self.assets[0]], index='TS', rename=rename, drop=[5, 7],
+        )
+
+        if df.index[-1] < now(interval):  # - self.frequency:
+
+            raise NotLatestDataError('Too old data: ', df.index[-1])
+
+        else:
+            df = df.loc[df.index % self.frequency == interval, self.ohlcv]
+            self.logger.debug('Timestamp is {}'.format(now(interval)))
+            self.logger.debug('interval is {} sec'.format(interval))
+            self.logger.debug(df.tail())
+
+            return df.iloc[-self.n_min_obs:].values
+
+    def clean_data2(self, data):
         """ Clean data.
 
         Returns
@@ -651,12 +698,12 @@ class DataExchangeManager:
         df = df.loc[df.index % self.frequency == 0, self.ohlcv]
         # TODO : append several assets
 
-        if df.index[-1] < now() - self.frequency:
+        if df.index[-1] < now():  # - self.frequency:
 
             raise NotLatestDataError('Too old data: ', df.index[-1])
 
         else:
-            self.logger.debug('Timestamp is {}'.format(now()))
+            self.logger.debug('Timestamp is {} '.format(now()))
             self.logger.debug(df.loc[:, self.ohlcv].tail())
 
             return df.loc[:, self.ohlcv].values[-self.n_min_obs:]
