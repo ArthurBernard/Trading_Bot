@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2020-02-20 16:35:31
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-03-15 11:20:00
+# @Last modified time: 2020-03-18 09:30:31
 
 """ Objects to send and receive objetcs between clients. """
 
@@ -108,15 +108,18 @@ class _BasisConnection:
         self.w.close()
 
 
+class ConnCLI(_BasisConnection):
+    """ Connection with Command Line Interface. """
+
+    def __init__(self):
+        super(ConnCLI, self).__init__(-2, name='CLI')
+
+
 class ConnOrderManager(_BasisConnection):
     """ Connection object to OrderManager object. """
 
     def __init__(self):
         super(ConnOrderManager, self).__init__(0, name='order_manager')
-
-    # def shutdown(self, msg=None):
-    #    self.send(('stop', msg),)
-    #    super(ConnectionOrderManager, self)._shutdown(msg=msg)
 
 
 class ConnPerformanceManager(_BasisConnection):
@@ -137,11 +140,6 @@ class ConnStrategyBot(_BasisConnection):
         if k == 'name':
             self.name = a
 
-        # elif k == 'switch_id':
-        #    self.id = a
-
-        #    return k, a
-
         else:
 
             return k, a
@@ -154,7 +152,3 @@ class ConnTradingBotManager(_BasisConnection):
 
     def __init__(self, _id):
         super(ConnTradingBotManager, self).__init__(_id, name='TBM')
-
-    # def _set_id(self, _id):
-    #    self.id = _id
-    #    self.send(('switch_id', _id),)

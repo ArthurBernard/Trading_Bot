@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2020-01-28 16:47:55
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-03-18 08:34:55
+# @Last modified time: 2020-03-18 09:06:42
 
 """ Clients to connect to TradingBotServer. """
 
@@ -149,8 +149,8 @@ class _ClientPerformanceManager(_ClientBot):
         self.q_tpm = self.m.get_queue_sb_to_tpm()
 
 
-class _ClientGUI(_ClientBot):
-    """ Base class for Graphical User Interface. """
+class _ClientCLI(_ClientBot):
+    """ Base class for Command Line Interface. """
 
     def __init__(self, address=('', 50000), authkey=b'tradingbot'):
         self.id = -2

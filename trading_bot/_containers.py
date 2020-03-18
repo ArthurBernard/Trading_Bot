@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2020-02-22 11:01:49
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-02-27 10:28:08
+# @Last modified time: 2020-03-18 10:01:37
 
 """ Module with specific containers objects. """
 
@@ -292,7 +292,6 @@ class ConnDict(dict):
     Methods
     -------
     append
-    # switch_id
     update
 
     """

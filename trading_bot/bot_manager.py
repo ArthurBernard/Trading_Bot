@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2020-01-27 09:58:03
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-03-18 08:47:01
+# @Last modified time: 2020-03-18 10:01:32
 
 """ Set a server and run each bot. """
 
@@ -177,14 +177,15 @@ class TradingBotManager(_TradingBotManager):
 
         self.logger.debug(_msg + 'end loop')
 
-    def listen_gui(self):
-        self.logger.debug('start listen GUI')
-        for k, a in self.conn_gui:
+    def listen_cli(self):
+        self.logger.debug('start listen CLI')
+        for k, a in self.conn_cli:
             if k is None:
                 pass
 
-            elif k == 'update':
-                self.conn_gui.send({c.id: c.name for c in self.conn_sb})
+            elif k == 'sb_update':
+                sb_update = {c.id: c.name for c in self.conn_sb}
+                self.conn_gui.send(('sb_update', sb_update),)
 
             else:
                 self.logger.error('Unknown command {}: {}'.format(k, a))
@@ -192,7 +193,7 @@ class TradingBotManager(_TradingBotManager):
             if self.is_stop():
                 self.conn_gui.shutdown()
 
-        self.logger.debug('end listen GUI')
+        self.logger.debug('end listen CLI')
 
     def client_manager(self):
         """ Listen client (OrderManager and StrategyManager). """
@@ -273,9 +274,9 @@ class TradingBotManager(_TradingBotManager):
             pass
 
         elif _id == -2:
-            # start thread for GUI
-            self.conn_gui.thread = Thread(
-                target=self.listen_gui,
+            # start thread for CLI
+            self.conn_cli.thread = Thread(
+                target=self.listen_cli,
                 daemon=True,
             )
             self.conn_gui.thread.start()
@@ -307,7 +308,7 @@ class TradingBotManager(_TradingBotManager):
             pass
 
         elif _id == -2:
-            conn = self.conn_gui
+            conn = self.conn_cli
 
         else:
             conn = self.conn_sb.pop(_id)

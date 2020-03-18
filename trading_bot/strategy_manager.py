@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2019-05-12 22:57:20
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-03-18 08:29:49
+# @Last modified time: 2020-03-18 10:11:50
 
 """ Client to manage a financial strategy. """
 
@@ -516,6 +516,14 @@ class StrategyBot(_ClientStrategyBot):
                 with open(self.path + '/price.txt', 'a') as f:
                     f.write(str(TS) + ',' + str(price) + '\n')
 
+                if not isinstance(output, list):
+                    # Send info to compute PnL
+                    self.q_tpm.put({
+                        'path': self.path,
+                        'timestep': self.frequency,
+                        'real': not self.ord_kwrds.get('validate', False),
+                    })
+
             txt = '{} | Next signal in {:.1f}'.format(
                 time.strftime('%y-%m-%d %H:%M:%S'),
                 str_time(self.next - self.TS),
@@ -626,6 +634,14 @@ if __name__ == '__main__':
                 TS = sm.next - sm.frequency
                 with open(sm.path + '/price.txt', 'a') as f:
                     f.write(str(TS) + ',' + str(price) + '\n')
+
+                if not isinstance(output, list):
+                    # Send info to compute PnL
+                    sm.q_tpm.put({
+                        'path': sm.path,
+                        'timestep': sm.frequency,
+                        'real': not sm.ord_kwrds.get('validate', False),
+                    })
 
             # Display time
             txt = time.strftime('%y-%m-%d %H:%M:%S')

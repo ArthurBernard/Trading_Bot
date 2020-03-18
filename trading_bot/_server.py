@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2020-01-27 09:58:03
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-03-18 08:36:23
+# @Last modified time: 2020-03-18 09:27:42
 
 """ Base object for trading bot server. """
 
@@ -21,7 +21,7 @@ import time
 
 # Local packages
 from trading_bot._connection import (ConnOrderManager, ConnStrategyBot,
-                                     ConnPerformanceManager)
+                                     ConnPerformanceManager, ConnCLI)
 from trading_bot._containers import ConnDict
 from trading_bot._exceptions import ConnRefused
 
@@ -38,6 +38,7 @@ class _TradingBotManager:
     conn_sb = ConnDict()
     conn_om = ConnOrderManager()
     conn_tpm = ConnPerformanceManager()
+    conn_cli = ConnCLI()
 
     def __init__(self, address=('', 50000), authkey=b'tradingbot'):
         """ Initialize the trading bot manager. """
@@ -128,7 +129,7 @@ class _TradingBotManager:
             self.conn_tpm._set_reader(r)
 
         elif _id == -2:
-            self.conn_gui._set_reader(r)
+            self.conn_cli._set_reader(r)
 
         else:
             if _id not in self.conn_sb.keys():
@@ -166,7 +167,7 @@ class _TradingBotManager:
             self.conn_tpm._set_writer(w)
 
         elif _id == -2:
-            self.conn_gui._set_writer(w)
+            self.conn_cli._set_writer(w)
 
         else:
             if _id not in self.conn_sb.keys():
