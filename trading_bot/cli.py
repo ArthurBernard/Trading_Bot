@@ -4,16 +4,19 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2020-03-17 12:23:25
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-03-18 08:34:59
+# @Last modified time: 2020-03-18 23:26:50
 
 """ A (very) light Graphical User Interface. """
 
 # Built-in packages
+import logging
 
 # Third party packages
 import fynance as fy
 
 # Local packages
+from trading_bot._client import _ClientCLI
+from trading_bot.tools.io import load_config_params
 
 
 class ResultManager:
@@ -243,11 +246,88 @@ def _rounder(*args, dec=0):
     return [round(float(arg), dec) for arg in args]
 
 
-class GUI(_ClientGUI):
-    pass
+class CLI(_ClientCLI):
+    """ Object to allow a Command Line Interface. """
+
+    txt = 'press any key to update data or press q to quit'
+    strat_bot = {}
+    pair = []
+
+    def __init__(self, path, address=('', 50000), authkey=b'tradingbot'):
+        super(CLI, self).__init__(address=address, authkey=authkey)
+        self.logger = logging.getLogger(__name__)
+        self.path = path
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        if self.is_stop():
+
+            raise StopIteration
+
+        k = input(self.txt)
+        if k == 'q':
+
+            raise StopIteration
+
+        elif k[0] == 'f':
+            # todo : ask current fees
+            pass
+
+        elif k[0] == 'b':
+            # todo : ask current balance
+            pass
+
+        else:
+
+            return 'sb_update'
+
+    def listen_tbm(self):
+        self.logger.debug('start listen TradingBotManager')
+        for k, a in self.conn_tbm:
+            self._handler(k, a)
+            self.update()
+            if self.is_stop():
+                self.conn_tbm.shutdown()
+
+        self.logger.debug('stop listen TradingBotManager')
+
+    def run(self):
+        for k in self:
+            if k == 'sb_update':
+                self.conn_tbm.send((k, None),)
+
+    def update(self):
+        for k in self.strat_bot:
+            with open(self.path + k + '/pnl.dat', 'rb') as f:
+                strat_bot[k]['pnl'] = Unpickler(f).load()
+
+    def _handler_tbm(self, k, a):
+        if k is None:
+            pass
+
+        elif k == 'sb_update':
+            self.pair = []
+            self.strat_bot = {n: self._get_sb_dict(i, n) for i, n in a.items()}
+
+        else:
+            self.logger.error('received unknown message {}: {}'.format(k, a))
+
+    def _get_sb_dict(self, _id, name):
+        # load some configuration info
+        cfg = load_config_params(self.path + name + '/configuration.yaml')
+        pair = cfg['order_instance']['pair']
+        freq = cfg['strat_manager_instance']['frequency']
+        kwrd = cfg['result_instance']
+        if pair not in self.pair:
+            self.pair += [pair]
+
+        return {'id': _id, 'pair': pair, 'freq': freq, 'kwrd': kwrd}
 
 
 if __name__ == "__main__":
 
-    gui = GUI()
-    pass
+    cli = CLI('./strategies/')
+    with cli:
+        cli.run()
