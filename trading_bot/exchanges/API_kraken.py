@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2019-05-06 20:53:46
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-03-14 21:03:24
+# @Last modified time: 2020-03-19 08:58:51
 
 """ Kraken Client API object. """
 
@@ -49,6 +49,7 @@ class KrakenClient:
         'EService:Unavailable',
         'EOrder:Unknown order',
         'EService:Busy',
+        'EGeneral:Invalid arguments:volume'
     ]
 
     def __init__(self, key=None, secret=None):
@@ -126,7 +127,13 @@ class KrakenClient:
 
         try:
             r = requests.post(url, headers=headers, data=data, timeout=timeout)
-            if r.json()['error']:
+            if 'EAPI:Rate limit exceeded' in r.json()['error']:
+                self.logger.error('Rate limit exceeded, must wait 15 minutes')
+                time.sleep(930)
+
+                return self.query_private(method, timeout=timeout, **data)
+
+            elif r.json()['error']:
                 for error in self.error_list:
                     if error in r.json()['error']:
                         self.logger.error('{}: {}'.format(method, error))

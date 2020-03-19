@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2020-02-06 11:57:48
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-03-14 18:36:16
+# @Last modified time: 2020-03-19 09:06:14
 
 """ Module with different Order objects.
 
@@ -16,6 +16,7 @@ specified `update` method and some specific attributes.
 # Built-in packages
 import time
 import logging
+from pickle import Pickler, Unpickler
 
 # Third party packages
 
@@ -149,10 +150,28 @@ class _BasisOrder:
 
     def execute(self):
         """ Execute the order. """
+        if self.input['type'] == 'market':
+            self.input['type'] = 'buy'
+
         if self.status is None or self.status == 'canceled':
             self._last = int(time.time())
             ans = self._request('AddOrder', userref=self.id, **self.input)
             self._update_status('open')
+            if 'EGeneral:Invalid arguments:volume' in ans.get('error', []):
+                self._update_status('closed')
+                try:
+                    with open('./orders_not_correctly_closed.dat', 'rb') as f:
+                        orders_list = Unpickler(f).load()
+
+                except FileNotFoundError:
+                    orders_list = []
+
+                orders_list += [{'repr': ''.format(self), 'input': self.input}]
+                with open('./orders_not_correctly_closed.dat', 'wb') as f:
+                    Pickler(f).dump(orders_list)
+
+                return None
+
             self.state = ans
             # Only if order is in validate mode
             if self.input.get('validate'):
@@ -466,8 +485,9 @@ class OrderSL(_BasisOrder):
 
             if self.status != 'closed':
                 self.logger.info('force exec market')
-                self.input['type'] = 'market'
-                self.input.pop('price')
+                self.input['ordertype'] = 'market'
+                if 'price' in self.input:
+                    self.input.pop('price')
 
                 self.execute()
 
@@ -600,8 +620,20 @@ class OrderBestLimit(_BasisOrder):
 
             if price == 'market' or time.time() > self.time_force:
                 self.logger.info('force exec market')
-                self.input['type'] = 'market'
-                self.input.pop('price')
+                self.input['ordertype'] = 'market'
+                if 'price' in self.input:
+                    self.input.pop('price')
+
+                if 'oflags' in self.input and 'post' == self.input['oflags']:
+                    self.input.pop('oflags')
+
+                elif 'oflags' in self.input and 'post' in self.input['oflags']:
+                    if isinstance(self.input['oflags'], list):
+                        self.input['oflags'].remove('post')
+
+                    else:
+                        oflags = self.input['oflags'].split(',').remove('post')
+                        self.input['oflags'] = ','.join(oflags)
 
             elif price == 'best':
                 self.input['price'] = self._handler_best[self.type](self.pair)

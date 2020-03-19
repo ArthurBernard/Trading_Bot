@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2020-02-15 12:34:18
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-02-24 20:19:51
+# @Last modified time: 2020-03-19 08:09:12
 
 """ Some call counter objects. """
 
@@ -82,7 +82,7 @@ class _CallCounter(object):
         self.t = t
         self.logger.debug('counter={}'.format(self.counter))
         # check if call_rate_limit is exceeded
-        if self.counter >= self.call_rate_limit:
+        if self.counter >= self.call_rate_limit - 1:  # substract 1 to prevent
             self.logger.info('counter exceeds {}'.format(self.call_rate_limit))
             time.sleep(self.counter - self.call_rate_limit + 1)
 
