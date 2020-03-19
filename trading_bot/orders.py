@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2020-02-06 11:57:48
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-03-19 09:06:14
+# @Last modified time: 2020-03-19 11:33:47
 
 """ Module with different Order objects.
 
@@ -150,8 +150,12 @@ class _BasisOrder:
 
     def execute(self):
         """ Execute the order. """
-        if self.input['type'] == 'market':
-            self.input['type'] = 'buy'
+        # to fix errors [to remove]
+        # if self.input['type'] == 'market':
+        #    self.input['type'] = 'buy'
+        # if self.volume == 1.:
+        #    self.volume = 1. - 0.60667107
+        #    self.input['volume'] = 1. - 0.60667107
 
         if self.status is None or self.status == 'canceled':
             self._last = int(time.time())

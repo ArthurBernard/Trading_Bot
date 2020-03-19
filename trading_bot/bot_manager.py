@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2020-01-27 09:58:03
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-03-18 10:01:32
+# @Last modified time: 2020-03-19 11:59:15
 
 """ Set a server and run each bot. """
 
@@ -185,13 +185,13 @@ class TradingBotManager(_TradingBotManager):
 
             elif k == 'sb_update':
                 sb_update = {c.id: c.name for c in self.conn_sb}
-                self.conn_gui.send(('sb_update', sb_update),)
+                self.conn_cli.send(('sb_update', sb_update),)
 
             else:
                 self.logger.error('Unknown command {}: {}'.format(k, a))
 
             if self.is_stop():
-                self.conn_gui.shutdown()
+                self.conn_cli.shutdown()
 
         self.logger.debug('end listen CLI')
 
@@ -279,7 +279,7 @@ class TradingBotManager(_TradingBotManager):
                 target=self.listen_cli,
                 daemon=True,
             )
-            self.conn_gui.thread.start()
+            self.conn_cli.thread.start()
 
         else:
             # start thread listen StrategyBot

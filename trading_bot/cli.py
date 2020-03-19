@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2020-03-17 12:23:25
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-03-18 23:26:50
+# @Last modified time: 2020-03-19 09:10:56
 
 """ A (very) light Graphical User Interface. """
 
@@ -16,6 +16,7 @@ import fynance as fy
 
 # Local packages
 from trading_bot._client import _ClientCLI
+from trading_bot.performance import PnL
 from trading_bot.tools.io import load_config_params
 
 
@@ -288,6 +289,7 @@ class CLI(_ClientCLI):
         for k, a in self.conn_tbm:
             self._handler(k, a)
             self.update()
+            # TODO : display performances
             if self.is_stop():
                 self.conn_tbm.shutdown()
 
