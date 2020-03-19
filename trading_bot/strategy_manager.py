@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2019-05-12 22:57:20
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-03-18 10:11:50
+# @Last modified time: 2020-03-19 13:20:58
 
 """ Client to manage a financial strategy. """
 
@@ -157,7 +157,13 @@ class StrategyBot(_ClientStrategyBot):
             # TODO : Debug/find solution to request data correctly.
             #        Need to choose between request a database, server,
             #        exchange API or other.
-            data = self.DM.get_data(*self.args_data, **self.kwargs_data)
+            if self.name_strat == 'reinvest_momentum_ethusd_7200':
+                _raise = False
+
+            else:
+                _raise = True
+
+            data = self.DM.get_data(*self.args_data, _raise=_raise, **self.kwargs_data)
 
             return self.get_order_params(data, *self.f_args, **self.f_kwrds)
 
@@ -177,6 +183,20 @@ class StrategyBot(_ClientStrategyBot):
         # self.get_histo_orders(self.path + '/orders_hist.dat')
         # self.get_histo_result(self.path + '/result_hist.dat')
 
+        # try:
+        #    with open(self.path + '/pending_orders.dat', 'rb') as f:
+        #        self.order_sent = Unpickler(f).load()
+
+        # except FileNotFoundError:
+        #    self.order_sent = []
+
+        # Send info to compute PnL
+        self.q_tpm.put({
+            'path': self.path,
+            'timestep': self.frequency,
+            'real': not self.ord_kwrds.get('validate', False),
+        })
+
         return self
 
     def __exit__(self, exc_type, exc_value, exc_tb):
@@ -191,6 +211,10 @@ class StrategyBot(_ClientStrategyBot):
         # TODO: Save history ? Only if loaded it is necessary
         # self.set_histo_orders(self.path + '/orders_hist.dat')
         # self.set_histo_result(self.path + '/result_hist.dat')
+
+        # with open(self.path + '/pending_orders.dat', 'wb') as f:
+        #    Pickler(f).dump(self.order_sent)
+
         if exc_type is not None:
             self.logger.error(
                 '{}: {}'.format(exc_type, exc_value),
@@ -583,7 +607,9 @@ class StrategyBot(_ClientStrategyBot):
             pass
 
         elif k == 'order':
-            self.order_sent.remove(a)
+            if a in self.order_sent:
+                self.order_sent.remove(a)
+
             if not self.order_sent:
                 # Send info to compute PnL
                 self.q_tpm.put({

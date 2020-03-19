@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2019-04-26 08:49:26
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-03-18 19:26:34
+# @Last modified time: 2020-03-19 17:07:34
 
 # Built-in import
 import json
@@ -596,7 +596,7 @@ class DataExchangeManager:
         self.n_min_obs = n_min_obs
         self.ohlcv = [i for i in ohlcv]
 
-    def get_data(self, *args, **kwargs):
+    def get_data(self, *args, _raise=True, **kwargs):
         """
 
         Returns
@@ -614,7 +614,7 @@ class DataExchangeManager:
 
         try:
 
-            return self.clean_data(data, interval=interval * 60)
+            return self.clean_data(data, interval=interval * 60, _raise=_raise)
 
         except NotLatestDataError as e:
             self.logger.error(
@@ -652,7 +652,7 @@ class DataExchangeManager:
             self.logger.error('Kwargs are', kwargs)
             raise e
 
-    def clean_data(self, data, interval=60):
+    def clean_data(self, data, interval=60, _raise=True):
         """ Clean data.
 
         Returns
@@ -669,16 +669,19 @@ class DataExchangeManager:
         )
 
         if df.index[-1] < now(interval):  # - self.frequency:
+            if _raise:  # (self.ohlcv != 'c' and _raise) or _raise:
 
-            raise NotLatestDataError('Too old data: ', df.index[-1])
+                raise NotLatestDataError('Too old data: ', df.index[-1])
 
-        else:
-            df = df.loc[df.index % self.frequency == interval, self.ohlcv]
-            self.logger.debug('Timestamp is {}'.format(now(interval)))
-            self.logger.debug('interval is {} sec'.format(interval))
-            self.logger.debug(df.tail())
+            self.logger.info('try to get the closed price')
+            df.loc[now(interval), 'c'] = get_close(self.assets[0])
 
-            return df.iloc[-self.n_min_obs:].values
+        df = df.loc[df.index % self.frequency == interval, self.ohlcv]
+        self.logger.debug('Timestamp is {}'.format(now(interval)))
+        self.logger.debug('interval is {} sec'.format(interval))
+        self.logger.debug(df.tail())
+
+        return df.iloc[-self.n_min_obs:].values
 
     def clean_data2(self, data):
         """ Clean data.
