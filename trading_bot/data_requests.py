@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2019-04-26 08:49:26
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-03-19 17:07:34
+# @Last modified time: 2020-03-21 10:15:15
 
 # Built-in import
 import json
@@ -667,17 +667,24 @@ class DataExchangeManager:
         df = set_dataframe(
             data[self.assets[0]], index='TS', rename=rename, drop=[5, 7],
         )
+        t = now(interval)
 
-        if df.index[-1] < now(interval):  # - self.frequency:
+        if df.index[-1] < t:  # - self.frequency:
+            txt = 'Too old data: {} < {}'.format(df.index[-1], t)
+            txt += ' | TS: {} & price: {}'.format(df.index[-1],
+                                                  df.loc[:, 'c'].values[-1])
             if _raise:  # (self.ohlcv != 'c' and _raise) or _raise:
 
-                raise NotLatestDataError('Too old data: ', df.index[-1])
+                raise NotLatestDataError(txt)
 
-            self.logger.info('try to get the closed price')
-            df.loc[now(interval), 'c'] = get_close(self.assets[0])
+            self.logger.debug(df.tail())
+            c = get_close(self.assets[0])
+            txt += ' | add closed price: {} at TS: {}'.format(c, t - interval)
+            self.logger.info(txt)
+            df.loc[t - interval, 'c'] = c
 
         df = df.loc[df.index % self.frequency == interval, self.ohlcv]
-        self.logger.debug('Timestamp is {}'.format(now(interval)))
+        self.logger.debug('Timestamp is {}'.format(t))
         self.logger.debug('interval is {} sec'.format(interval))
         self.logger.debug(df.tail())
 
@@ -714,6 +721,7 @@ class DataExchangeManager:
 
 class NotLatestDataError(Exception):
     """ Error raised when the data are not the most recent. """
+
     pass
 
 
