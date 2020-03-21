@@ -4,15 +4,18 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2020-03-17 12:23:25
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-03-19 09:10:56
+# @Last modified time: 2020-03-21 10:45:02
 
 """ A (very) light Graphical User Interface. """
 
 # Built-in packages
 import logging
+from pickle import Unpickler
+from threading import Thread
 
 # Third party packages
 import fynance as fy
+import pandas as pd
 
 # Local packages
 from trading_bot._client import _ClientCLI
@@ -113,23 +116,8 @@ class ResultManager:
         txt_table = [['-'] * (1 + len(self.metrics)), ['   '] + self.metrics]
 
         for period in self.periods:
-            if period.lower() == 'daily':
-                _index = self.df.index >= self.df.index[-1] - 86400
-
-            elif period.lower() == 'weekly':
-                _index = self.df.index >= self.df.index[-1] - 86400 * 7
-
-            elif period.lower() == 'monthly':
-                _index = self.df.index >= self.df.index[-1] - 86400 * 30
-
-            elif period.lower() == 'yearly':
-                _index = self.df.index >= self.df.index[-1] - 86400 * 365
-
-            elif period.lower() == 'total':
-                _index = self.df.index >= self.df.index[0]
-
-            else:
-                self.logger.error('Unknown period: {}'.format(period))
+            _index = self._get_period_index(period)
+            if _index is None:
                 continue
 
             txt_table += self._set_stats_result(self.df.loc[_index], period)
@@ -149,6 +137,14 @@ class ResultManager:
         return txt
 
     def _set_stats_result(self, df, head):
+        """ Set statistics in a table with header. """
+        table = [['-'] * (1 + len(self.metrics)), [head]]
+        for c in df.columns:
+            table += [[str(c)] + self.set_statistics(df.loc[:, c].values)]
+
+        return table
+
+    def _set_stats_result2(self, df, head):
         """ Set statistics in a table with header. """
         ui = df.price.values
         si = df.value.values
@@ -208,6 +204,28 @@ class ResultManager:
 
         return 100 * fee[-1] / val[-1]
 
+    def _get_period_index(self, period):
+        if period.lower() == 'daily':
+            _index = self.df.index >= self.df.index[-1] - 86400
+
+        elif period.lower() == 'weekly':
+            _index = self.df.index >= self.df.index[-1] - 86400 * 7
+
+        elif period.lower() == 'monthly':
+            _index = self.df.index >= self.df.index[-1] - 86400 * 30
+
+        elif period.lower() == 'yearly':
+            _index = self.df.index >= self.df.index[-1] - 86400 * 365
+
+        elif period.lower() == 'total':
+            _index = self.df.index >= self.df.index[0]
+
+        else:
+            self.logger.error('Unknown period: {}'.format(period))
+            _index = None
+
+        return _index
+
 
 def _set_text(*args):
     """ Set a table. """
@@ -259,6 +277,29 @@ class CLI(_ClientCLI):
         self.logger = logging.getLogger(__name__)
         self.path = path
 
+    def __enter__(self):
+        """ Enter. """
+        self.logger.debug('enter')
+        # TODO : Load config ?
+        super(CLI, self).__enter__()
+        self.conn_tbm.thread = Thread(target=self.listen_tbm, daemon=True)
+        self.conn_tbm.thread.start()
+
+        return self
+
+    def __exit__(self, exc_type, exc_value, exc_tb):
+        """ Exit. """
+        # TODO : Save configuration ?
+        if exc_type is not None:
+            self.logger.error(
+                '{}: {}'.format(exc_type, exc_value),
+                exc_info=True
+            )
+
+        super(CLI, self).__exit__(exc_type, exc_value, exc_tb)
+        self.conn_tbm.thread.join()
+        self.logger.debug('exit')
+
     def __iter__(self):
         return self
 
@@ -268,6 +309,7 @@ class CLI(_ClientCLI):
             raise StopIteration
 
         k = input(self.txt)
+        k = k if len(k) > 0 else ' '
         if k == 'q':
 
             raise StopIteration
@@ -284,12 +326,23 @@ class CLI(_ClientCLI):
 
             return 'sb_update'
 
+    def display(self):
+        self.logger.debug('display')
+        df = pd.DataFrame()
+        for k in self.strat_bot:
+            pass
+
     def listen_tbm(self):
         self.logger.debug('start listen TradingBotManager')
         for k, a in self.conn_tbm:
-            self._handler(k, a)
+            if k is None:
+
+                continue
+
+            self._handler_tbm(k, a)
             self.update()
             # TODO : display performances
+            self.display()
             if self.is_stop():
                 self.conn_tbm.shutdown()
 
@@ -301,9 +354,17 @@ class CLI(_ClientCLI):
                 self.conn_tbm.send((k, None),)
 
     def update(self):
+        self.logger.debug('update start')
         for k in self.strat_bot:
-            with open(self.path + k + '/pnl.dat', 'rb') as f:
-                strat_bot[k]['pnl'] = Unpickler(f).load()
+            txt = 'update {}'.format(k)
+            with open(self.path + k + '/PnL.dat', 'rb') as f:
+                pnl = Unpickler(f).load()
+
+            value = pnl.value.iloc[-1]
+            txt += ' | value is {:.2f}'.format(value)
+            txt += ' and volume is {:.8f}'.format(value / pnl.price.iloc[-1])
+            self.logger.debug(txt)
+            self.strat_bot[k]['pnl'] = pnl
 
     def _handler_tbm(self, k, a):
         if k is None:
@@ -329,6 +390,14 @@ class CLI(_ClientCLI):
 
 
 if __name__ == "__main__":
+
+    import logging.config
+    import yaml
+
+    with open('./trading_bot/logging.ini', 'rb') as f:
+        config = yaml.safe_load(f.read())
+
+    logging.config.dictConfig(config)
 
     cli = CLI('./strategies/')
     with cli:
