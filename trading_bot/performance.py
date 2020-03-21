@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2020-02-25 10:38:17
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-03-20 19:55:52
+# @Last modified time: 2020-03-21 14:49:49
 
 """ Objects to measure and display trading performance. """
 
