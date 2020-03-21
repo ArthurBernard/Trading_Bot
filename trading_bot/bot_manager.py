@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2020-01-27 09:58:03
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-03-19 11:59:15
+# @Last modified time: 2020-03-20 19:45:58
 
 """ Set a server and run each bot. """
 
@@ -184,7 +184,7 @@ class TradingBotManager(_TradingBotManager):
                 pass
 
             elif k == 'sb_update':
-                sb_update = {c.id: c.name for c in self.conn_sb}
+                sb_update = {c: v.name for c, v in self.conn_sb.items()}
                 self.conn_cli.send(('sb_update', sb_update),)
 
             else:

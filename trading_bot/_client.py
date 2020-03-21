@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2020-01-28 16:47:55
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-03-18 09:06:42
+# @Last modified time: 2020-03-20 19:33:02
 
 """ Clients to connect to TradingBotServer. """
 
@@ -154,5 +154,5 @@ class _ClientCLI(_ClientBot):
 
     def __init__(self, address=('', 50000), authkey=b'tradingbot'):
         self.id = -2
-        super(_ClientGUI, self).__init__(address=address, authkey=authkey)
+        super(_ClientCLI, self).__init__(address=address, authkey=authkey)
         self.conn_tbm = ConnTradingBotManager(self.id)

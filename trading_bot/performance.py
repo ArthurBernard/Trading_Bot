@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2020-02-25 10:38:17
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-03-18 08:51:38
+# @Last modified time: 2020-03-20 19:55:52
 
 """ Objects to measure and display trading performance. """
 
@@ -313,6 +313,7 @@ class PnL(_FullPnL):
             Current volume of the portfolio.
 
         """
+        # FIXME
         v = self.df.value.iloc[-1]
         p = self.df.price.iloc[-1]
 

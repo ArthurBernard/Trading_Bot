@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2019-05-12 22:57:20
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-03-19 13:20:58
+# @Last modified time: 2020-03-20 08:42:58
 
 """ Client to manage a financial strategy. """
 
@@ -163,7 +163,9 @@ class StrategyBot(_ClientStrategyBot):
             else:
                 _raise = True
 
-            data = self.DM.get_data(*self.args_data, _raise=_raise, **self.kwargs_data)
+            data = self.DM.get_data(
+                *self.args_data, _raise=_raise, **self.kwargs_data
+            )
 
             return self.get_order_params(data, *self.f_args, **self.f_kwrds)
 
