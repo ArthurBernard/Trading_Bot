@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2020-03-17 12:23:25
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-03-21 18:35:22
+# @Last modified time: 2020-03-21 19:59:12
 
 """ A (very) light Graphical User Interface. """
 
@@ -35,7 +35,7 @@ class ResultManager:
         Maximal number of trading periods per year
     metrics : list of str
         List of metrics to compute performance. The following are available:
-        'return', 'perf', 'sharpe', 'calmar', and 'mdd'.
+        'return', 'perf', 'sharpe', 'calmar', and 'maxdd'.
     periods : list of str
         Frequency to compute performances. The following are available:
         'daily', 'weekly', 'monthly', 'yearly' and 'total'.
@@ -277,7 +277,7 @@ class _ResultManager(ResultManager):
         Maximal number of trading periods per year
     metrics : list of str
         List of metrics to compute performance. The following are available:
-        'return', 'perf', 'sharpe', 'calmar', and 'mdd'.
+        'return', 'perf', 'sharpe', 'calmar', and 'maxdd'.
     periods : list of str
         Frequency to compute performances. The following are available:
         'daily', 'weekly', 'monthly', 'yearly' and 'total'.
@@ -291,7 +291,7 @@ class _ResultManager(ResultManager):
 
     """
 
-    def __init__(self, pnl_dict, metrics=[], periods=[], period=252):
+    def __init__(self, pnl_dict, period=252):  # , metrics=[], periods=[]):
         """ Initialize object.
 
         Parameters
@@ -309,13 +309,14 @@ class _ResultManager(ResultManager):
             market and 364 for crypto-currencies market. Default is 252.
 
         """
-        self.pnl = pnl
-        for key, value in pnl.items():
-            ts = value.TS.diff().min()
+        self.pnl = pnl_dict
+        for key, value in pnl_dict.items():
+            idx = value['pnl'].index
+            ts = (idx[1:] - idx[:-1]).min()
             self.pnl[key]['period'] = period * 86400 / ts
 
-        self.metrics = metrics
-        self.periods = periods
+        self.metrics = ['return', 'perf', 'sharpe', 'calmar', 'maxdd']  # metrics
+        self.periods = ['daily', 'weekly', 'monthly', 'yearly', 'total']  # periods
         self.logger = logging.getLogger(__name__)
 
     # def set_current_price(self):
@@ -329,61 +330,63 @@ class _ResultManager(ResultManager):
 
     #    return txt
 
-    def set_current_value(self):
-        """ Display the current share of portfolio in underlying and cash. """
-        price = self.df.price.iloc[-1]
-        value = self.df.value.iloc[-1]
-        pos = self.df.position.iloc[-1]
-        # TODO : fix problem with volume equal to 0. when pos is 0
-        vol = self.df.volume.iloc[-1]
-        txt = '\nCurrent value of the porfolio:\n'
-        txt += _set_text(['-'] * 3, [
-            'Portfolio',
-            '{:.2f} $'.format(value),
-            '{:.2f} ?'.format(value / price), ], [
-            'Underlying part.',
-            '{:.2f} $'.format(pos * vol * price),
-            '{:.2%}'.format(pos), ], [
-            'Base part',
-            '{:.2f} $'.format((1 - pos) * vol * price),
-            '{:.2%}'.format(1 - pos), ], ['-'] * 3)
+    # def set_current_value(self):
+    #    """ Display the current share of portfolio in underlying and cash. """
+    #    price = self.df.price.iloc[-1]
+    #    value = self.df.value.iloc[-1]
+    #    pos = self.df.position.iloc[-1]
+    #    # TODO : fix problem with volume equal to 0. when pos is 0
+    #    vol = self.df.volume.iloc[-1]
+    #    txt = '\nCurrent value of the porfolio:\n'
+    #    txt += _set_text(['-'] * 3, [
+    #        'Portfolio',
+    #        '{:.2f} $'.format(value),
+    #        '{:.2f} ?'.format(value / price), ], [
+    #        'Underlying part.',
+    #        '{:.2f} $'.format(pos * vol * price),
+    #        '{:.2%}'.format(pos), ], [
+    #        'Base part',
+    #        '{:.2f} $'.format((1 - pos) * vol * price),
+    #        '{:.2%}'.format(1 - pos), ], ['-'] * 3)
 
-        return txt
+    #    return txt
 
-    def set_current_stats(self):
+    def get_current_stats(self):
         """ Display some statistics for some time periods. """
         txt_table = [['-'] * (1 + len(self.metrics)), ['   '] + self.metrics]
 
         for period in self.periods:
-            _index = self._get_period_index(period)
-            if _index is None:
-                continue
+            txt_table += [['-'] * (1 + len(self.metrics)), [period]]
+            for key, value in self.pnl.items():
+                df = value['pnl']
+                _index = self._get_period_index(df, period)
+                if _index is None:
 
-            txt_table += self._set_stats_result(self.df.loc[_index], period)
+                    continue
+
+                txt_table += self._set_stats_result2(
+                    df.loc[_index],
+                    period,
+                    value['period'],
+                    col={'price': value['pair'], 'value': key}
+                    # sn=key,
+                )
 
         txt_table += (['-'] * (1 + len(self.metrics)),)
 
         return '\nStatistics of results:\n' + _set_text(*txt_table)
 
-    def print_stats(self):
-        """ Print some statistics of historical results strategy. """
-        txt = self.set_current_price()
-        txt += self.set_current_value()
-        txt += self.set_current_stats()
-        # self.logger.info(txt)
-
-        return txt
-
-    def _set_stats_result2(self, df, head, col=None):
+    def _set_stats_result2(self, df, head, period, col=None):
         """ Set statistics in a table with header. """
-        table = [['-'] * (1 + len(self.metrics)), [head]]
-        col = ['price', 'value'] if col is None else col
-        for c in col:
-            table += [[str(c)] + self.set_statistics(df.loc[:, c].values)]
+        # table = [['-'] * (1 + len(self.metrics)), [head]]
+        table = []
+        col = {'price': 'underlying', 'value': 'strategy'} if col is None else col
+        for k, a in col.items():
+            table += [[str(a)] + self.set_statistics(df.loc[:, k].values, period)]
 
         return table
 
-    def _set_stats_result(self, df, head):
+    def _set_stats_result(self, df, head, period, un='Underlying', sn='Strategy'):
         """ Set statistics in a table with header. """
         ui = df.price.values
         si = df.value.values
@@ -391,11 +394,11 @@ class _ResultManager(ResultManager):
         return [
             ['-'] * (1 + len(self.metrics)),
             [head],
-            ['Underlying'] + self.set_statistics(ui),
-            ['Strategy'] + self.set_statistics(si),
+            [un] + self.set_statistics(ui, period),
+            [sn] + self.set_statistics(si, period),
         ]
 
-    def set_statistics(self, series):
+    def set_statistics(self, series, period):
         """ Compute statistics of a series of price or index values.
 
         Parameters
@@ -421,10 +424,10 @@ class _ResultManager(ResultManager):
                 metric_values += [series[-1] / series[0] - 1.]
 
             elif metric.lower() == 'sharpe':
-                metric_values += [fy.sharpe(series, period=self.period)]
+                metric_values += [fy.sharpe(series, period=period)]
 
             elif metric.lower() == 'calmar':
-                metric_values += [fy.calmar(series, period=self.period)]
+                metric_values += [fy.calmar(series, period=period)]
 
             elif metric.lower() == 'maxdd':
                 metric_values += [fy.mdd(series)]
@@ -434,30 +437,21 @@ class _ResultManager(ResultManager):
 
         return _rounder(*metric_values, dec=2)
 
-    def _get_current_fee(self):
-        fee = self.df.loc[self.df.fee != 0., 'fee'].values
-        val = self.df.value.values
-        if not fee.size:
-
-            return 0.
-
-        return 100 * fee[-1] / val[-1]
-
-    def _get_period_index(self, period):
+    def _get_period_index(self, df, period):
         if period.lower() == 'daily':
-            _index = self.df.index >= self.df.index[-1] - 86400
+            _index = df.index >= df.index[-1] - 86400
 
         elif period.lower() == 'weekly':
-            _index = self.df.index >= self.df.index[-1] - 86400 * 7
+            _index = df.index >= df.index[-1] - 86400 * 7
 
         elif period.lower() == 'monthly':
-            _index = self.df.index >= self.df.index[-1] - 86400 * 30
+            _index = df.index >= df.index[-1] - 86400 * 30
 
         elif period.lower() == 'yearly':
-            _index = self.df.index >= self.df.index[-1] - 86400 * 365
+            _index = df.index >= df.index[-1] - 86400 * 365
 
         elif period.lower() == 'total':
-            _index = self.df.index >= self.df.index[0]
+            _index = df.index >= df.index[0]
 
         else:
             self.logger.error('Unknown period: {}'.format(period))
@@ -530,6 +524,9 @@ class CLI(_ClientCLI):
 
     def display(self):
         self.logger.debug('display')
+        rm = _ResultManager(self.strat_bot)
+        print(rm.get_current_stats())
+        return None
         for pair, list_name in self.pair.items():
             older_hist = {'name': None, 'available': 0}
             for name in list_pair:
