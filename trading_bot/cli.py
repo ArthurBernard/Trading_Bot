@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2020-03-17 12:23:25
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-03-21 19:59:12
+# @Last modified time: 2020-03-27 08:26:33
 
 """ A (very) light Graphical User Interface. """
 
@@ -12,8 +12,10 @@
 import logging
 from pickle import Unpickler
 from threading import Thread
+import time
 
 # Third party packages
+from blessed import Terminal
 import fynance as fy
 import numpy as np
 import pandas as pd
@@ -380,7 +382,9 @@ class _ResultManager(ResultManager):
         """ Set statistics in a table with header. """
         # table = [['-'] * (1 + len(self.metrics)), [head]]
         table = []
-        col = {'price': 'underlying', 'value': 'strategy'} if col is None else col
+        if col is None:
+            col = {'price': 'underlying', 'value': 'strategy'}
+
         for k, a in col.items():
             table += [[str(a)] + self.set_statistics(df.loc[:, k].values, period)]
 
@@ -472,6 +476,7 @@ class CLI(_ClientCLI):
         super(CLI, self).__init__(address=address, authkey=authkey)
         self.logger = logging.getLogger(__name__)
         self.path = path
+        self.term = Terminal()
 
     def __enter__(self):
         """ Enter. """
@@ -505,10 +510,14 @@ class CLI(_ClientCLI):
             raise StopIteration
 
         k = input(self.txt)
-        k = k if len(k) > 0 else ' '
+        k = k.lower() if len(k) > 0 else ' '
         if k == 'q':
 
             raise StopIteration
+
+        elif k == 'stop':
+
+            return k
 
         elif k[0] == 'f':
             # todo : ask current fees
@@ -525,6 +534,7 @@ class CLI(_ClientCLI):
     def display(self):
         self.logger.debug('display')
         rm = _ResultManager(self.strat_bot)
+        print(self.term.home + self.term.clear)
         print(rm.get_current_stats())
         return None
         for pair, list_name in self.pair.items():
@@ -566,6 +576,14 @@ class CLI(_ClientCLI):
         for k in self:
             if k == 'sb_update':
                 self.conn_tbm.send((k, None),)
+
+            elif k == 'stop':
+                self.conn_tbm.send(('stop', None),)
+
+            else:
+                self.logger.error('Unknown command: {}'.format(k))
+
+            time.sleep(1)
 
     def update(self):
         self.logger.debug('update start')
