@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2020-01-27 09:58:03
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-03-20 19:45:58
+# @Last modified time: 2020-03-27 19:09:05
 
 """ Set a server and run each bot. """
 
@@ -48,7 +48,7 @@ class TradingBotManager(_TradingBotManager):
         _TradingBotManager.__init__(self, address=address, authkey=authkey)
 
         self.logger = logging.getLogger(__name__)
-        self.t = int(time.time())
+        # self.t = int(time.time())
         self.path_log = ('/home/arthur/Strategies/Data_Server/'
                          'Untitled_Document2.txt')
         self.address = address
@@ -74,27 +74,42 @@ class TradingBotManager(_TradingBotManager):
 
         self.logger.info('TBM stopped')
 
+    def __iter__(self):
+        """ Iterative method. """
+        return self
+
+    def __next__(self):
+        """ Loop until state server stop. """
+        time.sleep(0.01)
+        if self.is_stop():
+
+            raise StopIteration
+
+        return None
+
     def __repr__(self):
         return 'order bot is {} | {} are running'.format(
             self.order_bot, self.strat_bot
         )
 
-    def runtime(self, s=9):
+    def runtime(self):
         """ Do something. """
         # TODO : Run OrderManagerClient object
         # TODO : Run all StrategyManagerClient objects
         self.logger.debug('start runtime loop')
-        while time.time() - self.t < s:
+        t0 = int(time.time())
+        # while time.time() - self.t < s:
+        for _ in self:
             # print('{:.1f} sec.'.format(time.time() - self.t), end='\r')
             txt = '{} | Have been started {} ago'.format(
                 time.strftime('%y-%m-%d %H:%M:%S'),
-                str_time(int(time.time() - self.t)),
+                str_time(int(time.time() - t0)),
             )
-            txt += ' | Stop in {} seconds'.format(
-                str_time(self.t + s - int(time.time()))
-            )
+            # txt += ' | Stop in {} seconds'.format(
+            #    str_time(t + s - int(time.time()))
+            # )
             print(txt, end='\r')
-            time.sleep(0.01)
+            # time.sleep(0.01)
 
         self.logger.debug('run | end to do something')
 
@@ -186,6 +201,11 @@ class TradingBotManager(_TradingBotManager):
             elif k == 'sb_update':
                 sb_update = {c: v.name for c, v in self.conn_sb.items()}
                 self.conn_cli.send(('sb_update', sb_update),)
+
+            elif k == 'stop':
+                self.logger.info('CLI send STOP command')
+                self.state['stop'] = True
+                raise StopIteration
 
             else:
                 self.logger.error('Unknown command {}: {}'.format(k, a))
@@ -376,4 +396,10 @@ if __name__ == '__main__':
 
     tbm = TradingBotManager(auto=auto)
     with tbm:
-        tbm.runtime(s=s)
+        try:
+            tbm.runtime()
+
+        except KeyboardInterrupt:
+            tbm.logger.error('Stop with KeyboardInterrupt')
+            tbm.state['stop'] = True
+            time.sleep(1)
