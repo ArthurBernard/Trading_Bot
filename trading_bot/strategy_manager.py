@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2019-05-12 22:57:20
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-03-20 08:42:58
+# @Last modified time: 2020-03-28 14:44:51
 
 """ Client to manage a financial strategy. """
 
@@ -23,7 +23,7 @@ from trading_bot._client import _ClientStrategyBot
 # from trading_bot._containers import OrderDict
 from trading_bot.data_requests import get_close
 from trading_bot.orders import OrderSL, OrderBestLimit
-from trading_bot.performance import PnL
+# from trading_bot.performance import PnL
 from trading_bot.tools.io import load_config_params, dump_config_params
 from trading_bot.tools.time_tools import now, str_time
 

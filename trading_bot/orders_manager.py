@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2019-04-29 23:42:09
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-03-14 16:37:14
+# @Last modified time: 2020-03-28 14:46:56
 
 """ Client to manage orders execution. """
 
@@ -192,8 +192,6 @@ class OrdersManager(_ClientOrdersManager):
     def loop(self):
         """ Run a loop until TradingBotServer closed. """
         self.logger.info('start loop method')
-        # TODO : get last order
-        last_order = 0
         for order in self:
             if order is None:
                 time.sleep(0.01)
@@ -204,7 +202,6 @@ class OrdersManager(_ClientOrdersManager):
                 self.orders.append(order)
                 self.logger.debug('execute {}'.format(order))
                 order.execute()
-                last_order = time.time()
 
             elif order.status == 'open' or order.status == 'canceled':
                 self.orders.append(order)
@@ -219,7 +216,6 @@ class OrdersManager(_ClientOrdersManager):
             elif order.status == 'closed':
                 order.get_result_exec()
                 update_hist_orders(order)
-                # TODO : update results_manager
                 self.conn_tbm.send(('order', order.id),)
                 self.logger.debug('remove {}'.format(order))
 
@@ -245,7 +241,7 @@ class OrdersManager(_ClientOrdersManager):
         """ Load current balance. """
         self.balance = self.K.query_private('Balance')
         self.call_counter('Balance')
-        self.logger.debug('balance is loaded: {}'.format(self.balance))
+        self.logger.debug('balance is loaded')
 
         self.conn_tbm.send(('balance', self.balance),)
         self.logger.debug('sent balance to TBM')

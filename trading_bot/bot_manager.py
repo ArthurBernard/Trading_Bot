@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2020-01-27 09:58:03
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-03-28 11:39:38
+# @Last modified time: 2020-03-28 13:55:01
 
 """ Set a server and run each bot. """
 
@@ -205,9 +205,7 @@ class TradingBotManager(_TradingBotManager):
 
             elif k == 'stop_tradingbot':
                 self.logger.info('CLI send STOP command')
-                # self.state['stop'] = True
                 self.set_stop(True)
-                # raise StopIteration
 
             else:
                 self.logger.error('Unknown command {}: {}'.format(k, a))

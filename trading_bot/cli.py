@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2020-03-17 12:23:25
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-03-28 11:42:45
+# @Last modified time: 2020-03-28 14:46:22
 
 """ A (very) light Graphical User Interface. """
 
@@ -17,7 +17,7 @@ import time
 # Third party packages
 from blessed import Terminal
 import fynance as fy
-import numpy as np
+# import numpy as np
 import pandas as pd
 
 # Local packages
@@ -138,14 +138,14 @@ class ResultManager:
 
         return txt
 
-    def _set_stats_result2(self, df, head, col=None):
-        """ Set statistics in a table with header. """
-        table = [['-'] * (1 + len(self.metrics)), [head]]
-        col = ['price', 'value'] if col is None else col
-        for c in col:
-            table += [[str(c)] + self.set_statistics(df.loc[:, c].values)]
+    # def _set_stats_result2(self, df, head, col=None):
+    #    """ Set statistics in a table with header. """
+    #    table = [['-'] * (1 + len(self.metrics)), [head]]
+    #    col = ['price', 'value'] if col is None else col
+    #    for c in col:
+    #        table += [[str(c)] + self.set_statistics(df.loc[:, c].values)]
 
-        return table
+    #    return table
 
     def _set_stats_result(self, df, head):
         """ Set statistics in a table with header. """
@@ -268,7 +268,7 @@ def _rounder(*args, dec=0):
     return [round(float(arg), dec) for arg in args]
 
 
-class _ResultManager(ResultManager):
+class _ResultManager:  # (ResultManager):
     """ Manager object of historical results of strategy.
 
     Attributes
@@ -361,7 +361,7 @@ class _ResultManager(ResultManager):
             txt_table += [['-'] * (1 + len(self.metrics)), [period]]
             for key, value in self.pnl.items():
                 df = value['pnl']
-                _index = self._get_period_index(df, period)
+                _index = self._get_period_index2(df, period)
                 if _index is None:
 
                     continue
@@ -386,7 +386,7 @@ class _ResultManager(ResultManager):
             col = {'price': 'underlying', 'value': 'strategy'}
 
         for k, a in col.items():
-            table += [[str(a)] + self.set_statistics(df.loc[:, k].values, period)]
+            table += [[str(a)] + self.set_statistics2(df.loc[:, k].values, period)]
 
         return table
 
@@ -398,11 +398,11 @@ class _ResultManager(ResultManager):
         return [
             ['-'] * (1 + len(self.metrics)),
             [head],
-            [un] + self.set_statistics(ui, period),
-            [sn] + self.set_statistics(si, period),
+            [un] + self.set_statistics2(ui, period),
+            [sn] + self.set_statistics2(si, period),
         ]
 
-    def set_statistics(self, series, period):
+    def set_statistics2(self, series, period):
         """ Compute statistics of a series of price or index values.
 
         Parameters
@@ -441,7 +441,7 @@ class _ResultManager(ResultManager):
 
         return _rounder(*metric_values, dec=2)
 
-    def _get_period_index(self, df, period):
+    def _get_period_index2(self, df, period):
         if period.lower() == 'daily':
             _index = df.index >= df.index[-1] - 86400
 
@@ -537,25 +537,24 @@ class CLI(_ClientCLI):
         rm = _ResultManager(self.strat_bot)
         print(self.term.home + self.term.clear)
         print(rm.get_current_stats())
-        return None
-        for pair, list_name in self.pair.items():
-            older_hist = {'name': None, 'available': 0}
-            for name in list_pair:
-                pnl = self.strat_bot[name]['pnl']
-                rm = _ResultManager(pnl, **self.strat_bot[name]['kwrd'])
 
-                availabe = pnl.index[-1] - pnl.index[0]
-                if available > older_hist['availabe']:
-                    older_hist['availabe'] = available
-                    older_hist['name'] = name
-                strat_value = pnl.value.values
-                # todo : compute perf for strat
+        # for pair, list_name in self.pair.items():
+        #    older_hist = {'name': None, 'available': 0}
+        #    for name in list_pair:
+        #        pnl = self.strat_bot[name]['pnl']
+        #        rm = _ResultManager(pnl, **self.strat_bot[name]['kwrd'])
 
-            pair_value = self.strat_bot[older_hist['name']]['pnl'].price.values
-            # todo : compute perf for pair underlying
+        #        availabe = pnl.index[-1] - pnl.index[0]
+        #        if available > older_hist['availabe']:
+        #            older_hist['availabe'] = available
+        #            older_hist['name'] = name
+        #        strat_value = pnl.value.values
+        #        # todo : compute perf for strat
+
+        #    pair_value = self.strat_bot[older_hist['name']]['pnl'].price.values
+        #    # todo : compute perf for pair underlying
 
         # todo display performance table
-        pass
 
     def listen_tbm(self):
         self.logger.debug('start listen TradingBotManager')
