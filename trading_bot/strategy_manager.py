@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2019-05-12 22:57:20
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-03-28 14:44:51
+# @Last modified time: 2020-03-28 15:54:42
 
 """ Client to manage a financial strategy. """
 
@@ -610,8 +610,10 @@ class StrategyBot(_ClientStrategyBot):
 
         elif k == 'order':
             if a in self.order_sent:
+                # remove order of pending orders list
                 self.order_sent.remove(a)
 
+            # if pending orders list is empty
             if not self.order_sent:
                 # Send info to compute PnL
                 self.q_tpm.put({
@@ -663,6 +665,7 @@ if __name__ == '__main__':
                 with open(sm.path + '/price.txt', 'a') as f:
                     f.write(str(TS) + ',' + str(price) + '\n')
 
+                # if no order sent
                 if not isinstance(output, list):
                     # Send info to compute PnL
                     sm.q_tpm.put({

@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2020-01-27 09:58:03
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-03-28 13:55:01
+# @Last modified time: 2020-03-28 16:53:01
 
 """ Set a server and run each bot. """
 
@@ -195,23 +195,34 @@ class TradingBotManager(_TradingBotManager):
     def listen_cli(self):
         self.logger.debug('start listen CLI')
         for k, a in self.conn_cli:
-            if k is None:
-                pass
+            if self.is_stop():
+                self.conn_cli.shutdown()
 
-            elif k == 'sb_update':
-                self.logger.debug('CLI send UPDATE command')
+            elif k is None:
+
+                continue
+
+            self.logger.info('CLI sent {} command'.format(k.upper()))
+            if k == 'sb_update':
+                self.logger.info('CLI sent UPDATE command')
                 sb_update = {c: v.name for c, v in self.conn_sb.items()}
                 self.conn_cli.send(('sb_update', sb_update),)
 
             elif k == 'stop_tradingbot':
-                self.logger.info('CLI send STOP command')
+                self.logger.info('CLI sent STOP command')
                 self.set_stop(True)
+
+            elif k == 'get_running_clients':
+                running_clients = {
+                    'orders_manager': str(self.conn_om),
+                    'performance_manager': str(self.conn_tpm),
+                    'strategy_bots': str(self.conn_sb),
+                    'command_line_interface': str(self.conn_cli),
+                }
+                self.conn_cli.send(('running_clients', running_clients),)
 
             else:
                 self.logger.error('Unknown command {}: {}'.format(k, a))
-
-            if self.is_stop():
-                self.conn_cli.shutdown()
 
         self.logger.debug('end listen CLI')
 
