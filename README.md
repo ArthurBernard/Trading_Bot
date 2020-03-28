@@ -40,9 +40,11 @@ $ pip install -e trading_bot
 
 ## Quick-start
 
-1. Create a folder `./strategies/YOUR_STRATEGY_NAME`, with 3 scripts to configurate a strategy: `__init__.py` an empty file, `configuration.yaml` and `strategy.py`. See examples in `strategies/example/` and `strategies/another_example/`.
+At the root of `Trading_Bot`:
 
-#### Example:
+### 1. Create a strategy:
+
+Make a folder `./strategies/YOUR_STRATEGY_NAME` with 3 scripts to configurate the strategy: `__init__.py` an empty file, `configuration.yaml` and `strategy.py`. See examples in the following directory `./strategies/example/` and `./strategies/another_example/`.
 
 ```bash
 $ mkdir ./strategies/YOUR_STRATEGY_NAME   
@@ -53,29 +55,42 @@ $ touch ./strategies/YOUR_STRATEGY_NAME/strategy.py
 
 TODO : explain how write `configuration.yaml` and `strategy.py`.
 
-2. Start the bot manager server.
+### 2. Start the bot manager server.
 
-#### Example:
-
-```bash
-$ python ./trading_bot/bot_manager.py
-```
-
-3. Start the orders manager client.
-
-#### Example:
+`auto` parameter will start automatically the order manager client and the trading performance manager client. Otherwise you have to manually start the order manager and the trading performance manager clients.
 
 ```bash
-$ python ./trading_bot/orders_manager.py
+$ python ./trading_bot/bot_manager.py auto
 ```
 
-4. Start your stragies client.
-
-#### Example:
+or manually:
 
 ```bash
-$ python ./trading_bot/strategy_manager.py YOUR_STRATEGY_NAME
+$ python ./trading_bot/bot_manager.py &
+$ python ./trading_bot/orders_manager.py &
+$ python ./trading_bot/performance.py &
 ```
+
+### 3. Start your client strategies.
+
+You can run several strategies in parallel but each strategy must have a unique name.
+
+```bash
+$ python ./trading_bot/strategy_manager.py YOUR_STRATEGY_NAME &
+```
+
+### 4. Manage trading bots with the CLI.
+
+```bash
+$ python ./trading_bot/cli.py
+```
+
+The following command lines are available:
+- `q`: quite the command line interface.
+- `stop`: stop the trading bot server and all the client strategies.
+- `perf`: display the performance table of running strategies.
+
+TODO : append more command lines.
 
 ## Custom your own strategy manager
 
@@ -90,17 +105,14 @@ Read the source code and make sure there are not undesirable behaviors.
 ## TODO list
 
 - General: 
-    - Make documentation;
-    - Simplify Quick-Start;
-    - Make GUI.
+    - Make documentation and clean objects;
+    - Improve Quick-Start;
+    - Improve CLI/make GUI.
 - `bot_manager.py`:
-    - Clean object;
     - Start automatically several `StrategyManager` clients on several process;
 - `orders_manager.py`:
     - Verify if the volume to order is available; 
 - `_order.py`:
     - Use WebSockets instead of REST API.
-- `result_manager.py`:
-    - Make an object to display PnL of strategies and portfolio.
 - `strategy_manager.py`:
     - Choose invested value in quote or base currency.
