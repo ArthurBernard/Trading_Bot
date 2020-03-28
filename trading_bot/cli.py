@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2020-03-17 12:23:25
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-03-27 08:26:33
+# @Last modified time: 2020-03-28 11:42:45
 
 """ A (very) light Graphical User Interface. """
 
@@ -511,13 +511,14 @@ class CLI(_ClientCLI):
 
         k = input(self.txt)
         k = k.lower() if len(k) > 0 else ' '
+        self.logger.debug('command: {}'.format(k))
         if k == 'q':
 
             raise StopIteration
 
         elif k == 'stop':
 
-            return k
+            return 'stop_tradingbot'
 
         elif k[0] == 'f':
             # todo : ask current fees
@@ -559,7 +560,10 @@ class CLI(_ClientCLI):
     def listen_tbm(self):
         self.logger.debug('start listen TradingBotManager')
         for k, a in self.conn_tbm:
-            if k is None:
+            if self.is_stop():
+                self.conn_tbm.shutdown()
+
+            elif k is None:
 
                 continue
 
@@ -567,8 +571,6 @@ class CLI(_ClientCLI):
             self.update()
             # TODO : display performances
             self.display()
-            if self.is_stop():
-                self.conn_tbm.shutdown()
 
         self.logger.debug('stop listen TradingBotManager')
 
@@ -577,8 +579,8 @@ class CLI(_ClientCLI):
             if k == 'sb_update':
                 self.conn_tbm.send((k, None),)
 
-            elif k == 'stop':
-                self.conn_tbm.send(('stop', None),)
+            elif k == 'stop_tradingbot':
+                self.conn_tbm.send((k, None),)
 
             else:
                 self.logger.error('Unknown command: {}'.format(k))

@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2020-01-27 09:58:03
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-03-27 19:09:05
+# @Last modified time: 2020-03-28 11:39:38
 
 """ Set a server and run each bot. """
 
@@ -199,13 +199,15 @@ class TradingBotManager(_TradingBotManager):
                 pass
 
             elif k == 'sb_update':
+                self.logger.debug('CLI send UPDATE command')
                 sb_update = {c: v.name for c, v in self.conn_sb.items()}
                 self.conn_cli.send(('sb_update', sb_update),)
 
-            elif k == 'stop':
+            elif k == 'stop_tradingbot':
                 self.logger.info('CLI send STOP command')
-                self.state['stop'] = True
-                raise StopIteration
+                # self.state['stop'] = True
+                self.set_stop(True)
+                # raise StopIteration
 
             else:
                 self.logger.error('Unknown command {}: {}'.format(k, a))
@@ -401,5 +403,6 @@ if __name__ == '__main__':
 
         except KeyboardInterrupt:
             tbm.logger.error('Stop with KeyboardInterrupt')
-            tbm.state['stop'] = True
+            tbm.set_stop(True)
+            # tbm.state['stop'] = True
             time.sleep(1)

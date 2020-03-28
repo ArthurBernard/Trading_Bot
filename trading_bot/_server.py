@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2020-01-27 09:58:03
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-03-18 09:27:42
+# @Last modified time: 2020-03-28 11:20:10
 
 """ Base object for trading bot server. """
 
@@ -97,6 +97,9 @@ class _TradingBotManager:
 
     def is_stop(self):
         return self.state['stop']
+
+    def set_stop(self, is_stop):
+        self.state['stop'] = is_stop
 
     def set_server(self, address=('', 50000), authkey=b'tradingbot'):
         """ Initialize a server connection. """
