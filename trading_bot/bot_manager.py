@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2020-01-27 09:58:03
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-03-28 16:53:01
+# @Last modified time: 2020-03-28 18:54:08
 
 """ Set a server and run each bot. """
 
@@ -229,14 +229,14 @@ class TradingBotManager(_TradingBotManager):
     def client_manager(self):
         """ Listen client (OrderManager and StrategyManager). """
         self.logger.debug('start')
-        t = time.time()
+        # t = time.time()
         p_om = None
         p_tpm = None
         while not self.is_stop():
-            if time.time() - t > 0:
-                self.logger.debug('StrategyBot: {}'.format(self.conn_sb))
-                self.logger.debug('OrdersManager: {}'.format(self.conn_om))
-                t += 900
+            # if time.time() - t > 0:
+            #    self.logger.debug('StrategyBot: {}'.format(self.conn_sb))
+            #    self.logger.debug('OrdersManager: {}'.format(self.conn_om))
+            #    t += 900
 
             p_om = self.check_up_process(
                 p_om, start_order_manager, 'OrdersManager', self.path_log,

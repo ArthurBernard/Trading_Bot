@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2019-05-12 22:57:20
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-03-28 15:54:42
+# @Last modified time: 2020-03-28 19:30:20
 
 """ Client to manage a financial strategy. """
 
@@ -168,6 +168,8 @@ class StrategyBot(_ClientStrategyBot):
             )
 
             return self.get_order_params(data, *self.f_args, **self.f_kwrds)
+
+        time.sleep(0.01)
 
         return None, None
 
@@ -528,36 +530,36 @@ class StrategyBot(_ClientStrategyBot):
     def start_loop(self):
         """ Run a loop until condition is false. """
         for s, kw in self:
-            if s is not None:
-                self.logger.info('Signal: {} | Parameters: {}'.format(s, kw))
-                output = self.set_order(s, **kw, **self.ord_kwrds)
-                if isinstance(output, list):
-                    self.logger.info('Executed order : {}'.format(output))
-                    price = output[0]['price']
-
-                else:
-                    price = output
-
-                TS = self.next - self.frequency
-                with open(self.path + '/price.txt', 'a') as f:
-                    f.write(str(TS) + ',' + str(price) + '\n')
-
-                if not isinstance(output, list):
-                    # Send info to compute PnL
-                    self.q_tpm.put({
-                        'path': self.path,
-                        'timestep': self.frequency,
-                        'real': not self.ord_kwrds.get('validate', False),
-                    })
-
-            txt = '{} | Next signal in {:.1f}'.format(
-                time.strftime('%y-%m-%d %H:%M:%S'),
-                str_time(self.next - self.TS),
-            )
-            print(txt, end='\r')
-            time.sleep(0.01)
+            self.process_signal(s, kw)
 
         self.logger.info('StrategyBot stopped.')
+
+    def process_signal(self, s, kw):
+        """ Process a signal. """
+        if s is None:
+
+            return
+
+        self.logger.info('Signal: {} | Parameters: {}'.format(s, kw))
+        output = self.set_order(s, **kw, **self.ord_kwrds)
+        if isinstance(output, list):
+            self.logger.info('Executed order : {}'.format(output))
+            price = output[0]['price']
+
+        else:
+            price = output
+
+        TS = self.next - self.frequency
+        with open(self.path + '/price.txt', 'a') as f:
+            f.write(str(TS) + ',' + str(price) + '\n')
+
+        if not isinstance(output, list):
+            # Send info to compute PnL
+            self.q_tpm.put({
+                'path': self.path,
+                'timestep': self.frequency,
+                'real': not self.ord_kwrds.get('validate', False),
+            })
 
     def _set_id_order(self, n=3):
         r""" Set an unique order identifier.
@@ -647,38 +649,41 @@ if __name__ == '__main__':
     sm = StrategyBot()
     with sm(name):
         for s, kw in sm:
-            if s is not None:
-                # send orders
-                sm.logger.info('Signal: {} | Parameters: {}'.format(s, kw))
-                output = sm.set_order(s, **kw, **sm.ord_kwrds)
-
-                # get last price
-                if isinstance(output, list):
-                    sm.logger.info('Executed order : {}'.format(output))
-                    price = output[0]['price']
-
-                else:
-                    price = output
-
-                # Save price
-                TS = sm.next - sm.frequency
-                with open(sm.path + '/price.txt', 'a') as f:
-                    f.write(str(TS) + ',' + str(price) + '\n')
-
-                # if no order sent
-                if not isinstance(output, list):
-                    # Send info to compute PnL
-                    sm.q_tpm.put({
-                        'path': sm.path,
-                        'timestep': sm.frequency,
-                        'real': not sm.ord_kwrds.get('validate', False),
-                    })
-
+            sm.process_signal(s, kw)
+            # if s is None:
             # Display time
             txt = time.strftime('%y-%m-%d %H:%M:%S')
             txt += ' | Next signal in {:}'.format(str_time(sm.next - sm.TS))
             print(txt, end='\r')
             time.sleep(0.01)
+
+            #    continue
+
+            # send orders
+            # sm.logger.info('Signal: {} | Parameters: {}'.format(s, kw))
+            # output = sm.set_order(s, **kw, **sm.ord_kwrds)
+
+            # get last price
+            # if isinstance(output, list):
+            #    sm.logger.info('Executed order : {}'.format(output))
+            #    price = output[0]['price']
+
+            # else:
+            #    price = output
+
+            # Save price
+            # TS = sm.next - sm.frequency
+            # with open(sm.path + '/price.txt', 'a') as f:
+            #    f.write(str(TS) + ',' + str(price) + '\n')
+
+            # if no order sent
+            # if not isinstance(output, list):
+            #    # Send info to compute PnL
+            #    sm.q_tpm.put({
+            #        'path': sm.path,
+            #        'timestep': sm.frequency,
+            #        'real': not sm.ord_kwrds.get('validate', False),
+            #    })
 
         sm.logger.info('StrategyBot stopped.')
 
