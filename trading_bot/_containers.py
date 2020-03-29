@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2020-02-22 11:01:49
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-03-18 10:01:37
+# @Last modified time: 2020-03-29 19:57:42
 
 """ Module with specific containers objects. """
 
@@ -292,6 +292,7 @@ class ConnDict(dict):
     Methods
     -------
     append
+    get_id
     update
 
     """
@@ -372,6 +373,28 @@ class ConnDict(dict):
             self.logger.error('{} is already stored'.format(conn))
 
             raise ValueError('{} and {}'.format(conn, self[conn.id]))
+
+    def get_id(self, name):
+        """ Get ID of a connection.
+
+        Parameters
+        ----------
+        name : str
+            Name of the connection.
+
+        Returns
+        -------
+        int
+            The ID of the connection. If `name` is not in collection then
+            returns None.
+
+        """
+        for conn in self.values():
+            if name == conn.name:
+
+                return conn.id
+
+        return None
 
     def update(self, *conn, **kwconn):
         """ Update self with conn objects or an other collection of conn.
