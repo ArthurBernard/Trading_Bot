@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2019-05-12 22:57:20
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-03-28 19:30:20
+# @Last modified time: 2020-03-29 23:37:47
 
 """ Client to manage a financial strategy. """
 
@@ -182,17 +182,10 @@ class StrategyBot(_ClientStrategyBot):
         self.conn_tbm.thread = Thread(target=self.listen_tbm, daemon=True)
         self.conn_tbm.thread.start()
         # send name of strategy to TBM
-        self.conn_tbm.send(('name', name),)
+        self.conn_tbm.send(('name', self.name_strat),)
         # TODO : load history ? Is it necessary ?
         # self.get_histo_orders(self.path + '/orders_hist.dat')
         # self.get_histo_result(self.path + '/result_hist.dat')
-
-        # try:
-        #    with open(self.path + '/pending_orders.dat', 'rb') as f:
-        #        self.order_sent = Unpickler(f).load()
-
-        # except FileNotFoundError:
-        #    self.order_sent = []
 
         # Send info to compute PnL
         self.q_tpm.put({
@@ -269,6 +262,7 @@ class StrategyBot(_ClientStrategyBot):
         if self.STOP is None:
             self.STOP = strat_cfg['STOP']
 
+        # FIXME : why ?
         elif isinstance(self.STOP, int):
             self.logger.info('Strategy will never stop')
             self.STOP = 1e8
@@ -624,6 +618,11 @@ class StrategyBot(_ClientStrategyBot):
                     'real': not self.ord_kwrds.get('validate', False),
                 })
 
+        elif k == '_stop':
+            # enforce stop time
+            self.logger.info('TradingBotManager sent a STOP command')
+            self.t = self.STOP
+
         else:
             self.logger.error('received unknown message {}: {}'.format(k, a))
 
@@ -650,40 +649,10 @@ if __name__ == '__main__':
     with sm(name):
         for s, kw in sm:
             sm.process_signal(s, kw)
-            # if s is None:
-            # Display time
             txt = time.strftime('%y-%m-%d %H:%M:%S')
             txt += ' | Next signal in {:}'.format(str_time(sm.next - sm.TS))
             print(txt, end='\r')
             time.sleep(0.01)
-
-            #    continue
-
-            # send orders
-            # sm.logger.info('Signal: {} | Parameters: {}'.format(s, kw))
-            # output = sm.set_order(s, **kw, **sm.ord_kwrds)
-
-            # get last price
-            # if isinstance(output, list):
-            #    sm.logger.info('Executed order : {}'.format(output))
-            #    price = output[0]['price']
-
-            # else:
-            #    price = output
-
-            # Save price
-            # TS = sm.next - sm.frequency
-            # with open(sm.path + '/price.txt', 'a') as f:
-            #    f.write(str(TS) + ',' + str(price) + '\n')
-
-            # if no order sent
-            # if not isinstance(output, list):
-            #    # Send info to compute PnL
-            #    sm.q_tpm.put({
-            #        'path': sm.path,
-            #        'timestep': sm.frequency,
-            #        'real': not sm.ord_kwrds.get('validate', False),
-            #    })
 
         sm.logger.info('StrategyBot stopped.')
 
