@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2020-01-27 09:58:03
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-03-28 18:54:08
+# @Last modified time: 2020-03-29 23:37:52
 
 """ Set a server and run each bot. """
 
@@ -42,6 +42,7 @@ class TradingBotManager(_TradingBotManager):
     _handler_sb = {
         # 'switch_id': _TradingBotManager.conn_sb.switch_id,
     }
+    process_sb = {}
 
     def __init__(self, address=('', 50000), authkey=b'tradingbot', auto=False):
         """ Initialize Trading Bot Manager object. """
@@ -208,9 +209,28 @@ class TradingBotManager(_TradingBotManager):
                 sb_update = {c: v.name for c, v in self.conn_sb.items()}
                 self.conn_cli.send(('sb_update', sb_update),)
 
-            elif k == 'stop_tradingbot':
-                self.logger.info('CLI sent STOP command')
-                self.set_stop(True)
+            elif k == '_stop':
+                self.logger.info('CLI sent STOP command: {}'.format(a))
+                for v in a:
+                    if v == 'trading_bot':
+                        self.set_stop(True)
+
+                        break
+
+                    elif v in [c.name for c in self.conn_sb.values()]:
+                        _id = self.conn_sb.get_id(v)
+                        self.conn_sb[_id].send(('_stop', None))
+
+                    else:
+                        self.logger.error('{} not in conn_sb'.format(v))
+
+            elif k == 'start':
+                self.logger.info('CLI sent START command: {}'.format(a))
+                for v in a:
+                    self.process_sb[v] = self.set_process(
+                        start_strategy_bot, v, v,
+                        address=self.address, authkey=self.authkey
+                    )
 
             elif k == 'get_running_clients':
                 running_clients = {
@@ -229,15 +249,9 @@ class TradingBotManager(_TradingBotManager):
     def client_manager(self):
         """ Listen client (OrderManager and StrategyManager). """
         self.logger.debug('start')
-        # t = time.time()
         p_om = None
         p_tpm = None
         while not self.is_stop():
-            # if time.time() - t > 0:
-            #    self.logger.debug('StrategyBot: {}'.format(self.conn_sb))
-            #    self.logger.debug('OrdersManager: {}'.format(self.conn_om))
-            #    t += 900
-
             p_om = self.check_up_process(
                 p_om, start_order_manager, 'OrdersManager', self.path_log,
                 address=self.address, authkey=self.authkey
@@ -266,12 +280,16 @@ class TradingBotManager(_TradingBotManager):
 
         self.logger.debug('client_manager | stop')
 
+    def set_process(self, target, name, *args, **kwargs):
+        p = Process(target=target, name=name, args=args, kwargs=kwargs)
+        self.logger.debug('Setup process: {}'.format(name))
+        p.start()
+
+        return p
+
     def check_up_process(self, p, target, name, *args, **kwargs):
         if self.auto and p is None:
-            # Start bot OrdersManager
-            self.logger.debug('Setup process {}'.format(name))
-            p = Process(target=target, name=name, args=args, kwargs=kwargs)
-            p.start()
+            p = self.set_process(target, name, *args, **kwargs)
 
         elif self.auto and not p.is_alive():
             self.logger.debug('Process {} is not alive'.format(name))
@@ -343,6 +361,7 @@ class TradingBotManager(_TradingBotManager):
 
         else:
             conn = self.conn_sb.pop(_id)
+            name = conn.name
 
         self.logger.debug('{}'.format(conn))
 
@@ -352,6 +371,11 @@ class TradingBotManager(_TradingBotManager):
 
         if conn.thread is not None:
             conn.thread.join()
+
+        if _id > 0 and name in self.process_sb:
+            self.logger.debug('wait to process {} join TBM'.format(name))
+            p = self.process_sb.pop(name)
+            p.join()
 
         self.logger.debug('shutdown Client ID {}'.format(_id))
 
@@ -379,6 +403,18 @@ def start_performance_manager(address=('', 50000), authkey=b'tradingbot'):
     return None
 
 
+def start_strategy_bot(strat_name, address=('', 50000), authkey=b'tradingbot'):
+    """ Start a strategy bot. """
+    from strategy_manager import StrategyBot as SB
+
+    sb = SB(address=address, authkey=authkey)
+    with sb(strat_name):
+        for s, kw in sb:
+            sb.process_signal(s, kw)
+
+    return None
+
+
 if __name__ == '__main__':
 
     import logging.config
@@ -396,22 +432,19 @@ if __name__ == '__main__':
     else:
         auto = False
 
-    if len(sys.argv) > 1 and isinstance(sys.argv[1], int):
-        s = sys.argv[1]
-
-    elif len(sys.argv) > 2 and isinstance(sys.argv[2], int):
-        s = sys.argv[2]
-
-    else:
-        s = 1e8
-
     tbm = TradingBotManager(auto=auto)
     with tbm:
         try:
-            tbm.runtime()
+            # tbm.runtime()
+            t0 = int(time.time())
+            for _ in tbm:
+                txt = '{} | Have been started {} ago'.format(
+                    time.strftime('%y-%m-%d %H:%M:%S'),
+                    str_time(int(time.time() - t0)),
+                )
+                print(txt, end='\r')
 
         except KeyboardInterrupt:
             tbm.logger.error('Stop with KeyboardInterrupt')
             tbm.set_stop(True)
-            # tbm.state['stop'] = True
             time.sleep(1)
