@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2020-03-17 12:23:25
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-03-28 17:23:46
+# @Last modified time: 2020-03-29 23:38:59
 
 """ A (very) light Command Line Interface. """
 
@@ -262,28 +262,48 @@ class CLI(_ClientCLI):
 
             raise StopIteration
 
-        k = input(self.txt)
-        k = k.lower() if len(k) > 0 else ' '
+        k = input(self.txt).lower().split(' ')
+        # k = k.lower() if len(k) > 0 else ' '
         self.logger.debug('command: {}'.format(k))
-        if k == 'q':
+        if k[0] == 'q':
 
             raise StopIteration
 
-        elif k == 'stop':
+        elif k[0] == 'stop':
+            if len(k) < 2 or k[1] in ['all', 'trading_bot']:
 
-            return 'stop_tradingbot'
+                return ['_stop', 'tradingbot']
 
-        elif k[0] == 'f':
-            # todo : ask current fees
-            pass
+            elif k[1] in running_strat:
 
-        elif k[0] == 'b':
-            # todo : ask current balance
-            pass
+                return ['_stop', k[1]]
 
-        else:
+        elif k[0] == 'start':
+            if len(k) < 2:
+
+                self.logger.error("With 'start' command you must specify a "
+                                  "name of strategy_bot")
+
+            else:
+
+                return k[:2]
+
+        elif k[0] == 'perf':
+            if len(k) < 2:
+                k += ['all']
+
+                return k
+
+            elif k[1] in running_strat:
+
+                return k[:2]
+
+        elif not k:
 
             return 'sb_update'
+
+        else:
+            self.logger.error("Unknown commands {}".format(k))
 
     def display(self):
         print(self.term.home + self.term.clear)
@@ -338,8 +358,8 @@ class CLI(_ClientCLI):
             if k == 'sb_update':
                 self.conn_tbm.send((k, None),)
 
-            elif k == 'stop_tradingbot':
-                self.conn_tbm.send((k, None),)
+            elif k[0] in ['perf', 'start', 'stop']:
+                self.conn_tbm.send((k[0], k[1:]),)
 
             else:
                 self.logger.error('Unknown command: {}'.format(k))
