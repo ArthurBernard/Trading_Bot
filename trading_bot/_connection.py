@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2020-02-20 16:35:31
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-03-18 09:30:31
+# @Last modified time: 2020-03-31 18:20:21
 
 """ Objects to send and receive objetcs between clients. """
 
@@ -44,6 +44,7 @@ class _BasisConnection:
             raise StopIteration
 
         if self.poll():
+
             return self._handler(*self.recv())
 
         else:

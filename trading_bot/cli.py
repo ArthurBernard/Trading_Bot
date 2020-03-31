@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2020-03-17 12:23:25
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-03-29 23:38:59
+# @Last modified time: 2020-03-31 19:51:07
 
 """ A (very) light Command Line Interface. """
 
@@ -219,10 +219,11 @@ class _ResultManager:  # (ResultManager):
 class CLI(_ClientCLI):
     """ Object to allow a Command Line Interface. """
 
-    txt = 'press any key to update data or press q to quit'
+    txt = 'press any key to update data or press q to quit\n'
     strat_bot = {}
     pair = {}
     txt_running_clients = ''
+    running_strats = {}
 
     def __init__(self, path, address=('', 50000), authkey=b'tradingbot'):
         # TODO : if trading bot not yet running => launch it
@@ -263,6 +264,9 @@ class CLI(_ClientCLI):
             raise StopIteration
 
         k = input(self.txt).lower().split(' ')
+        # update running clients
+        self._request_running_clients()
+        time.sleep(0.1)
         # k = k.lower() if len(k) > 0 else ' '
         self.logger.debug('command: {}'.format(k))
         if k[0] == 'q':
@@ -274,7 +278,7 @@ class CLI(_ClientCLI):
 
                 return ['_stop', 'tradingbot']
 
-            elif k[1] in running_strat:
+            elif k[1] in self.running_strats:
 
                 return ['_stop', k[1]]
 
@@ -294,16 +298,15 @@ class CLI(_ClientCLI):
 
                 return k
 
-            elif k[1] in running_strat:
+            elif k[1] in self.running_strats:
 
                 return k[:2]
 
-        elif not k:
+        elif not k[0]:
 
             return 'sb_update'
 
-        else:
-            self.logger.error("Unknown commands {}".format(k))
+        self.logger.error("Unknown commands {}".format(k))
 
     def display(self):
         print(self.term.home + self.term.clear)
@@ -358,7 +361,7 @@ class CLI(_ClientCLI):
             if k == 'sb_update':
                 self.conn_tbm.send((k, None),)
 
-            elif k[0] in ['perf', 'start', 'stop']:
+            elif k[0] in ['perf', 'start', '_stop']:
                 self.conn_tbm.send((k[0], k[1:]),)
 
             else:
@@ -390,9 +393,20 @@ class CLI(_ClientCLI):
             self.strat_bot = {n: self._get_sb_dict(i, n) for i, n in a.items()}
 
         elif k == 'running_clients':
+            self.running_strats = a['strategy_bots']
             self.txt_running_clients = ''
             for c, v in a.items():
-                self.txt_running_clients += '{}: {}\n'.format(c, v)
+                if c == 'strategy_bots':
+                    if not v:
+
+                        continue
+
+                    self.txt_running_clients += c + ':\n'
+                    for sc, sv in v.items():
+                        self.txt_running_clients += '{} is {}\n'.format(sc, sv)
+
+                else:
+                    self.txt_running_clients += '{} is {}\n'.format(c, v)
 
         else:
             self.logger.error('received unknown message {}: {}'.format(k, a))

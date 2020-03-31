@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2020-01-27 09:58:03
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-03-29 23:37:52
+# @Last modified time: 2020-03-31 19:01:10
 
 """ Set a server and run each bot. """
 
@@ -199,7 +199,7 @@ class TradingBotManager(_TradingBotManager):
             if self.is_stop():
                 self.conn_cli.shutdown()
 
-            elif k is None:
+            if k is None:
 
                 continue
 
@@ -212,7 +212,7 @@ class TradingBotManager(_TradingBotManager):
             elif k == '_stop':
                 self.logger.info('CLI sent STOP command: {}'.format(a))
                 for v in a:
-                    if v == 'trading_bot':
+                    if v == 'tradingbot':
                         self.set_stop(True)
 
                         break
@@ -234,10 +234,13 @@ class TradingBotManager(_TradingBotManager):
 
             elif k == 'get_running_clients':
                 running_clients = {
-                    'orders_manager': str(self.conn_om),
-                    'performance_manager': str(self.conn_tpm),
-                    'strategy_bots': str(self.conn_sb),
-                    'command_line_interface': str(self.conn_cli),
+                    'orders_manager': str(self.conn_om.state),
+                    'performance_manager': str(self.conn_tpm.state),
+                    # 'strategy_bots': str(self.conn_sb),
+                    'command_line_interface': str(self.conn_cli.state),
+                    'strategy_bots': {
+                        sb.name: sb.state for sb in self.conn_sb.values()
+                    },
                 }
                 self.conn_cli.send(('running_clients', running_clients),)
 

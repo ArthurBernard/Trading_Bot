@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2020-02-06 11:57:48
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-03-19 11:33:47
+# @Last modified time: 2020-03-31 19:39:56
 
 """ Module with different Order objects.
 
@@ -145,18 +145,12 @@ class _BasisOrder:
     def __repr__(self):
         """ Represent the order. """
         return ("[Order ID {self.id}] - status: {self.status}, type: "
-                "{self.type}, pair: {self.pair}, price: {self.price}, volume: "
-                "{self.volume}, vol_exec: {self.vol_exec}".format(self=self))
+                "{self.type}, pair: {self.pair}, price: {self.price}, "
+                "price_exec: {self.price_exec}, volume: {self.volume}, "
+                "vol_exec: {self.vol_exec}".format(self=self))
 
     def execute(self):
         """ Execute the order. """
-        # to fix errors [to remove]
-        # if self.input['type'] == 'market':
-        #    self.input['type'] = 'buy'
-        # if self.volume == 1.:
-        #    self.volume = 1. - 0.60667107
-        #    self.input['volume'] = 1. - 0.60667107
-
         if self.status is None or self.status == 'canceled':
             self._last = int(time.time())
             ans = self._request('AddOrder', userref=self.id, **self.input)
@@ -387,7 +381,7 @@ class _BasisOrder:
 
         ans = self.get_closed(start=self.result_exec['start_time'])
         self._get_result_exec(ans['closed'])
-        self.logger.debug('execution info: {}'.format(self.result_exec))
+        # self.logger.debug('execution info: {}'.format(self.result_exec))
 
     def _get_result_exec(self, closed_orders):
         self.result_exec['txid'] = list(closed_orders.keys())
@@ -412,6 +406,8 @@ class _BasisOrder:
 
         if self.result_exec['vol_exec'] > 0.:
             self.result_exec['price_exec'] /= self.result_exec['vol_exec']
+
+        self.price_exec = self.result_exec['price_exec']
 
 
 class OrderSL(_BasisOrder):

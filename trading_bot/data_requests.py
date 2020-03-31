@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2019-04-26 08:49:26
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-03-21 10:15:15
+# @Last modified time: 2020-03-31 19:43:47
 
 # Built-in import
 import json
@@ -596,7 +596,7 @@ class DataExchangeManager:
         self.n_min_obs = n_min_obs
         self.ohlcv = [i for i in ohlcv]
 
-    def get_data(self, *args, _raise=True, **kwargs):
+    def get_data(self, *args, **kwargs):
         """
 
         Returns
@@ -614,7 +614,7 @@ class DataExchangeManager:
 
         try:
 
-            return self.clean_data(data, interval=interval * 60, _raise=_raise)
+            return self.clean_data(data, interval=interval * 60)  # , _raise=_raise)
 
         except NotLatestDataError as e:
             self.logger.error(
@@ -652,7 +652,7 @@ class DataExchangeManager:
             self.logger.error('Kwargs are', kwargs)
             raise e
 
-    def clean_data(self, data, interval=60, _raise=True):
+    def clean_data(self, data, interval=60):  # , _raise=True):
         """ Clean data.
 
         Returns
@@ -673,20 +673,20 @@ class DataExchangeManager:
             txt = 'Too old data: {} < {}'.format(df.index[-1], t)
             txt += ' | TS: {} & price: {}'.format(df.index[-1],
                                                   df.loc[:, 'c'].values[-1])
-            if _raise:  # (self.ohlcv != 'c' and _raise) or _raise:
+            # if _raise:  # (self.ohlcv != 'c' and _raise) or _raise:
 
-                raise NotLatestDataError(txt)
+            #    raise NotLatestDataError(txt)
 
-            self.logger.debug(df.tail())
+            # self.logger.debug(df.tail())
             c = get_close(self.assets[0])
             txt += ' | add closed price: {} at TS: {}'.format(c, t - interval)
             self.logger.info(txt)
             df.loc[t - interval, 'c'] = c
 
         df = df.loc[df.index % self.frequency == interval, self.ohlcv]
-        self.logger.debug('Timestamp is {}'.format(t))
-        self.logger.debug('interval is {} sec'.format(interval))
-        self.logger.debug(df.tail())
+        # self.logger.debug('Timestamp is {}'.format(t))
+        # self.logger.debug('interval is {} sec'.format(interval))
+        # self.logger.debug(df.tail())
 
         return df.iloc[-self.n_min_obs:].values
 
