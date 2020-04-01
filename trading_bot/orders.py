@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2020-02-06 11:57:48
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-03-31 19:39:56
+# @Last modified time: 2020-03-31 22:17:39
 
 """ Module with different Order objects.
 
@@ -338,7 +338,8 @@ class _BasisOrder:
         self.call_counter(method)
         ans = self.exchange_client.query_private(method, **kwargs)
         self.hist += [ans]
-        self.logger.debug('send {} | answere: {}'.format(method, ans))
+        if 'error' in ans:
+            self.logger.error('send {} | answere: {}'.format(method, ans))
 
         return ans
 

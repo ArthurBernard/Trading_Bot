@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2020-03-17 12:23:25
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-03-31 19:51:07
+# @Last modified time: 2020-04-01 13:55:11
 
 """ A (very) light Command Line Interface. """
 
@@ -108,8 +108,10 @@ class _ResultManager:  # (ResultManager):
 
         """
         self.pnl = pnl_dict
+        self.strat_by_pair = {}
         for key, value in pnl_dict.items():
             idx = value['pnl'].index
+            self._set_ref_pair(key, value['pair'], value['freq'], idx.min())
             ts = (idx[1:] - idx[:-1]).min()
             self.pnl[key]['period'] = period * 86400 / ts
 
@@ -123,24 +125,45 @@ class _ResultManager:  # (ResultManager):
 
         for period in self.periods:
             txt_table += [['-'] * (1 + len(self.metrics)), [period]]
-            for key, value in self.pnl.items():
-                df = value['pnl']
-                _index = self._get_period_index(df, period)
-                if _index is None:
-
-                    continue
-
-                txt_table += self._set_stats_result(
-                    df.loc[_index],
-                    period,
-                    value['period'],
-                    col={'price': value['pair'], 'value': key}
-                    # sn=key,
+            # for key, value in self.pnl.items():
+            for pair, strats_dict in self.strat_by_pair.items():
+                strat_ref = self.pnl[strats_dict['ref']]
+                df = strat_ref['pnl']
+                txt_table += self.set_stats_result(
+                    df, period, strat_ref['period'], col={'price': pair}
                 )
+                for key in strats_dict['strat']:
+                    value = self.pnl[key]
+                    df = value['pnl']
+                    txt_table += self.set_stats_result(
+                        df,
+                        period,
+                        value['period'],
+                        # col={'price': value['pair'], 'value': key}
+                        col={'value': key}
+                        # sn=key,
+                    )
 
         txt_table += (['-'] * (1 + len(self.metrics)),)
 
         return '\nStatistics of results:\n' + _set_text(*txt_table)
+
+    def set_stats_result(self, df, head, period, col):
+        _index = self._get_period_index(df, head)
+        if _index is None:
+
+            return ''
+
+        return self._set_stats_result(
+            df.loc[_index],
+            head,
+            period,
+            col=col
+            # value['period'],
+            # col={'price': value['pair'], 'value': key}
+            # col={'value': key}
+            # sn=key,
+        )
 
     def _set_stats_result(self, df, head, period, col=None):
         """ Set statistics in a table with header. """
@@ -214,6 +237,20 @@ class _ResultManager:  # (ResultManager):
             _index = None
 
         return _index
+
+    def _set_ref_pair(self, _id, pair, freq, TS_0):
+        if pair not in self.strat_by_pair:
+            self.strat_by_pair[pair] = {'strat': []}
+
+        f = self.strat_by_pair[pair].get('freq')
+        t = self.strat_by_pair[pair].get('TS_0')
+
+        if f is None or freq < f or (freq == f and TS_0 < t):
+            self.strat_by_pair[pair]['freq'] = freq
+            self.strat_by_pair[pair]['TS_0'] = TS_0
+            self.strat_by_pair[pair]['ref'] = _id
+
+        self.strat_by_pair[pair]['strat'] += [_id]
 
 
 class CLI(_ClientCLI):

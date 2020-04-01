@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2019-04-26 08:49:26
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-03-31 19:43:47
+# @Last modified time: 2020-03-31 22:18:30
 
 # Built-in import
 import json
@@ -680,7 +680,7 @@ class DataExchangeManager:
             # self.logger.debug(df.tail())
             c = get_close(self.assets[0])
             txt += ' | add closed price: {} at TS: {}'.format(c, t - interval)
-            self.logger.info(txt)
+            # self.logger.info(txt)
             df.loc[t - interval, 'c'] = c
 
         df = df.loc[df.index % self.frequency == interval, self.ohlcv]
