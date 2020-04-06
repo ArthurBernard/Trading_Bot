@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2020-03-17 12:23:25
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-04-01 21:11:29
+# @Last modified time: 2020-04-06 21:20:51
 
 """ A (very) light Command Line Interface. """
 
@@ -88,6 +88,9 @@ class _ResultManager:  # (ResultManager):
     set_current_stats
 
     """
+    min_freq = None
+    min_TS = None
+    max_TS = None
 
     def __init__(self, pnl_dict, period=252):  # , metrics=[], periods=[]):
         """ Initialize object.
@@ -111,18 +114,23 @@ class _ResultManager:  # (ResultManager):
         self.strat_by_pair = {}
         for key, value in pnl_dict.items():
             idx = value['pnl'].index
+            if self.max_TS is None or idx[-1] > self.max_TS:
+                self.max_TS = idx[-1]
+
             self._set_ref_pair(key, value['pair'], value['freq'], idx.min())
             ts = (idx[1:] - idx[:-1]).min()
             self.pnl[key]['period'] = period * 86400 / ts
 
-        self.metrics = ['return', 'perf', 'sharpe', 'calmar', 'maxdd']  # metrics
-        self.periods = ['daily', 'weekly', 'monthly', 'yearly', 'total']  # periods
+        self.metrics = ['return', 'perf', 'sharpe', 'calmar', 'maxdd']
+        self.periods = ['daily', 'weekly', 'monthly', 'yearly', 'total']
         self.logger = logging.getLogger(__name__)
 
     def get_current_stats(self):
         """ Display some statistics for some time periods. """
         txt_table = [['-'] * (1 + len(self.metrics)), ['   '] + self.metrics]
 
+        tot_val = None
+        index = range(self.min_TS, self.max_TS + 1, self.min_freq)
         for period in self.periods:
             txt_table += [['-'] * (1 + len(self.metrics)), [period]]
             # for key, value in self.pnl.items():
@@ -139,10 +147,19 @@ class _ResultManager:  # (ResultManager):
                         df,
                         period,
                         value['period'],
-                        # col={'price': value['pair'], 'value': key}
                         col={'value': key}
-                        # sn=key,
                     )
+                    if tot_val is None:
+                        tot_val = pd.DataFrame(index=index, columns=['total'])
+
+                    _df = pd.DataFrame(index=index, columns=['value'])
+                    _df.loc[df.index, 'value'] = df.value
+                    _df = _df.fillna(method='ffill').fillna(method='bfill')
+                    tot_val.loc[:, 'total'] += _df.value.values
+
+            txt_table += self.set_stats_result(
+                tot_val, period, 365, col={'total': 'total'}
+            )
 
         txt_table += (['-'] * (1 + len(self.metrics)),)
 
@@ -230,6 +247,12 @@ class _ResultManager:  # (ResultManager):
         return _index
 
     def _set_ref_pair(self, _id, pair, freq, TS_0):
+        if self.min_freq is None or freq < self.min_freq:
+            self.min_freq = freq
+
+        if self.min_TS is None or TS_0 < self.min_TS:
+            self.min_TS = TS_0
+
         if pair not in self.strat_by_pair:
             self.strat_by_pair[pair] = {'strat': []}
 
