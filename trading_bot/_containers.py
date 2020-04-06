@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2020-02-22 11:01:49
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-03-29 19:57:42
+# @Last modified time: 2020-04-06 11:27:50
 
 """ Module with specific containers objects. """
 
@@ -276,7 +276,15 @@ class OrderDict(dict):
             path += '/'
 
         with open(path + name + ext, 'rb') as f:
-            self.update(*Unpickler(f).load())
+            orders = Unpickler(f).load()
+            for order in orders:
+                if order.status != 'open':
+                    continue
+
+                order.check_vol_exec(start=order.result_exec['start_time'])
+
+            self.update(*orders)
+            # self.update(*Unpickler(f).load())
 
     def _save(self, path, name, ext='.dat'):
         if path[-1] != '/':

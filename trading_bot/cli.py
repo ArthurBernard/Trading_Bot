@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2020-03-17 12:23:25
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-04-01 13:55:11
+# @Last modified time: 2020-04-01 21:11:29
 
 """ A (very) light Command Line Interface. """
 
@@ -154,16 +154,7 @@ class _ResultManager:  # (ResultManager):
 
             return ''
 
-        return self._set_stats_result(
-            df.loc[_index],
-            head,
-            period,
-            col=col
-            # value['period'],
-            # col={'price': value['pair'], 'value': key}
-            # col={'value': key}
-            # sn=key,
-        )
+        return self._set_stats_result(df.loc[_index], head, period, col=col)
 
     def _set_stats_result(self, df, head, period, col=None):
         """ Set statistics in a table with header. """

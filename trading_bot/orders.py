@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2020-02-06 11:57:48
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-03-31 22:17:39
+# @Last modified time: 2020-04-06 11:22:08
 
 """ Module with different Order objects.
 
@@ -260,7 +260,7 @@ class _BasisOrder:
 
         return opened
 
-    def check_vol_exec(self):
+    def check_vol_exec(self, start=None):
         """ Check if the volume has been executed and set corresponding status.
 
         If the executed volume is equal (or almost equal) to the volume
@@ -280,7 +280,10 @@ class _BasisOrder:
 
         # FIXME : some issues may occurs if an order is executed between the
         # call of get_closed() and the setting of _last attribute
-        ans = self.get_closed(start=self._last)
+        if start is None:
+            start = self._last
+
+        ans = self.get_closed(start=start)
         self._get_vol_exec(ans['closed'])
 
         if self.vol_exec == self.volume:
@@ -615,7 +618,8 @@ class OrderBestLimit(_BasisOrder):
         self.check_vol_exec()
 
         if self.status != 'closed':
-            if 'post' in self.input.get('oflags') and self.status == 'open':
+            oflags = self.input.get('oflags', '')
+            if 'post' in oflags and self.status == 'open':
                 self.logger.warning('flag postonly specified')
                 self._update_status('canceled')
 
