@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2020-03-17 12:23:25
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-04-06 21:20:51
+# @Last modified time: 2020-04-06 23:12:08
 
 """ A (very) light Command Line Interface. """
 
@@ -121,6 +121,14 @@ class _ResultManager:  # (ResultManager):
             ts = (idx[1:] - idx[:-1]).min()
             self.pnl[key]['period'] = period * 86400 / ts
 
+        index = range(self.min_TS, self.max_TS + 1, self.min_freq)
+        self.tot_val = pd.DataFrame(0, index=index, columns=['value'])
+        for k, v in pnl_dict.items():
+            df = pd.DataFrame(index=index, columns=['value'])
+            df.loc[v['pnl'].index, 'value'] = v['pnl'].value.values
+            df = df.fillna(method='ffill').fillna(method='bfill')
+            self.tot_val.loc[:, 'value'] += df.value.values
+
         self.metrics = ['return', 'perf', 'sharpe', 'calmar', 'maxdd']
         self.periods = ['daily', 'weekly', 'monthly', 'yearly', 'total']
         self.logger = logging.getLogger(__name__)
@@ -130,7 +138,6 @@ class _ResultManager:  # (ResultManager):
         txt_table = [['-'] * (1 + len(self.metrics)), ['   '] + self.metrics]
 
         tot_val = None
-        index = range(self.min_TS, self.max_TS + 1, self.min_freq)
         for period in self.periods:
             txt_table += [['-'] * (1 + len(self.metrics)), [period]]
             # for key, value in self.pnl.items():
@@ -149,16 +156,9 @@ class _ResultManager:  # (ResultManager):
                         value['period'],
                         col={'value': key}
                     )
-                    if tot_val is None:
-                        tot_val = pd.DataFrame(index=index, columns=['total'])
-
-                    _df = pd.DataFrame(index=index, columns=['value'])
-                    _df.loc[df.index, 'value'] = df.value
-                    _df = _df.fillna(method='ffill').fillna(method='bfill')
-                    tot_val.loc[:, 'total'] += _df.value.values
 
             txt_table += self.set_stats_result(
-                tot_val, period, 365, col={'total': 'total'}
+                self.tot_val, period, 365, col={'value': 'total'}
             )
 
         txt_table += (['-'] * (1 + len(self.metrics)),)
