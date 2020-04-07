@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2020-03-17 12:23:25
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-04-07 09:18:13
+# @Last modified time: 2020-04-07 19:28:48
 
 """ A (very) light Command Line Interface. """
 
@@ -273,37 +273,43 @@ class _ResultManager:  # (ResultManager):
         # close = get_close(pairs)
         # if not isinstance(close, list):
         #    close = [close]
+        # TODO : get all closed prices
+        total_ret = 0.
+        t = int(time.time() / self.min_freq + 1) * self.min_freq
         for pair, strats_dict in self.strat_by_pair.items():
             close = get_close(pair)
             for strat in strats_dict['strat']:
                 df = self.pnl[strat]['pnl']
-                freq = self.pnl[strat]['freq']
                 T = df.index[-1]
-                if T == int(time.time() / freq) * (freq + 1):
+                if T == t:
                     print('Drop row {}'.format(T))
-                    df.drop(T, axis=0)
+                    df = df.drop(T, axis=0)
 
-                self.pnl[strat]['pnl'] = update_pnl(df, close, freq)
-                print(df.tail())
+                df = update_pnl(df, close, t)
+                self.pnl[strat]['pnl'] = df
+                total_ret += df.loc[t, 'PnL']
+
+        val = self.tot_val.value.iloc[-1]
+        self.tot_val.loc[t, 'value'] = val + total_ret
 
 
-def update_pnl(df, close, freq):
+def update_pnl(df, close, t):
     """ Update PnL dataframe with closed price. """
     T = df.index[-1]
     ret = close - df.loc[T, 'price']
     vol = df.loc[T, 'volume']
     pos = df.loc[T, 'position']
-    df.loc[T + freq, 'price'] = close
-    df.loc[T + freq, 'returns'] = ret
-    df.loc[T + freq, 'volume'] = vol
-    df.loc[T + freq, 'position'] = pos
-    df.loc[T + freq, 'exchanged_volume'] = 0
-    df.loc[T + freq, 'signal'] = pos
-    df.loc[T + freq, 'delta_signal'] = 0
-    df.loc[T + freq, 'fee'] = 0
-    df.loc[T + freq, 'PnL'] = ret * vol * pos
-    df.loc[T + freq, 'cumPnL'] = df.loc[T, 'cumPnL'] + df.loc[T, 'PnL']
-    df.loc[T + freq, 'value'] = df.loc[T, 'value'] + df.loc[T, 'PnL']
+    df.loc[t, 'price'] = close
+    df.loc[t, 'returns'] = ret
+    df.loc[t, 'volume'] = vol
+    df.loc[t, 'position'] = pos
+    df.loc[t, 'exchanged_volume'] = 0
+    df.loc[t, 'signal'] = pos
+    df.loc[t, 'delta_signal'] = 0
+    df.loc[t, 'fee'] = 0
+    df.loc[t, 'PnL'] = ret * vol * pos
+    df.loc[t, 'cumPnL'] = df.loc[T, 'cumPnL'] + df.loc[t, 'PnL']
+    df.loc[t, 'value'] = df.loc[T, 'value'] + df.loc[t, 'PnL']
 
     return df
 
