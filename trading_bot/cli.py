@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2020-03-17 12:23:25
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-04-06 23:12:08
+# @Last modified time: 2020-04-07 09:18:13
 
 """ A (very) light Command Line Interface. """
 
@@ -22,6 +22,7 @@ import pandas as pd
 
 # Local packages
 from trading_bot._client import _ClientCLI
+from trading_bot.data_requests import get_close
 from trading_bot.performance import PnL
 from trading_bot.tools.io import load_config_params
 
@@ -136,8 +137,8 @@ class _ResultManager:  # (ResultManager):
     def get_current_stats(self):
         """ Display some statistics for some time periods. """
         txt_table = [['-'] * (1 + len(self.metrics)), ['   '] + self.metrics]
+        self._update_pnl()
 
-        tot_val = None
         for period in self.periods:
             txt_table += [['-'] * (1 + len(self.metrics)), [period]]
             # for key, value in self.pnl.items():
@@ -265,6 +266,46 @@ class _ResultManager:  # (ResultManager):
             self.strat_by_pair[pair]['ref'] = _id
 
         self.strat_by_pair[pair]['strat'] += [_id]
+
+    def _update_pnl(self):
+        # pairs = ','.join(list(self.strat_by_pair.keys()))
+        # pairs += ',XXBTZUSD'
+        # close = get_close(pairs)
+        # if not isinstance(close, list):
+        #    close = [close]
+        for pair, strats_dict in self.strat_by_pair.items():
+            close = get_close(pair)
+            for strat in strats_dict['strat']:
+                df = self.pnl[strat]['pnl']
+                freq = self.pnl[strat]['freq']
+                T = df.index[-1]
+                if T == int(time.time() / freq) * (freq + 1):
+                    print('Drop row {}'.format(T))
+                    df.drop(T, axis=0)
+
+                self.pnl[strat]['pnl'] = update_pnl(df, close, freq)
+                print(df.tail())
+
+
+def update_pnl(df, close, freq):
+    """ Update PnL dataframe with closed price. """
+    T = df.index[-1]
+    ret = close - df.loc[T, 'price']
+    vol = df.loc[T, 'volume']
+    pos = df.loc[T, 'position']
+    df.loc[T + freq, 'price'] = close
+    df.loc[T + freq, 'returns'] = ret
+    df.loc[T + freq, 'volume'] = vol
+    df.loc[T + freq, 'position'] = pos
+    df.loc[T + freq, 'exchanged_volume'] = 0
+    df.loc[T + freq, 'signal'] = pos
+    df.loc[T + freq, 'delta_signal'] = 0
+    df.loc[T + freq, 'fee'] = 0
+    df.loc[T + freq, 'PnL'] = ret * vol * pos
+    df.loc[T + freq, 'cumPnL'] = df.loc[T, 'cumPnL'] + df.loc[T, 'PnL']
+    df.loc[T + freq, 'value'] = df.loc[T, 'value'] + df.loc[T, 'PnL']
+
+    return df
 
 
 class CLI(_ClientCLI):
