@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2020-03-17 12:23:25
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-04-07 19:28:48
+# @Last modified time: 2020-04-07 21:10:27
 
 """ A (very) light Command Line Interface. """
 
@@ -25,6 +25,17 @@ from trading_bot._client import _ClientCLI
 from trading_bot.data_requests import get_close
 from trading_bot.performance import PnL
 from trading_bot.tools.io import load_config_params
+
+
+def get_close2(pair):
+    path = "https://api.kraken.com/0/public"
+    out = DataRequests(path, stop_step=1).get_data('Ticker', pair=pair)
+    res = {}
+    for pair, arg in out['result'].items():
+
+        res[pair] = float(arg['c'])
+
+    return res
 
 
 def _set_text(*args):
@@ -268,16 +279,23 @@ class _ResultManager:  # (ResultManager):
         self.strat_by_pair[pair]['strat'] += [_id]
 
     def _update_pnl(self):
-        # pairs = ','.join(list(self.strat_by_pair.keys()))
-        # pairs += ',XXBTZUSD'
-        # close = get_close(pairs)
+        pairs = ','.join(list(self.strat_by_pair.keys()))
+        pairs += ',XXBTZUSD,XETCZUSD,XETHZEUR'
+        closes = get_close(pairs)
+        # print(close)
+        # return
         # if not isinstance(close, list):
         #    close = [close]
+
+        # closes = {p: c for p, c in list(zip(pairs.split(','), close))}
+        # print(closes)
+        # return
         # TODO : get all closed prices
         total_ret = 0.
         t = int(time.time() / self.min_freq + 1) * self.min_freq
         for pair, strats_dict in self.strat_by_pair.items():
-            close = get_close(pair)
+            # close = get_close(pair)
+            close = closes[pair]
             for strat in strats_dict['strat']:
                 df = self.pnl[strat]['pnl']
                 T = df.index[-1]

@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2019-04-26 08:49:26
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-03-31 22:18:30
+# @Last modified time: 2020-04-07 22:30:49
 
 # Built-in import
 import json
@@ -758,18 +758,13 @@ def get_open(pair, path="https://api.kraken.com/0/public"):
 
 def _get_ticker(pair, method, path="https://api.kraken.com/0/public"):
     out = DataRequests(path, stop_step=1).get_data('Ticker', pair=pair)
-    res = []
-    for arg in out['result'].values():
-
-        if method != 'o':
-            res += [float(arg[method][0])]
-
-        else:
-            res += [float(arg[method])]
+    res = {}
+    for p, v in out['result'].items():
+        res[p] = float(v[method][0] if method != 'o' else v[method])
 
     if len(res) == 1:
 
-        return res[0]
+        return res[pair]
 
     else:
 
