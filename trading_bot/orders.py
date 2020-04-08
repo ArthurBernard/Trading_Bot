@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2020-02-06 11:57:48
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-04-06 11:22:08
+# @Last modified time: 2020-04-08 08:15:26
 
 """ Module with different Order objects.
 
@@ -290,6 +290,10 @@ class _BasisOrder:
             self._update_status('closed')
 
         elif 1 - self.vol_exec / self.volume < self.tol:
+            # to avoid error with canceled orders
+            if self.status == 'canceled':
+                self._update_status('open')
+
             self._update_status('closed')
             not_exec_vol = 1 - self.vol_exec / self.volume
             self.logger.warning("{:.6%} of the volume was not executed but is "
