@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2020-03-17 12:23:25
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-04-07 21:10:27
+# @Last modified time: 2020-04-08 08:23:19
 
 """ A (very) light Command Line Interface. """
 
@@ -280,17 +280,7 @@ class _ResultManager:  # (ResultManager):
 
     def _update_pnl(self):
         pairs = ','.join(list(self.strat_by_pair.keys()))
-        pairs += ',XXBTZUSD,XETCZUSD,XETHZEUR'
         closes = get_close(pairs)
-        # print(close)
-        # return
-        # if not isinstance(close, list):
-        #    close = [close]
-
-        # closes = {p: c for p, c in list(zip(pairs.split(','), close))}
-        # print(closes)
-        # return
-        # TODO : get all closed prices
         total_ret = 0.
         t = int(time.time() / self.min_freq + 1) * self.min_freq
         for pair, strats_dict in self.strat_by_pair.items():
@@ -435,24 +425,6 @@ class CLI(_ClientCLI):
         else:
             print('No strategy bot is running.')
 
-        # for pair, list_name in self.pair.items():
-        #    older_hist = {'name': None, 'available': 0}
-        #    for name in list_pair:
-        #        pnl = self.strat_bot[name]['pnl']
-        #        rm = _ResultManager(pnl, **self.strat_bot[name]['kwrd'])
-
-        #        availabe = pnl.index[-1] - pnl.index[0]
-        #        if available > older_hist['availabe']:
-        #            older_hist['availabe'] = available
-        #            older_hist['name'] = name
-        #        strat_value = pnl.value.values
-        #        # todo : compute perf for strat
-
-        #    pair_value = self.strat_bot[older_hist['name']]['pnl'].price.values
-        #    # todo : compute perf for pair underlying
-
-        # todo display performance table
-
     def listen_tbm(self):
         self.logger.debug('start listen TradingBotManager')
         for k, a in self.conn_tbm:
@@ -474,7 +446,11 @@ class CLI(_ClientCLI):
         # TODO : request running clients
         self._request_running_clients()
         for k in self:
-            if k == 'sb_update':
+            if k is None:
+
+                continue
+
+            elif k == 'sb_update':
                 self.conn_tbm.send((k, None),)
 
             elif k[0] in ['perf', 'start', '_stop']:
