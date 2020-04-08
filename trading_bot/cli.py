@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2020-03-17 12:23:25
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-04-08 08:23:19
+# @Last modified time: 2020-04-08 19:39:20
 
 """ A (very) light Command Line Interface. """
 
@@ -25,17 +25,6 @@ from trading_bot._client import _ClientCLI
 from trading_bot.data_requests import get_close
 from trading_bot.performance import PnL
 from trading_bot.tools.io import load_config_params
-
-
-def get_close2(pair):
-    path = "https://api.kraken.com/0/public"
-    out = DataRequests(path, stop_step=1).get_data('Ticker', pair=pair)
-    res = {}
-    for pair, arg in out['result'].items():
-
-        res[pair] = float(arg['c'])
-
-    return res
 
 
 def _set_text(*args):
@@ -281,10 +270,12 @@ class _ResultManager:  # (ResultManager):
     def _update_pnl(self):
         pairs = ','.join(list(self.strat_by_pair.keys()))
         closes = get_close(pairs)
+        if not isinstance(closes, dict):
+            closes = {pairs: closes}
+
         total_ret = 0.
         t = int(time.time() / self.min_freq + 1) * self.min_freq
         for pair, strats_dict in self.strat_by_pair.items():
-            # close = get_close(pair)
             close = closes[pair]
             for strat in strats_dict['strat']:
                 df = self.pnl[strat]['pnl']
@@ -417,6 +408,16 @@ class CLI(_ClientCLI):
     def display(self):
         print(self.term.home + self.term.clear)
         self.logger.debug('display')
+        # TODO: print values et volumes
+        strat_val = [['-'] * 3, ['Strategies', 'Values', 'Volumes'], ['-'] * 3]
+        for s, args in self.strat_values.items():
+            strat_val += [[s, '{:.2f}'.format(args['value']),
+                           '{:.8f}'.format(args['volume'])]]
+
+        strat_val += [['-'] * 3]
+        # print(self.strat_values)
+        print(_set_text(*strat_val))
+        # TODO: print last close prices
         print(self.txt_running_clients)
         if self.strat_bot:
             rm = _ResultManager(self.strat_bot)
@@ -463,6 +464,7 @@ class CLI(_ClientCLI):
 
     def update(self):
         self.logger.debug('update start')
+        self.strat_values = {}
         for k in self.strat_bot:
             txt = 'update {}'.format(k)
             with open(self.path + k + '/PnL.dat', 'rb') as f:
@@ -470,8 +472,10 @@ class CLI(_ClientCLI):
 
             # self.index = self.index.append(pnl.index).drop_duplicates()
             value = pnl.value.iloc[-1]
-            txt += ' | value is {:.2f}'.format(value)
-            txt += ' and volume is {:.8f}'.format(value / pnl.price.iloc[-1])
+            # txt += ' | value is {:.2f}'.format(value)
+            # txt += ' and volume is {:.8f}'.format(value / pnl.price.iloc[-1])
+            self.strat_values[k] = {'value': value,
+                                    'volume': value / pnl.price.iloc[-1]}
             self.logger.debug(txt)
             self.strat_bot[k]['pnl'] = pnl
 
