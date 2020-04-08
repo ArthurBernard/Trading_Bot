@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2020-03-17 12:23:25
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-04-08 19:39:20
+# @Last modified time: 2020-04-08 23:21:12
 
 """ A (very) light Command Line Interface. """
 
@@ -269,14 +269,14 @@ class _ResultManager:  # (ResultManager):
 
     def _update_pnl(self):
         pairs = ','.join(list(self.strat_by_pair.keys()))
-        closes = get_close(pairs)
-        if not isinstance(closes, dict):
-            closes = {pairs: closes}
+        self.close = get_close(pairs)
+        if not isinstance(self.close, dict):
+            self.close = {pairs: self.close}
 
         total_ret = 0.
         t = int(time.time() / self.min_freq + 1) * self.min_freq
         for pair, strats_dict in self.strat_by_pair.items():
-            close = closes[pair]
+            close = self.close[pair]
             for strat in strats_dict['strat']:
                 df = self.pnl[strat]['pnl']
                 T = df.index[-1]
@@ -421,7 +421,15 @@ class CLI(_ClientCLI):
         print(self.txt_running_clients)
         if self.strat_bot:
             rm = _ResultManager(self.strat_bot)
-            print(rm.get_current_stats())
+            txt = rm.get_current_stats()
+            close = rm.close
+            txt_close = [['='] * 2, ['Pair', 'Close'], ['='] * 2]
+            for pair, price, in close.items():
+                txt_close += [[pair, price], ['-'] * 2]
+
+            txt_close += [['='] * 2]
+            print(_set_text(*txt_close))
+            print(txt)
 
         else:
             print('No strategy bot is running.')
