@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2020-03-17 12:23:25
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-04-08 23:21:12
+# @Last modified time: 2020-04-09 19:55:15
 
 """ A (very) light Command Line Interface. """
 
@@ -43,21 +43,39 @@ def _set_text(*args):
         for arg in args:
             if len(arg[0]) > 1 and len(arg) >= i + 1:
                 space = ' ' * (n_spa - len(str(arg[i])))
-                k_list[j] += str(arg[i]) + space + ' | '
+                k_list[j] += str(arg[i]) + space + ' |'
+                if i < n - 1:
+                    k_list[j] += ' '
 
             elif len(arg[0]) == 1 and len(arg) >= i + 1:
                 k_list[j] += arg[i] * (n_spa + 2) + '+'
 
             else:
                 if i % 2 == 0:
-                    k_list[j] = k_list[j][:-2] + ' ' * (n_spa + 3) + '| '
+                    k_list[j] = k_list[j][:-2] + ' ' * (n_spa + 3) + '|'
 
                 else:
-                    k_list[j] = '|' + ' ' * (n_spa + 3) + k_list[j][1:]
+                    k_list[j] = '|' + ' ' * (n_spa + 3) + k_list[j][1:-1]
+
+                if i < n - 1:
+                        k_list[j] += ' '
 
             j += 1
 
     return '\n'.join(k_list)
+
+
+def _zip_text(txt1, txt2, c='  '):
+    txt1 = txt1.split('\n')
+    txt2 = txt2.split('\n')
+    if len(txt1) < len(txt1):
+        txt1, txt2 = txt2, txt1
+
+    n = len(txt2)
+    txt = list(a + c + b for a, b in zip(txt1[:n], txt2))
+    txt += txt1[n:]
+
+    return '\n'.join(txt)
 
 
 def _rounder(*args, dec=0):
@@ -164,7 +182,8 @@ class _ResultManager:  # (ResultManager):
 
         txt_table += (['-'] * (1 + len(self.metrics)),)
 
-        return '\nStatistics of results:\n' + _set_text(*txt_table)
+        return txt_table
+        # return '\nStatistics of results:\n' + _set_text(*txt_table)
 
     def set_stats_result(self, df, head, period, col):
         _index = self._get_period_index(df, head)
@@ -407,6 +426,7 @@ class CLI(_ClientCLI):
 
     def display(self):
         print(self.term.home + self.term.clear)
+        # txt_strat = 'Values and volumes of strategies\n'
         self.logger.debug('display')
         # TODO: print values et volumes
         strat_val = [['-'] * 3, ['Strategies', 'Values', 'Volumes'], ['-'] * 3]
@@ -416,22 +436,42 @@ class CLI(_ClientCLI):
 
         strat_val += [['-'] * 3]
         # print(self.strat_values)
-        print(_set_text(*strat_val))
+        if self.strat_values:
+            txt_strat = _set_text(*strat_val)
+            # txt_strat = txt_strat.split('\n')
+
         # TODO: print last close prices
-        print(self.txt_running_clients)
+        # print(self.txt_running_clients)
+        txt_clients = self.txt_running_clients
         if self.strat_bot:
             rm = _ResultManager(self.strat_bot)
-            txt = rm.get_current_stats()
+            txt_stats = _set_text(*rm.get_current_stats())
             close = rm.close
             txt_close = [['='] * 2, ['Pair', 'Close'], ['='] * 2]
             for pair, price, in close.items():
                 txt_close += [[pair, price], ['-'] * 2]
 
-            txt_close += [['='] * 2]
-            print(_set_text(*txt_close))
+            txt_close = txt_close[:-1] + [['='] * 2]
+            txt_close = _set_text(*txt_close)
+            txt = _zip_text(
+                txt_stats,
+                txt_close + '\n\n' + txt_strat + '\n\n' + txt_clients
+            )
+            # print(txt_stats)
+            # txt_stats = txt_stats.split('\n')
+            # txt_close = txt_close.split('\n')
+            # n = len(txt_close)
+            # _txt = list(a + ' ' + b for a, b in zip(txt_stats[:n], txt_close))
+            # txt = '\n'.join(_txt) + '\n'
+            # m = n + len(txt_strat)
+            # _txt = list(a + ' ' + b for a, b in zip(txt_stats[n:m], txt_strat))
+            # txt += '\n'.join(_txt) + '\n'
+            # txt += '\n'.join(txt_stats[m:])
+
             print(txt)
 
         else:
+            print(txt_clients)
             print('No strategy bot is running.')
 
     def listen_tbm(self):
