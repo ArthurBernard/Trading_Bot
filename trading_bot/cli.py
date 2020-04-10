@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2020-03-17 12:23:25
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-04-09 19:55:15
+# @Last modified time: 2020-04-10 19:40:21
 
 """ A (very) light Command Line Interface. """
 
@@ -300,7 +300,6 @@ class _ResultManager:  # (ResultManager):
                 df = self.pnl[strat]['pnl']
                 T = df.index[-1]
                 if T == t:
-                    print('Drop row {}'.format(T))
                     df = df.drop(T, axis=0)
 
                 df = update_pnl(df, close, t)
@@ -316,7 +315,7 @@ def update_pnl(df, close, t):
     T = df.index[-1]
     ret = close - df.loc[T, 'price']
     vol = df.loc[T, 'volume']
-    pos = df.loc[T, 'position']
+    pos = df.loc[T, 'signal']
     df.loc[t, 'price'] = close
     df.loc[t, 'returns'] = ret
     df.loc[t, 'volume'] = vol
@@ -426,22 +425,16 @@ class CLI(_ClientCLI):
 
     def display(self):
         print(self.term.home + self.term.clear)
-        # txt_strat = 'Values and volumes of strategies\n'
         self.logger.debug('display')
-        # TODO: print values et volumes
         strat_val = [['-'] * 3, ['Strategies', 'Values', 'Volumes'], ['-'] * 3]
         for s, args in self.strat_values.items():
             strat_val += [[s, '{:.2f}'.format(args['value']),
                            '{:.8f}'.format(args['volume'])]]
 
         strat_val += [['-'] * 3]
-        # print(self.strat_values)
         if self.strat_values:
             txt_strat = _set_text(*strat_val)
-            # txt_strat = txt_strat.split('\n')
 
-        # TODO: print last close prices
-        # print(self.txt_running_clients)
         txt_clients = self.txt_running_clients
         if self.strat_bot:
             rm = _ResultManager(self.strat_bot)
@@ -457,22 +450,10 @@ class CLI(_ClientCLI):
                 txt_stats,
                 txt_close + '\n\n' + txt_strat + '\n\n' + txt_clients
             )
-            # print(txt_stats)
-            # txt_stats = txt_stats.split('\n')
-            # txt_close = txt_close.split('\n')
-            # n = len(txt_close)
-            # _txt = list(a + ' ' + b for a, b in zip(txt_stats[:n], txt_close))
-            # txt = '\n'.join(_txt) + '\n'
-            # m = n + len(txt_strat)
-            # _txt = list(a + ' ' + b for a, b in zip(txt_stats[n:m], txt_strat))
-            # txt += '\n'.join(_txt) + '\n'
-            # txt += '\n'.join(txt_stats[m:])
-
             print(txt)
 
         else:
-            print(txt_clients)
-            print('No strategy bot is running.')
+            print(txt_clients + 'No strategy bot is running.')
 
     def listen_tbm(self):
         self.logger.debug('start listen TradingBotManager')
