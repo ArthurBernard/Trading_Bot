@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2020-03-17 12:23:25
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-04-10 19:40:21
+# @Last modified time: 2020-04-11 13:20:58
 
 """ A (very) light Command Line Interface. """
 
@@ -23,7 +23,6 @@ import pandas as pd
 # Local packages
 from trading_bot._client import _ClientCLI
 from trading_bot.data_requests import get_close
-from trading_bot.performance import PnL
 from trading_bot.tools.io import load_config_params
 
 
@@ -164,7 +163,7 @@ class _ResultManager:  # (ResultManager):
                 strat_ref = self.pnl[strats_dict['ref']]
                 df = strat_ref['pnl']
                 txt_table += self.set_stats_result(
-                    df, period, strat_ref['period'], col={'price': pair}
+                    df, period, strat_ref['period'], col={'price': '- ' + pair}
                 )
                 for key in strats_dict['strat']:
                     value = self.pnl[key]
@@ -183,7 +182,6 @@ class _ResultManager:  # (ResultManager):
         txt_table += (['-'] * (1 + len(self.metrics)),)
 
         return txt_table
-        # return '\nStatistics of results:\n' + _set_text(*txt_table)
 
     def set_stats_result(self, df, head, period, col):
         _index = self._get_period_index(df, head)
@@ -440,11 +438,11 @@ class CLI(_ClientCLI):
             rm = _ResultManager(self.strat_bot)
             txt_stats = _set_text(*rm.get_current_stats())
             close = rm.close
-            txt_close = [['='] * 2, ['Pair', 'Close'], ['='] * 2]
+            txt_close = [['-'] * 2, ['Pair', 'Close'], ['-'] * 2]
             for pair, price, in close.items():
                 txt_close += [[pair, price], ['-'] * 2]
 
-            txt_close = txt_close[:-1] + [['='] * 2]
+            txt_close = txt_close[:-1] + [['-'] * 2]
             txt_close = _set_text(*txt_close)
             txt = _zip_text(
                 txt_stats,
@@ -467,8 +465,9 @@ class CLI(_ClientCLI):
 
             self._handler_tbm(k, a)
             self.update()
-            # TODO : display performances
-            self.display()
+            if k == 'sb_update':
+                # TODO : display performances
+                self.display()
 
         self.logger.debug('stop listen TradingBotManager')
 
@@ -489,7 +488,7 @@ class CLI(_ClientCLI):
             else:
                 self.logger.error('Unknown command: {}'.format(k))
 
-            time.sleep(1)
+            time.sleep(0.1)
 
     def update(self):
         self.logger.debug('update start')
@@ -499,10 +498,7 @@ class CLI(_ClientCLI):
             with open(self.path + k + '/PnL.dat', 'rb') as f:
                 pnl = Unpickler(f).load()
 
-            # self.index = self.index.append(pnl.index).drop_duplicates()
             value = pnl.value.iloc[-1]
-            # txt += ' | value is {:.2f}'.format(value)
-            # txt += ' and volume is {:.8f}'.format(value / pnl.price.iloc[-1])
             self.strat_values[k] = {'value': value,
                                     'volume': value / pnl.price.iloc[-1]}
             self.logger.debug(txt)
@@ -551,6 +547,7 @@ class CLI(_ClientCLI):
 
     def _request_running_clients(self):
         self.conn_tbm.send(('get_running_clients', None),)
+        time.sleep(0.1)
 
 
 if __name__ == "__main__":
