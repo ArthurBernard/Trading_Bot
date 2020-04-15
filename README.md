@@ -53,7 +53,7 @@ $ touch./strategies/YOUR_STRATEGY_NAME/configuration.yaml
 $ touch ./strategies/YOUR_STRATEGY_NAME/strategy.py   
 ```
 
-TODO : explain how write `configuration.yaml` and `strategy.py`.
+TODO : tuto how write `configuration.yaml` and `strategy.py`.
 
 ### 2. Start the bot manager server.
 
@@ -88,9 +88,11 @@ $ python ./trading_bot/cli.py
 The following command lines are available:
 - `q`: quite the command line interface.
 - `stop`: stop the trading bot server and all the client strategies.
-- `perf`: display the performance table of running strategies.
+- `stop [STRATEGY_NAME]`: stop the strategy bot manager `STRATEGY_NAME`.
+- `start [STRATEGY_NAME]`: start the strategy bot manager `STRATEGY_NAME`.
+- todo: `perf`: display the performance table of running strategies.
 
-TODO : append more command lines.
+TODO: append more command lines.
 
 ## Custom your own strategy manager
 
