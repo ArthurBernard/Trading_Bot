@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2020-03-17 12:23:25
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-04-11 13:20:58
+# @Last modified time: 2020-04-18 18:33:25
 
 """ A (very) light Command Line Interface. """
 
@@ -560,6 +560,23 @@ if __name__ == "__main__":
 
     logging.config.dictConfig(config)
 
-    cli = CLI('./strategies/')
+    try:
+        cli = CLI('./strategies/')
+
+    except ConnectionRefusedError:
+        txt = 'TradingBotManager is not running, do you want to run it? Y/N'
+        while True:
+            a = input(txt)
+            if a[0].lower() == 'y':
+                # TODO : run TradingBotServer
+                print('not yet implemented')
+                break
+
+            elif a[0].lower() == 'n':
+                exit()
+
+            else:
+                print('Unknown command: {}. Answere with yes or no.'.format(a))
+
     with cli:
         cli.run()
