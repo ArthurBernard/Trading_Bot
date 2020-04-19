@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2020-03-17 12:23:25
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-04-18 18:33:25
+# @Last modified time: 2020-04-19 17:22:57
 
 """ A (very) light Command Line Interface. """
 
@@ -23,7 +23,7 @@ import pandas as pd
 # Local packages
 from trading_bot._client import _ClientCLI
 from trading_bot.data_requests import get_close
-from trading_bot.tools.io import load_config_params
+from trading_bot.tools.io import load_config_params, get_df
 
 
 def _set_text(*args):
@@ -495,8 +495,12 @@ class CLI(_ClientCLI):
         self.strat_values = {}
         for k in self.strat_bot:
             txt = 'update {}'.format(k)
-            with open(self.path + k + '/PnL.dat', 'rb') as f:
-                pnl = Unpickler(f).load()
+            pnl = get_df(self.path + k, 'PnL', ext='.dat')
+            # with open(self.path + k + '/PnL.dat', 'rb') as f:
+            #    pnl = Unpickler(f).load()
+            if pnl.empty():
+
+                continue
 
             value = pnl.value.iloc[-1]
             self.strat_values[k] = {'value': value,
