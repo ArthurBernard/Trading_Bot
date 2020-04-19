@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2020-03-17 12:23:25
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-04-19 18:21:33
+# @Last modified time: 2020-04-19 18:27:58
 
 """ A (very) light Command Line Interface. """
 
@@ -435,7 +435,7 @@ class CLI(_ClientCLI):
 
         txt_clients = self.txt_running_clients
         strat = {
-            k, v for k, v in self.strat_bot.items() if v.get('pnl') is not None
+            k: v for k, v in self.strat_bot.items() if v.get('pnl') is not None
         }
         if strat:
             rm = _ResultManager(strat)
