@@ -2,11 +2,12 @@
 # 1 - Parameters for StrategyManager object
 strat_manager_instance:
   id_strat: 2        # An number id for your strat (< 100)
-  current_pos: -1.0  # Current position of the strategy {1, 0, -1}
-  current_vol: 1.    # Current volume set to the position
-  frequency: 10      # Frequency in seconds e.g. daily = 86400
-  STOP: 3            # Optional number of iteration before stopping
+  current_pos: 0.0   # Current position of the strategy {1, 0, -1}
+  current_vol: 0.0   # Current volume set to the position
+  frequency: 30      # Frequency in seconds e.g. daily = 86400
+  STOP: 30           # Optional number of iteration before stopping
   order: best_limit  # Kind of order object (see API documentation)
+  reinvest: false    # Reinvest profit to trading volume
 
 # 2 - Parameters for the strategy function
 strategy_instance:
@@ -40,7 +41,26 @@ order_instance:
   pair: XETHZUSD    # Symbol of underlying
   ordertype: limit  # Order type e.g. limit or market
   leverage: 1       # Max leverage
-  oflags:           # list of flags (optionaly)
-  - post
+  oflags: post      # comma delimited list of flags (optionaly)
   validate: true    # /!\ Doesn't push order if True /!\
   volume: 1.        # Max volume to trade without leverage
+  order_params:     # Additional parameters
+
+# 5 - Parameters to print some statistic of strategy
+result_instance:
+  # path: ./strategies/example/
+  period: 364
+  # init_vol: 100.
+  # reinvest_profit: true
+  metrics:
+  - Return
+  - Perf
+  - Sharpe
+  - Calmar
+  - MaxDD
+  periods:
+  - Daily
+  - Weekly
+  - Monthly
+  - Yearly
+  - Total
