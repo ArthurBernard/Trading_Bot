@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2020-03-17 12:23:25
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-04-19 17:22:57
+# @Last modified time: 2020-04-19 17:25:53
 
 """ A (very) light Command Line Interface. """
 
@@ -496,9 +496,7 @@ class CLI(_ClientCLI):
         for k in self.strat_bot:
             txt = 'update {}'.format(k)
             pnl = get_df(self.path + k, 'PnL', ext='.dat')
-            # with open(self.path + k + '/PnL.dat', 'rb') as f:
-            #    pnl = Unpickler(f).load()
-            if pnl.empty():
+            if pnl.empty:
 
                 continue
 
