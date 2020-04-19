@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2020-02-25 10:38:17
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-04-19 16:26:16
+# @Last modified time: 2020-04-19 16:57:59
 
 """ Objects to measure and display trading performance. """
 
@@ -322,8 +322,11 @@ class PnL(_FullPnL):
     def _load(self):
         # load orders
         orders = get_df(path=self.path, name='orders_hist', ext='.dat')
-        if orders:
-            orders = orders.drop(columns=['txid', 'path', 'strat_name'])
+        if orders.empty:
+
+            return [], []
+
+        orders = orders.drop(columns=['txid', 'path', 'strat_name'])
 
         path = self.path + 'price.txt'
         # load prices
