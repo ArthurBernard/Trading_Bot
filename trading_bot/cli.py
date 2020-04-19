@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2020-03-17 12:23:25
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-04-19 17:25:53
+# @Last modified time: 2020-04-19 18:21:33
 
 """ A (very) light Command Line Interface. """
 
@@ -434,8 +434,11 @@ class CLI(_ClientCLI):
             txt_strat = _set_text(*strat_val)
 
         txt_clients = self.txt_running_clients
-        if self.strat_bot:
-            rm = _ResultManager(self.strat_bot)
+        strat = {
+            k, v for k, v in self.strat_bot.items() if v.get('pnl') is not None
+        }
+        if strat:
+            rm = _ResultManager(strat)
             txt_stats = _set_text(*rm.get_current_stats())
             close = rm.close
             txt_close = [['-'] * 2, ['Pair', 'Close'], ['-'] * 2]
