@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2020-02-06 11:57:48
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-04-08 08:15:26
+# @Last modified time: 2020-04-22 10:31:41
 
 """ Module with different Order objects.
 
@@ -612,6 +612,12 @@ class OrderBestLimit(_BasisOrder):
             raise OrderStatusError(self, 'replace')
 
         if self.get_open()['open']:
+            if self.status != 'open':
+                self.logger.error(
+                    'status is {} but orders are open'.format(self.status)
+                )
+                self._update_status('open')
+
             t = time.time() - self._last
             if t < self.wait:
                 self.logger.debug('wait {:.2f} seconds'.format(self.wait - t))
