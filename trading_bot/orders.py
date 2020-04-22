@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2020-02-06 11:57:48
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-04-22 10:31:41
+# @Last modified time: 2020-04-22 10:39:10
 
 """ Module with different Order objects.
 
@@ -287,6 +287,12 @@ class _BasisOrder:
         self._get_vol_exec(ans['closed'])
 
         if self.vol_exec == self.volume:
+            if self.status != 'open':
+                self.logger.error(
+                    'status is {} but orders were executed'.format(self.status)
+                )
+                self._update_status('open')
+
             self._update_status('closed')
 
         elif 1 - self.vol_exec / self.volume < self.tol:
