@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2020-02-25 10:38:17
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-04-19 17:03:42
+# @Last modified time: 2020-04-24 09:03:38
 
 """ Objects to measure and display trading performance. """
 
@@ -32,6 +32,8 @@ class _PnLI:
         'd_signal': 'type',
         'fee': 'fee_pct',
     }
+    columns = ['price', 'returns', 'volume', 'exchanged_volume', 'position',
+               'signal', 'delta_signal', 'fee', 'PnL', 'cumPnL', 'value']
 
     def __init__(self, data, v0=None):
         """ Initialize the perf object.
@@ -44,9 +46,6 @@ class _PnLI:
             Initial value available of the trading strategy.
 
         """
-        self.columns = ['price', 'returns', 'volume', 'exchanged_volume',
-                        'position', 'signal', 'delta_signal', 'fee', 'PnL',
-                        'cumPnL', 'value']
         self.index = data.loc[:, 'TS'].drop_duplicates()
         if v0 is None and data.ex_vol[0] != 0.:
             self.v0 = data.ex_vol[0] * data.price[0]
@@ -157,11 +156,40 @@ class _PnLR(_PnLI):
         'd_signal': 'type',
         'fee': 'fee',
     }
+    columns = ['price', 'returns', 'volume', 'exchanged_volume', 'position',
+               'signal', 'delta_signal', 'fee', 'PnL', 'cumPnL', 'value',
+               'skippage']
+
+    def __init__(self, data, v0=True):
+        """ Initialize the perf object.
+
+        Parameters
+        ----------
+        data : pd.DataFrame
+            DataFrame containing the orders history.
+        v0 : float, optional
+            Initial value available of the trading strategy.
+
+        """
+        exch_vol = self._get_exch_vol(data)
+        self.p_init = _PnLI._get_price(_PnLI, data, exch_vol)
+        super(_PnLR, self).__init__(data, v0)
+
+    def _set_df(self):
+        super(_PnLR, self)._set_df()
+        self.skippage = self._get_skippage(
+            self.price, self.d_signal, self.exch_vol, self.p_init
+        )
+        self.df.loc[:, 'skippage'] = self.skippage
 
     def _get_fee(self, data, *args):
         df = data.loc[:, (self._handler['fee'], 'TS')]
 
         return df.groupby(by='TS').sum().values
+
+    def _get_skippage(self, price, d_signal, exch_vol, p_init):
+
+        return (p_init - price) * exch_vol * np.sign(d_signal)
 
 
 class _FullPnL:
@@ -210,6 +238,8 @@ class _FullPnL:
         self._set_pnl()
         self['cumPnL'] = np.cumsum(self['PnL'].values)
         self['value'] = self['cumPnL'].values + pnl.v0
+        if real:
+            self._fillna('skippage', value=0.)
 
     def _set_pnl(self):
         pnl = self[('volume', 'returns', 'position')].prod(axis=1).values
