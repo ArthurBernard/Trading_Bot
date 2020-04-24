@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2020-03-17 12:23:25
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-04-19 18:27:58
+# @Last modified time: 2020-04-24 09:37:50
 
 """ A (very) light Command Line Interface. """
 
@@ -17,7 +17,7 @@ import time
 # Third party packages
 from blessed import Terminal
 import fynance as fy
-# import numpy as np
+import numpy as np
 import pandas as pd
 
 # Local packages
@@ -140,12 +140,19 @@ class _ResultManager:  # (ResultManager):
             self.pnl[key]['period'] = period * 86400 / ts
 
         index = range(self.min_TS, self.max_TS + 1, self.min_freq)
-        self.tot_val = pd.DataFrame(0, index=index, columns=['value'])
+        columns = ['value', 'skippage', 'fee']
+        self.tot_val = pd.DataFrame(0, index=index, columns=columns)
         for k, v in pnl_dict.items():
-            df = pd.DataFrame(index=index, columns=['value'])
-            df.loc[v['pnl'].index, 'value'] = v['pnl'].value.values
+            df = pd.DataFrame(index=index, columns=columns)
+            idx = v['pnl'].index
+            df.loc[idx, 'value'] = v['pnl'].value.values
+            df.loc[idx, 'fee'] = v['pnl'].fee.values
+            df.loc[idx, 'skippage'] = v['pnl'].skippage.values
+            df.loc[:, ('skippage', 'fee')] = df.loc[:, ('skippage', 'fee')].fillna(value=0.)
             df = df.fillna(method='ffill').fillna(method='bfill')
             self.tot_val.loc[:, 'value'] += df.value.values
+            self.tot_val.loc[:, 'skippage'] += df.skippage.values
+            self.tot_val.loc[:, 'fee'] += df.fee.values
 
         self.metrics = ['return', 'perf', 'sharpe', 'calmar', 'maxdd']
         self.periods = ['daily', 'weekly', 'monthly', 'yearly', 'total']
@@ -153,11 +160,12 @@ class _ResultManager:  # (ResultManager):
 
     def get_current_stats(self):
         """ Display some statistics for some time periods. """
-        txt_table = [['-'] * (1 + len(self.metrics)), ['   '] + self.metrics]
+        txt_table = [['-'] * (1 + len(self.metrics) + 2),
+                     ['   '] + self.metrics + ['skippage', 'cumFees']]
         self._update_pnl()
 
         for period in self.periods:
-            txt_table += [['-'] * (1 + len(self.metrics)), [period]]
+            txt_table += [['-'] * (1 + len(self.metrics) + 2), [period]]
             # for key, value in self.pnl.items():
             for pair, strats_dict in self.strat_by_pair.items():
                 strat_ref = self.pnl[strats_dict['ref']]
@@ -179,7 +187,7 @@ class _ResultManager:  # (ResultManager):
                 self.tot_val, period, 365, col={'value': 'total'}
             )
 
-        txt_table += (['-'] * (1 + len(self.metrics)),)
+        txt_table += (['-'] * (1 + len(self.metrics) + 2),)
 
         return txt_table
 
@@ -199,7 +207,16 @@ class _ResultManager:  # (ResultManager):
             col = {'price': 'underlying', 'value': 'strategy'}
 
         for k, a in col.items():
-            table += [[str(a)] + self.set_statistics(df.loc[:, k].values, period)]
+            table += [[str(a)] + self.set_statistics(df.loc[:, k].values,
+                                                     period)]
+            # Append skippage and fees
+            if k == 'price':
+                table[-1] += [' ', ' ']
+
+            elif k == 'value':
+                skippage = np.sum(df.loc[:, 'skippage'].values)
+                cum_fees = np.sum(df.loc[:, 'fee'].values)
+                table[-1] += _rounder(skippage, cum_fees, dec=2)
 
         return table
 
@@ -306,6 +323,7 @@ class _ResultManager:  # (ResultManager):
 
         val = self.tot_val.value.iloc[-1]
         self.tot_val.loc[t, 'value'] = val + total_ret
+        self.tot_val.loc[t, ('skippage', 'fee')] = 0, 0
 
 
 def update_pnl(df, close, t):
@@ -325,6 +343,7 @@ def update_pnl(df, close, t):
     df.loc[t, 'PnL'] = ret * vol * pos
     df.loc[t, 'cumPnL'] = df.loc[T, 'cumPnL'] + df.loc[t, 'PnL']
     df.loc[t, 'value'] = df.loc[T, 'value'] + df.loc[t, 'PnL']
+    df.loc[t, 'skippage'] = 0
 
     return df
 
