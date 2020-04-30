@@ -17,9 +17,9 @@ Initially `Trading_Bot` will be used with the Kraken crypto-currency exchange pl
     - Unix OS (Linux or MacOS)
 
 - Python version:
-    - 3.5
     - 3.6
     - 3.7
+    - 3.8
 
 - Python package:
     - blessed
