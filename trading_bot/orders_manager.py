@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2019-04-29 23:42:09
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-03-28 14:46:56
+# @Last modified time: 2020-04-30 20:32:19
 
 """ Client to manage orders execution. """
 
@@ -288,7 +288,7 @@ if __name__ == '__main__':
 
     logging.config.dictConfig(config)
 
-    path_log = '/home/arthur/Strategies/Data_Server/Untitled_Document2.txt'
+    path_log = '~/Strategies/Data_Server/Untitled_Document2.txt'
     om = OrdersManager()
     with om('kraken', path_log):
         om.logger.info('start loop method')
