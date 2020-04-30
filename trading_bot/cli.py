@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2020-03-17 12:23:25
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-04-30 09:05:59
+# @Last modified time: 2020-04-30 09:08:05
 
 """ A (very) light Command Line Interface. """
 
@@ -405,6 +405,7 @@ class CLI(_ClientCLI):
 
             raise StopIteration
 
+        time.sleep(0.15)
         print(self.txt)
         i, o, e = select.select([sys.stdin], [], [], self.TIMEOUT)
         if i:
