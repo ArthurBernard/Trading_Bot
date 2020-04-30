@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2020-01-27 09:58:03
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-03-31 19:01:10
+# @Last modified time: 2020-04-30 19:26:27
 
 """ Set a server and run each bot. """
 
@@ -145,7 +145,7 @@ class TradingBotManager(_TradingBotManager):
 
             elif k == 'fees':
                 self.state['fees'].update(a)
-                self.logger.debug('recv {}: {}'.format(k, a))
+                self.logger.debug('recv {}: {}'.format(k, type(a)))
 
             elif k == 'balance':
                 self.state['balance'].update(a)

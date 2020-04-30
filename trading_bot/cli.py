@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2020-03-17 12:23:25
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-04-30 09:08:05
+# @Last modified time: 2020-04-30 19:27:38
 
 """ A (very) light Command Line Interface. """
 
@@ -354,6 +354,7 @@ class CLI(_ClientCLI):
     """ Object to allow a Command Line Interface. """
 
     # TODO : append 'perf' command on specified strategy
+    #        append 'balance' command on specified pair currency
     txt = ('The following commands are supported, press <ENTER> at the end.\n'
            '  - <q> quit the command line interface.\n'
            '  - <start [strategy_name]> run the specified strategy bot.\n'
