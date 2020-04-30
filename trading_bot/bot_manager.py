@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2020-01-27 09:58:03
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-04-30 20:12:24
+# @Last modified time: 2020-04-30 20:53:19
 
 """ Set a server and run each bot. """
 
@@ -49,8 +49,10 @@ class TradingBotManager(_TradingBotManager):
         _TradingBotManager.__init__(self, address=address, authkey=authkey)
 
         self.logger = logging.getLogger(__name__)
-        # self.t = int(time.time())
-        self.path_log = '~/Strategies/Data_Server/Untitled_Document2.txt'
+
+        with open('./path_log_file.txt', 'r') as f:
+            self.path_log = f.read()
+
         self.address = address
         self.authkey = authkey
         self.txt = {}
