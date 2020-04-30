@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2020-03-17 12:23:25
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-04-30 09:02:27
+# @Last modified time: 2020-04-30 09:05:59
 
 """ A (very) light Command Line Interface. """
 
@@ -408,7 +408,7 @@ class CLI(_ClientCLI):
         print(self.txt)
         i, o, e = select.select([sys.stdin], [], [], self.TIMEOUT)
         if i:
-            k = sys.stdin.readline().lower().split(' ')
+            k = sys.stdin.readline().strip('\n').lower().split(' ')
             self.logger.debug('command: {}'.format(k))
             self._request_running_clients()
             time.sleep(0.1)
