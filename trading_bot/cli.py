@@ -4,13 +4,15 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2020-03-17 12:23:25
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-04-24 09:37:50
+# @Last modified time: 2020-04-30 09:02:27
 
 """ A (very) light Command Line Interface. """
 
 # Built-in packages
 import logging
 from pickle import Unpickler
+import select
+import sys
 from threading import Thread
 import time
 
@@ -351,7 +353,15 @@ def update_pnl(df, close, t):
 class CLI(_ClientCLI):
     """ Object to allow a Command Line Interface. """
 
-    txt = 'press any key to update data or press q to quit\n'
+    # TODO : append 'perf' command on specified strategy
+    txt = ('The following commands are supported, press <ENTER> at the end.\n'
+           '  - <q> quit the command line interface.\n'
+           '  - <start [strategy_name]> run the specified strategy bot.\n'
+           '  - <stop [strategy_name]> interupt the specified strategy bot.\n'
+           '  - <stop> interupt the TradingBotManager.\n'
+           '  - <ENTER> update the KPI of current running strategy bot.\n'
+           "If no commands are received after 30 seconds, the CLI exited.")
+    TIMEOUT = 30
     strat_bot = {}
     pair = {}
     txt_running_clients = ''
@@ -395,12 +405,18 @@ class CLI(_ClientCLI):
 
             raise StopIteration
 
-        k = input(self.txt).lower().split(' ')
-        # update running clients
-        self._request_running_clients()
-        time.sleep(0.1)
-        # k = k.lower() if len(k) > 0 else ' '
-        self.logger.debug('command: {}'.format(k))
+        print(self.txt)
+        i, o, e = select.select([sys.stdin], [], [], self.TIMEOUT)
+        if i:
+            k = sys.stdin.readline().lower().split(' ')
+            self.logger.debug('command: {}'.format(k))
+            self._request_running_clients()
+            time.sleep(0.1)
+
+        else:
+            self.logger.debug('Time out, CLI exit')
+            k = ['q']
+
         if k[0] == 'q':
 
             raise StopIteration
