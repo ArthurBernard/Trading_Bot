@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2020-01-27 09:58:03
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-05-01 11:26:43
+# @Last modified time: 2020-05-01 15:27:05
 
 """ Set a server and run each bot. """
 
@@ -45,18 +45,18 @@ class TradingBotManager(_TradingBotManager):
     }
     process_sb = {}
 
-    def __init__(self, address=('', 50000), authkey=b'tradingbot', auto=False):
+    def __init__(self, address=('', 50000), authkey=b'tradingbot'):
         """ Initialize Trading Bot Manager object. """
         _TradingBotManager.__init__(self, address=address, authkey=authkey)
 
         self.logger = logging.getLogger(__name__)
 
-        conf = load_config_params('./general_config.yaml')
-        self.path_log = conf['path']['log_file']
+        gen_config = load_config_params('./general_config.yaml')
+        self.path_log = gen_config['path']['log_file']
+        self.auto = gen_config['auto']
         self.address = address
         self.authkey = authkey
         self.txt = {}
-        self.auto = auto
         self.client_thread = Thread(target=self.client_manager, daemon=True)
 
     def __enter__(self):
@@ -422,21 +422,16 @@ def start_strategy_bot(strat_name, address=('', 50000), authkey=b'tradingbot'):
 if __name__ == '__main__':
 
     import logging.config
-    import yaml
-    import sys
 
-    with open('./trading_bot/logging.ini', 'rb') as f:
-        config = yaml.safe_load(f.read())
+    # Load logging configuration
+    log_config = load_config_params('./trading_bot/logging.ini')
+    logging.config.dictConfig(log_config)
 
-    logging.config.dictConfig(config)
+    # Load general configuration
+    gen_config = load_config_params('./general_config.yaml')
+    display_time = gen_config['display']['current_time']
 
-    if len(sys.argv) > 1 and 'auto' in sys.argv[1:]:
-        auto = True
-
-    else:
-        auto = False
-
-    tbm = TradingBotManager(auto=auto)
+    tbm = TradingBotManager()
     with tbm:
         try:
             # tbm.runtime()
@@ -446,7 +441,8 @@ if __name__ == '__main__':
                     time.strftime('%y-%m-%d %H:%M:%S'),
                     str_time(int(time.time() - t0)),
                 )
-                print(txt, end='\r')
+                if display_time:
+                    print(txt, end='\r')
 
         except KeyboardInterrupt:
             tbm.logger.error('Stop with KeyboardInterrupt')
