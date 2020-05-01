@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2020-03-17 12:23:25
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-05-01 17:35:48
+# @Last modified time: 2020-05-01 17:47:44
 
 """ A (very) light Command Line Interface. """
 
@@ -380,7 +380,7 @@ class CLI(_ClientCLI):
         """ Initialize a CLI object. """
         # TODO : if trading bot not yet running => launch it
         super(CLI, self).__init__(address=address, authkey=authkey)
-        self.logger = logging.getLogger('CLI')
+        self.logger = logging.getLogger('cli')
 
         self.path = path
         self.term = Terminal()
