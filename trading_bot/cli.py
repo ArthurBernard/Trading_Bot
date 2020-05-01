@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2020-03-17 12:23:25
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-05-01 15:00:12
+# @Last modified time: 2020-05-01 17:35:48
 
 """ A (very) light Command Line Interface. """
 
@@ -142,18 +142,22 @@ class _ResultManager:  # (ResultManager):
             self.pnl[key]['period'] = period * 86400 / ts
 
         index = range(self.min_TS, self.max_TS + 1, self.min_freq)
-        columns = ['value', 'skippage', 'fee']
+        columns = ['value', 'slippage', 'fee']
         self.tot_val = pd.DataFrame(0, index=index, columns=columns)
         for k, v in pnl_dict.items():
             df = pd.DataFrame(index=index, columns=columns)
             idx = v['pnl'].index
+            if v['vali']:
+                v['pnl'].loc[:, 'slippage'] = 0.
+
             df.loc[idx, 'value'] = v['pnl'].value.values
             df.loc[idx, 'fee'] = v['pnl'].fee.values
-            df.loc[idx, 'skippage'] = v['pnl'].skippage.values
-            df.loc[:, ('skippage', 'fee')] = df.loc[:, ('skippage', 'fee')].fillna(value=0.)
+            df.loc[idx, 'slippage'] = v['pnl'].slippage.values
+            df.loc[:, 'slippage'] = df.loc[:, 'slippage'].fillna(value=0.)
+            df.loc[:, 'fee'] = df.loc[:, 'fee'].fillna(value=0.)
             df = df.fillna(method='ffill').fillna(method='bfill')
             self.tot_val.loc[:, 'value'] += df.value.values
-            self.tot_val.loc[:, 'skippage'] += df.skippage.values
+            self.tot_val.loc[:, 'slippage'] += df.slippage.values
             self.tot_val.loc[:, 'fee'] += df.fee.values
 
         self.metrics = ['return', 'perf', 'sharpe', 'calmar', 'maxdd']
@@ -163,7 +167,7 @@ class _ResultManager:  # (ResultManager):
     def get_current_stats(self):
         """ Display some statistics for some time periods. """
         txt_table = [['-'] * (1 + len(self.metrics) + 2),
-                     ['   '] + self.metrics + ['skippage', 'cumFees']]
+                     ['   '] + self.metrics + ['slippage', 'cumFees']]
         self._update_pnl()
 
         for period in self.periods:
@@ -211,14 +215,14 @@ class _ResultManager:  # (ResultManager):
         for k, a in col.items():
             table += [[str(a)] + self.set_statistics(df.loc[:, k].values,
                                                      period)]
-            # Append skippage and fees
+            # Append slippage and fees
             if k == 'price':
                 table[-1] += [' ', ' ']
 
             elif k == 'value':
-                skippage = np.sum(df.loc[:, 'skippage'].values)
+                slippage = np.sum(df.loc[:, 'slippage'].values)
                 cum_fees = np.sum(df.loc[:, 'fee'].values)
-                table[-1] += _rounder(skippage, cum_fees, dec=2)
+                table[-1] += _rounder(slippage, cum_fees, dec=2)
 
         return table
 
@@ -281,6 +285,10 @@ class _ResultManager:  # (ResultManager):
             self.logger.error('Unknown period: {}'.format(period))
             _index = None
 
+        # NOT CLEAN SOLUTION
+        # if _index.sum() < 2:
+        #    _index = df.index >= df.index[-2]
+
         return _index
 
     def _set_ref_pair(self, _id, pair, freq, TS_0):
@@ -325,7 +333,7 @@ class _ResultManager:  # (ResultManager):
 
         val = self.tot_val.value.iloc[-1]
         self.tot_val.loc[t, 'value'] = val + total_ret
-        self.tot_val.loc[t, ('skippage', 'fee')] = 0, 0
+        self.tot_val.loc[t, ('slippage', 'fee')] = 0, 0
 
 
 def update_pnl(df, close, t):
@@ -345,7 +353,7 @@ def update_pnl(df, close, t):
     df.loc[t, 'PnL'] = ret * vol * pos
     df.loc[t, 'cumPnL'] = df.loc[T, 'cumPnL'] + df.loc[t, 'PnL']
     df.loc[t, 'value'] = df.loc[T, 'value'] + df.loc[t, 'PnL']
-    df.loc[t, 'skippage'] = 0
+    df.loc[t, 'slippage'] = 0
 
     return df
 
@@ -372,7 +380,7 @@ class CLI(_ClientCLI):
         """ Initialize a CLI object. """
         # TODO : if trading bot not yet running => launch it
         super(CLI, self).__init__(address=address, authkey=authkey)
-        self.logger = logging.getLogger(__name__)
+        self.logger = logging.getLogger('CLI')
 
         self.path = path
         self.term = Terminal()
@@ -578,16 +586,18 @@ class CLI(_ClientCLI):
 
     def _get_sb_dict(self, _id, name):
         # load some configuration info
+        sb_dict = {'id': _id}
         cfg = load_config_params(self.path + name + '/configuration.yaml')
-        pair = cfg['order_instance']['pair']
-        freq = cfg['strat_manager_instance']['frequency']
-        kwrd = cfg['result_instance']
+        sb_dict['pair'] = pair = cfg['order_instance']['pair']
+        sb_dict['vali'] = cfg['order_instance'].get('validate', False)
+        sb_dict['freq'] = cfg['strat_manager_instance']['frequency']
+        sb_dict['kwrd'] = cfg['result_instance']
         if pair not in self.pair:
             self.pair[pair] = []
 
         self.pair[pair] += [pair]
 
-        return {'id': _id, 'pair': pair, 'freq': freq, 'kwrd': kwrd}
+        return sb_dict
 
     def _request_running_clients(self):
         self.conn_tbm.send(('get_running_clients', None),)

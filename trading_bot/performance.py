@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2020-02-25 10:38:17
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-04-24 09:03:38
+# @Last modified time: 2020-05-01 16:27:58
 
 """ Objects to measure and display trading performance. """
 
@@ -158,7 +158,7 @@ class _PnLR(_PnLI):
     }
     columns = ['price', 'returns', 'volume', 'exchanged_volume', 'position',
                'signal', 'delta_signal', 'fee', 'PnL', 'cumPnL', 'value',
-               'skippage']
+               'slippage']
 
     def __init__(self, data, v0=True):
         """ Initialize the perf object.
@@ -177,17 +177,17 @@ class _PnLR(_PnLI):
 
     def _set_df(self):
         super(_PnLR, self)._set_df()
-        self.skippage = self._get_skippage(
+        self.slippage = self._get_slippage(
             self.price, self.d_signal, self.exch_vol, self.p_init
         )
-        self.df.loc[:, 'skippage'] = self.skippage
+        self.df.loc[:, 'slippage'] = self.slippage
 
     def _get_fee(self, data, *args):
         df = data.loc[:, (self._handler['fee'], 'TS')]
 
         return df.groupby(by='TS').sum().values
 
-    def _get_skippage(self, price, d_signal, exch_vol, p_init):
+    def _get_slippage(self, price, d_signal, exch_vol, p_init):
 
         return (p_init - price) * exch_vol * np.sign(d_signal)
 
@@ -239,7 +239,7 @@ class _FullPnL:
         self['cumPnL'] = np.cumsum(self['PnL'].values)
         self['value'] = self['cumPnL'].values + pnl.v0
         if real:
-            self._fillna('skippage', value=0.)
+            self._fillna('slippage', value=0.)
 
     def _set_pnl(self):
         pnl = self[('volume', 'returns', 'position')].prod(axis=1).values
