@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2019-04-29 23:42:09
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-05-01 12:34:06
+# @Last modified time: 2020-05-01 16:25:47
 
 """ Client to manage orders execution. """
 
@@ -85,7 +85,7 @@ class OrdersManager(_ClientOrdersManager):
         """
         # Set client and connect to the trading bot server
         _ClientOrdersManager.__init__(self, address=address, authkey=authkey)
-        self.logger = logging.getLogger(__name__)
+        self.logger = logging.getLogger('orders_manager')
         self.start = int(time.time())
 
     def __call__(self, exchange, path_log):

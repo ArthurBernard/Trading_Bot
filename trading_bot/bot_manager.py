@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2020-01-27 09:58:03
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-05-01 15:27:05
+# @Last modified time: 2020-05-01 15:45:11
 
 """ Set a server and run each bot. """
 
@@ -49,7 +49,7 @@ class TradingBotManager(_TradingBotManager):
         """ Initialize Trading Bot Manager object. """
         _TradingBotManager.__init__(self, address=address, authkey=authkey)
 
-        self.logger = logging.getLogger(__name__)
+        self.logger = logging.getLogger('trading_bot')
 
         gen_config = load_config_params('./general_config.yaml')
         self.path_log = gen_config['path']['log_file']

@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2019-05-12 22:57:20
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-05-01 12:37:36
+# @Last modified time: 2020-05-01 16:24:58
 
 """ Client to manage a financial strategy. """
 
@@ -84,7 +84,7 @@ class StrategyBot(_ClientStrategyBot):
         """
         # Set client and connect to the trading bot server
         _ClientStrategyBot.__init__(self, address=address, authkey=authkey)
-        self.logger = logging.getLogger(__name__)
+        self.logger = logging.getLogger('strategy_bot')
 
     def __call__(self, name_strat, STOP=None, path='./strategies'):
         """ Set parameters of strategy.
@@ -252,7 +252,7 @@ class StrategyBot(_ClientStrategyBot):
         self.frequency = strat_cfg['frequency']
         self.id = strat_cfg['id_strat']
         _id = '0' * (3 - len(str(self.id))) + str(self.id)
-        name_logger = 'Strat-' + _id
+        name_logger = 'strategy_bot.n-' + _id
         self.logger = logging.getLogger(name_logger)
         self.current_pos = strat_cfg['current_pos']
         self.current_vol = strat_cfg['current_vol']
