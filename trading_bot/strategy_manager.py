@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2019-05-12 22:57:20
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-03-31 19:44:22
+# @Last modified time: 2020-05-01 12:37:36
 
 """ Client to manage a financial strategy. """
 
@@ -105,11 +105,20 @@ class StrategyBot(_ClientStrategyBot):
             Object to manage strategy computations.
 
         """
+        conf = load_config_params('./general_config.yaml')
+        strat_path = conf['path']['strategy']
+        if strat_path[-1] != '/':
+            strat_path += '/'
+
         # Import strategy
-        strat = importlib.import_module(
-            'strategies.' + name_strat + '.strategy'
+        spec = importlib.util.spec_from_file_location(
+            'strategies.' + name_strat + '.strategy',
+            strat_path + name_strat + '/strategy.py'
         )
-        self.get_order_params = strat.get_order_params
+        strat_module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(strat_module)
+
+        self.get_order_params = strat_module.get_order_params
         self.logger.info('Load {} strategy function'.format(name_strat))
 
         self.name_strat = name_strat
@@ -398,6 +407,19 @@ class StrategyBot(_ClientStrategyBot):
         return [result]
 
     def get_current_volume(self, volume):
+        """ Get the current volume available.
+
+        Parameters
+        ----------
+        volume : float
+            Last folume available.
+
+        Returns
+        -------
+        float
+            New current volume available.
+
+        """
         path = self.path
         if path[-1] != '/':
             path += '/'
@@ -620,14 +642,12 @@ class StrategyBot(_ClientStrategyBot):
 
 
 if __name__ == '__main__':
-    # Load logging configuration
+
     import logging.config
-    import yaml
 
-    with open('./trading_bot/logging.ini', 'rb') as f:
-        config = yaml.safe_load(f.read())
-
-    logging.config.dictConfig(config)
+    # Load logging configuration
+    log_config = load_config_params('./trading_bot/logging.ini')
+    logging.config.dictConfig(log_config)
 
     if len(sys.argv) < 2:
         print('/!\\ RUN ANOTHER_EXAMPLE /!\\')

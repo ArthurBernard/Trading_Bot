@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2020-01-27 09:58:03
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-04-30 20:53:19
+# @Last modified time: 2020-05-01 11:26:43
 
 """ Set a server and run each bot. """
 
@@ -19,6 +19,7 @@ import time
 # Local packages
 from trading_bot._server import _TradingBotManager
 from trading_bot.strategy_manager import StrategyBot as SB
+from trading_bot.tools.io import load_config_params
 from trading_bot.tools.time_tools import str_time
 
 __all__ = [
@@ -50,9 +51,8 @@ class TradingBotManager(_TradingBotManager):
 
         self.logger = logging.getLogger(__name__)
 
-        with open('./path_log_file.txt', 'r') as f:
-            self.path_log = f.read()
-
+        conf = load_config_params('./general_config.yaml')
+        self.path_log = conf['path']['log_file']
         self.address = address
         self.authkey = authkey
         self.txt = {}

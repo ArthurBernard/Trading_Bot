@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2019-04-29 23:42:09
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-04-30 20:53:02
+# @Last modified time: 2020-05-01 12:34:06
 
 """ Client to manage orders execution. """
 
@@ -281,15 +281,15 @@ class OrdersManager(_ClientOrdersManager):
 if __name__ == '__main__':
 
     import logging.config
-    import yaml
+    from trading_bot.tools.io import load_config_params
 
-    with open('./trading_bot/logging.ini', 'rb') as f:
-        config = yaml.safe_load(f.read())
+    # Load logging configuration
+    log_config = load_config_params('./trading_bot/logging.ini')
+    logging.config.dictConfig(log_config)
 
-    logging.config.dictConfig(config)
-
-    with open('./path_log_file.txt', 'r') as f:
-        path_log = f.read()
+    # Load general configuration
+    gen_config = load_config_params('./general_config.yaml')
+    path_log = gen_config['path']['log_file']
 
     om = OrdersManager()
     with om('kraken', path_log):

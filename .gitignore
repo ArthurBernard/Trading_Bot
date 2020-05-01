@@ -1,6 +1,6 @@
 # Files to ignore
 id_timestamp
-path_log_file.txt
+general_config.yaml
 
 # Extensions to ignore
 *.so

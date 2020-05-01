@@ -4,13 +4,12 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2020-03-17 12:23:25
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-04-30 19:27:38
+# @Last modified time: 2020-05-01 15:00:12
 
 """ A (very) light Command Line Interface. """
 
 # Built-in packages
 import logging
-from pickle import Unpickler
 import select
 import sys
 from threading import Thread
@@ -108,6 +107,7 @@ class _ResultManager:  # (ResultManager):
     set_current_stats
 
     """
+
     min_freq = None
     min_TS = None
     max_TS = None
@@ -369,9 +369,11 @@ class CLI(_ClientCLI):
     running_strats = {}
 
     def __init__(self, path, address=('', 50000), authkey=b'tradingbot'):
+        """ Initialize a CLI object. """
         # TODO : if trading bot not yet running => launch it
         super(CLI, self).__init__(address=address, authkey=authkey)
         self.logger = logging.getLogger(__name__)
+
         self.path = path
         self.term = Terminal()
 
@@ -595,15 +597,17 @@ class CLI(_ClientCLI):
 if __name__ == "__main__":
 
     import logging.config
-    import yaml
 
-    with open('./trading_bot/logging.ini', 'rb') as f:
-        config = yaml.safe_load(f.read())
+    # Load logging configuration
+    log_config = load_config_params('./trading_bot/logging.ini')
+    logging.config.dictConfig(log_config)
 
-    logging.config.dictConfig(config)
+    # Load general configuration
+    gen_config = load_config_params('./general_config.yaml')
+    path = gen_config['path']['strategy']
 
     try:
-        cli = CLI('./strategies/')
+        cli = CLI(path)
 
     except ConnectionRefusedError:
         txt = 'TradingBotManager is not running, do you want to run it? Y/N'
