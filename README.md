@@ -17,7 +17,6 @@ Initially `Trading_Bot` will be used with the Kraken crypto-currency exchange pl
     - Unix OS (Linux or MacOS)
 
 - Python version:
-    - 3.6
     - 3.7
     - 3.8
 
@@ -57,42 +56,46 @@ TODO : tuto how write `configuration.yaml` and `strategy.py`.
 
 ### 2. Start the bot manager server.
 
-`auto` parameter will start automatically the order manager client and the trading performance manager client. Otherwise you have to manually start the order manager and the trading performance manager clients.
+Set `./general_config.yaml` file (or let it as default) with:
+  - `log_file`: the path of your log file.
+  - `strategy`: the path where you save your custom strategy functions.
+  - `address`: address of your server and port (can be local or remote).
+  - `authkey`: password of your server.
+  - `auto`: if true starts automatically the order manager and performance manager client, otherwise you must to run it mannually.
+
+And run the trading bot:
 
 ```bash
-$ python ./trading_bot/bot_manager.py auto
+$ python ./trading_bot/bot_manager.py > /dev/null 2>&1 &
 ```
 
-or manually:
+If you have to choose to run mannually the order manager and trading performance manager clients:
 
 ```bash
-$ python ./trading_bot/bot_manager.py &
 $ python ./trading_bot/orders_manager.py &
 $ python ./trading_bot/performance.py &
 ```
 
-### 3. Start your client strategies.
-
-You can run several strategies in parallel but each strategy must have a unique name.
-
-```bash
-$ python ./trading_bot/strategy_manager.py YOUR_STRATEGY_NAME &
-```
-
-### 4. Manage trading bots with the CLI.
+### 3. Manage trading bots with the CLI.
 
 ```bash
 $ python ./trading_bot/cli.py
 ```
+
+With the CLI you can start or stop one or several strategy bots, display KPI of the running strategy bots and stop the trading bot.
 
 The following command lines are available:
 - `q`: quite the command line interface.
 - `stop`: stop the trading bot server and all the client strategies.
 - `stop [STRATEGY_NAME]`: stop the strategy bot manager `STRATEGY_NAME`.
 - `start [STRATEGY_NAME]`: start the strategy bot manager `STRATEGY_NAME`.
-- todo: `perf`: display the performance table of running strategies.
+- `<ENTER>`: display the performance table of running strategies.
 
-TODO: append more command lines.
+TODO: append more command lines (e.g dispaly plot of performance, force to execute a pending order (i.e if an order wasn't executed due to a bug), etc.)
+
+### 4. Monitor loggers.
+
+You can see the logs of trading bot in the files `debug.log` and `error.log`.
 
 ## Custom your own strategy manager
 
@@ -112,8 +115,6 @@ Read the source code and make sure there are not undesirable behaviors.
     - Improve CLI/make GUI.
 - `bot_manager.py`:
     - Start automatically several `StrategyManager` clients on several process;
-- `orders_manager.py`:
-    - Verify if the volume to order is available; 
 - `_order.py`:
     - Use WebSockets instead of REST API.
 - `strategy_manager.py`:
