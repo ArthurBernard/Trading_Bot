@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2019-04-29 23:42:09
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-05-01 16:25:47
+# @Last modified time: 2020-05-09 10:07:31
 
 """ Client to manage orders execution. """
 
@@ -18,7 +18,7 @@ import time
 # Internal packages
 from trading_bot._client import _ClientOrdersManager
 from trading_bot._containers import OrderDict
-from trading_bot._exceptions import OrderError
+from trading_bot._exceptions import OrderError, InsufficientFundsError
 from trading_bot.exchanges.API_kraken import KrakenClient
 from trading_bot.order.io import update_hist_orders
 from trading_bot.tools.call_counters import KrakenCallCounter
@@ -179,6 +179,24 @@ class OrdersManager(_ClientOrdersManager):
         elif not self.q_ord.empty():
             order = self.q_ord.get()
             order.set_client_API(self.K, call_counter=self.call_counter)
+            try:
+                self.check_available_volume(order)
+
+            except InsufficientFundsError:
+                self.logger.error('Volume not available', exc_info=True)
+                try:
+                    ief_orders = OrderDict()
+                    ief_orders._load('./strategies/', 'IFE_orders', ext='.dat')
+
+                except FileNotFoundError:
+
+                    pass
+
+                ief_orders.append(order)
+                ief_orders._save('./strategies/', 'IFE_orders', ext='.dat')
+                self.logger.error('Save {} in IEF_orders.dat'.format(order))
+
+                return None
 
             return order
 
@@ -218,6 +236,10 @@ class OrdersManager(_ClientOrdersManager):
                 update_hist_orders(order)
                 self.conn_tbm.send(('order', order.id),)
                 self.logger.debug('remove {}'.format(order))
+                if not self.orders:
+                    # Update fees and balance
+                    self.get_fees()
+                    self.get_balance()
 
             else:
 
@@ -245,6 +267,30 @@ class OrdersManager(_ClientOrdersManager):
 
         self.conn_tbm.send(('balance', self.balance),)
         self.logger.debug('sent balance to TBM')
+
+    def check_available_volume(self, order, tol=0.01):
+        """ Check is volume to trade is available.
+
+        Parameters
+        ----------
+        order : _BasisOrder object or subclasses
+            The order to executed.
+        tol : float, optional
+            A marge of available volume to trade. Deafult is 1% above the
+            volume needed.
+
+        """
+        if order.type.lower() == 'sell':
+            balance = float(self.balance[order.pair[:4]])
+            volume = order.volume
+
+        else:
+            balance = float(self.balance[order.pair[4:]])
+            volume = order.volume * order.price
+
+        if balance < volume * (1. + tol):
+
+            raise InsufficientFundsError(order, balance)
 
     def _set_result(self, order):
         """ Add informations to output of query order.
@@ -326,7 +372,12 @@ if __name__ == '__main__':
                 order.get_result_exec()
                 update_hist_orders(order)
                 # TODO : update results_manager
+                om.conn_tbm.send(('order', order.id),)
                 om.logger.debug('remove {}'.format(order))
+                if not om.orders:
+                    # Update fees and balance
+                    om.get_fees()
+                    om.get_balance()
 
             else:
 
