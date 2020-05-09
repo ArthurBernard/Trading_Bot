@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2019-05-12 22:57:20
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-05-01 16:24:58
+# @Last modified time: 2020-05-09 16:58:22
 
 """ Client to manage a financial strategy. """
 
@@ -20,6 +20,7 @@ import time
 
 # Local packages
 from trading_bot._client import _ClientStrategyBot
+from trading_bot._exceptions import InsufficientFunds
 # from trading_bot._containers import OrderDict
 from trading_bot.data_requests import get_close
 from trading_bot.orders import OrderSL, OrderBestLimit
@@ -351,11 +352,33 @@ class StrategyBot(_ClientStrategyBot):
 
         return [result]
 
+    def _check_avail_vol(self, ccy, type, vol, avail_vol, price, c2):
+        if type == 'buy':
+            if vol * price * 1.01 > avail_vol:
+                raise InsufficientFunds(ccy, type, vol, avail_vol, price, c2)
+
+        else:
+            if vol * 1.01 > avail_vol:
+                raise InsufficientFunds(ccy, type, vol, avail_vol, price, c2)
+
     def _set_long(self, signal, **kwargs):
         """ Set long order. """
         # Set volume if reinvest profit
         if self.reinvest:
             kwargs['volume'] = self.get_current_volume(kwargs['volume'])
+
+        # check if volume is available
+        c1, c2 = kwargs['pair'][4:], kwargs['pair'][:4]
+        price = kwargs.get('price', get_close(kwargs['pair']))
+        volume = kwargs['volume']
+        avail_vol = self.get_available_volume(c1)
+        try:
+            self._check_avail_vol(c1, 'buy', volume, avail_vol, price, c2)
+
+        except InsufficientFunds:
+            self.logger.error('Volume not available', exc_info=True)
+            kwargs['volume'] = avail_vol / price / 1.01
+            self.logger.error(f"Set long pos with volume {kwargs['volume']}")
 
         result = self.send_order(**kwargs)
 
@@ -372,6 +395,19 @@ class StrategyBot(_ClientStrategyBot):
         """ Cut long position. """
         # Set volume to cut long
         kwargs['volume'] = self.current_vol
+
+        # check if volume is available
+        c1, c2 = kwargs['pair'][:4], kwargs['pair'][4:]
+        price = kwargs.get('price', get_close(kwargs['pair']))
+        volume = kwargs['volume']
+        avail_vol = self.get_available_volume(c1)
+        try:
+            self._check_avail_vol(c1, 'sell', volume, avail_vol, price, c2)
+
+        except InsufficientFunds:
+            self.logger.error('Volume not available', exc_info=True)
+            kwargs['volume'] = avail_vol / 1.01
+            self.logger.error(f"Cut long pos with volume {kwargs['volume']}")
 
         # Query order
         result = self.send_order(**kwargs)
@@ -619,6 +655,7 @@ class StrategyBot(_ClientStrategyBot):
             pass
 
         elif k == 'order':
+            # Order was executed
             if a in self.order_sent:
                 # remove order of pending orders list
                 self.order_sent.remove(a)
@@ -631,6 +668,15 @@ class StrategyBot(_ClientStrategyBot):
                     'timestep': self.frequency,
                     'real': not self.ord_kwrds.get('validate', False),
                 })
+
+        # elif k == 'ife':
+        #    # InsufficientFundsError
+        #    if a in self.order_sent:
+        #        # remove order of pending orders list
+        #        self.order_sent.remove(a)
+
+        #    # Update pos and volume
+        #    v = order.volume
 
         elif k == '_stop':
             # enforce stop time

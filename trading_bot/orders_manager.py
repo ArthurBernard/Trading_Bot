@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2019-04-29 23:42:09
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-05-09 10:07:31
+# @Last modified time: 2020-05-09 17:02:22
 
 """ Client to manage orders execution. """
 
@@ -179,24 +179,27 @@ class OrdersManager(_ClientOrdersManager):
         elif not self.q_ord.empty():
             order = self.q_ord.get()
             order.set_client_API(self.K, call_counter=self.call_counter)
-            try:
-                self.check_available_volume(order)
+            # try:
+            #    self.check_available_volume(order)
 
-            except InsufficientFundsError:
-                self.logger.error('Volume not available', exc_info=True)
-                try:
-                    ief_orders = OrderDict()
-                    ief_orders._load('./strategies/', 'IFE_orders', ext='.dat')
+            # except InsufficientFundsError:
+            #    self.logger.error('Volume not available', exc_info=True)
+            #    # Save order
+            #    try:
+            #        ief_orders = OrderDict()
+            #        ief_orders._load('./strategies/', 'IFE_orders', ext='.dat')
 
-                except FileNotFoundError:
+            #    except FileNotFoundError:
 
-                    pass
+            #        pass
 
-                ief_orders.append(order)
-                ief_orders._save('./strategies/', 'IFE_orders', ext='.dat')
-                self.logger.error('Save {} in IEF_orders.dat'.format(order))
+            #    ief_orders.append(order)
+            #    ief_orders._save('./strategies/', 'IFE_orders', ext='.dat')
+            #    self.logger.error('Save {} in IEF_orders.dat'.format(order))
+            #    # Sent info at Strategy Bot that the order wasn't executed
+            #    self.conn_tbm.send(('ife', order.id),)
 
-                return None
+            #    return None
 
             return order
 
@@ -288,7 +291,12 @@ class OrdersManager(_ClientOrdersManager):
             balance = float(self.balance[order.pair[4:]])
             volume = order.volume * order.price
 
-        if balance < volume * (1. + tol):
+        leverage = order.input.get('leverage')
+        if leverage is not None and leverage > 1:
+
+            return None
+
+        elif balance < volume * (1. + tol):
 
             raise InsufficientFundsError(order, balance)
 
