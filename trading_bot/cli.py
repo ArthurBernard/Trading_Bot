@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2020-03-17 12:23:25
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-05-01 17:47:44
+# @Last modified time: 2020-05-09 16:52:49
 
 """ A (very) light Command Line Interface. """
 
@@ -494,11 +494,14 @@ class CLI(_ClientCLI):
 
             txt_close = txt_close[:-1] + [['-'] * 2]
             txt_close = _set_text(*txt_close)
+            txt_balance = _set_text(*self._set_text_balance())
+            txt_pos = _set_text(*self._set_text_position())
             txt = _zip_text(
                 txt_stats,
-                txt_close + '\n\n' + txt_strat + '\n\n' + txt_clients
+                txt_close + '\n\n' + txt_strat + '\n\n' + txt_clients + '\n\n' + txt_balance
             )
             print(txt)
+            print(txt_pos)
 
         else:
             print(txt_clients + 'No strategy bot is running.')
@@ -581,6 +584,10 @@ class CLI(_ClientCLI):
                 else:
                     self.txt_running_clients += '{} is {}\n'.format(c, v)
 
+        elif k == 'balance':
+            self.logger.info('Receive balance: {}'.format(a))
+            self.balance = a
+
         else:
             self.logger.error('received unknown message {}: {}'.format(k, a))
 
@@ -592,6 +599,8 @@ class CLI(_ClientCLI):
         sb_dict['vali'] = cfg['order_instance'].get('validate', False)
         sb_dict['freq'] = cfg['strat_manager_instance']['frequency']
         sb_dict['kwrd'] = cfg['result_instance']
+        sb_dict['cpos'] = cfg['strat_manager_instance']['current_pos']
+        sb_dict['cvol'] = cfg['strat_manager_instance']['current_vol']
         if pair not in self.pair:
             self.pair[pair] = []
 
@@ -602,6 +611,34 @@ class CLI(_ClientCLI):
     def _request_running_clients(self):
         self.conn_tbm.send(('get_running_clients', None),)
         time.sleep(0.1)
+
+    def _set_text_balance(self):
+        ccy = []
+        for pair in self.pair:
+            c1, c2 = pair[:4], pair[4:]
+            ccy = ccy + [c1] if c1 not in ccy and c1 in self.balance else ccy
+            ccy = ccy + [c2] if c2 not in ccy and c2 in self.balance else ccy
+
+        txt_list = [('-', '-'), ('Currency', 'Balance'), ('-', '-')]
+        for c in ccy:
+            txt_list += [[c] + _rounder(self.balance[c], dec=8)]
+
+        return txt_list + [('-', '-')]
+
+    def _set_text_position(self):
+        txt_list = [['-'] * 6,
+                    ['Strategy', 'Real Position', 'Theorical Position', 'Rvol', 'Rvol2', 'Thvol'],
+                    ['-'] * 6]
+        for name, kwargs in self.strat_bot.items():
+            pnl = kwargs['pnl']
+            re_pos = pnl.position.iloc[0] + pnl.delta_signal.sum()
+            th_pos = kwargs['cpos']
+            re_vol = pnl.volume.iloc[0] + (pnl.PnL / pnl.price).sum()
+            re_vol_2 = pnl.volume.iloc[0] + (pnl.exchanged_volume * np.sign(pnl.delta_signal)).sum()
+            th_vol = kwargs['cvol']
+            txt_list += [[name, re_pos, th_pos, re_vol, re_vol_2, th_vol]]
+
+        return txt_list + [['-'] * 6]
 
 
 if __name__ == "__main__":
