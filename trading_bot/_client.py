@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2020-01-28 16:47:55
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-03-20 19:33:02
+# @Last modified time: 2020-05-09 16:13:59
 
 """ Clients to connect to TradingBotServer. """
 
@@ -118,6 +118,22 @@ class _ClientStrategyBot(_ClientBot):
         else:
 
             return 0.0
+
+    def get_available_volume(self, ccy):
+        """ Get the current available volume in balance following a currency.
+
+        Parameters
+        ----------
+        ccy : str
+            Currency pair.
+
+        Returns
+        -------
+        float
+            Available volume for the corresponding currency.
+
+        """
+        return float(self.p_state._getvalue()['balance'][ccy])
 
 
 class _ClientOrdersManager(_ClientBot):
