@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2020-02-04 16:04:55
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-05-09 10:11:00
+# @Last modified time: 2020-05-09 16:43:10
 
 """ Define some various richly-typed exceptions. """
 
@@ -77,6 +77,25 @@ class InsufficientFundsError(OrderError):
             msg += f" only {available_volume} {ccy} is available."
 
         super(InsufficientFundsError, self).__init__(order, msg)
+
+
+class InsufficientFunds(Exception):
+    """ Balance volume is insufficient. """
+
+    def __init__(self, ccy, type, vol, avail_vol, price, ccy_2):
+        """ Initialize the insufficient funds error. """
+        msg = "Insufficient funds for "
+        msg += f"{type} {vol}"
+        if type == 'buy':
+            cost = vol * price
+            msg += f" {ccy_2} at {cost} {ccy}"
+
+        else:
+            msg += f" {ccy}"
+
+        msg += f" only {avail_vol} {ccy} is available."
+
+        super(InsufficientFunds, self).__init__(msg)
 
 
 # =========================================================================== #
