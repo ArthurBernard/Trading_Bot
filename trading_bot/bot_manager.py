@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2020-01-27 09:58:03
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-05-01 15:45:11
+# @Last modified time: 2020-05-09 16:06:19
 
 """ Set a server and run each bot. """
 
@@ -152,10 +152,12 @@ class TradingBotManager(_TradingBotManager):
                 self.state['balance'].update(a)
                 self.logger.debug('recv {}: {}'.format(k, a))
 
-            elif k == 'order':
+            elif k in ['order', 'ife']:
+                # order executed or insufficient funds
                 # FIXME: make a function to get strategy bot ID
                 _id = int(str(a)[-3:])
                 if _id in self.conn_sb:
+                    # Send info to strategy bot
                     self.conn_sb[_id].send((k, a),)
 
                 else:
@@ -196,6 +198,7 @@ class TradingBotManager(_TradingBotManager):
 
     def listen_cli(self):
         self.logger.debug('start listen CLI')
+        self.conn_cli.send(('balance', self.state['balance']),)
         for k, a in self.conn_cli:
             if self.is_stop():
                 self.conn_cli.shutdown()
@@ -323,7 +326,8 @@ class TradingBotManager(_TradingBotManager):
 
         elif _id == -1:
             # TradingPerformance started
-            # not need to run a thread ?
+            # not need to run a thread because TradingPerformanceManager is
+            # not listen
             pass
 
         elif _id == -2:
@@ -357,8 +361,7 @@ class TradingBotManager(_TradingBotManager):
             conn = self.conn_om
 
         elif _id == -1:
-            # NOTHING NEEDED HERE ?
-            pass
+            conn = self.conn_tpm
 
         elif _id == -2:
             conn = self.conn_cli
