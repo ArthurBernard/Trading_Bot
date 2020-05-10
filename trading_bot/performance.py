@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2020-02-25 10:38:17
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-05-01 16:27:58
+# @Last modified time: 2020-05-10 17:31:18
 
 """ Objects to measure and display trading performance. """
 
@@ -46,6 +46,7 @@ class _PnLI:
             Initial value available of the trading strategy.
 
         """
+        self.logger = logging.getLogger('performance.PnL')
         self.index = data.loc[:, 'TS'].drop_duplicates()
         if v0 is None and data.ex_vol[0] != 0.:
             self.v0 = data.ex_vol[0] * data.price[0]
@@ -71,7 +72,8 @@ class _PnLI:
         self._set_df()
         if (self.pos[1:] != self.signal[:-1]).any():
 
-            raise ValueError('position at t + 1 does not match signal at t')
+            self.logger.error('position at t + 1 does not match signal at t')
+            # raise ValueError('position at t + 1 does not match signal at t')
 
     def _set_df(self):
         self.df = pd.DataFrame(
@@ -204,6 +206,7 @@ class _FullPnL:
             Series of prices.
 
         """
+        self.logger = logging.getLogger('performance.FullPnL')
         orders = orders.sort_values('userref').reset_index(drop=True)
         t_idx = orders.loc[:, 'TS'].drop_duplicates()
         self.t0, T = t_idx.min(), t_idx.max()
@@ -262,7 +265,8 @@ class _FullPnL:
             self.df.loc[self.t0: T - self.ts, 'signal'].values
         ):
 
-            raise ValueError('position at t + 1 does not match signal at t')
+            self.logger.error('position at t + 1 does not match signal at t')
+            # raise ValueError('position at t + 1 does not match signal at t')
 
     def __setitem__(self, key, value):
         self.df.loc[:, key] = value
@@ -398,7 +402,7 @@ class TradingPerformanceManager(_ClientPerformanceManager):
             address=address,
             authkey=authkey
         )
-        self.logger = logging.getLogger(__name__)
+        self.logger = logging.getLogger('performance')
 
     def __iter__(self):
         return self
