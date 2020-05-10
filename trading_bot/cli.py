@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2020-03-17 12:23:25
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-05-09 16:52:49
+# @Last modified time: 2020-05-10 17:36:16
 
 """ A (very) light Command Line Interface. """
 
@@ -588,6 +588,11 @@ class CLI(_ClientCLI):
             self.logger.info('Receive balance: {}'.format(a))
             self.balance = a
 
+        elif k in ['cpos', 'cvol']:
+            for key, args in self.strat_bot.items():
+                if args['id'] == a[0]:
+                    self.strat_bot[key][k] = a[1]
+
         else:
             self.logger.error('received unknown message {}: {}'.format(k, a))
 
@@ -599,6 +604,8 @@ class CLI(_ClientCLI):
         sb_dict['vali'] = cfg['order_instance'].get('validate', False)
         sb_dict['freq'] = cfg['strat_manager_instance']['frequency']
         sb_dict['kwrd'] = cfg['result_instance']
+        self.conn_tbm.send(('get_pos', _id),)
+        self.conn_tbm.send(('get_vol', _id),)
         sb_dict['cpos'] = cfg['strat_manager_instance']['current_pos']
         sb_dict['cvol'] = cfg['strat_manager_instance']['current_vol']
         if pair not in self.pair:
