@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2020-01-27 09:58:03
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-05-10 17:23:57
+# @Last modified time: 2020-05-10 18:31:21
 
 """ Set a server and run each bot. """
 
@@ -251,7 +251,7 @@ class TradingBotManager(_TradingBotManager):
                 }
                 self.conn_cli.send(('running_clients', running_clients),)
 
-            elif k in ['get_pos', 'get_col']:
+            elif k in ['get_pos', 'get_vol']:
                 self.conn_sb[a].send((k, a),)
 
             else:
