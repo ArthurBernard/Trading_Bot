@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2019-05-12 22:57:20
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-05-09 16:58:22
+# @Last modified time: 2020-05-10 17:24:17
 
 """ Client to manage a financial strategy. """
 
@@ -668,6 +668,12 @@ class StrategyBot(_ClientStrategyBot):
                     'timestep': self.frequency,
                     'real': not self.ord_kwrds.get('validate', False),
                 })
+
+        elif k == 'get_pos':
+            self.conn_tbm.send(('cpos', (self.id, self.current_pos)),)
+
+        elif k == 'get_vol':
+            self.conn_tbm.send(('cvol', (self.id, self.current_vol)),)
 
         # elif k == 'ife':
         #    # InsufficientFundsError

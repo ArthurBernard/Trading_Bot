@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2020-01-27 09:58:03
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-05-09 16:06:19
+# @Last modified time: 2020-05-10 17:23:57
 
 """ Set a server and run each bot. """
 
@@ -185,6 +185,9 @@ class TradingBotManager(_TradingBotManager):
                 self._handler_sb[k](a, _id)
                 self.logger.debug(_msg + '{}: {}'.format(k, a))
 
+            elif k in ['cpos', 'cvol']:
+                self.conn_cli.send((k, a),)
+
             elif k is None:
                 pass
 
@@ -247,6 +250,9 @@ class TradingBotManager(_TradingBotManager):
                     },
                 }
                 self.conn_cli.send(('running_clients', running_clients),)
+
+            elif k in ['get_pos', 'get_col']:
+                self.conn_sb[a].send((k, a),)
 
             else:
                 self.logger.error('Unknown command {}: {}'.format(k, a))
