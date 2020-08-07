@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2019-04-26 08:49:26
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-04-08 08:35:02
+# @Last modified time: 2020-08-07 19:34:14
 
 # Built-in import
 import json
@@ -647,9 +647,11 @@ class DataExchangeManager:
         except Exception as e:
             self.logger.error('UNKNOWN ERROR !\n' + '-' * 15 + '\n')
             # print('Error is', e, type(e))
+            self.logger.error("Error is", data['error'])
             self.logger.error('Answere is', data)
             self.logger.error('Args are', args)
             self.logger.error('Kwargs are', kwargs)
+
             raise e
 
     def clean_data(self, data, interval=60):  # , _raise=True):
