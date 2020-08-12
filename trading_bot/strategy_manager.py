@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2019-05-12 22:57:20
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-05-10 17:24:17
+# @Last modified time: 2020-08-12 23:39:37
 
 """ Client to manage a financial strategy. """
 
@@ -29,6 +29,9 @@ from trading_bot.tools.io import load_config_params, dump_config_params
 from trading_bot.tools.time_tools import now, str_time
 
 __all__ = ['StrategyBot']
+
+
+MIN_VOL_MARGIN = 1.10
 
 
 class StrategyBot(_ClientStrategyBot):
@@ -354,11 +357,11 @@ class StrategyBot(_ClientStrategyBot):
 
     def _check_avail_vol(self, ccy, type, vol, avail_vol, price, c2):
         if type == 'buy':
-            if vol * price * 1.01 > avail_vol:
+            if vol * price * MIN_VOL_MARGIN > avail_vol:
                 raise InsufficientFunds(ccy, type, vol, avail_vol, price, c2)
 
         else:
-            if vol * 1.01 > avail_vol:
+            if vol * MIN_VOL_MARGIN > avail_vol:
                 raise InsufficientFunds(ccy, type, vol, avail_vol, price, c2)
 
     def _set_long(self, signal, **kwargs):
@@ -377,7 +380,7 @@ class StrategyBot(_ClientStrategyBot):
 
         except InsufficientFunds:
             self.logger.error('Volume not available', exc_info=True)
-            kwargs['volume'] = avail_vol / price / 1.01
+            kwargs['volume'] = avail_vol / price / MIN_VOL_MARGIN
             self.logger.error(f"Set long pos with volume {kwargs['volume']}")
 
         result = self.send_order(**kwargs)
@@ -406,7 +409,7 @@ class StrategyBot(_ClientStrategyBot):
 
         except InsufficientFunds:
             self.logger.error('Volume not available', exc_info=True)
-            kwargs['volume'] = avail_vol / 1.01
+            kwargs['volume'] = avail_vol / MIN_VOL_MARGIN
             self.logger.error(f"Cut long pos with volume {kwargs['volume']}")
 
         # Query order
