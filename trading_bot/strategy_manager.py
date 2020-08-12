@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2019-05-12 22:57:20
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-08-12 23:53:06
+# @Last modified time: 2020-08-12 23:57:01
 
 """ Client to manage a financial strategy. """
 
@@ -265,7 +265,7 @@ class StrategyBot(_ClientStrategyBot):
         self.Order = self._handler_order[strat_cfg['order']]
         self.reinvest = strat_cfg['reinvest']
         if 'delay' in strat_cfg.keys():
-            self.delay = strat_cfg['delay']
+            self.delay = int(strat_cfg['delay'])
 
         self.logger.info('current position is {}'.format(self.current_pos))
         self.logger.info('current volume is {}'.format(self.current_vol))
