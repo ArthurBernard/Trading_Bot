@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2020-02-25 10:38:17
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-08-08 10:25:40
+# @Last modified time: 2020-08-13 22:20:17
 
 """ Objects to measure and display trading performance. """
 
@@ -148,6 +148,14 @@ class _PnLI:
     def _get_PnL(self, returns, pos, vol_pos, fee):
         return vol_pos * returns * pos - fee
 
+    def _repr_html_(self):
+        """ Return a html representation for a particular DataFrame. """
+        if self.df is not None:
+
+            return self.df._repr_html_()
+
+        return "None"
+
 
 class _PnLR(_PnLI):
     """ Object to compute PnL of only one asset. """
@@ -273,6 +281,18 @@ class _FullPnL:
 
     def __getitem__(self, key):
         return self.df.loc[:, key]
+
+    def __repr__(self):
+        """ Represent method. """
+        return self.df.__repr__()
+
+    def _repr_html_(self):
+        """ Return a html representation for a particular DataFrame. """
+        if self.df is not None:
+
+            return self.df._repr_html_()
+
+        return "None"
 
 
 class PnL(_FullPnL):
