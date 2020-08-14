@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2020-03-17 12:23:25
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-08-14 08:49:56
+# @Last modified time: 2020-08-14 22:52:48
 
 """ A (very) light Command Line Interface. """
 
@@ -81,7 +81,7 @@ def _zip_text(txt1, txt2, c='  '):
 def _rounder(*args, dec=0):
     """ Round each element of a list. """
     # return [round(float(arg), dec) for arg in args]
-    return [round(float(a), dec) if float(a) < 10e4 else format(a, "6.2e") for a in args]
+    return [round(float(a), dec) if float(a) < 10e3 else format(a, "5.1e") for a in args]
 
 
 class _ResultManager:  # (ResultManager):
