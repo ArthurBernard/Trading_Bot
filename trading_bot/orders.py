@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2020-02-06 11:57:48
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-04-22 10:39:10
+# @Last modified time: 2020-08-16 10:58:18
 
 """ Module with different Order objects.
 
@@ -190,16 +190,24 @@ class _BasisOrder:
         """ Cancel the order. """
         if self.status == 'open':
             ans = self._request('CancelOrder', txid=self.id)
-            if 'EOrder:Unknown order' in ans.get('error', []):
+            try:
+                if 'EOrder:Unknown order' in ans.get('error', []):
 
-                return ans
+                    return ans
 
-            elif ans['count'] == 0:
+                elif ans['count'] == 0:
 
-                raise OrderError(self, 'no order canceled')
+                    raise OrderError(self, 'no order canceled')
 
-            else:
-                self._update_status('canceled')
+                else:
+                    self._update_status('canceled')
+
+                    return ans
+
+            except KeyError:
+                # TODO : What to do when exception ?
+                msg = 'KEY ERROR : ans={}'.format(ans)
+                self.logger.error(msg, exc_info=True)
 
                 return ans
 
