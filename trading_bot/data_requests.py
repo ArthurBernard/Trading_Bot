@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2019-04-26 08:49:26
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-08-07 19:34:14
+# @Last modified time: 2020-08-21 11:11:25
 
 # Built-in import
 import json
@@ -645,12 +645,12 @@ class DataExchangeManager:
             return data['result']
 
         except Exception as e:
-            self.logger.error('UNKNOWN ERROR !\n' + '-' * 15 + '\n')
+            txt = 'UNKNOWN ERROR !\n' + '-' * 15 + '\n'
             # print('Error is', e, type(e))
-            self.logger.error("Error is", data['error'])
-            self.logger.error('Answere is', data)
-            self.logger.error('Args are', args)
-            self.logger.error('Kwargs are', kwargs)
+            txt += ("Error is {}\nAnswere is {} of type {}\nArgs are {}\n"
+                    "Kwargs are {}".format(data["error"], data, type(data),
+                                           args, kwargs))
+            self.logger.error(txt)
 
             raise e
 
