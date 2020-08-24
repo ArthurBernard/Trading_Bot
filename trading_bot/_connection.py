@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2020-02-20 16:35:31
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-03-31 18:20:21
+# @Last modified time: 2020-08-24 23:30:23
 
 """ Objects to send and receive objetcs between clients. """
 
@@ -30,7 +30,8 @@ class _BasisConnection:
 
     def __init__(self, _id, name='connection'):
         # self.logger = logging.getLogger(__name__)
-        self.logger = logging.getLogger(__name__ + '.{}-{}'.format(name, _id))
+        self.logger = logging.getLogger(__name__ + '.{}::{}'.format(name, _id))
+        self.detail_logger = logging.getLogger('conn.{}::{}'.format(name, _id))
         self.id = _id
         self.name = name
 
@@ -73,10 +74,26 @@ class _BasisConnection:
 
     def recv(self):
         k, a = self.r.recv()
+        if k == "fees" or k == "balance":
+            self.detail_logger.debug("recv {}: {}".format(k.upper(), type(a)))
+
+        else:
+            self.detail_logger.debug("recv {}: {}".format(k.upper(), a))
 
         return k, a
 
     def send(self, msg):
+        if isinstance(msg, tuple):
+            k, a = msg[0].upper(), msg[1]
+            if k == "FEES" or k == "BALANCE":
+                self.detail_logger.debug("send {} {}".format(k, type(a)))
+
+            else:
+                self.detail_logger.debug("send {} {}".format(k, a))
+
+        else:
+            self.detail_logger.debug("send {}".format(msg))
+
         self.w.send(msg)
 
     def poll(self):
