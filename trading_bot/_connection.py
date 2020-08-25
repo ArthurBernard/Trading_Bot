@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2020-02-20 16:35:31
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-08-24 23:30:23
+# @Last modified time: 2020-08-25 08:25:30
 
 """ Objects to send and receive objetcs between clients. """
 
@@ -30,8 +30,9 @@ class _BasisConnection:
 
     def __init__(self, _id, name='connection'):
         # self.logger = logging.getLogger(__name__)
-        self.logger = logging.getLogger(__name__ + '.{}::{}'.format(name, _id))
-        self.detail_logger = logging.getLogger('conn.{}::{}'.format(name, _id))
+        _name = '{}::{}'.format(name, _id)
+        self.logger = logging.getLogger(__name__ + '.' + _name)
+        self.detail_logger = logging.getLogger('conn.' + _name)
         self.id = _id
         self.name = name
 
@@ -62,23 +63,25 @@ class _BasisConnection:
         self.state = 'up'
         self.r = reader
         self.w = writer
-        self.logger.debug('setup {}'.format(self))
+        self.logger.debug('setup ----- {}'.format(self))
 
     def shutdown(self, msg=None):
         self.state = 'down'
         if msg is not None:
             self.logger.debug('shutdown because {}'.format(msg))
 
-        self.logger.debug('shutdown {}'.format(self))
+        self.logger.debug('shutdown - {}'.format(self))
         self._shutdown()
 
     def recv(self):
         k, a = self.r.recv()
         if k == "fees" or k == "balance":
-            self.detail_logger.debug("recv {}: {}".format(k.upper(), type(a)))
+            log_msg = "recv ------ {}: {}".format(k.upper(), type(a))
 
         else:
-            self.detail_logger.debug("recv {}: {}".format(k.upper(), a))
+            log_msg = "recv ------ {}: {}".format(k.upper(), a)
+
+        self.detail_logger.debug(log_msg)
 
         return k, a
 
@@ -86,14 +89,15 @@ class _BasisConnection:
         if isinstance(msg, tuple):
             k, a = msg[0].upper(), msg[1]
             if k == "FEES" or k == "BALANCE":
-                self.detail_logger.debug("send {} {}".format(k, type(a)))
+                log_msg = "send ------ {}: {}".format(k, type(a))
 
             else:
-                self.detail_logger.debug("send {} {}".format(k, a))
+                log_msg = "send ------ {}: {}".format(k, a)
 
         else:
-            self.detail_logger.debug("send {}".format(msg))
+            log_msg = "send ------ {}".format(msg)
 
+        self.detail_logger.debug(log_msg)
         self.w.send(msg)
 
     def poll(self):

@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2019-05-06 20:53:46
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-03-19 08:58:51
+# @Last modified time: 2020-08-25 08:36:29
 
 """ Kraken Client API object. """
 
@@ -24,6 +24,7 @@ from requests.exceptions import SSLError, ConnectionError
 
 # Internal packages
 
+# TODO : clean logging and add more details
 
 __all__ = ['KrakenClient']
 
@@ -137,6 +138,7 @@ class KrakenClient:
                 for error in self.error_list:
                     if error in r.json()['error']:
                         self.logger.error('{}: {}'.format(method, error))
+                        # FIXME : /!\ WHY RETURNS SOMETHING WITH AN ERROR ? /!\
 
                         return r.json()
 
@@ -145,7 +147,7 @@ class KrakenClient:
                 self.logger.error('HEAD: ' + str(headers))
                 self.logger.error('DATA: ' + str(data))
 
-                raise ValueError(r.json()['error'], r.json())
+                raise ValueError("{}: {}".format(r.json()['error'], r.json()))
 
             elif r.status_code in [200, 201, 202]:
                 self.logger.info('query_private | success')
@@ -154,7 +156,7 @@ class KrakenClient:
 
             else:
 
-                raise ValueError(r.status_code, r)
+                raise ValueError("{}: {}". format(r.status_code, r))
 
         except KeyError as e:
             error_msg = 'KeyError {} | '.format(type(e))
