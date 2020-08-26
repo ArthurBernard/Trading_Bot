@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2019-05-06 20:53:46
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-08-25 08:36:29
+# @Last modified time: 2020-08-26 23:25:38
 
 """ Kraken Client API object. """
 
@@ -67,7 +67,7 @@ class KrakenClient:
         self.uri = "https://api.kraken.com"
         self.key = key
         self.secret = secret
-        self.logger = logging.getLogger(__name__)
+        self.logger = logging.getLogger(__name__ + "KrakenClient")
         self.logger.info('init')
 
     def load_key(self, path):
@@ -142,10 +142,16 @@ class KrakenClient:
 
                         return r.json()
 
-                self.logger.error('ANSWERE: ' + str(r.json()))
-                self.logger.error('URL: ' + str(url))
-                self.logger.error('HEAD: ' + str(headers))
-                self.logger.error('DATA: ' + str(data))
+                # self.logger.error('ANSWERE: ' + str(r.json()))
+                # self.logger.error('URL: ' + str(url))
+                # self.logger.error('HEAD: ' + str(headers))
+                # self.logger.error('DATA: ' + str(data))
+                ans = r.json()
+                txt = ('UNKNOWN ERROR !\n' + '-' * 15 + "\nError is {}\n"
+                       "Answere is {} of type {}\nHeaders are {}\nData are {}"
+                       "\nURL is {}".format(ans["error"], ans, type(ans),
+                                            headers, data, url))
+                self.logger.error(txt, exc_info=True)
 
                 raise ValueError("{}: {}".format(r.json()['error'], r.json()))
 
