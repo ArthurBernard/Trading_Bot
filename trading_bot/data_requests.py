@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2019-04-26 08:49:26
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-08-21 11:11:25
+# @Last modified time: 2020-08-28 08:24:13
 
 # Built-in import
 import json
@@ -625,22 +625,23 @@ class DataExchangeManager:
             return self.get_data(*args, **kwargs)
 
     # TODO : to finish
-    def _get_data(self, *args, **kwargs):
+    def _get_data(self, *args, wait=1, **kwargs):
         try:
             data = self.req.get_data(*args, **kwargs)
 
         except RequestsConnectionError:
             self.logger.error('Requests failed, ConnectionError, wait 3 sec')
-            time.sleep(3)
+            time.sleep(wait)
+            wait *= 2
 
-            return self._get_data(*args, **kwargs)
+            return self._get_data(*args, wait=wait, **kwargs)
 
         try:
-            if 'Eservice:Unavailable' in data['error']:
+            if 'EService:Unavailable' in data['error']:
                 self.logger.error('eservice unvailable, wait 1 sec')
-                time.sleep(1)
+                time.sleep(wait)
 
-                return self._get_data(*args, **kwargs)
+                return self._get_data(*args, wait=wait, **kwargs)
 
             return data['result']
 
