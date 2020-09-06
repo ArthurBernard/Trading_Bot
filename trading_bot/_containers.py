@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2020-02-22 11:01:49
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-04-06 11:27:50
+# @Last modified time: 2020-09-06 10:25:04
 
 """ Module with specific containers objects. """
 
@@ -40,7 +40,7 @@ class OrderDict(dict):
 
     def __init__(self, *orders, **kworders):
         """ Initialize a collection of order objects. """
-        self.logger = logging.getLogger(__name__)
+        self.logger = logging.getLogger('orders_manager.container')
         for k, v in kworders.items():
             self._is_order(v)
 

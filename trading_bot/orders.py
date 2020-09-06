@@ -4,7 +4,7 @@
 # @Email: arthur.bernard.92@gmail.com
 # @Date: 2020-02-06 11:57:48
 # @Last modified by: ArthurBernard
-# @Last modified time: 2020-08-16 10:58:18
+# @Last modified time: 2020-09-06 10:20:01
 
 """ Module with different Order objects.
 
@@ -114,7 +114,7 @@ class _BasisOrder:
             'cost': 0,
             'start_time': int(time.time())
         }
-        self.logger = logging.getLogger('Order-' + str(id))
+        self.logger = logging.getLogger('orders_manager.Ord-' + str(id))
         self.id = id
         self.input = input
         self.tol = tol
