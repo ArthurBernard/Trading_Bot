@@ -6,6 +6,22 @@ rejected approaches as tombstones.
 
 ---
 
+### 2026-06-20 Kraken private WS: token-auth via on_connect, mock-verified (PR #19)
+
+**Decision.** `brokers/kraken_ws.py` `KrakenPrivateWS` streams Kraken v2 `executions`
+on `transport.WebSocketBase`, parsing frames into domain `Fill`s (trade execs) and
+`OrderUpdate`s. Kraken's private WS is not per-frame signed: `on_connect` fetches a
+short-lived **WebSocket token** (private REST `GetWebSocketsToken`, signed) via an
+injected `token_provider` seam and subscribes with it; re-running on reconnect
+re-fetches/re-subscribes (self-heal). **No key here** — token fetch + parsing are
+verified against realistic canned v2 frames; the live private connection is deferred.
+
+**Why.** Token-in-`on_connect` makes the private subscription idempotent across drops;
+the seam keeps the whole path offline-testable without credentials. Tokens are secrets
+and are never logged.
+
+---
+
 ### 2026-06-20 KrakenBroker REST: signing verified, env credentials, mock+public posture (PR #18)
 
 **Decision.** `brokers/kraken.py` implements the `Broker` port over Kraken REST.

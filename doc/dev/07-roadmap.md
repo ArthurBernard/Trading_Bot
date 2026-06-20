@@ -10,13 +10,6 @@ The single source *index* of open work. Each unchecked item is a candidate for
 > **Full decomposition** — every epic broken into its leaves, branches,
 > complexity and dependencies: [`08-program-plan.md`](08-program-plan.md).
 
-## Foundation
-
-- [ ] **E3 — Broker port + Kraken adapter.** `Broker` protocol (place/cancel/
-  replace, open orders, balances, fills, market data) + registry; `KrakenBroker`
-  (REST first, WS fills next). Other venues declared, not implemented.
-  _(depends on E1, E2)_
-
 ## Execution engine
 
 - [ ] **E4 — Order router + PaperBroker.** Idempotent submit (client-order-id),

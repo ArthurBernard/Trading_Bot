@@ -6,7 +6,7 @@ complexity: high
 depends: [02]
 parallel: false
 branch: feat/broker-kraken-ws
-pr: ""
+pr: "#19"
 ---
 
 # KrakenBroker — private WebSocket (fills / order updates)

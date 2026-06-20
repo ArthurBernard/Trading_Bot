@@ -1,7 +1,7 @@
 ---
 plan: broker-kraken
 kind: global
-status: planning
+status: done
 roadmap: "- [ ] **E3 — Broker port + Kraken adapter.** `Broker` protocol (place/cancel/replace, open orders, balances, fills, market data) + registry; `KrakenBroker` (REST first, WS fills next). Other venues declared, not implemented."
 release_on_done: false
 ---
@@ -35,7 +35,7 @@ logged or committed.
 
 - [x] 01 broker-port — feat/broker-port — high
 - [x] 02 kraken-rest — feat/broker-kraken-rest — high (depends on 01)
-- [ ] 03 kraken-ws — feat/broker-kraken-ws — high (depends on 02)
+- [x] 03 kraken-ws — feat/broker-kraken-ws — high (depends on 02)
 
 ## Dependencies
 
