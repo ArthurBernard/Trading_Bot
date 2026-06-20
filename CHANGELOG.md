@@ -15,6 +15,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Git Flow (`develop` / `master`) with `CONTRIBUTING.md` and a `pre-push` hook.
 - Domain primitives — Decimal `money` (float-guarded), venue-neutral `instrument`
   with Kraken normalisation, and the `errors` hierarchy. (#7)
+- `Order` aggregate + lifecycle state machine and order types
+  (market/limit/stop-loss/best-limit), with exact Decimal fill accounting. (#8)
 
 ### Changed
 

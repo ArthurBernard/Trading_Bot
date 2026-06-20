@@ -6,6 +6,24 @@ rejected approaches as tombstones.
 
 ---
 
+### 2026-06-20 Order lifecycle as an explicit state machine (PR #8)
+
+**Decision.** `domain/order.py` models the order as a **mutable, stateful
+aggregate** with a typed `OrderStatus` machine (NEW→SUBMITTED→OPEN→
+PARTIALLY_FILLED→FILLED, plus CANCELLED/REJECTED) — replacing the legacy
+`{None,'open','canceled','closed'}`. State changes only through five guarded
+transitions; `apply_fill` accumulates an exact Decimal quantity-weighted average
+price and closes to FILLED when the unfilled fraction is below `fill_tolerance`
+(0.1%, ported from legacy `check_vol_exec`). Over-fills are rejected;
+`client_order_id` is mandatory (idempotency invariant).
+
+**Why.** An order has stable identity and a long fill-by-fill life; a mutable
+aggregate guarded by explicit transitions keeps the machine the single source of
+truth without copy-threading noise. The tolerance handles venues leaving sub-tick
+dust. **Rejected:** immutable copy-on-transition (noise without added safety).
+
+---
+
 ### 2026-06-20 Decimal-guarded Money & Kraken normalisation in `domain/` (PR #7)
 
 **Decision.** `domain/money.py` accepts only `str`/`int`/`Decimal`; a `float`

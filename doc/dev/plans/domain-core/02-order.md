@@ -6,7 +6,7 @@ complexity: high
 depends: [01]
 parallel: false
 branch: feat/domain-order
-pr: ""
+pr: "#8"
 ---
 
 # Order aggregate + lifecycle state machine
