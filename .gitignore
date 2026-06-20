@@ -1,23 +1,51 @@
-# Files to ignore
-id_timestamp
-general_config.yaml
-_README.md
-
-# Extensions to ignore
+# Byte-compiled / caches
+__pycache__/
+*.py[cod]
 *.so
-*.html
-*.ipynb_checkpoints
-*.log
-*.dat
+.cache/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
 
-# Folders to ignore
+# Build / packaging
+build/
+dist/
 *.egg-info/
 env/
-build/
-__pycache__/
-.pytest_cache/
-strategies/
+.venv/
+.python-version
+
+# Coverage
+.coverage
+htmlcov/
+coverage.xml
+
+# Secrets & runtime config (never commit)
+.env
+*.key
+secrets/
+general_config.yaml
+id_timestamp
+_README.md
+
+# Logs / data / notebooks
+*.log
+*.db
+*.dat
+*.html
+*.ipynb_checkpoints
+logs/
 errors/
+
+# Sphinx generated
+doc/source/generated/
+doc/build/
+doc/_build/
+
+# Archived (pre-rewrite) developer docs — local snapshot, not tracked
+doc/dev/_archive/
+
+# Local-only scratch
 dev_test/
 old_scripts/
 deprecated*
