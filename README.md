@@ -1,121 +1,67 @@
-# Trading_Bot - Autonomous Trading Bot in Python for algorithmic financial strategies [In Progress]
+# Trading_Bot
 
-![GitHub](https://img.shields.io/github/license/ArthurBernard/Trading_Bot)
-[![Language grade: Python](https://img.shields.io/lgtm/grade/python/g/ArthurBernard/Trading_Bot.svg?logo=lgtm&logoWidth=18)](https://lgtm.com/projects/g/ArthurBernard/Trading_Bot/context:python)
+**Execution & orchestration layer of a three-repo trading stack.** Hexagonal,
+async-first. *(Rewrite in progress — see status below.)*
 
-## /!\ Not yet working but comming soon ! /!\
+![License](https://img.shields.io/github/license/ArthurBernard/Trading_Bot)
 
-## Description
+## The triptych
 
-This project is in progress, eventually it will be able to automatically manage several strategies, signal calculation, order execution, allow history performance, etc.    
+| Repo | Role |
+|------|------|
+| [**dccd**](https://github.com/ArthurBernard/Download_Crypto_Currencies_Data) | **Data** — multi-exchange market-data collection & storage (async, Parquet) |
+| [**fynance**](https://github.com/ArthurBernard/Fynance) | **Research** — features, models, allocation, walk-forward backtest |
+| **Trading_Bot** (this repo) | **Execution & orchestration** — run strategies live, route & manage orders, track positions / PnL / risk, and wire the other two together |
 
-Initially `Trading_Bot` will be used with the Kraken crypto-currency exchange platform, but in the long term this project may be extended to other trading platforms (e.g. Bitfinex, Bitmex or some more classical trading platforms as Interactive-Brokers). 
+Trading_Bot is the part that *acts*: it takes data from dccd and signals from
+fynance, and turns them into managed orders on real exchanges.
 
-## Requirements
+## Status
 
-- System:
-    - Unix OS (Linux or MacOS)
+The pre-2026 implementation has been **parked under `trading_bot/legacy/`**
+(reference only) and the project is being rewritten as a clean hexagonal,
+async-first engine — harmonised with dccd. The current milestone is the
+foundation (domain, transport, a Kraken broker behind a multi-exchange port, a
+paper-trading broker, the order router and strategy runner). Track progress in
+[`doc/dev/07-roadmap.md`](doc/dev/07-roadmap.md).
 
-- Python version:
-    - 3.7
-    - 3.8
+**Design stance:** multi-exchange from day one (Kraken implemented first);
+paper-trading by default, live behind an explicit opt-in; all money in `Decimal`;
+reconcile-don't-assume; risk limits + kill-switch on every order.
 
-- Python package:
-    - blessed
-    - fynance
-    - numpy
-    - pandas
-    - requests
-
-## Installation
-
-At the root of a folder, clone the repository and install it with `pip`:
-
-```bash
-$ git clone https://github.com/ArthurBernard/Trading_Bot.git    
-$ cd Trading_Bot    
-$ pip install -e trading_bot   
-```
-
-## Quick-start
-
-At the root of `Trading_Bot`:
-
-### 1. Create a strategy:
-
-Make a folder `./strategies/YOUR_STRATEGY_NAME` with 3 scripts to configurate the strategy: `__init__.py` an empty file, `configuration.yaml` and `strategy.py`. See examples in the following directory `./strategies/example/` and `./strategies/another_example/`.
+## Install
 
 ```bash
-$ mkdir ./strategies/YOUR_STRATEGY_NAME   
-$ touch ./strategies/YOUR_STRATEGY_NAME/__init__.py   
-$ touch./strategies/YOUR_STRATEGY_NAME/configuration.yaml   
-$ touch ./strategies/YOUR_STRATEGY_NAME/strategy.py   
+git clone https://github.com/ArthurBernard/Trading_Bot.git
+cd Trading_Bot
+pip install -e ".[dev]"
 ```
 
-TODO : tuto how write `configuration.yaml` and `strategy.py`.
-
-### 2. Start the bot manager server.
-
-Set `./general_config.yaml` file (or let it as default) with:
-  - `log_file`: the path of your log file.
-  - `strategy`: the path where you save your custom strategy functions.
-  - `address`: address of your server and port (can be local or remote).
-  - `authkey`: password of your server.
-  - `auto`: if true starts automatically the order manager and performance manager client, otherwise you must to run it mannually.
-
-And run the trading bot:
+Triptych integration (optional until the integration code lands):
 
 ```bash
-$ python ./trading_bot/bot_manager.py > /dev/null 2>&1 &
+pip install -e ".[dev,triptych]"                    # + fynance (PyPI)
+pip install -e ../Download_Crypto_Currencies_Data   # dccd (editable)
 ```
 
-If you have to choose to run mannually the order manager and trading performance manager clients:
+## Develop
 
 ```bash
-$ python ./trading_bot/orders_manager.py &
-$ python ./trading_bot/performance.py &
+pytest                      # tests (legacy & network excluded by default)
+ruff check trading_bot/     # lint
+mypy trading_bot/           # types
 ```
 
-### 3. Manage trading bots with the CLI.
-
-```bash
-$ python ./trading_bot/cli.py
-```
-
-With the CLI you can start or stop one or several strategy bots, display KPI of the running strategy bots and stop the trading bot.
-
-The following command lines are available:
-- `q`: quite the command line interface.
-- `stop`: stop the trading bot server and all the client strategies.
-- `stop [STRATEGY_NAME]`: stop the strategy bot manager `STRATEGY_NAME`.
-- `start [STRATEGY_NAME]`: start the strategy bot manager `STRATEGY_NAME`.
-- `<ENTER>`: display the performance table of running strategies.
-
-TODO: append more command lines (e.g dispaly plot of performance, force to execute a pending order (i.e if an order wasn't executed due to a bug), etc.)
-
-### 4. Monitor loggers.
-
-You can see the logs of trading bot in the files `debug.log` and `error.log`.
-
-## Custom your own strategy manager
-
-Documentation is available at [comming soon].
+The repo follows a tooled dev loop (`/pick-task → /plan → /execute-leaf →
+/finish-task → /release`); see [`CLAUDE.md`](CLAUDE.md) and
+[`doc/dev/`](doc/dev/) for the full developer brief and conventions.
 
 ## Disclaimer
 
-Do not risk money which you are afraid to lose.
-Use the trading bot at your own risk, the authors assume no responsibility for your trading results.
-Read the source code and make sure there are not undesirable behaviors.
+Do not risk money which you are afraid to lose. Use the trading bot at your own
+risk; the authors assume no responsibility for your trading results. Read the
+source code and make sure there are no undesirable behaviours.
 
-## TODO list
+## License
 
-- General: 
-    - Make documentation and clean objects;
-    - Improve Quick-Start;
-    - Improve CLI/make GUI.
-- `bot_manager.py`:
-    - Start automatically several `StrategyManager` clients on several process;
-- `_order.py`:
-    - Use WebSockets instead of REST API.
-- `strategy_manager.py`:
-    - Choose invested value in quote or base currency.
+MIT — see [LICENSE.txt](LICENSE.txt).
