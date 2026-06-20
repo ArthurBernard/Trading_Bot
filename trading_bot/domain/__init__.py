@@ -16,12 +16,16 @@ Public surface:
   lifecycle state machine (:class:`~trading_bot.domain.order.OrderSide`,
   :class:`~trading_bot.domain.order.OrderType`,
   :class:`~trading_bot.domain.order.OrderStatus`);
+* fill — the immutable :class:`~trading_bot.domain.fill.Fill` execution record;
+* position — the :class:`~trading_bot.domain.position.Position` net exposure
+  rebuilt from fills;
 * errors — the :class:`~trading_bot.domain.errors.TradingBotError` hierarchy.
 """
 
 from __future__ import annotations
 
 from trading_bot.domain.errors import (
+    InstrumentMismatch,
     InsufficientFunds,
     MissingOrder,
     NoCapability,
@@ -30,6 +34,7 @@ from trading_bot.domain.errors import (
     RiskLimitBreached,
     TradingBotError,
 )
+from trading_bot.domain.fill import Fill
 from trading_bot.domain.instrument import (
     Instrument,
     Symbol,
@@ -52,6 +57,7 @@ from trading_bot.domain.order import (
     OrderStatus,
     OrderType,
 )
+from trading_bot.domain.position import Position
 
 __all__ = [
     # money
@@ -73,11 +79,16 @@ __all__ = [
     "OrderType",
     "OrderStatus",
     "DEFAULT_FILL_TOLERANCE",
+    # fill
+    "Fill",
+    # position
+    "Position",
     # errors
     "TradingBotError",
     "OrderError",
     "OrderStatusError",
     "MissingOrder",
+    "InstrumentMismatch",
     "InsufficientFunds",
     "RiskLimitBreached",
     "NoCapability",

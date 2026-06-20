@@ -1,7 +1,7 @@
 ---
 plan: domain-core/03-fill-position
 kind: leaf
-status: planned
+status: done
 complexity: medium
 depends: [02]
 parallel: false

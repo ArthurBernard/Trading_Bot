@@ -20,6 +20,7 @@ __all__ = [
     "OrderError",
     "OrderStatusError",
     "MissingOrder",
+    "InstrumentMismatch",
     "InsufficientFunds",
     "RiskLimitBreached",
     "NoCapability",
@@ -81,6 +82,30 @@ class MissingOrder(TradingBotError):
     def __init__(self, order_id: str) -> None:
         self.order_id = order_id
         super().__init__(f"order {order_id} is missing")
+
+
+class InstrumentMismatch(TradingBotError):
+    """Two domain objects that must share an instrument do not.
+
+    Raised, e.g., when folding fills into a single position and a fill names a
+    different instrument than the position is built on (a position is the net
+    exposure of *one* instrument).
+
+    Parameters
+    ----------
+    expected : str
+        The instrument the operation is bound to (its ``BASE/QUOTE`` string).
+    actual : str
+        The mismatching instrument that was supplied.
+
+    """
+
+    def __init__(self, expected: str, actual: str) -> None:
+        self.expected = expected
+        self.actual = actual
+        super().__init__(
+            f"instrument mismatch: expected {expected}, got {actual}"
+        )
 
 
 class InsufficientFunds(TradingBotError):
