@@ -6,6 +6,9 @@ The single source *index* of open work. Each unchecked item is a candidate for
 
 > Order is roughly sequential (E1 → E10); dependencies noted inline. Re-slice
 > freely — an epic may ship as several small PRs.
+>
+> **Full decomposition** — every epic broken into its leaves, branches,
+> complexity and dependencies: [`08-program-plan.md`](08-program-plan.md).
 
 ## Foundation
 
