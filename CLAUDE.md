@@ -33,12 +33,13 @@ from PyPI for the integration code (see Dependencies).
 ## Commands
 
 ```bash
-# Dev install (Python 3.11+)
+# Dev env (Python 3.11+) — use a project venv (.venv/, gitignored) so the triptych
+# deps are present. Without fynance the domain/performance KPI tests SKIP; without
+# dccd the E5+ data-feed tests skip.
+python -m venv .venv && . .venv/bin/activate
 pip install -e ".[dev]"
-
-# Add the triptych deps (fynance from PyPI; dccd editable from its repo)
-pip install -e ".[dev,triptych]"
-pip install -e ../Download_Crypto_Currencies_Data   # dccd (not on PyPI)
+pip install -e ../Fynance                            # fynance — enables the KPI tests
+pip install -e ../Download_Crypto_Currencies_Data    # dccd — market data (E5+)
 
 # Run the full unit suite (legacy excluded; network E2E excluded by default)
 pytest
