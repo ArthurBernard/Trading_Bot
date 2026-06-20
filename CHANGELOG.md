@@ -33,6 +33,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   **E2 transport** layer. (#15)
 - `brokers.Broker` port (runtime-checkable Protocol over domain types) +
   `Capability` model + `BrokerRegistry`. (#17)
+- `brokers.KrakenBroker` — Kraken REST adapter: HMAC-SHA512 request signing
+  (verified vs Kraken's published vector), signed orders/balances/fills, public
+  market data. Credentials via env; public data works key-free. (#18)
 
 ### Changed
 

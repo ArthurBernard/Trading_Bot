@@ -6,6 +6,24 @@ rejected approaches as tombstones.
 
 ---
 
+### 2026-06-20 KrakenBroker REST: signing verified, env credentials, mock+public posture (PR #18)
+
+**Decision.** `brokers/kraken.py` implements the `Broker` port over Kraken REST.
+`_sign` (nonce + `SHA256(nonce+postdata)` → `HMAC-SHA512(b64decode(secret))` → b64)
+is verified against **Kraken's published signature test vector**. Credentials come
+from env (`KRAKEN_API_KEY`/`KRAKEN_API_SECRET`), never logged; the broker is
+constructible without them (public market data works key-free), and a private call
+without both raises `BrokerError` before any I/O. Order mapping: side→buy/sell,
+type→ordertype (`BEST_LIMIT`→limit), qty→volume, price from limit/stop; money stays
+`Decimal` from Kraken's string amounts. Private endpoints are **mock-tested only**
+(no key); real private verification is deferred.
+
+**Why.** The published test vector proves the signing matches Kraken's spec exactly
+without a key, so real orders would sign correctly. Env-only secrets keep keys out of
+the repo and logs; Decimal-from-string avoids float error on venue amounts.
+
+---
+
 ### 2026-06-20 Broker port: runtime-checkable Protocol + capability declaration (PR #17)
 
 **Decision.** `brokers/base.py` defines the venue-neutral async `Broker` as a

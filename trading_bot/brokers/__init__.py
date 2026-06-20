@@ -9,8 +9,8 @@ adapters. The port speaks :mod:`trading_bot.domain` types only and its concrete
 adapters use the :mod:`trading_bot.transport` plumbing; the domain never imports
 a broker.
 
-This package is a pure interface here — the concrete Kraken adapter lands in the
-next leaf.
+The :class:`~trading_bot.brokers.kraken.KrakenBroker` is the first concrete
+adapter behind this port.
 
 Public surface:
 
@@ -23,12 +23,15 @@ Public surface:
   an operation it has not declared;
 * :class:`~trading_bot.brokers.registry.BrokerRegistry` — venue key to adapter;
 * :class:`~trading_bot.domain.errors.BrokerError` — the venue-neutral broker
-  failure (re-exported for convenience).
+  failure (re-exported for convenience);
+* :class:`~trading_bot.brokers.kraken.KrakenBroker` — the concrete Kraken REST
+  adapter (signed orders/balances/fills + public market data).
 """
 
 from __future__ import annotations
 
 from trading_bot.brokers.base import Broker, BrokerError, Capability, require
+from trading_bot.brokers.kraken import KrakenBroker
 from trading_bot.brokers.registry import BrokerRegistry
 
 __all__ = [
@@ -37,4 +40,5 @@ __all__ = [
     "require",
     "BrokerError",
     "BrokerRegistry",
+    "KrakenBroker",
 ]
