@@ -111,14 +111,11 @@ checklist) → … per leaf … → last leaf removes the roadmap line → `/rel
 
 The full plan-tree format lives in [`doc/dev/plans/README.md`](doc/dev/plans/README.md).
 
-**Model per task** (advisory — set via `/model`, or a plan leaf's `complexity`
-derives it: `low→haiku`, `medium→sonnet`, `high→opus`):
-
-| Model | For |
-|-------|-----|
-| `opus` | judgement, design, decisions, planning, review |
-| `sonnet` | implementation — code, tests, docstrings |
-| `haiku` | mechanical fan-out (doc scans, checklists) — spawn explicitly as a subagent |
+**Model: `opus`, always.** Per the maintainer's standing preference, **all work on
+this repo runs on `opus`** — interactive sessions *and* every spawned subagent
+(including `/execute-leaf`), regardless of a leaf's `complexity`. The `complexity`
+tag still records effort/risk and orders the execution queue, but it **does not
+downgrade the model**: treat `low | medium | high` all as `opus`.
 
 ## Architecture (target — hexagonal, mirrors dccd)
 
