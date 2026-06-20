@@ -21,6 +21,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (flips, fee-aware realised PnL). (#9)
 - `Signal` — venue-neutral strategy target (fractional exposure or explicit
   target quantity) with `delta_to(position)`. (#10)
+- Pure PnL/KPI performance functions — `pnl`/`cum_pnl`/`equity_curve` (Decimal),
+  with Sharpe/Sortino/max-drawdown/Calmar delegated to fynance. Completes the
+  **E1 domain core**. (#11)
 
 ### Changed
 
