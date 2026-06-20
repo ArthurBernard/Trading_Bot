@@ -7,7 +7,7 @@
   "changelog": "CHANGELOG.md",
   "plans_dir": "doc/dev/plans",
   "plans_archive": "doc/dev/_archive/plans",
-  "test_cmd": "pytest",
-  "lint_cmd": "ruff check trading_bot/",
+  "test_cmd": ".venv/bin/python -m pytest",
+  "lint_cmd": ".venv/bin/ruff check trading_bot/",
   "docs_src": "doc/source"
 }
