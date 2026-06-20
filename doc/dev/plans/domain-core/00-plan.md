@@ -27,7 +27,7 @@ no imports from `transport`/`brokers`/`storage`. The pre-2026 tree
 
 ## Leaf checklist
 
-- [ ] 01 primitives — feat/domain-primitives — medium
+- [x] 01 primitives — feat/domain-primitives — medium
 - [ ] 02 order — feat/domain-order — high (depends on 01)
 - [ ] 03 fill-position — feat/domain-fill-position — medium (depends on 02)
 - [ ] 04 signal — feat/domain-signal — low (depends on 01)

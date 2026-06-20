@@ -6,6 +6,22 @@ rejected approaches as tombstones.
 
 ---
 
+### 2026-06-20 Decimal-guarded Money & Kraken normalisation in `domain/` (PR #7)
+
+**Decision.** `domain/money.py` accepts only `str`/`int`/`Decimal`; a `float`
+(and `bool`) raises `TypeError`. The single sanctioned float entry point is
+`from_float()`, which routes through `str(value)` to get the shortest
+round-tripping decimal (`from_float(0.1) == Decimal("0.1")`). `quantize` defaults
+to `ROUND_DOWN` so an order never overshoots a tick/lot. `domain/instrument.py`
+normalises Kraken assets with the alias table **mined from the dccd Kraken
+adapter** (`XBT→BTC`, `XDG→DOGE`) plus Kraken's legacy 4-char `X`/`Z` prefix rule.
+
+**Why.** Money correctness is a core invariant — `Decimal(0.1)` already carries
+binary error, so floats must never enter silently. Reusing dccd's table keeps the
+two repos consistent instead of inventing a divergent mapping.
+
+---
+
 ### 2026-06-20 Bootstrap the dev environment & Claude workflow (Phase 0)
 
 **Decision.** Bring the repo up to the dccd/fynance standard *before* writing any
