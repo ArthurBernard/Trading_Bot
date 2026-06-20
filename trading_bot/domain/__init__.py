@@ -12,6 +12,10 @@ Public surface:
   :func:`~trading_bot.domain.money.quantize`, ...);
 * instrument — venue-neutral :class:`~trading_bot.domain.instrument.Symbol` /
   :class:`~trading_bot.domain.instrument.Instrument` with Kraken normalisation;
+* order — the :class:`~trading_bot.domain.order.Order` aggregate and its
+  lifecycle state machine (:class:`~trading_bot.domain.order.OrderSide`,
+  :class:`~trading_bot.domain.order.OrderType`,
+  :class:`~trading_bot.domain.order.OrderStatus`);
 * errors — the :class:`~trading_bot.domain.errors.TradingBotError` hierarchy.
 """
 
@@ -41,6 +45,13 @@ from trading_bot.domain.money import (
     quantize,
     sub,
 )
+from trading_bot.domain.order import (
+    DEFAULT_FILL_TOLERANCE,
+    Order,
+    OrderSide,
+    OrderStatus,
+    OrderType,
+)
 
 __all__ = [
     # money
@@ -56,6 +67,12 @@ __all__ = [
     "Instrument",
     "normalise",
     "parse_kraken_pair",
+    # order
+    "Order",
+    "OrderSide",
+    "OrderType",
+    "OrderStatus",
+    "DEFAULT_FILL_TOLERANCE",
     # errors
     "TradingBotError",
     "OrderError",
