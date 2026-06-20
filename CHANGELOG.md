@@ -24,6 +24,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Pure PnL/KPI performance functions — `pnl`/`cum_pnl`/`equity_curve` (Decimal),
   with Sharpe/Sortino/max-drawdown/Calmar delegated to fynance. Completes the
   **E1 domain core**. (#11)
+- `transport.AsyncHTTPClient` — async httpx wrapper (get/post, retry with
+  increasing exponential backoff, `Retry-After` on 429, timeouts). (#13)
 
 ### Changed
 

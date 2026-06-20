@@ -28,7 +28,7 @@ is venue-neutral plumbing.
 
 ## Leaf checklist
 
-- [ ] 01 http — feat/transport-http — medium
+- [x] 01 http — feat/transport-http — medium
 - [ ] 02 ws — feat/transport-ws — medium
 - [ ] 03 ratelimit — feat/transport-ratelimit — medium
 
