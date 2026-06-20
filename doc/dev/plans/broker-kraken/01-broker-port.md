@@ -1,12 +1,12 @@
 ---
 plan: broker-kraken/01-broker-port
 kind: leaf
-status: planned
+status: done
 complexity: high
 depends: []
 parallel: false
 branch: feat/broker-port
-pr: ""
+pr: "#17"
 ---
 
 # Broker port + registry

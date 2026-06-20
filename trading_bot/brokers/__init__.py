@@ -1,0 +1,40 @@
+"""trading_bot brokers layer — venue adapters behind a :class:`Broker` port.
+
+This is the **execution layer**: the venue-neutral
+:class:`~trading_bot.brokers.base.Broker` contract that every exchange adapter
+implements, a :class:`~trading_bot.brokers.base.Capability` model declaring what
+a given adapter actually serves, and a
+:class:`~trading_bot.brokers.registry.BrokerRegistry` mapping venue names to
+adapters. The port speaks :mod:`trading_bot.domain` types only and its concrete
+adapters use the :mod:`trading_bot.transport` plumbing; the domain never imports
+a broker.
+
+This package is a pure interface here — the concrete Kraken adapter lands in the
+next leaf.
+
+Public surface:
+
+* :class:`~trading_bot.brokers.base.Broker` — the async, runtime-checkable
+  :class:`~typing.Protocol` every venue adapter satisfies;
+* :class:`~trading_bot.brokers.base.Capability` — the operations an adapter may
+  declare it supports;
+* :func:`~trading_bot.brokers.base.require` — the gate that raises
+  :class:`~trading_bot.domain.errors.NoCapability` when an adapter is asked for
+  an operation it has not declared;
+* :class:`~trading_bot.brokers.registry.BrokerRegistry` — venue key to adapter;
+* :class:`~trading_bot.domain.errors.BrokerError` — the venue-neutral broker
+  failure (re-exported for convenience).
+"""
+
+from __future__ import annotations
+
+from trading_bot.brokers.base import Broker, BrokerError, Capability, require
+from trading_bot.brokers.registry import BrokerRegistry
+
+__all__ = [
+    "Broker",
+    "Capability",
+    "require",
+    "BrokerError",
+    "BrokerRegistry",
+]

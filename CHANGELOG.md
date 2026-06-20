@@ -31,6 +31,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `transport.RateLimiter` + `KrakenCallCounter` — per-exchange token-bucket plus
   Kraken's decaying call-counter (tiers, per-endpoint costs). Completes the
   **E2 transport** layer. (#15)
+- `brokers.Broker` port (runtime-checkable Protocol over domain types) +
+  `Capability` model + `BrokerRegistry`. (#17)
 
 ### Changed
 

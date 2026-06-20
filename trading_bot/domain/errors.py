@@ -24,12 +24,35 @@ __all__ = [
     "InsufficientFunds",
     "RiskLimitBreached",
     "NoCapability",
+    "BrokerError",
     "SignalError",
 ]
 
 
 class TradingBotError(Exception):
     """Root of every error raised by the trading bot domain."""
+
+
+class BrokerError(TradingBotError):
+    """A broker/venue adapter operation failed.
+
+    The venue-neutral error every :class:`~trading_bot.brokers.base.Broker`
+    adapter raises for a generic failure that is not better described by a more
+    specific member of this hierarchy (e.g. a venue returning an error body, an
+    unknown venue looked up in the registry, an adapter that cannot satisfy a
+    request). It carries plain data only — adapters decode the venue payload and
+    pass a human-readable message; the error never reaches for a client or an
+    I/O object.
+
+    Parameters
+    ----------
+    msg : str
+        Human-readable detail of the failure.
+
+    """
+
+    def __init__(self, msg: str) -> None:
+        super().__init__(msg)
 
 
 class OrderError(TradingBotError):

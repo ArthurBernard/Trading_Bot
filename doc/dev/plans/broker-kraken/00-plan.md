@@ -33,7 +33,7 @@ logged or committed.
 
 ## Leaf checklist
 
-- [ ] 01 broker-port — feat/broker-port — high
+- [x] 01 broker-port — feat/broker-port — high
 - [ ] 02 kraken-rest — feat/broker-kraken-rest — high (depends on 01)
 - [ ] 03 kraken-ws — feat/broker-kraken-ws — high (depends on 02)
 

@@ -28,6 +28,7 @@ Public surface:
 from __future__ import annotations
 
 from trading_bot.domain.errors import (
+    BrokerError,
     InstrumentMismatch,
     InsufficientFunds,
     MissingOrder,
@@ -129,5 +130,6 @@ __all__ = [
     "InsufficientFunds",
     "RiskLimitBreached",
     "NoCapability",
+    "BrokerError",
     "SignalError",
 ]
