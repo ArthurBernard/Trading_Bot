@@ -1,7 +1,7 @@
 ---
 plan: transport/03-ratelimit
 kind: leaf
-status: planned
+status: done
 complexity: medium
 depends: []
 parallel: false
