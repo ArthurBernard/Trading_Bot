@@ -41,5 +41,6 @@ done. The authoritative working rules live in the repo-root `CLAUDE.md`.
 
 - This is descriptive, not aspirational: write what the repo **is**, not what it
   should become. Open work goes in [`07-roadmap.md`](07-roadmap.md) — the single
-  source *index* — and its detailed expansion (while being worked) in
-  [`plans/`](plans/); history stays in git/CHANGELOG.
+  source *index* — its **full decomposition** (every leaf + branch + deps) in
+  [`08-program-plan.md`](08-program-plan.md), and its executable expansion (while
+  being worked) in [`plans/`](plans/); history stays in git/CHANGELOG.
