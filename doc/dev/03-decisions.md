@@ -6,6 +6,19 @@ rejected approaches as tombstones.
 
 ---
 
+### 2026-06-20 Transport WS: subscriptions via on_connect; send() needs a live socket (PR #14)
+
+**Decision.** `transport.WebSocketBase.stream_raw()` reconnects with increasing,
+capped backoff (the attempt counter resets after a successful connect). `send()`
+raises if not connected; subscriptions/auth go through the `on_connect` hook, which
+re-runs on every (re)connect so they **self-heal** across drops.
+
+**Why.** A frame queued while disconnected would either miss its window or land on
+the wrong post-reconnect socket. Putting subscriptions in `on_connect` makes them
+idempotent across reconnects with no bookkeeping.
+
+---
+
 ### 2026-06-20 Transport HTTP: increasing backoff + Protocol limiter seam (PR #13)
 
 **Decision.** `transport.AsyncHTTPClient` retries transient failures (5xx, network

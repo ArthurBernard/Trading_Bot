@@ -26,6 +26,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   **E1 domain core**. (#11)
 - `transport.AsyncHTTPClient` — async httpx wrapper (get/post, retry with
   increasing exponential backoff, `Retry-After` on 429, timeouts). (#13)
+- `transport.WebSocketBase` — async WS base: `stream_raw()` + increasing
+  exponential reconnect, `on_connect` hook, `send()`. (#14)
 
 ### Changed
 
