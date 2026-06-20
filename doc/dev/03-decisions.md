@@ -6,6 +6,22 @@ rejected approaches as tombstones.
 
 ---
 
+### 2026-06-20 Broker port: runtime-checkable Protocol + capability declaration (PR #17)
+
+**Decision.** `brokers/base.py` defines the venue-neutral async `Broker` as a
+`runtime_checkable` `Protocol` (`place_order`/`cancel_order`/`open_orders`/
+`balances`/`fills`/`ticker` over domain types), with a `Capability` enum each adapter
+declares via `capabilities()`; `require(broker, cap)` gates every operation and raises
+`NoCapability`. A `BrokerRegistry` maps venue name → adapter. `BrokerError` was added
+to `domain.errors`.
+
+**Why.** A port has no shared implementation to inherit, so structural typing keeps
+adapters decoupled from the port (no import back-coupling) and registry-friendly.
+Honest support is the declared capability *set*, not the class hierarchy — the engine
+never asks a venue for an undeclared operation.
+
+---
+
 ### 2026-06-20 Transport rate-limiting: token-bucket + Kraken call-counter (PR #15)
 
 **Decision.** `transport.RateLimiter` holds one `TokenBucket` per exchange (injected
