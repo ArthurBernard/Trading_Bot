@@ -1,7 +1,7 @@
 ---
 plan: domain-core/04-signal
 kind: leaf
-status: planned
+status: done
 complexity: low
 depends: [01]
 parallel: false
