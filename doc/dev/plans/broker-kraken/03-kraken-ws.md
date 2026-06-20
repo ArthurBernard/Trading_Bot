@@ -1,7 +1,7 @@
 ---
 plan: broker-kraken/03-kraken-ws
 kind: leaf
-status: planned
+status: done
 complexity: high
 depends: [02]
 parallel: false

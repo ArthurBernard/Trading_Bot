@@ -25,13 +25,18 @@ Public surface:
 * :class:`~trading_bot.domain.errors.BrokerError` — the venue-neutral broker
   failure (re-exported for convenience);
 * :class:`~trading_bot.brokers.kraken.KrakenBroker` — the concrete Kraken REST
-  adapter (signed orders/balances/fills + public market data).
+  adapter (signed orders/balances/fills + public market data);
+* :class:`~trading_bot.brokers.kraken_ws.KrakenPrivateWS` — the Kraken v2 private
+  WebSocket adapter streaming ``executions`` (own trades / order updates) into
+  domain :class:`~trading_bot.domain.fill.Fill`s (auth-token flow; live private
+  connection gated on credentials, parse path mock-verified).
 """
 
 from __future__ import annotations
 
 from trading_bot.brokers.base import Broker, BrokerError, Capability, require
 from trading_bot.brokers.kraken import KrakenBroker
+from trading_bot.brokers.kraken_ws import KrakenPrivateWS
 from trading_bot.brokers.registry import BrokerRegistry
 
 __all__ = [
@@ -41,4 +46,5 @@ __all__ = [
     "BrokerError",
     "BrokerRegistry",
     "KrakenBroker",
+    "KrakenPrivateWS",
 ]
