@@ -19,6 +19,9 @@ Public surface:
 * fill — the immutable :class:`~trading_bot.domain.fill.Fill` execution record;
 * position — the :class:`~trading_bot.domain.position.Position` net exposure
   rebuilt from fills;
+* signal — the venue-neutral :class:`~trading_bot.domain.signal.Signal` strategy
+  target (:class:`~trading_bot.domain.signal.SignalMode`) and its delta to a
+  position;
 * errors — the :class:`~trading_bot.domain.errors.TradingBotError` hierarchy.
 """
 
@@ -32,6 +35,7 @@ from trading_bot.domain.errors import (
     OrderError,
     OrderStatusError,
     RiskLimitBreached,
+    SignalError,
     TradingBotError,
 )
 from trading_bot.domain.fill import Fill
@@ -58,6 +62,7 @@ from trading_bot.domain.order import (
     OrderType,
 )
 from trading_bot.domain.position import Position
+from trading_bot.domain.signal import Signal, SignalMode
 
 __all__ = [
     # money
@@ -83,6 +88,9 @@ __all__ = [
     "Fill",
     # position
     "Position",
+    # signal
+    "Signal",
+    "SignalMode",
     # errors
     "TradingBotError",
     "OrderError",
@@ -92,4 +100,5 @@ __all__ = [
     "InsufficientFunds",
     "RiskLimitBreached",
     "NoCapability",
+    "SignalError",
 ]

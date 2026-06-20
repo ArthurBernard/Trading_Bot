@@ -1,12 +1,12 @@
 ---
 plan: domain-core/04-signal
 kind: leaf
-status: planned
+status: done
 complexity: low
 depends: [01]
 parallel: false
 branch: feat/domain-signal
-pr: ""
+pr: "#10"
 ---
 
 # Signal (venue-neutral strategy target)

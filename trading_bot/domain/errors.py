@@ -24,6 +24,7 @@ __all__ = [
     "InsufficientFunds",
     "RiskLimitBreached",
     "NoCapability",
+    "SignalError",
 ]
 
 
@@ -152,6 +153,25 @@ class RiskLimitBreached(TradingBotError):
         super().__init__(
             f"risk limit {limit!r} breached: {value} exceeds {threshold}"
         )
+
+
+class SignalError(TradingBotError):
+    """A strategy signal is invalid (bad target, missing scale, ...).
+
+    Raised when constructing or resolving a
+    :class:`~trading_bot.domain.signal.Signal`: an out-of-range fractional
+    exposure, an ambiguous/double-specified target, or a fractional signal
+    resolved without the ``reference_qty`` scale it requires.
+
+    Parameters
+    ----------
+    msg : str
+        Human-readable detail of why the signal is invalid.
+
+    """
+
+    def __init__(self, msg: str) -> None:
+        super().__init__(msg)
 
 
 class NoCapability(TradingBotError):
