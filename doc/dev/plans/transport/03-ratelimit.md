@@ -6,7 +6,7 @@ complexity: medium
 depends: []
 parallel: false
 branch: feat/transport-ratelimit
-pr: ""
+pr: "#15"
 ---
 
 # RateLimiter — token-bucket + Kraken call-counter

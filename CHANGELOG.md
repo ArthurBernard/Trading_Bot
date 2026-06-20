@@ -28,6 +28,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   increasing exponential backoff, `Retry-After` on 429, timeouts). (#13)
 - `transport.WebSocketBase` — async WS base: `stream_raw()` + increasing
   exponential reconnect, `on_connect` hook, `send()`. (#14)
+- `transport.RateLimiter` + `KrakenCallCounter` — per-exchange token-bucket plus
+  Kraken's decaying call-counter (tiers, per-endpoint costs). Completes the
+  **E2 transport** layer. (#15)
 
 ### Changed
 

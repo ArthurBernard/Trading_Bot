@@ -12,9 +12,6 @@ The single source *index* of open work. Each unchecked item is a candidate for
 
 ## Foundation
 
-- [ ] **E2 — Transport.** `AsyncHTTPClient` (httpx + retry/backoff),
-  `WebSocketBase` (reconnect), `RateLimiter` (token-bucket / Kraken call-counter).
-  Mirror dccd's transport. _(depends on E1 for typing only)_
 - [ ] **E3 — Broker port + Kraken adapter.** `Broker` protocol (place/cancel/
   replace, open orders, balances, fills, market data) + registry; `KrakenBroker`
   (REST first, WS fills next). Other venues declared, not implemented.

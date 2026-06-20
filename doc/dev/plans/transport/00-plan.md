@@ -1,7 +1,7 @@
 ---
 plan: transport
 kind: global
-status: planning
+status: done
 roadmap: "- [ ] **E2 — Transport.** `AsyncHTTPClient` (httpx + retry/backoff), `WebSocketBase` (reconnect), `RateLimiter` (token-bucket / Kraken call-counter). Mirror dccd's transport."
 release_on_done: false
 ---
@@ -30,7 +30,7 @@ is venue-neutral plumbing.
 
 - [x] 01 http — feat/transport-http — medium
 - [x] 02 ws — feat/transport-ws — medium
-- [ ] 03 ratelimit — feat/transport-ratelimit — medium
+- [x] 03 ratelimit — feat/transport-ratelimit — medium
 
 ## Dependencies
 

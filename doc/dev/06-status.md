@@ -10,11 +10,13 @@ GitHub Actions CI (3.11–3.13), Git Flow (`develop`/`master`), `CLAUDE.md`,
 `.claude/` workflow + hooks, and this `doc/dev/` pack. The package imports and a
 smoke test passes.
 
-**E1 — Domain core is complete.** `trading_bot/domain/` exposes `money`,
-`instrument`, `errors`, `order`, `fill`, `position`, `signal`, `performance` —
-pure, mypy-strict, ~180 tests (KPI parity import-gated on fynance). The later
-layers (`transport`, `brokers`, `storage`, `application`, `interfaces`) are
-pending — next is **E2 (transport)**. See `07-roadmap.md` / `08-program-plan.md`.
+**E1 (domain) and E2 (transport) are complete.** `trading_bot/domain/` (money,
+instrument, errors, order, fill, position, signal, performance — pure, mypy-strict)
+and `trading_bot/transport/` (`AsyncHTTPClient`, `WebSocketBase`, `RateLimiter` +
+`KrakenCallCounter` — async, with real Kraken REST/WS smokes under `-m network`)
+are in. The later layers (`brokers`, `storage`, `application`, `interfaces`) are
+pending — next is **E3 (broker port + Kraken adapter)**. See `07-roadmap.md` /
+`08-program-plan.md`.
 
 ## Done
 
@@ -27,7 +29,7 @@ pending — next is **E2 (transport)**. See `07-roadmap.md` / `08-program-plan.m
 
 ## Pending
 
-Everything remaining in [`07-roadmap.md`](07-roadmap.md): transport, the
+Everything remaining in [`07-roadmap.md`](07-roadmap.md): the
 Kraken broker + paper broker, the order router, the strategy runner, performance/
 risk, the CLI, the orchestration layer, and (later) the UI and go-live hardening.
 
