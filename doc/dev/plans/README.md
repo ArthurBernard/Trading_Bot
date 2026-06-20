@@ -82,11 +82,16 @@ if a non-trivial decision was made; status/roadmap edits).
 
 ## Complexity → execution model
 
-| `complexity` | model | for |
-|--------------|--------|-----|
-| `low` | `haiku` | mechanical fan-out — doc scans, checklists, trivial edits |
-| `medium` | `sonnet` | straightforward implementation against a precise spec |
-| `high` | `opus` | judgement, design, cross-cutting changes |
+**This repo runs every leaf on `opus`** (maintainer preference — see `CLAUDE.md`).
+The `complexity` tag below records **effort/risk** and orders the queue, but the
+execution model is `opus` regardless — the model column is the upstream default,
+overridden here:
+
+| `complexity` | effort/risk | model |
+|--------------|-------------|-------|
+| `low` | mechanical fan-out — doc scans, checklists, trivial edits | ~~haiku~~ → **opus** |
+| `medium` | straightforward implementation against a precise spec | ~~sonnet~~ → **opus** |
+| `high` | judgement, design, cross-cutting changes | **opus** |
 
 ## Dependencies & parallelism
 
