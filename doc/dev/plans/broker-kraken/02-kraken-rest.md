@@ -6,7 +6,7 @@ complexity: high
 depends: [01]
 parallel: false
 branch: feat/broker-kraken-rest
-pr: ""
+pr: "#18"
 ---
 
 # KrakenBroker — REST (signing, orders, balances, fills)
