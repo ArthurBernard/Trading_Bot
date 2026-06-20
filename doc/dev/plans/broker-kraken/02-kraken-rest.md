@@ -1,7 +1,7 @@
 ---
 plan: broker-kraken/02-kraken-rest
 kind: leaf
-status: planned
+status: done
 complexity: high
 depends: [01]
 parallel: false
