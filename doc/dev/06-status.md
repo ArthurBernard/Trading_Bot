@@ -10,11 +10,11 @@ GitHub Actions CI (3.11–3.13), Git Flow (`develop`/`master`), `CLAUDE.md`,
 `.claude/` workflow + hooks, and this `doc/dev/` pack. The package imports and a
 smoke test passes.
 
-**The rewrite has begun.** `domain/` exists with the primitives — `money`
-(Decimal, float-guarded), `instrument` (Kraken normalisation), `errors` (E1 leaf
-01 landed). The remaining domain leaves (order, fill/position, signal, performance)
-and the later layers (`transport`, `brokers`, `storage`, `application`,
-`interfaces`) are pending — see `07-roadmap.md` / `08-program-plan.md`.
+**E1 — Domain core is complete.** `trading_bot/domain/` exposes `money`,
+`instrument`, `errors`, `order`, `fill`, `position`, `signal`, `performance` —
+pure, mypy-strict, ~180 tests (KPI parity import-gated on fynance). The later
+layers (`transport`, `brokers`, `storage`, `application`, `interfaces`) are
+pending — next is **E2 (transport)**. See `07-roadmap.md` / `08-program-plan.md`.
 
 ## Done
 
@@ -22,10 +22,12 @@ and the later layers (`transport`, `brokers`, `storage`, `application`,
 - Modern packaging + tooling + CI + Git Flow.
 - Claude Code workflow wired (`/pick-task` … `/release` resolve against this repo).
 - Developer brief (`doc/dev/`) and rewrite roadmap.
+- **E1 — Domain core**: `domain/` (money, instrument, errors, order, fill,
+  position, signal, performance) — pure, mypy-strict, tested.
 
 ## Pending
 
-Everything in [`07-roadmap.md`](07-roadmap.md): the domain core, transport, the
+Everything remaining in [`07-roadmap.md`](07-roadmap.md): transport, the
 Kraken broker + paper broker, the order router, the strategy runner, performance/
 risk, the CLI, the orchestration layer, and (later) the UI and go-live hardening.
 

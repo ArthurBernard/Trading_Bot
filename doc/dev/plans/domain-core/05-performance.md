@@ -6,7 +6,7 @@ complexity: high
 depends: [03]
 parallel: false
 branch: feat/domain-performance
-pr: ""
+pr: "#11"
 ---
 
 # Pure PnL / KPI performance functions

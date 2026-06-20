@@ -1,7 +1,7 @@
 ---
 plan: domain-core
 kind: global
-status: planning
+status: done
 roadmap: "- [ ] **E1 — Domain core.** `Order` (+ lifecycle state machine), `Position`, `Fill`, `Signal`, `Instrument`, `Money` (Decimal), pure PnL/KPI, errors."
 release_on_done: false
 ---
@@ -31,7 +31,7 @@ no imports from `transport`/`brokers`/`storage`. The pre-2026 tree
 - [x] 02 order — feat/domain-order — high (depends on 01)
 - [x] 03 fill-position — feat/domain-fill-position — medium (depends on 02)
 - [x] 04 signal — feat/domain-signal — low (depends on 01)
-- [ ] 05 performance — feat/domain-performance — high (depends on 03)
+- [x] 05 performance — feat/domain-performance — high (depends on 03)
 
 ## Dependencies
 

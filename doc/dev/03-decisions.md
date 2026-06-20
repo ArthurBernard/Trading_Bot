@@ -6,6 +6,22 @@ rejected approaches as tombstones.
 
 ---
 
+### 2026-06-20 Performance: pure PnL core, KPI delegated to fynance (PR #11)
+
+**Decision.** `domain/performance.py` keeps the PnL/cum-PnL/equity core pure
+(numpy/Decimal) and delegates KPI (Sharpe, Sortino, max-drawdown, Calmar) to
+**fynance**, imported **lazily** inside each wrapper (`PerformanceDependencyError`
+if absent). KPI tests are `pytest.importorskip("fynance")`-gated. mypy stays strict
+on the domain via a **typed wrapper** at the boundary (no `pyproject` override) —
+fynance results coerced through `float()`.
+
+**Why.** Reuse fynance's vetted metric implementations rather than reimplement
+them; the lazy import + skip-gate keep the module importable and the suite green
+where fynance (numba) isn't installed, while CI exercises the parity. Decimal money
+math stays in the pure core where exactness matters.
+
+---
+
 ### 2026-06-20 Signal: two-mode venue-neutral target (PR #10)
 
 **Decision.** `domain/signal.py` expresses a strategy target in one of two

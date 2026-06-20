@@ -12,10 +12,6 @@ The single source *index* of open work. Each unchecked item is a candidate for
 
 ## Foundation
 
-- [ ] **E1 — Domain core.** `Order` (+ lifecycle state machine), `Position`,
-  `Fill`, `Signal`, `Instrument`, `Money` (Decimal), pure PnL/KPI, errors. Pure,
-  typed strict, unit-tested. Mine `legacy/orders.py` + `legacy/performance.py` for
-  spec.
 - [ ] **E2 — Transport.** `AsyncHTTPClient` (httpx + retry/backoff),
   `WebSocketBase` (reconnect), `RateLimiter` (token-bucket / Kraken call-counter).
   Mirror dccd's transport. _(depends on E1 for typing only)_
