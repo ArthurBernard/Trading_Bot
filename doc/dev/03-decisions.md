@@ -6,6 +6,22 @@ rejected approaches as tombstones.
 
 ---
 
+### 2026-06-20 Signal: two-mode venue-neutral target (PR #10)
+
+**Decision.** `domain/signal.py` expresses a strategy target in one of two
+validated modes — fractional exposure in `[-1, 1]` or an explicit signed target
+quantity (named constructors `Signal.exposure` / `Signal.target_qty`).
+`delta_to(position, reference_qty=None)` returns the signed change to reach the
+target; fractional mode **requires** a positive `reference_qty` (max position
+size) to scale the exposure into a quantity. This unifies the legacy `signal`
+(cumulative target) and `delta_signal` (per-step change) vocabulary.
+
+**Why.** Strategies think in normalised exposure; execution needs concrete
+quantities. Carrying both modes (with explicit scaling) lets one `Signal` feed the
+order router and the PnL layer without a divergent vocabulary.
+
+---
+
 ### 2026-06-20 Position PnL & flip convention from fills (PR #9)
 
 **Decision.** `Position.from_fills` folds an **ordered** fill sequence: realised

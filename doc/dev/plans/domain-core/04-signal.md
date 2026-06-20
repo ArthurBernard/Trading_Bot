@@ -6,7 +6,7 @@ complexity: low
 depends: [01]
 parallel: false
 branch: feat/domain-signal
-pr: ""
+pr: "#10"
 ---
 
 # Signal (venue-neutral strategy target)
