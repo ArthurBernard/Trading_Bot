@@ -10,9 +10,11 @@ GitHub Actions CI (3.11–3.13), Git Flow (`develop`/`master`), `CLAUDE.md`,
 `.claude/` workflow + hooks, and this `doc/dev/` pack. The package imports and a
 smoke test passes.
 
-**The rewrite itself has not started.** The new hexagonal layers
-(`domain/`, `transport/`, `brokers/`, `storage/`, `application/`, `interfaces/`)
-do **not** exist yet — only the legacy reference tree and the package skeleton do.
+**The rewrite has begun.** `domain/` exists with the primitives — `money`
+(Decimal, float-guarded), `instrument` (Kraken normalisation), `errors` (E1 leaf
+01 landed). The remaining domain leaves (order, fill/position, signal, performance)
+and the later layers (`transport`, `brokers`, `storage`, `application`,
+`interfaces`) are pending — see `07-roadmap.md` / `08-program-plan.md`.
 
 ## Done
 

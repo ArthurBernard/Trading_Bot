@@ -1,12 +1,12 @@
 ---
 plan: domain-core/01-primitives
 kind: leaf
-status: executing
+status: done
 complexity: medium
 depends: []
 parallel: false
 branch: feat/domain-primitives
-pr: ""
+pr: "#7"
 ---
 
 # Domain primitives — Money, Instrument, errors
