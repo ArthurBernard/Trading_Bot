@@ -1,12 +1,12 @@
 ---
 plan: broker-kraken/03-kraken-ws
 kind: leaf
-status: planned
+status: done
 complexity: high
 depends: [02]
 parallel: false
 branch: feat/broker-kraken-ws
-pr: ""
+pr: "#19"
 ---
 
 # KrakenBroker — private WebSocket (fills / order updates)

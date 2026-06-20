@@ -10,12 +10,15 @@ GitHub Actions CI (3.11–3.13), Git Flow (`develop`/`master`), `CLAUDE.md`,
 `.claude/` workflow + hooks, and this `doc/dev/` pack. The package imports and a
 smoke test passes.
 
-**E1 (domain) and E2 (transport) are complete.** `trading_bot/domain/` (money,
-instrument, errors, order, fill, position, signal, performance — pure, mypy-strict)
-and `trading_bot/transport/` (`AsyncHTTPClient`, `WebSocketBase`, `RateLimiter` +
-`KrakenCallCounter` — async, with real Kraken REST/WS smokes under `-m network`)
-are in. The later layers (`brokers`, `storage`, `application`, `interfaces`) are
-pending — next is **E3 (broker port + Kraken adapter)**. See `07-roadmap.md` /
+**E1 (domain), E2 (transport) and E3 (brokers) are complete** — the whole
+**Foundation** block. `trading_bot/domain/` (money, instrument, errors, order, fill,
+position, signal, performance — pure, mypy-strict), `trading_bot/transport/`
+(`AsyncHTTPClient`, `WebSocketBase`, `RateLimiter` + `KrakenCallCounter`), and
+`trading_bot/brokers/` (the `Broker` port + registry + `KrakenBroker` REST +
+`KrakenPrivateWS` — signing verified vs Kraken's vector; private endpoints
+mock-tested, real private verification gated on a key) are in. The later layers
+(`storage`, `application`, `interfaces`) are pending — next is **E4 (execution
+engine)**. See `07-roadmap.md` /
 `08-program-plan.md`.
 
 ## Done

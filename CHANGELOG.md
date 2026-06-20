@@ -36,6 +36,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `brokers.KrakenBroker` — Kraken REST adapter: HMAC-SHA512 request signing
   (verified vs Kraken's published vector), signed orders/balances/fills, public
   market data. Credentials via env; public data works key-free. (#18)
+- `brokers.KrakenPrivateWS` — Kraken v2 private-WS `executions` parsing into domain
+  `Fill`s / order updates (token-auth, mock-verified; live gated on a key).
+  Completes the **E3 Kraken adapter**. (#19)
 
 ### Changed
 
