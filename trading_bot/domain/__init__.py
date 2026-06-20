@@ -61,6 +61,21 @@ from trading_bot.domain.order import (
     OrderStatus,
     OrderType,
 )
+from trading_bot.domain.performance import (
+    PerformanceDependencyError,
+    calmar,
+    cum_pnl,
+    equity_array,
+    equity_curve,
+    exchanged_volume,
+    fee_series,
+    max_drawdown,
+    pnl,
+    position_series,
+    returns,
+    sharpe,
+    sortino,
+)
 from trading_bot.domain.position import Position
 from trading_bot.domain.signal import Signal, SignalMode
 
@@ -91,6 +106,20 @@ __all__ = [
     # signal
     "Signal",
     "SignalMode",
+    # performance
+    "returns",
+    "exchanged_volume",
+    "position_series",
+    "fee_series",
+    "pnl",
+    "cum_pnl",
+    "equity_curve",
+    "equity_array",
+    "sharpe",
+    "sortino",
+    "max_drawdown",
+    "calmar",
+    "PerformanceDependencyError",
     # errors
     "TradingBotError",
     "OrderError",

@@ -1,7 +1,7 @@
 ---
 plan: domain-core/05-performance
 kind: leaf
-status: planned
+status: done
 complexity: high
 depends: [03]
 parallel: false
