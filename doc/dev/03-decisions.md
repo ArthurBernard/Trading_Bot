@@ -6,6 +6,23 @@ rejected approaches as tombstones.
 
 ---
 
+### 2026-06-20 Transport HTTP: increasing backoff + Protocol limiter seam (PR #13)
+
+**Decision.** `transport.AsyncHTTPClient` retries transient failures (5xx, network
+errors, 429) with **monotonically increasing** exponential backoff
+(`backoff_base * 2**attempt`, capped at 60s) — review caught and fixed an initial
+`base**attempt` form that *decreased* with `base=0.5`. 429 honours `Retry-After`.
+The optional rate limiter is typed as a `Protocol` (awaited before each request),
+so transport doesn't hard-depend on the not-yet-built `ratelimit` module; `sleep`
+is an injected seam for deterministic retry-timing tests. `HTTPError` stays a plain
+`Exception` (transport decoupled from `domain.errors`).
+
+**Why.** Backoff must lengthen under a sustained outage, never shorten — a
+shortening backoff hammers the venue and risks a ban. The Protocol seam keeps the
+leaf order (http before ratelimit) dependency-free.
+
+---
+
 ### 2026-06-20 Performance: pure PnL core, KPI delegated to fynance (PR #11)
 
 **Decision.** `domain/performance.py` keeps the PnL/cum-PnL/equity core pure

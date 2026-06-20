@@ -6,7 +6,7 @@ complexity: medium
 depends: []
 parallel: false
 branch: feat/transport-http
-pr: ""
+pr: "#13"
 ---
 
 # AsyncHTTPClient — httpx wrapper with retry/backoff
