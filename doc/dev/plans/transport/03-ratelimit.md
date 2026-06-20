@@ -1,12 +1,12 @@
 ---
 plan: transport/03-ratelimit
 kind: leaf
-status: planned
+status: done
 complexity: medium
 depends: []
 parallel: false
 branch: feat/transport-ratelimit
-pr: ""
+pr: "#15"
 ---
 
 # RateLimiter — token-bucket + Kraken call-counter

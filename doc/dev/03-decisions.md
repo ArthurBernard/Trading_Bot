@@ -6,6 +6,21 @@ rejected approaches as tombstones.
 
 ---
 
+### 2026-06-20 Transport rate-limiting: token-bucket + Kraken call-counter (PR #15)
+
+**Decision.** `transport.RateLimiter` holds one `TokenBucket` per exchange (injected
+clock/sleep seams); `KrakenCallCounter` models Kraken's decaying counter —
+per-endpoint costs and tier limits (starter 15/3s, intermediate 20/2s, pro 20/1s)
+ported from `legacy/tools/call_counters.py`. The port **fixes a legacy under-wait**:
+it waits `overshoot * time_down` (not a raw `overshoot`) so the counter actually
+decays clear of the limit before the next call.
+
+**Why.** Proactive throttling keeps the engine under each venue's published budget —
+a rate-limit ban during live trading is unacceptable. The legacy raw-overshoot sleep
+under-waited and could still trip the limit.
+
+---
+
 ### 2026-06-20 Transport WS: subscriptions via on_connect; send() needs a live socket (PR #14)
 
 **Decision.** `transport.WebSocketBase.stream_raw()` reconnects with increasing,
