@@ -6,6 +6,23 @@ rejected approaches as tombstones.
 
 ---
 
+### 2026-06-20 Position PnL & flip convention from fills (PR #9)
+
+**Decision.** `Position.from_fills` folds an **ordered** fill sequence: realised
+PnL only on exposure-reducing fills — long reduce `(exit−entry)·closed`, short
+reduce `(entry−exit)·closed`. Every fill's `fee` accrues into `fees_paid` and is
+subtracted from realised PnL (fees count on opening fills too). A **flip** (a fill
+exceeding the open qty in the opposite direction) closes the whole position
+(realising PnL vs the old average), then re-opens the remainder at the flipping
+fill's price. `Fill.ts` is `int` milliseconds since the Unix epoch (UTC); fills are
+folded in caller-supplied order, not re-sorted.
+
+**Why.** Fills are the source of truth for PnL; a deterministic, explicit fold
+keeps positions reconstructable from history alone. ms-epoch ints keep the pure
+layer tz-free and match Kraken's granularity.
+
+---
+
 ### 2026-06-20 Order lifecycle as an explicit state machine (PR #8)
 
 **Decision.** `domain/order.py` models the order as a **mutable, stateful
