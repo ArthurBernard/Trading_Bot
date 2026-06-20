@@ -1,12 +1,12 @@
 ---
 plan: domain-core/03-fill-position
 kind: leaf
-status: planned
+status: done
 complexity: medium
 depends: [02]
 parallel: false
 branch: feat/domain-fill-position
-pr: ""
+pr: "#9"
 ---
 
 # Fill + Position (net from fills)

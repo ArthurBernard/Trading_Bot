@@ -17,6 +17,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   with Kraken normalisation, and the `errors` hierarchy. (#7)
 - `Order` aggregate + lifecycle state machine and order types
   (market/limit/stop-loss/best-limit), with exact Decimal fill accounting. (#8)
+- `Fill` and `Position` — net exposure rebuilt from an ordered fill sequence
+  (flips, fee-aware realised PnL). (#9)
 
 ### Changed
 
