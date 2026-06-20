@@ -1,7 +1,7 @@
 ---
 plan: domain-core/01-primitives
 kind: leaf
-status: planned
+status: executing
 complexity: medium
 depends: []
 parallel: false
