@@ -15,7 +15,7 @@ the early ones produce — over-specifying them now would be speculation.
 
 ## Legend
 
-- **Complexity → execution model**: `low → haiku`, `medium → sonnet`, `high → opus`.
+- **Execution model**: every leaf runs on **`opus`** (maintainer preference — see `CLAUDE.md`). The `complexity` column records effort/risk and queue order only — it does **not** downgrade the model.
 - **Branch types**: `feat/` (new code), `chore/` (tooling/cleanup), `test/` (test-only),
   `docs/`. One leaf = one disposable PR.
 - **Deps** are leaf numbers within the epic unless prefixed by an epic (e.g. `E3-02`)
