@@ -1,7 +1,7 @@
 ---
 plan: strategy-runner/02-data-feed
 kind: leaf
-status: planned
+status: executing
 complexity: high
 depends: []
 parallel: false

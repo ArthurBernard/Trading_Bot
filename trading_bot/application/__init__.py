@@ -43,6 +43,12 @@ It then layers the engine's use-cases:
   :func:`~trading_bot.application.strategy.load_strategy` loader (no
   arbitrary-file exec), and the built-in
   :func:`~trading_bot.application.strategy.ma_crossover_signal` example.
+* data_feed — the :class:`~trading_bot.application.data_feed.DataFeed` protocol
+  (an iterator of growing **causal** bar windows — at step ``t`` only bars
+  ``≤ t``, never a future bar) with the offline
+  :class:`~trading_bot.application.data_feed.InMemoryFeed` and the dccd-backed
+  :class:`~trading_bot.application.data_feed.DccdFeed` (injected client; thin
+  coupling), the source of the bars frames a ``signal_fn`` evaluates.
 """
 
 from __future__ import annotations
@@ -52,6 +58,12 @@ from trading_bot.application.config import (
     BrokerConfig,
     RiskConfig,
     StrategyConfig,
+)
+from trading_bot.application.data_feed import (
+    BARS_SCHEMA,
+    DataFeed,
+    DccdFeed,
+    InMemoryFeed,
 )
 from trading_bot.application.events import (
     Event,
@@ -87,6 +99,11 @@ __all__ = [
     "PositionTracker",
     "reconcile",
     "ReconResult",
+    # data feed
+    "DataFeed",
+    "InMemoryFeed",
+    "DccdFeed",
+    "BARS_SCHEMA",
     # strategy
     "Strategy",
     "SignalFn",
