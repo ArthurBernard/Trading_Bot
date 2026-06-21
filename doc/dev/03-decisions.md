@@ -6,6 +6,24 @@ rejected approaches as tombstones.
 
 ---
 
+### 2026-06-21 DataFeed: causal windows, thin injectable dccd coupling
+
+**Decision.** `application/data_feed.py` `DataFeed` is a sync `Iterable[polars.DataFrame]`
+of **growing causal windows** — at step *t* it yields `frame[:t+1]` (all bars ≤ t,
+never a future bar), so any feed-driven backtest is lookahead-free by construction.
+`InMemoryFeed` replays a fixed frame; `DccdFeed` reads real bars via `dccd.Client.read`
+(mapping dccd's `TS,open,high,low,close,volume` → `time,o,h,l,c,v`) and replays the same
+way, with an `async live_windows` that emits a bar only once **closed**
+(`now − bar.time ≥ span`). The dccd client is injected (typed against a minimal
+protocol) — nothing imports dccd, so offline tests use a fake returning a canned frame.
+
+**Why.** Causality is the hard strategy invariant (mirrors fynance walk-forward); making
+the window prefix the data structure removes a whole class of lookahead bugs. A sync
+iterator fits the backtest loop; closed-bar-only keeps live identical to replay. Thin
+injectable coupling keeps the offline suite dccd-free and isolates dccd's column quirks.
+
+---
+
 ### 2026-06-21 Strategy contract: bars→Signal callable + safe loader (no file exec)
 
 **Decision.** `application/strategy.py` models a strategy as `(instrument,

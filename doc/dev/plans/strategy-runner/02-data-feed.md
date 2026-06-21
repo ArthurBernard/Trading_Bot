@@ -1,12 +1,12 @@
 ---
 plan: strategy-runner/02-data-feed
 kind: leaf
-status: planned
+status: executing
 complexity: high
 depends: []
 parallel: false
 branch: feat/data-feed
-pr: ""
+pr: "#32"
 ---
 
 # DataFeed — bars to a strategy (in-memory + dccd-backed)
