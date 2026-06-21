@@ -6,7 +6,23 @@ rejected approaches as tombstones.
 
 ---
 
-### 2026-06-21 Venue-level order idempotency deferred (PR #XX)
+### 2026-06-21 PaperBroker: the default in-process broker (PR #XX)
+
+**Decision.** `brokers/paper.py` `PaperBroker` (`name="paper"`) implements the
+`Broker` port entirely in-process — the **default** broker so the engine runs with
+no venue or key. `fill_model="immediate"` fully fills on placement at the order's
+limit (or an injected mark for market); `"partial"` slices into equal chunks (the
+last absorbing the remainder, so slices sum exactly). Fee = `price*qty*fee_bps/10000`
+(Decimal, quote units). Balances thread buy/sell and may go negative (a simulator,
+not a funding gate). Ids/clock are seamed so tests are exact.
+
+**Why.** A behind-the-port simulator lets the whole order→fill→position path be
+verified end-to-end with no network — the basis for testing the router,
+reconciliation and strategies before any live broker is wired.
+
+---
+
+### 2026-06-21 Venue-level order idempotency deferred (PR #23)
 
 **Decision.** `KrakenBroker` does **not** forward the domain `client_order_id` to
 Kraken (its `cl_ord_id` needs a UUID, `userref` a 32-bit int — neither fits an
