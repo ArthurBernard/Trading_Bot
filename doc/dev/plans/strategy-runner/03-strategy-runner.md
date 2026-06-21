@@ -1,7 +1,7 @@
 ---
 plan: strategy-runner/03-strategy-runner
 kind: leaf
-status: planned
+status: done
 complexity: high
 depends: [01, 02]
 parallel: false
