@@ -49,8 +49,3 @@ risk, the CLI, the orchestration layer, and (later) the UI and go-live hardening
   Today idempotency is engine-side only (`OrderRouter` client-order-id dedup);
   venue-level idempotency / reconcile-on-ambiguous-failure is go-live hardening
   (groundwork in E4's order-router, finished in E10).
-- **`PaperBroker` self-drives the order state machine** — `place_order` mutates the
-  caller's `Order` (`submit`/`open`/`apply_fill`), violating the `Broker` port
-  contract (the `OrderRouter` owns the lifecycle). The router tolerates both styles
-  for now; `PaperBroker` is to be made port-pure (return a venue id + expose fills,
-  no caller mutation) in **E4 leaf 04** when the fill→position flow is consolidated.

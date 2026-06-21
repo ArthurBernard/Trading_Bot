@@ -6,6 +6,25 @@ rejected approaches as tombstones.
 
 ---
 
+### 2026-06-21 PositionTracker from fills; PaperBroker made port-pure
+
+**Decision.** `application/position_tracker.py` `PositionTracker` keeps a per-instrument
+ordered fill list and recomputes the live `Position` via `domain.Position.from_fills`
+(no own money logic). Fill ingestion boundary: the **broker emits `FillEvent`s**, the
+tracker **subscribes** and folds them — router = write path, tracker = read-back path,
+neither knows the other. **And:** `PaperBroker` was made **port-pure** — `place_order`
+no longer mutates the caller's `Order` (it reads only the order's data, returns a
+synthetic venue id, records `Fill`s, and `open_orders()` returns a *reconstructed*
+venue view). The `OrderRouter`'s "tolerate a self-driving broker" branches were removed.
+
+**Why.** Fixes the `Broker`-port contract violation surfaced in the order-router leaf:
+the `OrderRouter` owns the order state machine; a broker that mutates the caller's
+`Order` would corrupt that single source of truth and diverge from how a real venue
+behaves (it reports a *separate* record). Delegating PnL to `Position.from_fills` keeps
+one implementation of the fold.
+
+---
+
 ### 2026-06-21 OrderRouter: engine-side idempotency; broker must not drive the order
 
 **Decision.** `application/order_router.py` `OrderRouter` makes order submission
