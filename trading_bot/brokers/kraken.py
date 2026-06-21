@@ -419,9 +419,14 @@ class KrakenBroker(Broker):
 
         Pure (no I/O), so the order-to-payload mapping is unit-testable on its
         own. ``price`` is the limit price for limit orders and the stop price
-        for stop-loss orders; market orders carry no price. The
-        ``client_order_id`` rides along as Kraken's ``userref`` is numeric-only,
-        so it is sent as ``cl_ord_id`` (Kraken's string client-order-id field).
+        for stop-loss orders; market orders carry no price.
+
+        The domain ``client_order_id`` is **not** forwarded to Kraken here:
+        Kraken's ``cl_ord_id`` requires a UUID and ``userref`` is a 32-bit int,
+        neither of which fits an arbitrary id. Idempotency is enforced
+        engine-side by the ``OrderRouter`` (client-order-id dedup); venue-level
+        idempotency — and *not* blindly retrying a non-idempotent ``AddOrder``
+        POST — is a deferred go-live hardening item (see ``doc/dev/06-status.md``).
         """
         params: dict[str, str] = {
             "pair": order.instrument.symbol.to_venue_symbol(self.name),

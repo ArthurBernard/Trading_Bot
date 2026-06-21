@@ -6,6 +6,26 @@ rejected approaches as tombstones.
 
 ---
 
+### 2026-06-21 Venue-level order idempotency deferred (PR #XX)
+
+**Decision.** `KrakenBroker` does **not** forward the domain `client_order_id` to
+Kraken (its `cl_ord_id` needs a UUID, `userref` a 32-bit int — neither fits an
+arbitrary id). Idempotent submission is enforced **engine-side** by the
+`OrderRouter` (client-order-id dedup). The transport's blanket POST retry means an
+`AddOrder` lost-response could still double-submit at the venue; that risk is
+**accepted for now** (no live trading; private path mock-only) and recorded as a
+go-live gap.
+
+**Why.** The MVP runs paper-only, so venue double-submit cannot lose real money
+yet, and a correct fix (a Kraken-acceptable `userref` mapping + not retrying a
+non-idempotent `AddOrder`, reconciling on ambiguous failure instead) is go-live
+hardening (E10), with groundwork in the E4 order-router. Surfacing the risk now —
+honest docstring + a `06-status.md` known gap — beats a silent false claim that the
+client id was sent. **Rejected:** sending the raw `client_order_id` as `cl_ord_id`
+(Kraken rejects non-UUID values).
+
+---
+
 ### 2026-06-21 Application kernel: paper-default config + fan-out EventBus (PR #22)
 
 **Decision.** `application/config.py` `AppConfig` is pydantic v2 with
