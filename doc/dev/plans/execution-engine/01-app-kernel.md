@@ -6,7 +6,7 @@ complexity: medium
 depends: []
 parallel: false
 branch: feat/app-kernel
-pr: ""
+pr: "#22"
 ---
 
 # Application kernel — AppConfig + EventBus

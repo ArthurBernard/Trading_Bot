@@ -6,6 +6,22 @@ rejected approaches as tombstones.
 
 ---
 
+### 2026-06-21 Application kernel: paper-default config + fan-out EventBus (PR #22)
+
+**Decision.** `application/config.py` `AppConfig` is pydantic v2 with
+`mode: Literal["paper","live"] = "paper"` — a fresh/empty config never trades real
+money; going live is an explicit edit. `application/events.py` `EventBus` carries
+frozen `OrderEvent`/`FillEvent`/`LogEvent` (domain objects by reference, so `Decimal`
+money stays intact) to a *set* of per-consumer async queues (fan-out, not steal) plus
+sync subscribers; `emit` never blocks or raises — bad handlers are logged+swallowed,
+full queues drop.
+
+**Why.** Paper-by-default is the live-trading safety invariant made structural.
+Fan-out lets the router, position tracker and a future UI consume the same stream
+independently; a non-blocking `emit` keeps a slow consumer from stalling the engine.
+
+---
+
 ### 2026-06-20 Kraken private WS: token-auth via on_connect, mock-verified (PR #19)
 
 **Decision.** `brokers/kraken_ws.py` `KrakenPrivateWS` streams Kraken v2 `executions`

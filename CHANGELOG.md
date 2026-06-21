@@ -39,6 +39,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `brokers.KrakenPrivateWS` — Kraken v2 private-WS `executions` parsing into domain
   `Fill`s / order updates (token-auth, mock-verified; live gated on a key).
   Completes the **E3 Kraken adapter**. (#19)
+- `application` kernel — `AppConfig` (pydantic v2, paper-default) + async `EventBus`
+  (fan-out queues + sync subscribers; `OrderEvent`/`FillEvent`/`LogEvent`). (#22)
 
 ### Changed
 
