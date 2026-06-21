@@ -10,15 +10,16 @@ GitHub Actions CI (3.11–3.13), Git Flow (`develop`/`master`), `CLAUDE.md`,
 `.claude/` workflow + hooks, and this `doc/dev/` pack. The package imports and a
 smoke test passes.
 
-**E1 (domain), E2 (transport) and E3 (brokers) are complete** — the whole
-**Foundation** block. `trading_bot/domain/` (money, instrument, errors, order, fill,
-position, signal, performance — pure, mypy-strict), `trading_bot/transport/`
-(`AsyncHTTPClient`, `WebSocketBase`, `RateLimiter` + `KrakenCallCounter`), and
-`trading_bot/brokers/` (the `Broker` port + registry + `KrakenBroker` REST +
-`KrakenPrivateWS` — signing verified vs Kraken's vector; private endpoints
-mock-tested, real private verification gated on a key) are in. The later layers
-(`storage`, `application`, `interfaces`) are pending — next is **E4 (execution
-engine)**. See `07-roadmap.md` /
+**Foundation (E1–E3) and the execution engine (E4) are complete.**
+`trading_bot/domain/` (money, instrument, errors, order, fill, position, signal,
+performance — pure, mypy-strict), `trading_bot/transport/` (`AsyncHTTPClient`,
+`WebSocketBase`, `RateLimiter` + `KrakenCallCounter`), `trading_bot/brokers/` (the
+`Broker` port + registry + `KrakenBroker` REST + `KrakenPrivateWS` + the **port-pure
+`PaperBroker`**), and `trading_bot/application/` (`AppConfig` + `EventBus`,
+`OrderRouter` with idempotent submit, `PositionTracker` from fills, `reconcile`) are
+in — the whole order→fill→position→reconcile path runs in-process. The later layers
+(strategy runner, storage, perf/risk, interfaces) are pending — next is **E5
+(strategy runner)**. See `07-roadmap.md` /
 `08-program-plan.md`.
 
 ## Done

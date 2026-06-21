@@ -6,6 +6,26 @@ rejected approaches as tombstones.
 
 ---
 
+### 2026-06-21 Reconciliation: venue is truth, rebuild positions from fills, idempotent
+
+**Decision.** `application/reconcile.py` `reconcile(broker, router, tracker)` reads the
+broker's open orders + balances + fills and converges local state, writing **only**
+locally (never to the venue). **Orders — venue open set is truth:** ingest unknown
+venue-open orders (no broker call, no lifecycle transition), keep already-tracked ones
+(ingest idempotent, engine object authoritative), **close-and-forget** non-terminal
+orphans the venue has no record of (drive `CANCELLED` + evict), leave terminal locals.
+**Positions — broker fills are truth:** rebuild the `PositionTracker` from
+`broker.fills()` so positions equal `Position.from_fills` per instrument. **Idempotent:**
+no venue change ⇒ second pass is a no-op. Added minimal helpers `OrderRouter.{tracked_orders,ingest,forget}`
+and `PositionTracker.reset` (no private-state reaching).
+
+**Why.** *Reconcile, don't assume* is a hard live-trading invariant: after any
+disconnect the venue's records — not local optimism — must win, with no order
+duplicated or lost. Rebuilding positions from fills (rather than diffing) is trivially
+correct and never double-counts. Idempotency makes it safe to run on every reconnect.
+
+---
+
 ### 2026-06-21 PositionTracker from fills; PaperBroker made port-pure
 
 **Decision.** `application/position_tracker.py` `PositionTracker` keeps a per-instrument

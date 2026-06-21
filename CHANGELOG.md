@@ -47,6 +47,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   incl. concurrent) + order-lifecycle driving + events.
 - `application.PositionTracker` — live per-instrument `Position`s folded from
   broker-confirmed `FillEvent`s (delegates to `Position.from_fills`).
+- `application.reconcile` — converge local order/position state with the broker on
+  startup/reconnect (adopt venue open orders, ingest unknown, close orphans, rebuild
+  positions from broker fills; idempotent). Completes the **E4 execution engine**.
 
 ### Changed
 

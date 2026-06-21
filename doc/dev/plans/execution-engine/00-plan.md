@@ -1,7 +1,7 @@
 ---
 plan: execution-engine
 kind: global
-status: planning
+status: done
 roadmap: "- [ ] **E4 — Order router + PaperBroker.** Idempotent submit (client-order-id), routing, reconciliation; `PaperBroker` simulation behind the same port; `PositionTracker` from confirmed fills."
 release_on_done: false
 ---
@@ -36,7 +36,7 @@ don't-assume, fills are the PnL truth, all money `Decimal`. Everything is verifi
 - [x] 02 paper-broker — feat/paper-broker — medium
 - [x] 03 order-router — feat/order-router — high (depends on 01, 02)
 - [x] 04 position-tracker — feat/position-tracker — medium (depends on 03)
-- [ ] 05 reconciliation — feat/reconciliation — high (depends on 03, 04)
+- [x] 05 reconciliation — feat/reconciliation — high (depends on 03, 04)
 
 ## Dependencies
 
