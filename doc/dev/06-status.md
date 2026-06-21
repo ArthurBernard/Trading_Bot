@@ -54,7 +54,3 @@ risk, the CLI, the orchestration layer, and (later) the UI and go-live hardening
   contract (the `OrderRouter` owns the lifecycle). The router tolerates both styles
   for now; `PaperBroker` is to be made port-pure (return a venue id + expose fills,
   no caller mutation) in **E4 leaf 04** when the fill→position flow is consolidated.
-- **E4-02/03 landed via local merge (GitHub outage)** — `PaperBroker` and
-  `OrderRouter` were verified locally and merged into `develop` without a per-leaf PR
-  during a GitHub connectivity outage; to be pushed/recorded when connectivity is
-  stable.
