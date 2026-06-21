@@ -60,9 +60,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   caller's `Order` (the `OrderRouter` owns the state machine); it returns a venue id
   and reports fills via `fills()` / `FillEvent`s. Removed the router's
   self-driving-broker workaround.
-
-### Changed
-
 - Parked the pre-2026 implementation under `trading_bot/legacy/` (reference only,
   excluded from lint/type-check/tests) ahead of the hexagonal rewrite.
 - Bumped version to `0.2.0.dev0` to mark the start of the rewrite.
