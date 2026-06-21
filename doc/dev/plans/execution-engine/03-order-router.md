@@ -1,12 +1,12 @@
 ---
 plan: execution-engine/03-order-router
 kind: leaf
-status: planned
+status: done
 complexity: high
 depends: [01, 02]
 parallel: false
 branch: feat/order-router
-pr: ""
+pr: "local-merge (GitHub outage)"
 ---
 
 # OrderRouter — idempotent submit + state-machine driving

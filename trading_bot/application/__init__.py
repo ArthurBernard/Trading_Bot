@@ -18,6 +18,13 @@ cross-cutting primitives:
   :class:`~trading_bot.application.events.LogEvent`): the pub/sub fan-out the
   router, the position tracker and a future UI consume. Events carry domain
   objects, so money stays :class:`~decimal.Decimal` end to end.
+
+It then layers the engine's first use-case:
+
+* order_router — the :class:`~trading_bot.application.order_router.OrderRouter`,
+  the engine's idempotent write path: it submits domain orders to a
+  :class:`~trading_bot.brokers.base.Broker` (deduped by client-order-id), drives
+  each through its lifecycle state machine, and emits ``OrderEvent``\\ s.
 """
 
 from __future__ import annotations
@@ -35,6 +42,7 @@ from trading_bot.application.events import (
     LogEvent,
     OrderEvent,
 )
+from trading_bot.application.order_router import OrderRouter
 
 __all__ = [
     # config
@@ -48,4 +56,6 @@ __all__ = [
     "OrderEvent",
     "FillEvent",
     "LogEvent",
+    # use-cases
+    "OrderRouter",
 ]
