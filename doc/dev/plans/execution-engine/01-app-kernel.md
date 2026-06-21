@@ -1,12 +1,12 @@
 ---
 plan: execution-engine/01-app-kernel
 kind: leaf
-status: planned
+status: done
 complexity: medium
 depends: []
 parallel: false
 branch: feat/app-kernel
-pr: ""
+pr: "#22"
 ---
 
 # Application kernel — AppConfig + EventBus

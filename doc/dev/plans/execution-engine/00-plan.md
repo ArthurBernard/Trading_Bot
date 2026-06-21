@@ -32,7 +32,7 @@ don't-assume, fills are the PnL truth, all money `Decimal`. Everything is verifi
 
 ## Leaf checklist
 
-- [ ] 01 app-kernel — feat/app-kernel — medium
+- [x] 01 app-kernel — feat/app-kernel — medium
 - [ ] 02 paper-broker — feat/paper-broker — medium
 - [ ] 03 order-router — feat/order-router — high (depends on 01, 02)
 - [ ] 04 position-tracker — feat/position-tracker — medium (depends on 03)
