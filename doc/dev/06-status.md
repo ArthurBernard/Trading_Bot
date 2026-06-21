@@ -43,3 +43,9 @@ risk, the CLI, the orchestration layer, and (later) the UI and go-live hardening
 - **dccd↔trading_bot orchestration depth** (library import vs driving a service) —
   decided when the orchestration epic (E8) is planned.
 - **`trading-bot` console script** — not declared until the CLI module exists (E7).
+- **`AddOrder` idempotency at the venue** — the transport retries POSTs on
+  5xx/network errors, but `AddOrder` carries no venue idempotency key, so a retry
+  after an *ambiguous* failure (order placed, response lost) could double-submit.
+  Today idempotency is engine-side only (`OrderRouter` client-order-id dedup);
+  venue-level idempotency / reconcile-on-ambiguous-failure is go-live hardening
+  (groundwork in E4's order-router, finished in E10).
