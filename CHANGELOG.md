@@ -53,6 +53,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `application.Strategy` — declare/load a strategy (config + a signal callable
   `bars→domain Signal`) with a **safe loader** (importable `module:function`, no
   arbitrary-file exec) + a fynance-backed MA-crossover example signal.
+- `application.DataFeed` — causal bars feed (`InMemoryFeed` + dccd-backed
+  `DccdFeed`): growing windows `frame[:t+1]`, never a future bar; live emits only
+  closed bars.
 
 ### Changed
 

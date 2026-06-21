@@ -31,7 +31,7 @@ walk-forward discipline.)
 ## Leaf checklist
 
 - [x] 01 strategy-spec — feat/strategy-spec — medium
-- [ ] 02 data-feed — feat/data-feed — high
+- [x] 02 data-feed — feat/data-feed — high
 - [ ] 03 strategy-runner — feat/strategy-runner — high (depends on 01, 02)
 
 ## Dependencies

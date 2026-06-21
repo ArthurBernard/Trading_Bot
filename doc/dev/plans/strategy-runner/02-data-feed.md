@@ -6,7 +6,7 @@ complexity: high
 depends: []
 parallel: false
 branch: feat/data-feed
-pr: ""
+pr: "#32"
 ---
 
 # DataFeed — bars to a strategy (in-memory + dccd-backed)
