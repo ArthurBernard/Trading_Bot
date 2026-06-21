@@ -35,7 +35,7 @@ don't-assume, fills are the PnL truth, all money `Decimal`. Everything is verifi
 - [x] 01 app-kernel — feat/app-kernel — medium
 - [x] 02 paper-broker — feat/paper-broker — medium
 - [x] 03 order-router — feat/order-router — high (depends on 01, 02)
-- [ ] 04 position-tracker — feat/position-tracker — medium (depends on 03)
+- [x] 04 position-tracker — feat/position-tracker — medium (depends on 03)
 - [ ] 05 reconciliation — feat/reconciliation — high (depends on 03, 04)
 
 ## Dependencies

@@ -45,6 +45,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   models, fee model), the default broker so the engine runs with no venue.
 - `application.OrderRouter` — idempotent order submission (client-order-id dedup,
   incl. concurrent) + order-lifecycle driving + events.
+- `application.PositionTracker` — live per-instrument `Position`s folded from
+  broker-confirmed `FillEvent`s (delegates to `Position.from_fills`).
+
+### Changed
+
+- `brokers.PaperBroker` is now **port-pure**: `place_order` no longer mutates the
+  caller's `Order` (the `OrderRouter` owns the state machine); it returns a venue id
+  and reports fills via `fills()` / `FillEvent`s. Removed the router's
+  self-driving-broker workaround.
 
 ### Changed
 

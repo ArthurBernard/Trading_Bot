@@ -181,27 +181,16 @@ class OrderRouter:
     async def _do_submit(self, order: Order) -> Order:
         """Drive one fresh submission ``NEW -> SUBMITTED -> OPEN`` (or reject).
 
-        Per the :class:`Broker` port, the *caller* drives the lifecycle:
-        :meth:`Order.submit`, then ``place_order`` returns the venue id, then
-        :meth:`Order.open`. Some adapters (notably
-        :class:`~trading_bot.brokers.paper.PaperBroker`) instead *self-drive* the
-        state machine inside ``place_order`` — they require a ``NEW`` order and
-        may even fill it immediately. To support both honestly, the router calls
-        ``place_order`` with the order still ``NEW`` and *then* advances the
-        machine only as far as the broker left it: a self-driving broker has
-        already moved it past ``NEW`` (so the router does nothing), while a
-        port-pure broker leaves it ``NEW`` (so the router drives the full
-        ``NEW -> SUBMITTED -> OPEN`` with the returned venue id). Either way the
-        router never double-drives a transition.
+        Per the :class:`Broker` port, the *caller* drives the lifecycle and the
+        broker only transmits the order and reports its venue id back — it never
+        touches the caller's ``Order``. So the router calls ``place_order`` with
+        the order still ``NEW``, then drives ``NEW -> SUBMITTED -> OPEN`` itself
+        with the returned venue id.
         """
         try:
             venue_id = await self._broker.place_order(order)
-            # Port-pure broker: it only transmitted the order and returned the id;
-            # the order is still NEW, so the *router* drives the lifecycle. A
-            # self-driving broker already advanced it (OPEN / FILLED) — skip.
-            if order.status is OrderStatus.NEW:
-                order.submit()
-                order.open(venue_id)
+            order.submit()
+            order.open(venue_id)
         except (BrokerError, OrderError) as exc:
             # Record the (rejected) attempt *before* surfacing, so a retry of the
             # same id is deduped and never double-submits to the venue.
@@ -243,9 +232,8 @@ class OrderRouter:
         """Cancel a tracked order on the broker and transition it to ``CANCELLED``.
 
         Resolves ``order_or_id`` to the tracked order, cancels it on the venue via
-        the order's ``venue_order_id``, drives :meth:`Order.cancel` (unless the
-        broker self-drove it, as :class:`~trading_bot.brokers.paper.PaperBroker`
-        does), and emits an :class:`~trading_bot.application.events.OrderEvent`.
+        the order's ``venue_order_id``, drives :meth:`Order.cancel`, and emits an
+        :class:`~trading_bot.application.events.OrderEvent`.
 
         Parameters
         ----------
@@ -270,11 +258,9 @@ class OrderRouter:
         if order.venue_order_id is None:
             raise MissingOrder(order.client_order_id)
         await self._broker.cancel_order(order.venue_order_id)
-        # Same self-driving caveat as submit: a broker like PaperBroker cancels
-        # the domain order itself inside cancel_order. Only drive the transition
-        # ourselves if the broker has not already moved it to CANCELLED.
-        if order.status is not OrderStatus.CANCELLED:
-            order.cancel()
+        # The broker only cancels its own venue record (it never touches our
+        # Order); the router drives the local CANCELLED transition.
+        order.cancel()
         self._bus.emit(OrderEvent(order))
         return order
 

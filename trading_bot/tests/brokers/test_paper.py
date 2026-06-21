@@ -92,6 +92,60 @@ def test_capabilities_declares_six_ops() -> None:
     assert Capability.PRIVATE_WS not in PaperBroker().capabilities()
 
 
+# --- port purity: place_order never mutates the caller's Order ------------- #
+
+
+async def test_place_order_does_not_mutate_caller_order() -> None:
+    """``place_order`` leaves the caller's :class:`Order` completely untouched.
+
+    The :class:`Broker` port says the *caller* owns the order's state machine;
+    the broker only accepts the order, returns a venue id and records fills. So a
+    fully-filling placement must not advance the passed order's status, fill
+    state or venue id — even though the simulator recorded a fill.
+    """
+    broker = PaperBroker(starting_balances={"USD": money("100000")})
+    order = _limit_buy(qty="2", price="30000")
+
+    await broker.place_order(order)
+
+    # The caller's order is exactly as constructed: NEW, no fills, no venue id.
+    assert order.status is OrderStatus.NEW
+    assert order.filled_qty == Decimal("0")
+    assert order.avg_fill_price is None
+    assert order.venue_order_id is None
+    # ...yet the broker did record the fill on *its* side.
+    assert len(await broker.fills()) == 1
+
+
+async def test_place_order_emits_fill_events_when_given_a_bus() -> None:
+    """With an injected ``EventBus`` the broker emits a ``FillEvent`` per fill."""
+    from trading_bot.application import EventBus, FillEvent
+
+    bus = EventBus()
+    seen: list[object] = []
+    bus.subscribe(seen.append)
+    broker = PaperBroker(
+        fill_model="partial",
+        partial_chunks=2,
+        starting_balances={"USD": money("100000")},
+        event_bus=bus,
+    )
+
+    await broker.place_order(_limit_buy(qty="2", price="30000"))
+
+    fill_events = [e for e in seen if isinstance(e, FillEvent)]
+    assert len(fill_events) == 2  # one per simulated slice
+    assert [e.fill.qty for e in fill_events] == [Decimal("1"), Decimal("1")]
+
+
+async def test_place_order_does_not_emit_without_a_bus() -> None:
+    """With no bus, fills are retrievable only via :meth:`fills` (no emission)."""
+    broker = PaperBroker(starting_balances={"USD": money("100000")})
+    # No bus wired; this simply must not raise and must still record the fill.
+    await broker.place_order(_limit_buy(qty="1", price="30000"))
+    assert len(await broker.fills()) == 1
+
+
 # --- immediate-fill LIMIT buy ---------------------------------------------- #
 
 
@@ -103,7 +157,7 @@ async def test_immediate_limit_buy_one_fill_at_limit_price() -> None:
     venue_order_id = await broker.place_order(order)
 
     assert venue_order_id == "PAPER-1"
-    assert order.status is OrderStatus.FILLED
+    # Port-pure: a fully-filled order is not live, so no open order remains.
     assert await broker.open_orders() == []
 
     fills = await broker.fills()
@@ -160,7 +214,8 @@ async def test_market_order_fills_at_injected_mark_price() -> None:
     assert fills[0].price == Decimal("31000")
     # 31000 * 1 * 10 / 10000 = 31.
     assert fills[0].fee == Decimal("31")
-    assert order.status is OrderStatus.FILLED
+    # Port-pure: fully filled -> not surfaced as a live order.
+    assert await broker.open_orders() == []
 
 
 async def test_market_order_uses_set_price_hook() -> None:
@@ -199,7 +254,7 @@ async def test_partial_model_multiple_fills_summing_to_qty_and_closes() -> None:
     assert sum((f.qty for f in fills), Decimal("0")) == Decimal("2")
     # Equal slices of 1.0 each.
     assert [f.qty for f in fills] == [Decimal("1"), Decimal("1")]
-    assert order.status is OrderStatus.FILLED
+    # Port-pure: fully filled -> no live order remains.
     assert await broker.open_orders() == []
 
 
@@ -218,13 +273,21 @@ async def test_partial_model_remainder_left_open() -> None:
     # Half of 2.0 = 1.0 filled, across 2 chunks of 0.5.
     fills = await broker.fills()
     assert sum((f.qty for f in fills), Decimal("0")) == Decimal("1")
-    assert order.status is OrderStatus.PARTIALLY_FILLED
-    assert order.filled_qty == Decimal("1")
-    assert order.remaining_qty == Decimal("1")
 
+    # Port-pure: the caller's order is NOT mutated by place_order.
+    assert order.status is OrderStatus.NEW
+    assert order.filled_qty == Decimal("0")
+    assert order.venue_order_id is None
+
+    # The venue's *own* view of the still-live order is surfaced by open_orders,
+    # reconstructed with the recorded fill state.
     open_orders = await broker.open_orders()
     assert len(open_orders) == 1
-    assert open_orders[0].venue_order_id == venue_order_id
+    reported = open_orders[0]
+    assert reported.venue_order_id == venue_order_id
+    assert reported.status is OrderStatus.PARTIALLY_FILLED
+    assert reported.filled_qty == Decimal("1")
+    assert reported.remaining_qty == Decimal("1")
 
 
 async def test_partial_slices_sum_exactly_with_remainder_chunk() -> None:
@@ -241,7 +304,8 @@ async def test_partial_slices_sum_exactly_with_remainder_chunk() -> None:
     fills = await broker.fills()
     assert len(fills) == 3
     assert sum((f.qty for f in fills), Decimal("0")) == Decimal("1")
-    assert order.status is OrderStatus.FILLED
+    # Port-pure: fully filled -> no live order remains.
+    assert await broker.open_orders() == []
 
 
 # --- cancel ----------------------------------------------------------------- #

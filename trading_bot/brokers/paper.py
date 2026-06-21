@@ -10,6 +10,28 @@ balances and records :class:`~trading_bot.domain.fill.Fill`s — speaking
 **domain types only**, with every amount an exact
 :class:`~decimal.Decimal`.
 
+Port purity
+-----------
+The broker is **port-pure**: :meth:`place_order` never mutates the caller's
+:class:`~trading_bot.domain.order.Order` aggregate. Per the
+:class:`~trading_bot.brokers.base.Broker` contract the *caller* (the
+:class:`~trading_bot.application.order_router.OrderRouter`) owns the order's state
+machine; the broker only (a) accepts an order, (b) returns a synthetic
+``venue_order_id``, and (c) records/reports :class:`Fill`s via :meth:`fills`.
+
+The simulation works purely off the order's *data* (side, qty, price, type) and
+keeps its own per-venue-id bookkeeping (filled quantity + a reconstructed open
+:class:`Order` snapshot). :meth:`open_orders` returns freshly reconstructed
+domain orders (status, ``filled_qty``, ``avg_fill_price`` and ``venue_order_id``
+populated from the simulator's view) — exactly as a real venue would, where the
+caller's in-memory ``Order`` and the venue's record are distinct objects.
+
+Optionally, if constructed with an :class:`~trading_bot.application.events.
+EventBus`, the broker **emits** a
+:class:`~trading_bot.application.events.FillEvent` for each simulated fill, so a
+subscribed consumer (e.g. the ``PositionTracker``) sees executions without
+polling :meth:`fills`. With no bus, fills are retrievable only via :meth:`fills`.
+
 Determinism
 -----------
 The simulation is fully deterministic so tests assert exact values:
@@ -68,14 +90,19 @@ simulator, not a risk gate); margin/funding checks live in the engine.
 from __future__ import annotations
 
 from collections.abc import Callable
+from dataclasses import dataclass, field
 from itertools import count
+from typing import TYPE_CHECKING
 
 from trading_bot.brokers.base import Broker, Capability
 from trading_bot.domain.errors import BrokerError, MissingOrder
 from trading_bot.domain.fill import Fill
 from trading_bot.domain.instrument import Instrument
 from trading_bot.domain.money import Money, money
-from trading_bot.domain.order import Order, OrderSide
+from trading_bot.domain.order import Order, OrderSide, OrderType
+
+if TYPE_CHECKING:
+    from trading_bot.application.events import EventBus
 
 __all__ = ["PaperBroker"]
 
@@ -93,12 +120,34 @@ def _default_clock() -> Callable[[], int]:
     return lambda: next(ticker)
 
 
+@dataclass(slots=True)
+class _OpenOrder:
+    """The simulator's private record of a still-live placed order.
+
+    Holds only the order's *data* (never the caller's :class:`Order` object) plus
+    the simulator's running fill state, so :meth:`PaperBroker.open_orders` can
+    reconstruct a fresh domain :class:`Order` on demand — exactly as a real venue
+    reports its own view, independent of the caller's in-memory order.
+    """
+
+    client_order_id: str
+    instrument: Instrument
+    side: OrderSide
+    type: OrderType
+    qty: Money
+    limit_price: Money | None
+    fill_tolerance: Money
+    filled_qty: Money = field(default_factory=lambda: money("0"))
+    avg_fill_price: Money | None = None
+
+
 class PaperBroker(Broker):
     """In-process, deterministic :class:`Broker` that simulates fills.
 
     The default (paper-trading) broker: it serves the full :class:`Broker` port
     in memory, with no network and exact :class:`~decimal.Decimal` money. See the
-    module docstring for the fill, fee and balance models.
+    module docstring for the port-purity contract and the fill, fee and balance
+    models.
 
     Parameters
     ----------
@@ -119,6 +168,12 @@ class PaperBroker(Broker):
         Zero-arg callable returning the current time as **milliseconds since the
         Unix epoch (UTC)**, stamped onto every :class:`Fill`. Defaults to a
         deterministic clock (fixed base, +1ms per call) so runs are reproducible.
+    event_bus : EventBus, optional
+        If given, the broker emits a
+        :class:`~trading_bot.application.events.FillEvent` for every simulated
+        fill, so subscribed consumers (e.g. the ``PositionTracker``) see
+        executions without polling :meth:`fills`. Defaults to ``None`` (fills are
+        retrievable only via :meth:`fills`).
     partial_chunks : int, optional
         Number of equal slices for ``fill_model="partial"``. Defaults to ``2``.
         Must be ``>= 1``.
@@ -144,6 +199,7 @@ class PaperBroker(Broker):
         fill_model: str = "immediate",
         starting_balances: dict[str, Money] | None = None,
         clock: Callable[[], int] | None = None,
+        event_bus: EventBus | None = None,
         partial_chunks: int = 2,
         partial_fill_ratio: Money = money("1"),
     ) -> None:
@@ -168,14 +224,16 @@ class PaperBroker(Broker):
         self._fill_model = fill_model
         self._balances: dict[str, Money] = dict(starting_balances or {})
         self._clock = clock if clock is not None else _default_clock()
+        self._bus = event_bus
         self._partial_chunks = partial_chunks
         self._partial_fill_ratio = partial_fill_ratio
 
         # Deterministic id seams.
         self._order_ids = count(1)
         self._fill_ids = count(1)
-        # Live orders keyed by their synthetic venue id.
-        self._open: dict[str, Order] = {}
+        # Live orders keyed by their synthetic venue id — the simulator's *own*
+        # record (never the caller's Order); see ``_OpenOrder``.
+        self._open: dict[str, _OpenOrder] = {}
         # Every fill ever produced, in execution order.
         self._fills: list[Fill] = []
         # One-shot override of the placement fill ratio (see ``arm_partial``),
@@ -255,17 +313,19 @@ class PaperBroker(Broker):
     async def place_order(self, order: Order) -> str:
         """Submit ``order`` to the simulator and return its synthetic venue id.
 
-        Drives the domain ``order`` through ``submit`` -> ``open`` under a fresh
-        ``"PAPER-{n}"`` id, then simulates fills per the configured fill model
-        (see the module docstring). Each fill is recorded, mutates internal
-        balances, and is applied to the domain order. Any unfilled remainder is
-        kept live and surfaced by :meth:`open_orders`.
+        **Port-pure**: the caller's ``order`` object is *never mutated* — its
+        status, ``filled_qty`` and ``venue_order_id`` are untouched. The simulator
+        reads only the order's *data* (side, qty, price, type), allocates a fresh
+        ``"PAPER-{n}"`` id, simulates fills per the configured fill model (see the
+        module docstring) into its own per-venue-id record, records each
+        :class:`Fill`, and moves internal balances. Any unfilled remainder is kept
+        live (a reconstructed snapshot) and surfaced by :meth:`open_orders`.
 
         Parameters
         ----------
         order : Order
-            The domain order to simulate. Must be in ``NEW`` status (freshly
-            constructed); its lifecycle is driven here.
+            The domain order to simulate. Read-only here: the caller owns and
+            drives its lifecycle; this broker does not touch it.
 
         Returns
         -------
@@ -280,8 +340,15 @@ class PaperBroker(Broker):
 
         """
         venue_order_id = f"PAPER-{next(self._order_ids)}"
-        order.submit()
-        order.open(venue_order_id)
+        record = _OpenOrder(
+            client_order_id=order.client_order_id,
+            instrument=order.instrument,
+            side=order.side,
+            type=order.type,
+            qty=order.qty,
+            limit_price=order.limit_price,
+            fill_tolerance=order.fill_tolerance,
+        )
 
         # A one-shot armed ratio (if any) wins over the model; reset it now so
         # it only affects this placement.
@@ -291,11 +358,12 @@ class PaperBroker(Broker):
         price = self._execution_price(order)
         fill_qty = self._placement_fill_qty(order.qty, armed)
         for slice_qty in self._slice(fill_qty):
-            self._execute(order, slice_qty, price)
+            self._execute(record, slice_qty, price)
 
-        # Keep the order live only if a quantity remains unfilled.
-        if not order.is_terminal:
-            self._open[venue_order_id] = order
+        # Keep the order live only if a quantity remains unfilled (i.e. the
+        # simulated fills did not fully consume it within tolerance).
+        if not self._is_terminal(record):
+            self._open[venue_order_id] = record
         return venue_order_id
 
     def _execution_price(self, order: Order) -> Money:
@@ -344,22 +412,56 @@ class PaperBroker(Broker):
         slices.append(qty - base * (n - 1))  # last absorbs the remainder
         return slices
 
-    def _execute(self, order: Order, qty: Money, price: Money) -> None:
-        """Record one fill of ``qty`` at ``price`` and move balances/order state."""
+    def _execute(self, record: _OpenOrder, qty: Money, price: Money) -> None:
+        """Record one fill of ``qty`` at ``price``, moving balances & sim state.
+
+        Updates only the simulator's *own* ``record`` (never the caller's
+        ``Order``): accrues ``filled_qty`` and the quantity-weighted
+        ``avg_fill_price``, appends the :class:`Fill`, moves balances and — if an
+        :class:`~trading_bot.application.events.EventBus` was injected — emits a
+        :class:`~trading_bot.application.events.FillEvent`.
+        """
         fee = self._fee(qty, price)
         fill = Fill(
             fill_id=f"PAPER-FILL-{next(self._fill_ids)}",
-            client_order_id=order.client_order_id,
-            instrument=order.instrument,
-            side=order.side,
+            client_order_id=record.client_order_id,
+            instrument=record.instrument,
+            side=record.side,
             qty=qty,
             price=price,
             fee=fee,
             ts=self._clock(),
         )
         self._fills.append(fill)
-        order.apply_fill(qty, price)
+
+        # Fold the fill into the simulator's running record (quantity-weighted
+        # average across this order's fills so far).
+        prior_notional = (
+            record.avg_fill_price * record.filled_qty
+            if record.avg_fill_price is not None
+            else money("0")
+        )
+        new_filled = record.filled_qty + qty
+        record.avg_fill_price = (prior_notional + qty * price) / new_filled
+        record.filled_qty = new_filled
+
         self._apply_to_balances(fill)
+        if self._bus is not None:
+            from trading_bot.application.events import FillEvent
+
+            self._bus.emit(FillEvent(fill))
+
+    def _is_terminal(self, record: _OpenOrder) -> bool:
+        """Whether ``record`` is fully filled within its order's tolerance.
+
+        Mirrors :meth:`~trading_bot.domain.order.Order._is_filled_within_tolerance`
+        on the simulator's own bookkeeping so :meth:`open_orders` reconstructs the
+        exact status (``FILLED`` orders are dropped; the rest stay live).
+        """
+        if record.filled_qty >= record.qty:
+            return True
+        unfilled = (record.qty - record.filled_qty) / record.qty
+        return unfilled < record.fill_tolerance
 
     def _fee(self, qty: Money, price: Money) -> Money:
         """Fee for a slice: ``price * qty * fee_bps / 10000`` in quote units."""
@@ -386,6 +488,10 @@ class PaperBroker(Broker):
     async def cancel_order(self, venue_order_id: str) -> None:
         """Cancel the live (open / partially-filled) order ``venue_order_id``.
 
+        Drops the simulator's own record for that id. **Port-pure**: it does not
+        touch any caller :class:`Order` — the caller drives its order's
+        ``CANCELLED`` transition itself.
+
         Parameters
         ----------
         venue_order_id : str
@@ -398,13 +504,17 @@ class PaperBroker(Broker):
             already cancelled, or never placed).
 
         """
-        order = self._open.pop(venue_order_id, None)
-        if order is None:
+        record = self._open.pop(venue_order_id, None)
+        if record is None:
             raise MissingOrder(venue_order_id)
-        order.cancel()
 
     async def open_orders(self) -> list[Order]:
         """Return the still-live (open / partially-filled) orders.
+
+        Each is a **freshly reconstructed** domain :class:`Order` (the caller's
+        original object is never stored), with status, ``filled_qty``,
+        ``avg_fill_price`` and ``venue_order_id`` populated from the simulator's
+        view — exactly as a real venue reports its own record.
 
         Returns
         -------
@@ -412,7 +522,35 @@ class PaperBroker(Broker):
             The live domain orders, in placement order.
 
         """
-        return list(self._open.values())
+        return [
+            self._reconstruct(venue_order_id, record)
+            for venue_order_id, record in self._open.items()
+        ]
+
+    def _reconstruct(self, venue_order_id: str, record: _OpenOrder) -> Order:
+        """Build a domain :class:`Order` mirroring the simulator's live record.
+
+        Drives a fresh ``Order`` through ``submit -> open -> apply_fill`` so its
+        status and fields match what the simulator recorded — the venue's view of
+        a still-live (partially-filled) order, distinct from the caller's object.
+        """
+        order = Order(
+            client_order_id=record.client_order_id,
+            instrument=record.instrument,
+            side=record.side,
+            qty=record.qty,
+            type=record.type,
+            limit_price=record.limit_price,
+            fill_tolerance=record.fill_tolerance,
+        )
+        order.submit()
+        order.open(venue_order_id)
+        if record.filled_qty > 0 and record.avg_fill_price is not None:
+            # One aggregate fill at the running average reproduces the recorded
+            # filled_qty / avg_fill_price exactly (a still-open order is never
+            # terminal, so apply_fill leaves it PARTIALLY_FILLED).
+            order.apply_fill(record.filled_qty, record.avg_fill_price)
+        return order
 
     async def balances(self) -> dict[str, Money]:
         """Return free balances keyed by canonical asset code.
