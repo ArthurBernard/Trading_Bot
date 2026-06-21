@@ -6,6 +6,26 @@ rejected approaches as tombstones.
 
 ---
 
+### 2026-06-21 Strategy contract: bars→Signal callable + safe loader (no file exec)
+
+**Decision.** `application/strategy.py` models a strategy as `(instrument,
+signal_fn)` where `signal_fn: polars.DataFrame(bars) → domain Signal` — unifying on
+the existing venue-neutral `Signal` (the runner turns `Signal` + `Position` into an
+order) instead of the legacy `get_signal(data) → {-1,0,1}` int. `evaluate` enforces
+the instrument invariant and returns a **flat** signal during warmup (`< lookback`
+bars) rather than guessing. `load_strategy` accepts a passed callable **or** an
+already-importable `"module:function"` string (`importlib.import_module` + `getattr`)
+— **never** an arbitrary-file `exec_module` like the legacy `StrategyBot`. The
+built-in `ma_crossover_signal` uses `fynance.sma` (causal trailing average).
+
+**Why.** A `bars→Signal` callable is the minimal strategy surface and reuses the
+domain vocabulary end to end. The safe loader removes the legacy code-execution sink
+(loose-file `exec`). Warmup-flat keeps an undertrained signal from taking a position.
+**Rejected:** loose-file importlib loading (security); a bespoke signal int (diverges
+from the `Signal` value object).
+
+---
+
 ### 2026-06-21 Reconciliation: venue is truth, rebuild positions from fills, idempotent
 
 **Decision.** `application/reconcile.py` `reconcile(broker, router, tracker)` reads the
