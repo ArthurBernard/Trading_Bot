@@ -12,9 +12,6 @@ The single source *index* of open work. Each unchecked item is a candidate for
 
 ## Execution engine
 
-- [ ] **E4 — Order router + PaperBroker.** Idempotent submit (client-order-id),
-  routing, reconciliation; `PaperBroker` simulation behind the same port;
-  `PositionTracker` from confirmed fills. _(depends on E3)_
 - [ ] **E5 — Strategy runner.** Load a strategy (config + fynance signal), feed it
   data from dccd, emit target positions/orders; the live loop. Replaces
   `legacy/StrategyBot`. _(depends on E4)_
