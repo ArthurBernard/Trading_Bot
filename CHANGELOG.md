@@ -42,7 +42,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `application` kernel — `AppConfig` (pydantic v2, paper-default) + async `EventBus`
   (fan-out queues + sync subscribers; `OrderEvent`/`FillEvent`/`LogEvent`). (#22)
 - `brokers.PaperBroker` — in-process fill simulation (immediate/partial fill
-  models, fee model), the default broker so the engine runs with no venue. (#XX)
+  models, fee model), the default broker so the engine runs with no venue.
+- `application.OrderRouter` — idempotent order submission (client-order-id dedup,
+  incl. concurrent) + order-lifecycle driving + events.
 
 ### Changed
 

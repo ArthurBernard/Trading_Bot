@@ -6,7 +6,27 @@ rejected approaches as tombstones.
 
 ---
 
-### 2026-06-21 PaperBroker: the default in-process broker (PR #XX)
+### 2026-06-21 OrderRouter: engine-side idempotency; broker must not drive the order
+
+**Decision.** `application/order_router.py` `OrderRouter` makes order submission
+**idempotent engine-side**: a dedup map keyed by `client_order_id` (a second submit
+of a known id returns the tracked `Order`, no second broker call) plus a per-id
+in-flight `asyncio.Future`, so two *concurrent* submits of the same id still yield
+exactly one `broker.place_order`. It drives the domain `Order` state machine
+(`submit`→`open(venue_id)`; `reject` on `BrokerError`) and emits `OrderEvent`s. Fill
+ingestion is **not** here — it lives in the PositionTracker (leaf 04): the write path
+(intent→venue) and the read-back path (executions→position) are the clean split.
+
+**Why.** Idempotency is a money-safety invariant; the dedup map + in-flight future
+cover the sequential and concurrent retry cases. Venue-level idempotency stays
+deferred (see the #23 ADR / `06-status`). **Contract note:** the `Broker` port must
+**not** mutate the caller's `Order` — the router owns the state machine. `PaperBroker`
+currently self-drives the order (a leaf-02 contract violation); the router tolerates
+it for now, to be fixed in leaf 04 (see `06-status` known gaps).
+
+---
+
+### 2026-06-21 PaperBroker: the default in-process broker
 
 **Decision.** `brokers/paper.py` `PaperBroker` (`name="paper"`) implements the
 `Broker` port entirely in-process — the **default** broker so the engine runs with

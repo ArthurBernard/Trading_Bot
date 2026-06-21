@@ -6,7 +6,7 @@ complexity: high
 depends: [01, 02]
 parallel: false
 branch: feat/order-router
-pr: ""
+pr: "local-merge (GitHub outage)"
 ---
 
 # OrderRouter — idempotent submit + state-machine driving
