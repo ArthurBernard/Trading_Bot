@@ -240,13 +240,17 @@ async def test_resubmit_after_rejection_does_not_recall_broker() -> None:
 async def test_cancel_cancels_on_broker_and_transitions_order() -> None:
     """Cancel calls the broker, drives CANCELLED, and emits an event."""
     # A partially-filling paper broker leaves the order live so it is cancellable.
+    # The broker is port-pure (never touches the caller's Order), so after submit
+    # the router has driven the order only to OPEN — cancel runs from OPEN.
     broker = PaperBroker(fill_model="partial", partial_fill_ratio=money("0.5"))
     bus = EventBus()
     seen = _capture(bus)
     router = OrderRouter(broker, bus)
 
     order = await router.submit(_order(cid="to-cancel"))
-    assert order.status is OrderStatus.PARTIALLY_FILLED
+    assert order.status is OrderStatus.OPEN
+    # The venue's own view shows the partial fill (reconstructed by the broker).
+    assert len(await broker.open_orders()) == 1
 
     cancelled = await router.cancel("to-cancel")
 
@@ -285,8 +289,9 @@ async def test_real_paperbroker_duplicate_id_yields_one_paper_order() -> None:
     router = OrderRouter(broker, bus)
 
     first = await router.submit(_order(cid="real-1"))
-    # Immediate fill model: the order is fully filled on placement.
-    assert first.status is OrderStatus.FILLED
+    # Port-pure broker: the router drives the order to OPEN and sets the venue id;
+    # the broker's *own* fill of it lives in broker.fills(), not on this order.
+    assert first.status is OrderStatus.OPEN
     assert first.venue_order_id == "PAPER-1"
 
     # Same client-order-id again -> dedup, no second paper order/fill.
@@ -297,10 +302,10 @@ async def test_real_paperbroker_duplicate_id_yields_one_paper_order() -> None:
     assert len(fills) == 1, "duplicate id must not create a second paper fill"
     assert fills[0].client_order_id == "real-1"
 
-    # Exactly one OrderEvent for the single accepted submission, FILLED.
+    # Exactly one OrderEvent for the single accepted submission, OPEN.
     order_events = [e for e in seen if isinstance(e, OrderEvent)]
     assert len(order_events) == 1
-    assert order_events[0].order.status is OrderStatus.FILLED
+    assert order_events[0].order.status is OrderStatus.OPEN
 
 
 async def test_real_paperbroker_concurrent_duplicate_one_order() -> None:

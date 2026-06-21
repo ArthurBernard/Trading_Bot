@@ -1,7 +1,7 @@
 ---
 plan: execution-engine/04-position-tracker
 kind: leaf
-status: planned
+status: done
 complexity: medium
 depends: [03]
 parallel: false
