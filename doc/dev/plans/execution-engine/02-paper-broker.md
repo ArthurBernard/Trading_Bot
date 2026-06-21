@@ -6,7 +6,7 @@ complexity: medium
 depends: []
 parallel: false
 branch: feat/paper-broker
-pr: "local-merge (GitHub outage)"
+pr: "#24"
 ---
 
 # PaperBroker — in-process fill simulation
