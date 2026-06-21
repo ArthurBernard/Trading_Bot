@@ -1,7 +1,7 @@
 ---
 plan: strategy-runner/01-strategy-spec
 kind: leaf
-status: planned
+status: done
 complexity: medium
 depends: []
 parallel: false

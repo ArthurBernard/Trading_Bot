@@ -37,6 +37,12 @@ It then layers the engine's use-cases:
   venue's open orders, balances and fills and converges the router's tracked
   orders and the tracker's positions to that truth — never leaving a duplicated
   or lost order.
+* strategy — the :class:`~trading_bot.application.strategy.Strategy` (instrument
+  + a :data:`~trading_bot.application.strategy.SignalFn` callable that maps a
+  bars frame to a domain ``Signal``), the safe
+  :func:`~trading_bot.application.strategy.load_strategy` loader (no
+  arbitrary-file exec), and the built-in
+  :func:`~trading_bot.application.strategy.ma_crossover_signal` example.
 """
 
 from __future__ import annotations
@@ -57,6 +63,12 @@ from trading_bot.application.events import (
 from trading_bot.application.order_router import OrderRouter
 from trading_bot.application.position_tracker import PositionTracker
 from trading_bot.application.reconcile import ReconResult, reconcile
+from trading_bot.application.strategy import (
+    SignalFn,
+    Strategy,
+    load_strategy,
+    ma_crossover_signal,
+)
 
 __all__ = [
     # config
@@ -75,4 +87,9 @@ __all__ = [
     "PositionTracker",
     "reconcile",
     "ReconResult",
+    # strategy
+    "Strategy",
+    "SignalFn",
+    "load_strategy",
+    "ma_crossover_signal",
 ]
