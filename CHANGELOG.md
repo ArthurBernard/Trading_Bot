@@ -50,6 +50,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `application.reconcile` — converge local order/position state with the broker on
   startup/reconnect (adopt venue open orders, ingest unknown, close orphans, rebuild
   positions from broker fills; idempotent). Completes the **E4 execution engine**.
+- `application.Strategy` — declare/load a strategy (config + a signal callable
+  `bars→domain Signal`) with a **safe loader** (importable `module:function`, no
+  arbitrary-file exec) + a fynance-backed MA-crossover example signal.
 
 ### Changed
 

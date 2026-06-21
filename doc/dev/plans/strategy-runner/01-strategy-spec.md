@@ -6,7 +6,7 @@ complexity: medium
 depends: []
 parallel: false
 branch: feat/strategy-spec
-pr: ""
+pr: "#30"
 ---
 
 # Strategy spec — declare & load a strategy
