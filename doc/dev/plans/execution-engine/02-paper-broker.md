@@ -1,12 +1,12 @@
 ---
 plan: execution-engine/02-paper-broker
 kind: leaf
-status: planned
+status: done
 complexity: medium
 depends: []
 parallel: false
 branch: feat/paper-broker
-pr: ""
+pr: "#XX"
 ---
 
 # PaperBroker — in-process fill simulation
