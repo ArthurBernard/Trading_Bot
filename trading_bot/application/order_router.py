@@ -279,3 +279,63 @@ class OrderRouter:
         inspect what the router has tracked without driving a transition.
         """
         return self._orders.get(client_order_id)
+
+    def tracked_orders(self) -> dict[str, Order]:
+        """Return a snapshot of every tracked order, keyed by client-order-id.
+
+        A read-only copy of the dedup map (the mapping is fresh; the
+        :class:`Order` values are shared). For callers — notably
+        :func:`~trading_bot.application.reconcile.reconcile` — that need to
+        diff the router's view against the venue's truth without driving a
+        transition.
+        """
+        return dict(self._orders)
+
+    def ingest(self, order: Order) -> Order:
+        """Adopt an already-live venue ``order`` into the tracked map, no submit.
+
+        The reconciliation path (:func:`~trading_bot.application.reconcile.
+        reconcile`) uses this to adopt an order the **venue** reports as open
+        but the router never tracked locally (e.g. submitted before a restart,
+        or in a window the engine missed). Unlike :meth:`submit`, this performs
+        **no broker call** and drives **no lifecycle transition** — ``order`` is
+        the venue's already-reconstructed view (its ``status`` and
+        ``venue_order_id`` are populated by the broker's ``open_orders``), and
+        the router simply records it under its ``client_order_id`` so subsequent
+        :meth:`get` / :meth:`cancel` resolve it.
+
+        Idempotent on ``client_order_id``: ingesting an id the router already
+        tracks is a no-op that returns the **existing** tracked order (the
+        engine's own object is authoritative for an id it already owns; the
+        venue snapshot is not allowed to clobber it). This keeps reconciliation
+        from ever duplicating an order.
+
+        Parameters
+        ----------
+        order : Order
+            The venue's reconstructed open order to adopt. Its
+            ``client_order_id`` is the tracking key.
+
+        Returns
+        -------
+        Order
+            The tracked order: the freshly-ingested ``order`` on a new id, or
+            the pre-existing tracked order on an id already owned.
+
+        """
+        existing = self._orders.get(order.client_order_id)
+        if existing is not None:
+            return existing
+        self._orders[order.client_order_id] = order
+        self._bus.emit(OrderEvent(order))
+        return order
+
+    def forget(self, client_order_id: str) -> Order | None:
+        """Drop ``client_order_id`` from the tracked map, returning the order.
+
+        The reconciliation path uses this to evict an **orphan**: a locally
+        tracked order the venue reports neither as open nor via any fill, after
+        reconcile has driven it terminal. Returns the removed order, or ``None``
+        if the id was not tracked (a no-op, so a second reconcile is clean).
+        """
+        return self._orders.pop(client_order_id, None)

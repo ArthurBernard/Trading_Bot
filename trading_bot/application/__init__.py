@@ -31,6 +31,12 @@ It then layers the engine's use-cases:
   applied explicitly) into a live net
   :class:`~trading_bot.domain.position.Position` per instrument, the owner of
   exposure and realised PnL.
+* reconcile — :func:`~trading_bot.application.reconcile.reconcile` (and its
+  :class:`~trading_bot.application.reconcile.ReconResult`): the *reconcile,
+  don't assume* pass that, on startup or after a disconnect, refetches the
+  venue's open orders, balances and fills and converges the router's tracked
+  orders and the tracker's positions to that truth — never leaving a duplicated
+  or lost order.
 """
 
 from __future__ import annotations
@@ -50,6 +56,7 @@ from trading_bot.application.events import (
 )
 from trading_bot.application.order_router import OrderRouter
 from trading_bot.application.position_tracker import PositionTracker
+from trading_bot.application.reconcile import ReconResult, reconcile
 
 __all__ = [
     # config
@@ -66,4 +73,6 @@ __all__ = [
     # use-cases
     "OrderRouter",
     "PositionTracker",
+    "reconcile",
+    "ReconResult",
 ]

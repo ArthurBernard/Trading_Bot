@@ -45,6 +45,8 @@ deterministic in fill order.
 
 from __future__ import annotations
 
+from collections.abc import Iterable
+
 from trading_bot.application.events import Event, EventBus, FillEvent
 from trading_bot.domain.fill import Fill
 from trading_bot.domain.instrument import Instrument
@@ -134,6 +136,36 @@ class PositionTracker:
         position = Position.from_fills(fills)
         self._positions[instrument] = position
         return position
+
+    def reset(self, fills: Iterable[Fill] = ()) -> None:
+        """Discard all tracked fills and rebuild from ``fills`` (the new truth).
+
+        Clears every per-instrument fill list and cached position, then folds
+        ``fills`` in the order given — each fill routed to its instrument's
+        bucket and that instrument's :class:`Position` recomputed via
+        :meth:`apply`. The reconciliation path
+        (:func:`~trading_bot.application.reconcile.reconcile`) calls this with
+        the broker's confirmed :meth:`~trading_bot.brokers.base.Broker.fills`
+        (the PnL source of truth) so local positions converge to **exactly**
+        the venue's, with no double-counting of fills the tracker had already
+        seen.
+
+        Because the broker's fill stream is the de-duplicated source, the
+        result is, by construction, ``Position.from_fills`` over the broker's
+        fills per instrument — re-running with the same fills yields the same
+        positions (idempotent rebuild).
+
+        Parameters
+        ----------
+        fills : Iterable[Fill], optional
+            The fills to rebuild from, **in execution order**. Defaults to
+            empty, which clears the tracker to flat.
+
+        """
+        self._fills = {}
+        self._positions = {}
+        for fill in fills:
+            self.apply(fill)
 
     def position(self, instrument: Instrument) -> Position | None:
         """Return the live net :class:`Position` for ``instrument``, or ``None``.
