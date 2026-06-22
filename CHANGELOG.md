@@ -60,6 +60,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   → `Signal.delta_to(position)` → order → `OrderRouter`, with per-step idempotent
   client-order-ids. Completes the **E5 strategy runner**: a strategy now runs
   end-to-end (dccd data → fynance signal → managed positions on a broker).
+- `storage.SqliteStore` — append-only SQLite order/fill history + key/value state
+  (orders UPSERTed, fills append-only, money as TEXT — exact `Decimal`, never
+  float); optional `EventBus` attach. The reconciliation source.
 
 ### Changed
 

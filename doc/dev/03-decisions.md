@@ -6,6 +6,24 @@ rejected approaches as tombstones.
 
 ---
 
+### 2026-06-22 Storage: SQLite, money as TEXT, orders UPSERT / fills append-only
+
+**Decision.** `trading_bot/storage/sqlite_store.py` `SqliteStore` (stdlib `sqlite3`,
+WAL) persists `orders` (UPSERT by `client_order_id` — latest state), `fills`
+(`INSERT OR IGNORE` by `fill_id` — immutable, append-only) and a `state` key/value.
+**All money/qty columns are TEXT** holding `str(Decimal)`, rebuilt with `money(...)` —
+never SQLite's REAL/float. Reads **reconstruct the domain object directly** from the
+row (no state-machine replay — the stored row is the truth). `attach(event_bus)`
+subscribes `OrderEvent→upsert_order` / `FillEvent→record_fill`.
+
+**Why.** SQLite's only numeric types are INTEGER/REAL (binary float); a price through
+REAL reintroduces exactly the rounding error `money` refuses — so TEXT is the only
+lossless option. Orders are stateful aggregates (one evolving row); fills are
+immutable facts (replay/refetch must be a no-op, never a duplicate). Replaying the
+state machine on read could disagree with what was recorded, so the row wins.
+
+---
+
 ### 2026-06-22 StrategyRunner: the live loop, per-step idempotent ids, warmup in one place
 
 **Decision.** `application/strategy_runner.py` `StrategyRunner(strategy, feed, router,

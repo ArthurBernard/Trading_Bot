@@ -1,12 +1,12 @@
 ---
 plan: perf-persistence-risk/01-storage
 kind: leaf
-status: planned
+status: done
 complexity: high
 depends: []
 parallel: false
 branch: feat/storage
-pr: ""
+pr: "#35"
 ---
 
 # Storage — SQLite order/fill history + engine state
