@@ -56,6 +56,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `application.DataFeed` — causal bars feed (`InMemoryFeed` + dccd-backed
   `DccdFeed`): growing windows `frame[:t+1]`, never a future bar; live emits only
   closed bars.
+- `application.StrategyRunner` — the live loop wiring `DataFeed` → strategy signal
+  → `Signal.delta_to(position)` → order → `OrderRouter`, with per-step idempotent
+  client-order-ids. Completes the **E5 strategy runner**: a strategy now runs
+  end-to-end (dccd data → fynance signal → managed positions on a broker).
 
 ### Changed
 

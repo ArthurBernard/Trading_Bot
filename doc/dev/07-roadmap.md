@@ -12,9 +12,6 @@ The single source *index* of open work. Each unchecked item is a candidate for
 
 ## Execution engine
 
-- [ ] **E5 — Strategy runner.** Load a strategy (config + fynance signal), feed it
-  data from dccd, emit target positions/orders; the live loop. Replaces
-  `legacy/StrategyBot`. _(depends on E4)_
 - [ ] **E6 — Performance, persistence & risk.** `PerformanceService` (PnL/KPI),
   `storage` (SQLite order/fill history + state for reconciliation), `RiskManager`
   (pre-trade limits + kill-switch). _(depends on E4)_

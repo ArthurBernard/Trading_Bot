@@ -1,7 +1,7 @@
 ---
 plan: strategy-runner
 kind: global
-status: planning
+status: done
 roadmap: "- [ ] **E5 — Strategy runner.** Load a strategy (config + fynance signal), feed it data from dccd, emit target positions/orders; the live loop. Replaces `legacy/StrategyBot`."
 release_on_done: false
 ---
@@ -32,7 +32,7 @@ walk-forward discipline.)
 
 - [x] 01 strategy-spec — feat/strategy-spec — medium
 - [x] 02 data-feed — feat/data-feed — high
-- [ ] 03 strategy-runner — feat/strategy-runner — high (depends on 01, 02)
+- [x] 03 strategy-runner — feat/strategy-runner — high (depends on 01, 02)
 
 ## Dependencies
 

@@ -6,6 +6,26 @@ rejected approaches as tombstones.
 
 ---
 
+### 2026-06-22 StrategyRunner: the live loop, per-step idempotent ids, warmup in one place
+
+**Decision.** `application/strategy_runner.py` `StrategyRunner(strategy, feed, router,
+tracker, *, event_bus, order_factory)` is an async driver over the sync `DataFeed`:
+per causal window, `signal = strategy.evaluate(bars)`; `delta =
+signal.delta_to(tracker.position(instrument), reference_qty)`; if `delta != 0`, submit a
+MARKET order (side/qty from the delta) with a **deterministic per-step
+`client_order_id`** `f"{strategy.name}-{step}"` so a re-run dedups to one venue order
+(the runner half of E4 idempotency). `delta == 0` → no order. Warmup is **not**
+re-implemented — `Strategy.evaluate` returns flat below `lookback`, so flat-vs-flat →
+no order. `order_factory`'s id is always overridden by the runner.
+
+**Why.** This closes the loop: dccd data → fynance signal → target position → managed
+orders, lookahead-free by construction (the runner only reads the window it's handed).
+Keeping warmup in the strategy and idempotency in the runner avoids duplicated logic.
+The step index advances even on no-order steps so ids stay 1:1 with bars (a re-run
+reproduces them exactly).
+
+---
+
 ### 2026-06-21 DataFeed: causal windows, thin injectable dccd coupling
 
 **Decision.** `application/data_feed.py` `DataFeed` is a sync `Iterable[polars.DataFrame]`
