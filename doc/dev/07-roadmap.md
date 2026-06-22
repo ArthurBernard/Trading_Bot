@@ -10,12 +10,6 @@ The single source *index* of open work. Each unchecked item is a candidate for
 > **Full decomposition** — every epic broken into its leaves, branches,
 > complexity and dependencies: [`08-program-plan.md`](08-program-plan.md).
 
-## Execution engine
-
-- [ ] **E6 — Performance, persistence & risk.** `PerformanceService` (PnL/KPI),
-  `storage` (SQLite order/fill history + state for reconciliation), `RiskManager`
-  (pre-trade limits + kill-switch). _(depends on E4)_
-
 ## Interfaces & orchestration
 
 - [ ] **E7 — CLI.** Typer CLI (start/stop strategies, status, KPI table) + async

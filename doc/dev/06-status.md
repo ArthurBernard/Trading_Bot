@@ -10,17 +10,18 @@ GitHub Actions CI (3.11–3.13), Git Flow (`develop`/`master`), `CLAUDE.md`,
 `.claude/` workflow + hooks, and this `doc/dev/` pack. The package imports and a
 smoke test passes.
 
-**Foundation (E1–E3), the execution engine (E4) and the strategy runner (E5) are
-complete — a strategy now runs end-to-end.** `domain/` (pure, mypy-strict),
-`transport/` (`AsyncHTTPClient`, `WebSocketBase`, `RateLimiter`/`KrakenCallCounter`),
-`brokers/` (the `Broker` port + `KrakenBroker` REST + `KrakenPrivateWS` + the
-port-pure `PaperBroker`), and `application/` (`AppConfig` + `EventBus`, `OrderRouter`
-idempotent, `PositionTracker`, `reconcile`, **`Strategy` + safe loader, `DataFeed`
-causal, `StrategyRunner`**) are in. The full loop **dccd data → fynance signal →
-target position → managed orders on a broker → fills → position** runs in-process and
-is verified end-to-end. Pending: **E6** (performance service, SQLite persistence,
-risk manager + kill-switch), then **E7** (CLI — the MVP "first light"), E8
-orchestration, E9 UI, E10 go-live. Next is **E6**. See `07-roadmap.md` /
+**E1–E6 are complete — the engine is feature-complete behind the interface.**
+`domain/` (pure, mypy-strict), `transport/` (`AsyncHTTPClient`, `WebSocketBase`,
+`RateLimiter`/`KrakenCallCounter`), `brokers/` (the `Broker` port + `KrakenBroker`
+REST + `KrakenPrivateWS` + port-pure `PaperBroker`), `storage/` (`SqliteStore` —
+order/fill history + state, money as TEXT), and `application/` (`AppConfig` +
+`EventBus`, `OrderRouter` idempotent **+ risk-gated**, `PositionTracker`, `reconcile`,
+`Strategy` + safe loader, causal `DataFeed`, `StrategyRunner`, `PerformanceService`,
+**`RiskManager` pre-trade limits + kill-switch**) are in. The full loop **dccd data →
+fynance signal → target position → risk-gated managed orders → fills → position →
+PnL/KPI**, with SQLite persistence and reconciliation, runs in-process and is verified
+end-to-end. Pending: **E7** (CLI — the MVP "first light"), E8 orchestration, E9 UI,
+E10 go-live. Next is **E7**. See `07-roadmap.md` /
 `08-program-plan.md`.
 
 ## Done

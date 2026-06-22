@@ -1,7 +1,7 @@
 ---
 plan: perf-persistence-risk
 kind: global
-status: planning
+status: done
 roadmap: "- [ ] **E6 — Performance, persistence & risk.** `PerformanceService` (PnL/KPI), `storage` (SQLite order/fill history + state for reconciliation), `RiskManager` (pre-trade limits + kill-switch)."
 release_on_done: false
 ---
@@ -30,7 +30,7 @@ gate every order**. Everything is offline-testable.
 
 - [x] 01 storage — feat/storage — high
 - [x] 02 performance-service — feat/performance-service — medium
-- [ ] 03 risk-manager — feat/risk-manager — high
+- [x] 03 risk-manager — feat/risk-manager — high
 
 ## Dependencies
 

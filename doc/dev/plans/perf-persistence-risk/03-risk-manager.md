@@ -6,7 +6,7 @@ complexity: high
 depends: []
 parallel: false
 branch: feat/risk-manager
-pr: ""
+pr: "#37"
 ---
 
 # RiskManager — pre-trade limits + kill-switch (gates every order)
