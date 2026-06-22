@@ -6,7 +6,7 @@ complexity: high
 depends: []
 parallel: false
 branch: feat/storage
-pr: ""
+pr: "#35"
 ---
 
 # Storage — SQLite order/fill history + engine state
