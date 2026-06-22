@@ -6,6 +6,25 @@ rejected approaches as tombstones.
 
 ---
 
+### 2026-06-22 PerformanceService: fill-driven realised-PnL equity, two views
+
+**Decision.** `application/performance_service.py` `PerformanceService` observes the
+`FillEvent` stream (read-side; never trades) and keeps **two views of one stream**: a
+global arrival-order fill list driving an aggregate **realised-PnL equity curve**
+(`equity_k = v0 + cumulative realised PnL through fill k`, one point per fill), and
+per-instrument lists driving `position()` via `Position.from_fills`. KPIs
+(Sharpe/Sortino/max-drawdown/Calmar) delegate to `domain.performance` (fynance) over
+that curve; a series with `< 2` points returns `0.0` (guarded, no raise).
+`domain.performance.equity_curve` (single-instrument mark-to-market) was **not** used —
+the same `v0 + cumulative-PnL` shape is rebuilt from fills.
+
+**Why.** Realised PnL is additive across instruments and fills, so the aggregate total
+equals the sum of per-instrument `Position.from_fills(...).realised_pnl` — a fill-driven
+step curve needs no external mark prices (which we don't have for a cross-instrument
+aggregate stream). Short-series-safe KPIs keep the service callable from the first fill.
+
+---
+
 ### 2026-06-22 Storage: SQLite, money as TEXT, orders UPSERT / fills append-only
 
 **Decision.** `trading_bot/storage/sqlite_store.py` `SqliteStore` (stdlib `sqlite3`,

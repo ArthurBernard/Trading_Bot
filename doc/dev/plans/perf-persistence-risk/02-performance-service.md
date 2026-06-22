@@ -6,7 +6,7 @@ complexity: medium
 depends: []
 parallel: false
 branch: feat/performance-service
-pr: ""
+pr: "#36"
 ---
 
 # PerformanceService — live PnL/KPI over the fill stream
