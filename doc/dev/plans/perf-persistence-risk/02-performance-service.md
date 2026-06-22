@@ -1,7 +1,7 @@
 ---
 plan: perf-persistence-risk/02-performance-service
 kind: leaf
-status: planned
+status: done
 complexity: medium
 depends: []
 parallel: false
