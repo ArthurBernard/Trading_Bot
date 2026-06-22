@@ -65,6 +65,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   float); optional `EventBus` attach. The reconciliation source.
 - `application.PerformanceService` — live realised PnL / fees / equity curve over
   the `FillEvent` stream, with Sharpe/Sortino/max-drawdown/Calmar via fynance.
+- `application.RiskManager` — pre-trade gate (`max_order`/`max_position`/
+  `max_daily_loss`) + kill-switch, wired into `OrderRouter.submit` so every order is
+  gated; a breach raises `RiskLimitBreached` and never reaches the broker. Completes
+  the **E6 performance/persistence/risk** block.
+
+### Fixed
+
+- `application.OrderRouter` — a refused/failed submit with no concurrent waiter no
+  longer leaves an unretrieved in-flight future (silences asyncio's "Future
+  exception was never retrieved" log noise).
 
 ### Changed
 

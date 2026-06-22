@@ -1,12 +1,12 @@
 ---
 plan: perf-persistence-risk/03-risk-manager
 kind: leaf
-status: planned
+status: done
 complexity: high
 depends: []
 parallel: false
 branch: feat/risk-manager
-pr: ""
+pr: "#37"
 ---
 
 # RiskManager — pre-trade limits + kill-switch (gates every order)

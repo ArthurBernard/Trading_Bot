@@ -6,6 +6,46 @@ rejected approaches as tombstones.
 
 ---
 
+### 2026-06-22 RiskManager: pre-trade gate in the router, resulting-net limits, kill-switch
+
+**Decision.** `application/risk.py` `RiskManager.check(order)` is wired into
+`OrderRouter._do_submit` **before** `broker.place_order` and before any state
+transition — the last safety block before a venue sees an order. Checks, in order:
+**kill-switch** (hard halt, first), `max_order` (the order's own size), `max_position`
+(the **resulting** absolute net = current net + signed order qty, so a *reducing*
+order is never blocked), `max_daily_loss` (halts new orders once the day's *realised*
+loss ≥ cap — it does not predict the order's PnL). `None` limits are unconstrained.
+A breach raises `RiskLimitBreached`: **no broker call, the order is left untracked**
+(not a `REJECTED` record), so a later submit of the same id is a fresh attempt and
+idempotency is intact. Kill-switch: `trip`/`reset`; `async kill(router|broker)`
+cancels open orders **then** trips (cancel-before-trip, since cancelling is a reducing
+action and must not be self-refused). Daily loss is sourced through a thin injected
+`daily_pnl_provider` callable (or `record_daily_pnl`); "daily" resets via an explicit
+caller-driven `reset_day()` — the manager owns no clock.
+
+**Why.** Risk limits + kill-switch must gate **every** order (a hard live-trading
+invariant); placing the gate inside the router's single submit path guarantees no
+order bypasses it. Gating the *resulting* net (not order size) is the correct
+position limit. **Known limitation:** `max_position` reads the *confirmed* position
+from the tracker, so it does not count the unfilled qty of still-open orders —
+pending exposure can momentarily exceed the cap between submit and fill; tightening
+to pending-aware exposure is go-live hardening (E10).
+
+---
+
+### 2026-06-22 OrderRouter: consume the in-flight future's exception (log hygiene)
+
+**Decision.** The router's per-id in-flight `asyncio.Future` (the concurrency guard)
+gets a done-callback that retrieves a stored exception, so a refused/failed submit
+with **no** concurrent waiter no longer triggers asyncio's "Future exception was
+never retrieved" at GC. A real waiter still receives the exception via `await`.
+
+**Why.** Surfaced when the risk gate made `submit` raise routinely: the dangling
+future logged spurious noise. In a trading engine, log noise masks real incidents —
+the guard must be silent when it has nothing to report.
+
+---
+
 ### 2026-06-22 PerformanceService: fill-driven realised-PnL equity, two views
 
 **Decision.** `application/performance_service.py` `PerformanceService` observes the
