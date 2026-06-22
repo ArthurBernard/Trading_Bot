@@ -49,6 +49,14 @@ It then layers the engine's use-cases:
   :class:`~trading_bot.application.data_feed.InMemoryFeed` and the dccd-backed
   :class:`~trading_bot.application.data_feed.DccdFeed` (injected client; thin
   coupling), the source of the bars frames a ``signal_fn`` evaluates.
+* strategy_runner — the
+  :class:`~trading_bot.application.strategy_runner.StrategyRunner`, the engine's
+  live loop: it pulls causal windows from a ``DataFeed``, evaluates the
+  ``Strategy``'s ``Signal``, diffs it against the ``PositionTracker``'s live
+  position into a target delta, and submits the resulting ``Order`` through the
+  ``OrderRouter`` with a deterministic per-step ``client_order_id`` (so a re-run
+  dedups). No order during warmup or when already on target; causality is
+  preserved by construction.
 """
 
 from __future__ import annotations
@@ -81,6 +89,7 @@ from trading_bot.application.strategy import (
     load_strategy,
     ma_crossover_signal,
 )
+from trading_bot.application.strategy_runner import OrderFactory, StrategyRunner
 
 __all__ = [
     # config
@@ -109,4 +118,7 @@ __all__ = [
     "SignalFn",
     "load_strategy",
     "ma_crossover_signal",
+    # strategy runner
+    "StrategyRunner",
+    "OrderFactory",
 ]
