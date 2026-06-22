@@ -31,6 +31,12 @@ It then layers the engine's use-cases:
   applied explicitly) into a live net
   :class:`~trading_bot.domain.position.Position` per instrument, the owner of
   exposure and realised PnL.
+* performance_service — the
+  :class:`~trading_bot.application.performance_service.PerformanceService`, the
+  read-side performance view: it observes the same confirmed ``Fill``\\ s and
+  reports aggregate realised PnL / fees, an equity curve (``v0`` + cumulative
+  realised PnL) and the fynance-backed KPI ratios (Sharpe, Sortino, max drawdown,
+  Calmar). Observational only — it never places an order.
 * reconcile — :func:`~trading_bot.application.reconcile.reconcile` (and its
   :class:`~trading_bot.application.reconcile.ReconResult`): the *reconcile,
   don't assume* pass that, on startup or after a disconnect, refetches the
@@ -81,6 +87,7 @@ from trading_bot.application.events import (
     OrderEvent,
 )
 from trading_bot.application.order_router import OrderRouter
+from trading_bot.application.performance_service import PerformanceService
 from trading_bot.application.position_tracker import PositionTracker
 from trading_bot.application.reconcile import ReconResult, reconcile
 from trading_bot.application.strategy import (
@@ -106,6 +113,7 @@ __all__ = [
     # use-cases
     "OrderRouter",
     "PositionTracker",
+    "PerformanceService",
     "reconcile",
     "ReconResult",
     # data feed

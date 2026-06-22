@@ -1,12 +1,12 @@
 ---
 plan: perf-persistence-risk/02-performance-service
 kind: leaf
-status: planned
+status: done
 complexity: medium
 depends: []
 parallel: false
 branch: feat/performance-service
-pr: ""
+pr: "#36"
 ---
 
 # PerformanceService — live PnL/KPI over the fill stream

@@ -63,6 +63,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `storage.SqliteStore` — append-only SQLite order/fill history + key/value state
   (orders UPSERTed, fills append-only, money as TEXT — exact `Decimal`, never
   float); optional `EventBus` attach. The reconciliation source.
+- `application.PerformanceService` — live realised PnL / fees / equity curve over
+  the `FillEvent` stream, with Sharpe/Sortino/max-drawdown/Calmar via fynance.
 
 ### Changed
 

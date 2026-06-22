@@ -29,7 +29,7 @@ gate every order**. Everything is offline-testable.
 ## Leaf checklist
 
 - [x] 01 storage — feat/storage — high
-- [ ] 02 performance-service — feat/performance-service — medium
+- [x] 02 performance-service — feat/performance-service — medium
 - [ ] 03 risk-manager — feat/risk-manager — high
 
 ## Dependencies
