@@ -43,6 +43,14 @@ It then layers the engine's use-cases:
   venue's open orders, balances and fills and converges the router's tracked
   orders and the tracker's positions to that truth — never leaving a duplicated
   or lost order.
+* risk — the :class:`~trading_bot.application.risk.RiskManager`, the engine's
+  **pre-trade gate + kill-switch**: it ``check``\\ s every order the
+  ``OrderRouter`` is about to submit against the
+  :class:`~trading_bot.application.config.RiskConfig` limits (max order size, max
+  resulting net position, max daily loss) and a hard kill-switch, raising
+  :class:`~trading_bot.domain.errors.RiskLimitBreached` so a breaching order — or
+  any order once the switch is tripped — is **never placed**. The last safety
+  block before a venue sees an order.
 * strategy — the :class:`~trading_bot.application.strategy.Strategy` (instrument
   + a :data:`~trading_bot.application.strategy.SignalFn` callable that maps a
   bars frame to a domain ``Signal``), the safe
@@ -90,6 +98,7 @@ from trading_bot.application.order_router import OrderRouter
 from trading_bot.application.performance_service import PerformanceService
 from trading_bot.application.position_tracker import PositionTracker
 from trading_bot.application.reconcile import ReconResult, reconcile
+from trading_bot.application.risk import RiskManager
 from trading_bot.application.strategy import (
     SignalFn,
     Strategy,
@@ -114,6 +123,7 @@ __all__ = [
     "OrderRouter",
     "PositionTracker",
     "PerformanceService",
+    "RiskManager",
     "reconcile",
     "ReconResult",
     # data feed

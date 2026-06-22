@@ -1,7 +1,7 @@
 ---
 plan: perf-persistence-risk/03-risk-manager
 kind: leaf
-status: planned
+status: done
 complexity: high
 depends: []
 parallel: false

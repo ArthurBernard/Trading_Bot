@@ -59,11 +59,15 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from typing import TYPE_CHECKING
 
 from trading_bot.application.events import EventBus, OrderEvent
 from trading_bot.brokers.base import Broker, Capability, require
 from trading_bot.domain.errors import BrokerError, MissingOrder, OrderError
 from trading_bot.domain.order import Order, OrderStatus
+
+if TYPE_CHECKING:
+    from trading_bot.application.risk import RiskManager
 
 __all__ = ["OrderRouter"]
 
@@ -88,6 +92,15 @@ class OrderRouter:
         The bus every order lifecycle change is emitted on, as an
         :class:`~trading_bot.application.events.OrderEvent` carrying the live
         :class:`Order`.
+    risk_manager : RiskManager, optional
+        The pre-trade gate. When given, every :meth:`submit` calls
+        :meth:`~trading_bot.application.risk.RiskManager.check` on the order
+        **before** the broker is touched; a
+        :class:`~trading_bot.domain.errors.RiskLimitBreached` propagates and the
+        order is **never placed** and **never tracked** (no broker call, no
+        half-tracked submission — so the idempotency map stays a record of
+        *accepted* submissions only, and a later retry is free to re-attempt).
+        ``None`` (the default) runs the router with no risk gate.
 
     Raises
     ------
@@ -96,13 +109,20 @@ class OrderRouter:
 
     """
 
-    def __init__(self, broker: Broker, event_bus: EventBus) -> None:
+    def __init__(
+        self,
+        broker: Broker,
+        event_bus: EventBus,
+        *,
+        risk_manager: RiskManager | None = None,
+    ) -> None:
         # Gate up front: a broker that cannot place *and* cancel is not a valid
         # write-path target, so fail at construction rather than at first call.
         require(broker, Capability.PLACE_ORDER)
         require(broker, Capability.CANCEL)
         self._broker = broker
         self._bus = event_bus
+        self._risk = risk_manager
         # Dedup map: every order the router has tracked, keyed by its identity.
         self._orders: dict[str, Order] = {}
         # Per-id in-flight submissions, the concurrency guard (see module doc).
@@ -135,6 +155,13 @@ class OrderRouter:
 
         Raises
         ------
+        RiskLimitBreached
+            If a ``risk_manager`` is wired and its
+            :meth:`~trading_bot.application.risk.RiskManager.check` refuses the
+            order (a breached limit or a tripped kill-switch). The broker is
+            **not** called and the order is **not** tracked — a refused order is
+            not a submission, so it leaves no record and a later retry is a fresh
+            attempt.
         BrokerError or OrderError
             If the broker (or the order's own state machine) fails the
             submission. The order is driven to ``REJECTED``, a reject
@@ -186,7 +213,21 @@ class OrderRouter:
         touches the caller's ``Order``. So the router calls ``place_order`` with
         the order still ``NEW``, then drives ``NEW -> SUBMITTED -> OPEN`` itself
         with the returned venue id.
+
+        The **risk gate runs first**, before any broker call or state change:
+        :meth:`~trading_bot.application.risk.RiskManager.check` is the last safety
+        block before a venue sees the order. A
+        :class:`~trading_bot.domain.errors.RiskLimitBreached` propagates *out of*
+        this method without calling the broker, without driving any transition,
+        and without tracking the order — a refused order is **not** a submission,
+        so it leaves no ``REJECTED`` record and the dedup map is unchanged (a
+        subsequent submit of the same id is a fresh attempt, not a deduped
+        replay).
         """
+        if self._risk is not None:
+            # Pre-trade gate: raises RiskLimitBreached before the broker is ever
+            # touched. Left to propagate untracked (see the docstring).
+            self._risk.check(order)
         try:
             venue_id = await self._broker.place_order(order)
             order.submit()
