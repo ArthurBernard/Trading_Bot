@@ -6,6 +6,24 @@ rejected approaches as tombstones.
 
 ---
 
+### 2026-06-23 MVP "first light" reached; legacy tree retired
+
+**Decision.** With the Typer CLI + async orchestration in place, the rewrite is
+complete through the **MVP**: `trading-bot run` runs a fynance-backed strategy over a
+data feed, routing risk-gated orders to a (paper) broker and reporting positions/PnL —
+the whole `dccd data → fynance signal → managed orders → fills → PnL` loop, runnable
+from the command line. The superseded `trading_bot/legacy/` tree (23 modules) is
+**deleted** (history in git) and the legacy exclusions removed from all tooling, so
+ruff/mypy/pytest/interrogate now cover the entire package.
+
+**Why.** Every legacy capability has a native replacement, and nothing live imported
+`legacy/` — keeping a dead, untested tree around only invites drift and confuses the
+"what's real" picture. Retiring it makes the rewrite *the* implementation. The
+remaining epics (E8 triptych orchestration, E9 UI, E10 go-live) build on the MVP, not
+the legacy code.
+
+---
+
 ### 2026-06-23 Orchestrator: gather (non-fail-fast), cooperative stop, opt-in signals
 
 **Decision.** `application/orchestrator.py` `Orchestrator` runs N `StrategyRunner`s

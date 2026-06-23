@@ -12,9 +12,6 @@ The single source *index* of open work. Each unchecked item is a candidate for
 
 ## Interfaces & orchestration
 
-- [ ] **E7 — CLI.** Typer CLI (start/stop strategies, status, KPI table) + async
-  orchestration replacing the legacy multiprocessing server. Declare the
-  `trading-bot` console script. Delete superseded legacy modules. _(depends on E5, E6)_
 - [ ] **E8 — Orchestration of the triptych.** One `AppConfig` declaring data
   sources (dccd) + strategies (fynance) + brokers; a single entrypoint that wires
   the three. Decide library-import vs service-driving for dccd here. _(depends on E7)_

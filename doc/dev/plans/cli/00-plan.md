@@ -1,7 +1,7 @@
 ---
 plan: cli
 kind: global
-status: planning
+status: done
 roadmap: "- [ ] **E7 — CLI.** Typer CLI (start/stop strategies, status, KPI table) + async orchestration replacing the legacy multiprocessing server. Declare the `trading-bot` console script. Delete superseded legacy modules."
 release_on_done: false
 ---
@@ -32,7 +32,7 @@ confirmation); everything offline-testable (Typer `CliRunner` + `PaperBroker`).
 - [x] 01 cli-skeleton — feat/cli-skeleton — high
 - [x] 02 cli-commands — feat/cli-commands — medium (depends on 01)
 - [x] 03 async-orchestration — feat/async-orchestration — high (depends on 01)
-- [ ] 04 legacy-removal — chore/remove-legacy — low (depends on 02, 03)
+- [x] 04 legacy-removal — chore/remove-legacy — low (depends on 02, 03)
 
 ## Dependencies
 
