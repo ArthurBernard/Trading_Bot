@@ -1,7 +1,7 @@
 ---
 plan: cli/03-async-orchestration
 kind: leaf
-status: planned
+status: done
 complexity: high
 depends: [01]
 parallel: false
