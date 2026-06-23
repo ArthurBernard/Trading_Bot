@@ -354,6 +354,38 @@ async def test_router_blocks_breaching_order_no_broker_call() -> None:
     assert router.get("big") is None
 
 
+async def test_breaching_submit_leaves_no_unretrieved_future() -> None:
+    """A refused submit (no concurrent waiter) logs no asyncio future warning.
+
+    The router stores a failed submission's exception on its in-flight future for
+    any concurrent waiter; with no waiter, asyncio would log "Future exception was
+    never retrieved" at GC — log noise that can mask real incidents in a trading
+    engine. The future's done-callback consumes the exception, so the loop's
+    exception handler is never invoked.
+    """
+    import gc
+
+    broker = _SpyBroker()
+    bus = EventBus()
+    rm = RiskManager(RiskConfig(max_order=money("1")))
+    router = OrderRouter(broker, bus, risk_manager=rm)
+
+    handled: list[dict[str, object]] = []
+    asyncio.get_running_loop().set_exception_handler(
+        lambda _loop, context: handled.append(context)
+    )
+
+    with pytest.raises(RiskLimitBreached):
+        await router.submit(_order(cid="big", qty="2"))
+
+    # Force collection of the (now-dropped) in-flight future, then let the loop
+    # run so any scheduled handler call would fire.
+    gc.collect()
+    await asyncio.sleep(0)
+
+    assert handled == [], f"unexpected loop exception handler calls: {handled}"
+
+
 async def test_router_allows_compliant_order() -> None:
     """A compliant order passes the gate and reaches the broker normally."""
     broker = _SpyBroker()
