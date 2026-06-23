@@ -1,9 +1,8 @@
 # 02 — Architecture (target)
 
 Hexagonal, async-first, mirroring dccd's layering under the same `trading_bot/`
-package. This is the **target**; layers land incrementally (see
-[`07-roadmap.md`](07-roadmap.md)). The legacy tree is replaced module by module,
-never extended.
+package. The MVP layers are in place (see [`07-roadmap.md`](07-roadmap.md) for
+what comes next).
 
 ```
 trading_bot/
@@ -13,7 +12,6 @@ trading_bot/
   storage/       # persistence + reconciliation source
   application/   # the engine (use-cases, wiring)
   interfaces/    # CLI, later HTTP/UI
-  legacy/        # reference only
   tests/
 ```
 
@@ -80,7 +78,7 @@ with what the broker reports and converges.
 ## Interfaces (`interfaces/`)
 
 - `cli/` — Typer commands (start/stop strategies, status, KPI table). Replaces the
-  legacy `blessed` CLI **and** the multiprocessing server (async orchestration
+  pre-2026 `blessed` CLI **and** the multiprocessing server (async orchestration
   instead of processes-over-socket).
 - `api/` + `ui/` — FastAPI + Jinja2 dashboard (positions/orders/PnL), later;
   mirrors dccd's UI.

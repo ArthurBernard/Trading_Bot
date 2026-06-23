@@ -10,18 +10,21 @@ GitHub Actions CI (3.11–3.13), Git Flow (`develop`/`master`), `CLAUDE.md`,
 `.claude/` workflow + hooks, and this `doc/dev/` pack. The package imports and a
 smoke test passes.
 
-**E1–E6 are complete — the engine is feature-complete behind the interface.**
-`domain/` (pure, mypy-strict), `transport/` (`AsyncHTTPClient`, `WebSocketBase`,
-`RateLimiter`/`KrakenCallCounter`), `brokers/` (the `Broker` port + `KrakenBroker`
-REST + `KrakenPrivateWS` + port-pure `PaperBroker`), `storage/` (`SqliteStore` —
-order/fill history + state, money as TEXT), and `application/` (`AppConfig` +
-`EventBus`, `OrderRouter` idempotent **+ risk-gated**, `PositionTracker`, `reconcile`,
-`Strategy` + safe loader, causal `DataFeed`, `StrategyRunner`, `PerformanceService`,
-**`RiskManager` pre-trade limits + kill-switch**) are in. The full loop **dccd data →
-fynance signal → target position → risk-gated managed orders → fills → position →
-PnL/KPI**, with SQLite persistence and reconciliation, runs in-process and is verified
-end-to-end. Pending: **E7** (CLI — the MVP "first light"), E8 orchestration, E9 UI,
-E10 go-live. Next is **E7**. See `07-roadmap.md` /
+**E1–E7 are complete — the MVP "first light" is reached.** The engine runs from the
+command line: `trading-bot run` runs a fynance-backed strategy over a `DataFeed`,
+routing **risk-gated** orders through the `OrderRouter` to a (paper) broker and
+reporting positions / PnL / KPIs; `status`/`kpi` read a persisted `SqliteStore`. Layers:
+`domain/` (pure, mypy-strict), `transport/` (http/ws/ratelimit), `brokers/` (`Broker`
+port + `KrakenBroker` REST+WS + port-pure `PaperBroker`), `storage/` (`SqliteStore`,
+money as TEXT), `application/` (`AppConfig`+`EventBus`, idempotent risk-gated
+`OrderRouter`, `PositionTracker`, `reconcile`, `Strategy`+safe loader, causal
+`DataFeed`, `StrategyRunner`, `PerformanceService`, `RiskManager`+kill-switch,
+`Orchestrator`, `service_factory`), and `interfaces/cli/` (Typer `trading-bot`). The
+pre-2026 `legacy/` tree is **deleted** (history in git); the whole package is
+linted/typed/tested (no exclusions). 461 tests green via the project `.venv`.
+
+Pending: **E8** (triptych orchestration — one config wiring dccd+fynance+brokers), E9
+(web UI), E10 (go-live hardening + final name). Next is **E8**. See `07-roadmap.md` /
 `08-program-plan.md`.
 
 ## Done

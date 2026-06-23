@@ -1,12 +1,12 @@
 ---
 plan: cli/04-legacy-removal
 kind: leaf
-status: planned
+status: done
 complexity: low
 depends: [02, 03]
 parallel: false
 branch: chore/remove-legacy
-pr: ""
+pr: "#43"
 ---
 
 # Legacy removal — delete the superseded pre-2026 tree

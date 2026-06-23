@@ -93,10 +93,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   caller's `Order` (the `OrderRouter` owns the state machine); it returns a venue id
   and reports fills via `fills()` / `FillEvent`s. Removed the router's
   self-driving-broker workaround.
-- Parked the pre-2026 implementation under `trading_bot/legacy/` (reference only,
-  excluded from lint/type-check/tests) ahead of the hexagonal rewrite.
 - Bumped version to `0.2.0.dev0` to mark the start of the rewrite.
 
 ### Removed
 
 - `setup.py` and `requirements.txt` — folded into `pyproject.toml`.
+- Deleted the superseded pre-2026 `trading_bot/legacy/` tree (23 modules) — the
+  rewrite is complete through the **MVP CLI**; the old implementation lives in git
+  history. Removed the now-unneeded legacy exclusions from the ruff/mypy/pytest/
+  coverage/interrogate config (the whole package is now linted/typed/tested).

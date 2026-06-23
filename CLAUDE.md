@@ -9,12 +9,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 > [`doc/dev/README.md`](doc/dev/README.md). `CLAUDE.md` remains authoritative for
 > commands and invariants.
 
-> **Status: rewrite in progress.** The pre-2026 implementation is parked under
-> [`trading_bot/legacy/`](trading_bot/legacy/) (reference only — excluded from
-> lint/type-check/tests). The new hexagonal layers are being built per
-> [`doc/dev/07-roadmap.md`](doc/dev/07-roadmap.md). When this file describes a
-> layer that does not exist yet, it is describing the **target** — check the
-> roadmap/status for what has actually landed.
+> **Status: rewrite complete through the MVP.** The hexagonal layers exist
+> natively (domain, transport, brokers, storage, application, Typer CLI). The
+> pre-2026 implementation has been retired — it lives in git history only (no
+> in-tree legacy package). For remaining work see
+> [`doc/dev/07-roadmap.md`](doc/dev/07-roadmap.md); when this file describes a
+> layer that does not exist yet, check the roadmap/status for what has landed.
 
 ## The triptych
 
@@ -41,7 +41,7 @@ pip install -e ".[dev]"
 pip install -e ../Fynance                            # fynance — enables the KPI tests
 pip install -e ../Download_Crypto_Currencies_Data    # dccd — market data (E5+)
 
-# Run the full unit suite (legacy excluded; network E2E excluded by default)
+# Run the full unit suite (network E2E excluded by default)
 pytest
 
 # Run a single test file
@@ -121,8 +121,7 @@ downgrade the model**: treat `low | medium | high` all as `opus`.
 ## Architecture (target — hexagonal, mirrors dccd)
 
 The rewrite mirrors dccd's hexagonal layering under the same `trading_bot/`
-package. Layers land incrementally (see roadmap); the legacy tree is replaced
-module by module, never extended.
+package. The MVP layers are in place; remaining work is tracked in the roadmap.
 
 ```
 trading_bot/
@@ -138,7 +137,6 @@ trading_bot/
   interfaces/
     cli/         # Typer CLI (start/stop strategies, status, KPI table)
     api/ + ui/   # FastAPI + Jinja2 dashboard (later)
-  legacy/        # pre-2026 implementation — reference only, excluded from tooling
   tests/
 ```
 
@@ -169,8 +167,7 @@ early if unimplemented).
 
 ## Testing conventions
 
-Tests live in `trading_bot/tests/`. The legacy tree is excluded from collection
-(`--ignore=trading_bot/legacy`). Coverage is measured on every run
+Tests live in `trading_bot/tests/`. Coverage is measured on every run
 (`--cov=trading_bot`). CI matrix: Python 3.11–3.13.
 
 **Test the chain on real data, not just the pieces.** A green unit suite is not
