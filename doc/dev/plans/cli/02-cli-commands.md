@@ -1,12 +1,12 @@
 ---
 plan: cli/02-cli-commands
 kind: leaf
-status: planned
+status: done
 complexity: medium
 depends: [01]
 parallel: false
 branch: feat/cli-commands
-pr: ""
+pr: "#41"
 ---
 
 # CLI commands — run / status / kpi
