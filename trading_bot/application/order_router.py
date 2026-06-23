@@ -74,6 +74,18 @@ __all__ = ["OrderRouter"]
 logger = logging.getLogger(__name__)
 
 
+def _consume_exception(future: "asyncio.Future[Order]") -> None:
+    """Mark a done future's exception retrieved (silences asyncio's GC warning).
+
+    Used as an in-flight future's done-callback: a submission that failed with no
+    concurrent waiter would otherwise trigger "Future exception was never
+    retrieved" at GC. Reading ``.exception()`` marks it retrieved; a real waiter
+    has already consumed it via ``await``.
+    """
+    if not future.cancelled():
+        future.exception()
+
+
 class OrderRouter:
     """Idempotent order submission + lifecycle driving over a :class:`Broker`.
 
@@ -189,6 +201,13 @@ class OrderRouter:
         # concurrently-scheduled submit of the same id finds it above.
         loop = asyncio.get_running_loop()
         future: asyncio.Future[Order] = loop.create_future()
+        # A failed submission (e.g. RiskLimitBreached, BrokerError) stores its
+        # exception on this future for any concurrent waiter. When there is *no*
+        # waiter, asyncio would log a spurious "Future exception was never
+        # retrieved" at GC — log noise that, in a trading engine, can mask real
+        # incidents. This callback consumes the exception so it is always marked
+        # retrieved; a real waiter still gets it via ``await`` beforehand.
+        future.add_done_callback(_consume_exception)
         self._inflight[cid] = future
         try:
             result = await self._do_submit(order)
