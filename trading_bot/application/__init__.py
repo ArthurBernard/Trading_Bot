@@ -99,6 +99,7 @@ from trading_bot.application.performance_service import PerformanceService
 from trading_bot.application.position_tracker import PositionTracker
 from trading_bot.application.reconcile import ReconResult, reconcile
 from trading_bot.application.risk import RiskManager
+from trading_bot.application.service_factory import Engine, build_engine
 from trading_bot.application.strategy import (
     SignalFn,
     Strategy,
@@ -139,4 +140,7 @@ __all__ = [
     # strategy runner
     "StrategyRunner",
     "OrderFactory",
+    # wiring
+    "Engine",
+    "build_engine",
 ]
