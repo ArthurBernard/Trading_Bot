@@ -73,6 +73,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   whole engine (bus, broker, router+risk, tracker, perf, store) from an `AppConfig`
   (paper-by-default; live needs credentials), plus a Typer `trading-bot` CLI skeleton
   and the `trading-bot` console script.
+- `trading-bot` CLI commands — `run` (run a strategy over a bars file / synthetic
+  feed, paper by default; `--live` needs explicit ack **and** credentials), `status`
+  and `kpi` (read a persisted `--db` history; rich tables, money as Decimal).
 
 ### Fixed
 

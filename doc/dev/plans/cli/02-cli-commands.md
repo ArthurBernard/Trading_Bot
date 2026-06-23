@@ -6,7 +6,7 @@ complexity: medium
 depends: [01]
 parallel: false
 branch: feat/cli-commands
-pr: ""
+pr: "#41"
 ---
 
 # CLI commands — run / status / kpi

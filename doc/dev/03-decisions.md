@@ -6,6 +6,26 @@ rejected approaches as tombstones.
 
 ---
 
+### 2026-06-23 CLI run/status/kpi: double live-guard, fills-as-source for status/kpi
+
+**Decision.** `trading-bot run` defaults to **paper**; `--live` requires **both** an
+explicit `--yes-i-understand` ack (or interactive `typer.confirm`) **and** venue
+credentials — either missing → clear non-zero exit with **no broker built and no order
+placed**. `run` takes a `--bars` file (CSV/parquet → polars → `InMemoryFeed`) or a
+built-in synthetic feed; it prices the example MA-crossover with a LIMIT-at-close order
+factory so the paper run fills offline without a mark feed. `status`/`kpi` read a
+persisted `SqliteStore` (`--db`) and rebuild positions/KPIs from the stored **fills**
+(the PnL source of truth), not a re-run engine. `kpi --capital` anchors `v0 > 0` so the
+equity curve doesn't sign-cross (fynance's annual-return math requires it).
+
+**Why.** A two-gate live opt-in makes "no live by accident" structural at the interface
+too, not just in the factory. Rebuilding from stored fills makes `status`/`kpi`
+inspect real history a prior `run --db` produced (genuinely testable) rather than
+re-simulating. The positive-capital anchor is a fynance constraint, not a choice about
+PnL (realised PnL/fees are capital-independent).
+
+---
+
 ### 2026-06-23 service_factory: single wiring point, no live broker by accident
 
 **Decision.** `application/service_factory.py` `build_engine(config, *, db_path=None)
