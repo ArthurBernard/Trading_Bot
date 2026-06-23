@@ -6,6 +6,26 @@ rejected approaches as tombstones.
 
 ---
 
+### 2026-06-23 Orchestrator: gather (non-fail-fast), cooperative stop, opt-in signals
+
+**Decision.** `application/orchestrator.py` `Orchestrator` runs N `StrategyRunner`s
+concurrently with `asyncio.gather(..., return_exceptions=True)` — **not** a TaskGroup —
+so one runner raising does **not** auto-cancel its siblings (independent strategy books
+keep trading); outcomes are aggregated after, a lone failure re-raised, multiple wrapped
+in `RunnerGroupError`. Graceful shutdown is **one shared cooperative `asyncio.Event`**
+each runner checks **between** steps (never mid-submit) — no forced cancellation;
+`StrategyRunner.run` gained a minimal `stop_event=` hook (+ a per-iteration `sleep(0)`
+only when a stop-event is present, so a no-order live loop yields). SIGINT/SIGTERM
+handling is **opt-in** via `install_signal_handlers(loop)` (loop-native, `signal.signal`
+fallback) — importing installs nothing. Replaces the legacy multiprocessing server.
+
+**Why.** Strategy loops are independent books — a fail-fast TaskGroup would cancel
+healthy strategies on one's error. Cooperative stop-between-steps guarantees no order is
+torn mid-flight on shutdown (a money-safety property). Opt-in signals keep the module
+import-safe and tests signal-free.
+
+---
+
 ### 2026-06-23 CLI run/status/kpi: double live-guard, fills-as-source for status/kpi
 
 **Decision.** `trading-bot run` defaults to **paper**; `--live` requires **both** an

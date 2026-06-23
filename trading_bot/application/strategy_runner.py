@@ -24,11 +24,23 @@ The feed is a **synchronous** ``Iterable`` of causal windows, but the router is
 iterates the sync feed and ``await``\\ s one submission per step. The public
 surface is deliberately small:
 
-* :meth:`run` — drive the whole feed (optionally capped at ``max_steps``),
-  returning the number of orders actually submitted;
+* :meth:`run` — drive the whole feed (optionally capped at ``max_steps``,
+  optionally observing a cooperative ``stop_event``), returning the number of
+  orders actually submitted;
 * :meth:`step` — process **one** already-pulled window, the unit :meth:`run`
   calls in a loop. Exposed so a caller (a live driver, a test) can pump windows
   in by hand and keep the step index it owns.
+
+Cooperative stop (carried into the ADR)
+---------------------------------------
+:meth:`run` accepts an optional :class:`asyncio.Event` ``stop_event``. The loop
+checks it **at the top of each iteration** — *before* pulling/processing the next
+window — and exits cleanly when it is set. The check is *between* steps, never
+mid-``step``: a step that has begun (and may have ``await``\\ ed a submission)
+always runs to completion, so a cooperative stop can never tear an order in half.
+This is the runner's half of the :class:`~trading_bot.application.orchestrator.
+Orchestrator`'s graceful shutdown — the orchestrator owns one shared event, sets
+it once, and every runner drains to its next between-steps boundary.
 
 Because each window is the feed's causal prefix ``frame[: t + 1]`` and the runner
 never reads beyond the window handed to it, **causality is preserved by
@@ -60,6 +72,7 @@ performs no I/O of its own (the router/broker do).
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Callable
 from typing import TYPE_CHECKING
 
@@ -168,13 +181,19 @@ class StrategyRunner:
         """The next step index (== number of windows processed so far)."""
         return self._step_index
 
-    async def run(self, max_steps: int | None = None) -> int:
+    async def run(
+        self,
+        max_steps: int | None = None,
+        *,
+        stop_event: asyncio.Event | None = None,
+    ) -> int:
         """Drive the feed window-by-window, submitting the per-step deltas.
 
         Iterates the feed (the sync iterable of causal windows) and calls
         :meth:`step` on each, stopping early after ``max_steps`` windows if
-        given. Honours causality by construction — each window is the feed's
-        causal prefix and the runner never reads past it.
+        given, or as soon as ``stop_event`` is set. Honours causality by
+        construction — each window is the feed's causal prefix and the runner
+        never reads past it.
 
         Parameters
         ----------
@@ -182,6 +201,13 @@ class StrategyRunner:
             Process at most this many windows (bounds an otherwise feed-length
             run; useful for tests and live feeds). ``None`` (default) drains the
             feed to exhaustion.
+        stop_event : asyncio.Event or None, optional
+            A cooperative stop signal. When given, the loop checks it at the top
+            of each iteration — **between** steps, never mid-``step`` — and
+            returns cleanly the moment it is set, so an in-flight submission is
+            never interrupted. ``None`` (default) runs without a stop signal.
+            This is the hook the :class:`~trading_bot.application.orchestrator.
+            Orchestrator` uses for graceful shutdown.
 
         Returns
         -------
@@ -194,12 +220,25 @@ class StrategyRunner:
         submitted = 0
         processed = 0
         for bars in self._feed:
+            # Check the cooperative stop *before* processing this window: a step
+            # that has begun always finishes (no order torn mid-submit); a stop
+            # only takes effect at this between-steps boundary.
+            if stop_event is not None and stop_event.is_set():
+                break
             if max_steps is not None and processed >= max_steps:
                 break
             order = await self.step(bars)
             if order is not None:
                 submitted += 1
             processed += 1
+            # When a stop signal is in play (the orchestrator's looping/live
+            # case), yield control to the event loop once per iteration. A step
+            # that submits nothing (warmup / on-target) never ``await``s a venue,
+            # so without this a tight sync loop over a live feed would starve the
+            # loop — and the cooperative ``shutdown`` coroutine could never run.
+            # This is a between-steps boundary, so it never interrupts a submit.
+            if stop_event is not None:
+                await asyncio.sleep(0)
         return submitted
 
     async def step(self, bars: pl.DataFrame) -> Order | None:

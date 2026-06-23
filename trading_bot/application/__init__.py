@@ -71,6 +71,16 @@ It then layers the engine's use-cases:
   ``OrderRouter`` with a deterministic per-step ``client_order_id`` (so a re-run
   dedups). No order during warmup or when already on target; causality is
   preserved by construction.
+* orchestrator — the
+  :class:`~trading_bot.application.orchestrator.Orchestrator`, the engine's
+  lifecycle conductor: it runs one or more ``StrategyRunner`` loops
+  **concurrently** (``asyncio.gather`` with ``return_exceptions=True`` — siblings
+  are not auto-cancelled on a failure) and stops them all with a single
+  **graceful shutdown** — a shared :class:`asyncio.Event` every runner observes
+  between steps, so no order is left half-submitted. SIGINT/SIGTERM handling is
+  opt-in/injectable (the process entrypoint calls
+  :meth:`~trading_bot.application.orchestrator.Orchestrator.install_signal_handlers`;
+  importing installs nothing). Replaces the legacy multiprocessing server.
 """
 
 from __future__ import annotations
@@ -94,6 +104,7 @@ from trading_bot.application.events import (
     LogEvent,
     OrderEvent,
 )
+from trading_bot.application.orchestrator import Orchestrator, RunnerGroupError
 from trading_bot.application.order_router import OrderRouter
 from trading_bot.application.performance_service import PerformanceService
 from trading_bot.application.position_tracker import PositionTracker
@@ -140,6 +151,9 @@ __all__ = [
     # strategy runner
     "StrategyRunner",
     "OrderFactory",
+    # orchestration
+    "Orchestrator",
+    "RunnerGroupError",
     # wiring
     "Engine",
     "build_engine",

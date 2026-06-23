@@ -22,6 +22,8 @@ Async tests run un-decorated (``asyncio_mode = "auto"``).
 
 from __future__ import annotations
 
+import asyncio
+from collections.abc import Iterator
 from decimal import Decimal
 
 import polars as pl
@@ -236,6 +238,90 @@ async def test_step_returns_none_on_zero_delta() -> None:
     assert await broker.fills() == []
     # The index still advanced (a no-order step consumes its slot).
     assert runner.step_index == 1
+
+
+# --- cooperative stop ------------------------------------------------------ #
+
+
+async def test_run_stops_when_stop_event_already_set() -> None:
+    """``run(stop_event=...)`` set before the first step submits nothing.
+
+    The cooperative stop is checked at the top of each iteration, *before* the
+    step — so an already-set event means the loop exits immediately with zero
+    orders, never tearing a submission mid-flight.
+    """
+
+    def _always_long(bars: pl.DataFrame) -> Signal:
+        return Signal.exposure(BTC_USD, money("1"), ts=0)
+
+    strat = Strategy(name="stop", instrument=BTC_USD, signal_fn=_always_long,
+                     reference_qty=money("1"))
+    runner, broker, _tracker, _bus = _wire(strat, _bars([100.0] * 5), mark="100")
+
+    stop = asyncio.Event()
+    stop.set()
+    n = await runner.run(stop_event=stop)
+
+    assert n == 0
+    assert await broker.fills() == []
+    assert runner.step_index == 0  # not even one window consumed
+
+
+async def test_run_stops_between_steps_on_stop_event() -> None:
+    """A stop set mid-feed halts the loop *between* steps (no partial submit).
+
+    A spy feed sets the stop event after the first window is consumed; the loop
+    must process exactly that first window and then exit at the next
+    between-steps check — leaving exactly one fill and a consistent position.
+    """
+    frame = _bars([100.0] * 5)
+    stop = asyncio.Event()
+
+    class _StopAfterFirst:
+        """Yields the causal windows but sets ``stop`` after the first one."""
+
+        def __init__(self, inner: InMemoryFeed) -> None:
+            self._inner = inner
+            self.seen = 0
+
+        def __iter__(self) -> Iterator[pl.DataFrame]:
+            for window in self._inner:
+                self.seen += 1
+                yield window
+                if self.seen == 1:
+                    stop.set()  # request stop right after step 0 finished
+
+        def latest(self) -> pl.DataFrame:
+            return self._inner.latest()
+
+    def _always_long(bars: pl.DataFrame) -> Signal:
+        return Signal.exposure(BTC_USD, money("1"), ts=0)
+
+    strat = Strategy(name="midstop", instrument=BTC_USD, signal_fn=_always_long,
+                     reference_qty=money("1"))
+    feed = _StopAfterFirst(InMemoryFeed(frame))
+    bus = EventBus()
+    tracker = PositionTracker(event_bus=bus)
+    broker = PaperBroker(
+        prices={BTC_USD: money("100")},
+        fee_bps=money("0"),
+        fill_model="immediate",
+        starting_balances={"USD": money("10000000"), "BTC": money("0")},
+        event_bus=bus,
+    )
+    router = OrderRouter(broker, bus)
+    runner = StrategyRunner(strat, feed, router, tracker, event_bus=bus)  # type: ignore[arg-type]
+
+    n = await runner.run(stop_event=stop)
+
+    # Exactly one step ran (step 0 bought to long 1); the stop took effect at
+    # the next between-steps check, so no further window was processed.
+    assert n == 1
+    assert runner.step_index == 1
+    fills = await broker.fills()
+    assert len(fills) == 1
+    pos = tracker.position(BTC_USD)
+    assert pos is not None and pos.net_qty == Decimal("1")
 
 
 # --- warmup ---------------------------------------------------------------- #
