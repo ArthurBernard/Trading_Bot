@@ -1,3 +1,2 @@
 include LICENSE.txt README.md CHANGELOG.md
 recursive-include trading_bot *.ini
-prune trading_bot/legacy

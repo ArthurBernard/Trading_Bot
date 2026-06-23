@@ -5,9 +5,8 @@ signals): it runs strategies live, routes and manages orders across exchanges,
 and tracks positions / PnL / risk. Hexagonal, async-first — see ``CLAUDE.md``
 and ``doc/dev/`` for the architecture and the developer brief.
 
-The pre-2026 implementation is parked under :mod:`trading_bot.legacy` (kept for
-reference, excluded from lint / type-check / tests) while the new layers are
-built. See ``doc/dev/07-roadmap.md`` for the rewrite roadmap.
+The pre-2026 implementation lives in git history only (no in-tree legacy
+package). See ``doc/dev/07-roadmap.md`` for the rewrite roadmap.
 """
 from __future__ import annotations
 

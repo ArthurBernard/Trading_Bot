@@ -1,7 +1,7 @@
 ---
 plan: cli/04-legacy-removal
 kind: leaf
-status: planned
+status: done
 complexity: low
 depends: [02, 03]
 parallel: false

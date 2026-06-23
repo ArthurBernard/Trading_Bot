@@ -18,11 +18,11 @@ fynance, and turns them into managed orders on real exchanges.
 
 ## Status
 
-The pre-2026 implementation has been **parked under `trading_bot/legacy/`**
-(reference only) and the project is being rewritten as a clean hexagonal,
-async-first engine — harmonised with dccd. The current milestone is the
-foundation (domain, transport, a Kraken broker behind a multi-exchange port, a
-paper-trading broker, the order router and strategy runner). Track progress in
+The project has been rewritten from scratch as a clean hexagonal, async-first
+engine — harmonised with dccd. The MVP is in place: domain, transport, a Kraken
+broker behind a multi-exchange port, a paper-trading broker, the order router,
+strategy runner and a Typer CLI. (The pre-2026 implementation lives in git
+history only.) Track progress in
 [`doc/dev/07-roadmap.md`](doc/dev/07-roadmap.md).
 
 **Design stance:** multi-exchange from day one (Kraken implemented first);
@@ -47,7 +47,7 @@ pip install -e ../Download_Crypto_Currencies_Data   # dccd (editable)
 ## Develop
 
 ```bash
-pytest                      # tests (legacy & network excluded by default)
+pytest                      # tests (network E2E excluded by default)
 ruff check trading_bot/     # lint
 mypy trading_bot/           # types
 ```

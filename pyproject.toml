@@ -76,11 +76,9 @@ Changelog = "https://github.com/ArthurBernard/Trading_Bot/blob/master/CHANGELOG.
 
 [tool.setuptools.packages.find]
 include = ["trading_bot*"]
-exclude = ["trading_bot.legacy*"]
 
 [tool.pytest.ini_options]
-# The legacy package is reference-only and excluded from collection.
-addopts = "--exitfirst -vv --ignore=trading_bot/legacy --cov=trading_bot --cov-report=term-missing -m 'not network'"
+addopts = "--exitfirst -vv --cov=trading_bot --cov-report=term-missing -m 'not network'"
 testpaths = ["trading_bot"]
 asyncio_mode = "auto"
 markers = [
@@ -88,12 +86,11 @@ markers = [
 ]
 
 [tool.coverage.run]
-omit = ["trading_bot/legacy/*", "trading_bot/tests/*"]
+omit = ["trading_bot/tests/*"]
 
 [tool.ruff]
 target-version = "py311"
 line-length = 88
-extend-exclude = ["trading_bot/legacy"]
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I"]
@@ -109,7 +106,7 @@ warn_unused_configs = true
 follow_imports = "silent"
 # Full annotations are enforced only on the domain layer (strict override below).
 disable_error_code = ["import-untyped", "no-untyped-def", "no-untyped-call"]
-exclude = ["trading_bot/tests/", "trading_bot/legacy/"]
+exclude = ["trading_bot/tests/"]
 
 [[tool.mypy.overrides]]
 module = ["trading_bot.domain.*"]
@@ -122,4 +119,4 @@ ignore-magic = true
 ignore-semiprivate = true
 ignore-private = true
 fail-under = 80
-exclude = ["trading_bot/tests", "trading_bot/legacy"]
+exclude = ["trading_bot/tests"]

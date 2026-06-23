@@ -29,13 +29,15 @@ deepens it epic by epic.
 
 ## Current state (2026-06)
 
-- **Rewrite in progress.** The pre-2026 implementation (a `multiprocessing`
-  server/clients design over an authenticated socket, REST Kraken/Bitfinex, a
-  `blessed` CLI) is **parked under `trading_bot/legacy/`** — kept as reference and
-  spec, excluded from all tooling.
-- The new hexagonal, async-first layers are being built from scratch, harmonised
-  with dccd. See [`02-architecture.md`](02-architecture.md) for the target and
-  [`07-roadmap.md`](07-roadmap.md) for what is being built next.
+- **Rewrite complete through the MVP.** The new hexagonal, async-first layers
+  exist natively — domain, transport, brokers (Kraken + paper), storage,
+  application (router/risk/tracker/perf/reconcile/strategy/datafeed/runner/
+  orchestrator) and a Typer CLI. The pre-2026 implementation (a
+  `multiprocessing` server/clients design over an authenticated socket, REST
+  Kraken/Bitfinex, a `blessed` CLI) has been retired; it lives in git history
+  only (no in-tree legacy package).
+- See [`02-architecture.md`](02-architecture.md) for the design and
+  [`07-roadmap.md`](07-roadmap.md) for what comes next.
 - **Decided direction:** full rewrite (not incremental); execution **and**
   orchestration; multi-exchange-ready with **Kraken first**; **paper-first**;
   name kept as `trading_bot` for now (final name deferred). See
@@ -45,26 +47,32 @@ deepens it epic by epic.
 
 ```
 trading_bot/         # the package
-  legacy/            # pre-2026 implementation — reference only (excluded from tooling)
-  tests/             # new test suite (smoke for now)
+  domain/            # pure core — orders, positions, fills, money, KPI
+  transport/         # async HTTP/WS, rate-limit, retry
+  brokers/           # Kraken + paper broker behind the Broker port
+  storage/           # append-only order/fill history + engine state
+  application/       # runner, router, risk, tracker, perf, reconcile, orchestrator
+  interfaces/        # Typer CLI
+  tests/             # the test suite
   __init__.py        # exposes __version__
 doc/dev/             # this developer brief + plan trees
-strategies/          # example strategy folders (legacy shape — will evolve)
-data_base/           # example data fixtures (legacy)
-execution_scripts/   # legacy shell launchers
+strategies/          # example strategy folders (pre-2026 shape — will evolve)
+data_base/           # example data fixtures (pre-2026)
+execution_scripts/   # pre-2026 shell launchers
 CLAUDE.md            # authoritative working rules
 pyproject.toml       # packaging + tooling config
 ```
 
-## Legacy concepts worth preserving (as spec, not code)
+## History
 
-The legacy tree encodes real domain knowledge to mine when rebuilding:
+The pre-2026 implementation has been fully superseded and removed from the tree
+(it remains in git history). The mapping from the old design onto the rewrite:
 
-| Legacy | Becomes |
-|--------|---------|
-| `StrategyBot` (`legacy/strategy_manager.py`) | `application/StrategyRunner` |
-| `_BasisOrder` / `OrderSL` / `OrderBestLimit` (`legacy/orders.py`) | `domain/order.py` + state machine |
-| `OrdersManager` (funds check, call-counter) (`legacy/orders_manager.py`) | `application/OrderRouter` + `RiskManager` |
-| `_PnLI` (`legacy/performance.py`) | `application/PerformanceService` (KPI via fynance) |
-| `blessed` CLI (`legacy/cli.py`) | `interfaces/cli` (Typer) |
+| Pre-2026 | Became |
+|----------|--------|
+| `StrategyBot` (`strategy_manager.py`) | `application/StrategyRunner` |
+| `_BasisOrder` / `OrderSL` / `OrderBestLimit` (`orders.py`) | `domain/order.py` + state machine |
+| `OrdersManager` (funds check, call-counter) (`orders_manager.py`) | `application/OrderRouter` + `RiskManager` |
+| `_PnLI` (`performance.py`) | `application/PerformanceService` (KPI via fynance) |
+| `blessed` CLI (`cli.py`) | `interfaces/cli` (Typer) |
 | `exchanges/API_kraken.py`, `API_bfx.py` | `brokers/kraken.py` (+ port, registry) |
