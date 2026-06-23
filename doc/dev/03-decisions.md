@@ -6,6 +6,26 @@ rejected approaches as tombstones.
 
 ---
 
+### 2026-06-23 service_factory: single wiring point, no live broker by accident
+
+**Decision.** `application/service_factory.py` `build_engine(config, *, db_path=None)
+-> Engine` is the **one** place the engine is assembled: one `EventBus` shared by
+`PositionTracker`, `PerformanceService`, `OrderRouter` (holding the `RiskManager` gate)
+and (when `db_path`) `SqliteStore`. Broker selection enforces **paper-by-default** —
+`PaperBroker` unless `config.mode == "live"` **and** the configured venue
+(`KrakenBroker`) `has_credentials`; a credential-less / unknown / unconfigured live
+venue raises `BrokerError` (never a silent paper fallback, never a live broker that
+can't trade). `Engine` is a frozen dataclass the CLI/orchestration consume. The Typer
+`app` needs a no-op `@app.callback()` so a single command stays a multi-command group.
+
+**Why.** Centralising construction (order matters: tracker subscribes before fills
+flow, the router carries the gate) means the CLI, tests and a future daemon all build
+an identically-wired engine, and the interfaces layer never news-up a use-case. The
+broker rule makes the paper-default invariant structural — going live is an explicit,
+credential-checked choice. Mirrors dccd's `application` wiring.
+
+---
+
 ### 2026-06-22 RiskManager: pre-trade gate in the router, resulting-net limits, kill-switch
 
 **Decision.** `application/risk.py` `RiskManager.check(order)` is wired into

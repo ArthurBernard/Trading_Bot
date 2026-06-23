@@ -6,7 +6,7 @@ complexity: high
 depends: []
 parallel: false
 branch: feat/cli-skeleton
-pr: ""
+pr: "#40"
 ---
 
 # CLI skeleton — service_factory + Typer app + console script
