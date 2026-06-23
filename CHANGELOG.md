@@ -69,6 +69,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `max_daily_loss`) + kill-switch, wired into `OrderRouter.submit` so every order is
   gated; a breach raises `RiskLimitBreached` and never reaches the broker. Completes
   the **E6 performance/persistence/risk** block.
+- `application.service_factory.build_engine` — single wiring point assembling the
+  whole engine (bus, broker, router+risk, tracker, perf, store) from an `AppConfig`
+  (paper-by-default; live needs credentials), plus a Typer `trading-bot` CLI skeleton
+  and the `trading-bot` console script.
 
 ### Fixed
 

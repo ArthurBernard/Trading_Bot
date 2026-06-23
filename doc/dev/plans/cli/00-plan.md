@@ -29,7 +29,7 @@ confirmation); everything offline-testable (Typer `CliRunner` + `PaperBroker`).
 
 ## Leaf checklist
 
-- [ ] 01 cli-skeleton — feat/cli-skeleton — high
+- [x] 01 cli-skeleton — feat/cli-skeleton — high
 - [ ] 02 cli-commands — feat/cli-commands — medium (depends on 01)
 - [ ] 03 async-orchestration — feat/async-orchestration — high (depends on 01)
 - [ ] 04 legacy-removal — chore/remove-legacy — low (depends on 02, 03)

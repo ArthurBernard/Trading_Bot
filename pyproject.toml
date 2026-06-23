@@ -38,6 +38,7 @@ triptych = [
 ]
 daemon = [
     "typer>=0.12",
+    "rich>=13.0",
     "uvicorn[standard]>=0.29",
     "fastapi>=0.110",
     "jinja2>=3.1",
@@ -53,6 +54,9 @@ dev = [
     "mypy>=1.0",
     "interrogate>=1.5",
     "pyyaml>=6.0",
+    # The CLI (Typer + Rich) so the unit suite / CI can import and exercise it.
+    "typer>=0.12",
+    "rich>=13.0",
 ]
 doc = [
     "sphinx>=7.0",
@@ -62,6 +66,9 @@ doc = [
     "sphinx-copybutton",
     "autodoc-pydantic>=2.0",
 ]
+
+[project.scripts]
+trading-bot = "trading_bot.interfaces.cli.main:app"
 
 [project.urls]
 Homepage = "https://github.com/ArthurBernard/Trading_Bot"

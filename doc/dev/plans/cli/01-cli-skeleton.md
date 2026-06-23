@@ -1,12 +1,12 @@
 ---
 plan: cli/01-cli-skeleton
 kind: leaf
-status: planned
+status: done
 complexity: high
 depends: []
 parallel: false
 branch: feat/cli-skeleton
-pr: ""
+pr: "#40"
 ---
 
 # CLI skeleton — service_factory + Typer app + console script
