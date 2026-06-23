@@ -76,6 +76,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `trading-bot` CLI commands — `run` (run a strategy over a bars file / synthetic
   feed, paper by default; `--live` needs explicit ack **and** credentials), `status`
   and `kpi` (read a persisted `--db` history; rich tables, money as Decimal).
+- `application.Orchestrator` — runs multiple `StrategyRunner` loops concurrently
+  with cooperative graceful shutdown (shared stop-event, opt-in SIGINT/SIGTERM) and
+  per-runner failure surfacing; replaces the legacy multiprocessing server. Plus a
+  `StrategyRunner.run(stop_event=...)` cooperative-stop hook.
 
 ### Fixed
 

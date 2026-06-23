@@ -6,7 +6,7 @@ complexity: high
 depends: [01]
 parallel: false
 branch: feat/async-orchestration
-pr: ""
+pr: "#42"
 ---
 
 # Async orchestration — concurrent strategy loops + graceful shutdown
