@@ -6,6 +6,28 @@ rejected approaches as tombstones.
 
 ---
 
+### 2026-06-25 dccd integration depth — RESOLVED: library import, not a service
+
+**Decision.** (Resolving the long-deferred decision.) Trading_Bot consumes dccd as an
+**in-process library**, not a separate service/daemon/IPC. `application/data_provider.py`
+`feed_for(strategy, *, client=None, backfill=False)` is the single seam:
+`dccd.Client.read` supplies the bars a `DccdFeed` replays (read path), and
+`dccd.Client.backfill` lets trading_bot **drive dccd's collection** before reading (the
+orchestrator role). The dccd type stays behind a tiny injectable `DccdClient` Protocol;
+the real `dccd.Client` is imported **lazily** inside `_make_client`, so the whole
+offline path (and test suite) runs dccd-free with a fake.
+
+**Why.** `dccd.Client` already exposes *both* read (`read`) and collection-driving
+(`backfill`/`stream`) in one in-process API, so a library import covers the full
+orchestrator role with **no IPC, no second process, no serialization boundary** —
+simpler, faster, and directly testable. A separate dccd *service* would add operational
+weight (a daemon to run/monitor) and a network/RPC seam for zero functional gain at this
+scale. **Rejected:** driving dccd as an out-of-process service. The editable-from-sibling
+install (chosen at bootstrap) already treats dccd/fynance as libraries; this stays
+consistent.
+
+---
+
 ### 2026-06-25 Declarative config: signal-by-reference, data-source-per-strategy
 
 **Decision.** `AppConfig` grows so one YAML fully declares a runnable system: each
