@@ -29,6 +29,7 @@ from __future__ import annotations
 
 from trading_bot.domain.errors import (
     BrokerError,
+    ConfigError,
     InstrumentMismatch,
     InsufficientFunds,
     MissingOrder,
@@ -132,4 +133,5 @@ __all__ = [
     "NoCapability",
     "BrokerError",
     "SignalError",
+    "ConfigError",
 ]

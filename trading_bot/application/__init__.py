@@ -87,6 +87,17 @@ It then layers the engine's use-cases:
   opt-in/injectable (the process entrypoint calls
   :meth:`~trading_bot.application.orchestrator.Orchestrator.install_signal_handlers`;
   importing installs nothing). Replaces the legacy multiprocessing server.
+* run_app — :func:`~trading_bot.application.run_app.run_app` (and
+  :func:`~trading_bot.application.run_app.build_runners`), the **triptych
+  entrypoint**: one :class:`~trading_bot.application.config.AppConfig` →
+  :func:`~trading_bot.application.service_factory.build_engine` →
+  one ``StrategyRunner`` per declared strategy (signal resolved from a builtin
+  name or a ``module:function`` ref, feed from
+  :func:`~trading_bot.application.data_provider.feed_for`, injectable
+  ``dccd_client`` for an offline run) → run them all through the ``Orchestrator``,
+  returning a :class:`~trading_bot.application.run_app.RunReport` (per-strategy
+  orders + final positions + aggregate PnL). The single seam the CLI's ``run``
+  delegates to when handed a config — the whole declared (paper) system, up.
 """
 
 from __future__ import annotations
@@ -120,6 +131,12 @@ from trading_bot.application.performance_service import PerformanceService
 from trading_bot.application.position_tracker import PositionTracker
 from trading_bot.application.reconcile import ReconResult, reconcile
 from trading_bot.application.risk import RiskManager
+from trading_bot.application.run_app import (
+    RunReport,
+    StrategyReport,
+    build_runners,
+    run_app,
+)
 from trading_bot.application.service_factory import Engine, build_engine
 from trading_bot.application.strategy import (
     SignalFn,
@@ -172,4 +189,9 @@ __all__ = [
     # wiring
     "Engine",
     "build_engine",
+    # entrypoint
+    "run_app",
+    "build_runners",
+    "RunReport",
+    "StrategyReport",
 ]

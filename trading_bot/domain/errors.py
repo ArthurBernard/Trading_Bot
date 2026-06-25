@@ -26,6 +26,7 @@ __all__ = [
     "NoCapability",
     "BrokerError",
     "SignalError",
+    "ConfigError",
 ]
 
 
@@ -190,6 +191,28 @@ class SignalError(TradingBotError):
     ----------
     msg : str
         Human-readable detail of why the signal is invalid.
+
+    """
+
+    def __init__(self, msg: str) -> None:
+        super().__init__(msg)
+
+
+class ConfigError(TradingBotError):
+    """A declared configuration cannot be resolved into a runnable system.
+
+    Raised while turning a validated
+    :class:`~trading_bot.application.config.AppConfig` into running collaborators
+    (e.g. by :func:`~trading_bot.application.run_app.build_runners`): a strategy
+    that declares no signal or no data source, names an unknown builtin signal,
+    or whose signal reference cannot be built/imported. Distinct from a pydantic
+    ``ValidationError`` (a *shape* violation caught at parse time) — this is a
+    *resolution* failure for a config that is individually well-formed.
+
+    Parameters
+    ----------
+    msg : str
+        Human-readable detail of why the configuration cannot be resolved.
 
     """
 

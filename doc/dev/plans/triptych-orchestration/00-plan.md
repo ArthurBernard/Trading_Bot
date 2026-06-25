@@ -1,7 +1,7 @@
 ---
 plan: triptych-orchestration
 kind: global
-status: planning
+status: done
 roadmap: "- [ ] **E8 — Orchestration of the triptych.** One `AppConfig` declaring data sources (dccd) + strategies (fynance) + brokers; a single entrypoint that wires the three. Decide library-import vs service-driving for dccd here."
 release_on_done: false
 ---
@@ -34,7 +34,7 @@ imports dccd and calls it.
 
 - [x] 01 app-config-full — feat/app-config-full — medium
 - [x] 02 dccd-integration — feat/dccd-integration — high (depends on 01)
-- [ ] 03 entrypoint — feat/triptych-entrypoint — high (depends on 01, 02)
+- [x] 03 entrypoint — feat/triptych-entrypoint — high (depends on 01, 02)
 
 ## Dependencies
 

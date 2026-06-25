@@ -10,21 +10,24 @@ GitHub Actions CI (3.11–3.13), Git Flow (`develop`/`master`), `CLAUDE.md`,
 `.claude/` workflow + hooks, and this `doc/dev/` pack. The package imports and a
 smoke test passes.
 
-**E1–E7 are complete — the MVP "first light" is reached.** The engine runs from the
-command line: `trading-bot run` runs a fynance-backed strategy over a `DataFeed`,
-routing **risk-gated** orders through the `OrderRouter` to a (paper) broker and
-reporting positions / PnL / KPIs; `status`/`kpi` read a persisted `SqliteStore`. Layers:
-`domain/` (pure, mypy-strict), `transport/` (http/ws/ratelimit), `brokers/` (`Broker`
-port + `KrakenBroker` REST+WS + port-pure `PaperBroker`), `storage/` (`SqliteStore`,
-money as TEXT), `application/` (`AppConfig`+`EventBus`, idempotent risk-gated
-`OrderRouter`, `PositionTracker`, `reconcile`, `Strategy`+safe loader, causal
-`DataFeed`, `StrategyRunner`, `PerformanceService`, `RiskManager`+kill-switch,
-`Orchestrator`, `service_factory`), and `interfaces/cli/` (Typer `trading-bot`). The
-pre-2026 `legacy/` tree is **deleted** (history in git); the whole package is
-linted/typed/tested (no exclusions). 461 tests green via the project `.venv`.
+**E1–E8 are complete — Trading_Bot is the conductor of the triptych.** One
+`AppConfig` declares data sources (dccd) + strategies (fynance signals) + brokers +
+risk, and `trading-bot run <config.yaml>` brings up the **whole declared
+multi-strategy system** (paper by default): `run_app` builds one shared engine and
+runs a `StrategyRunner` per strategy concurrently via the `Orchestrator`, reporting
+per-strategy orders/positions/PnL. dccd is integrated by **library import**
+(`feed_for` → `dccd.Client.read`/`backfill`). Layers: `domain/` (pure, mypy-strict),
+`transport/` (http/ws/ratelimit), `brokers/` (`Broker` port + `KrakenBroker` REST+WS +
+port-pure `PaperBroker`), `storage/` (`SqliteStore`, money as TEXT), `application/`
+(declarative `AppConfig`+`EventBus`, idempotent risk-gated `OrderRouter`,
+`PositionTracker`, `reconcile`, `Strategy`+safe loader, causal `DataFeed`+`feed_for`,
+`StrategyRunner`, `PerformanceService`, `RiskManager`+kill-switch, `Orchestrator`,
+`run_app`, `service_factory`), and `interfaces/cli/` (Typer `trading-bot`). The
+pre-2026 `legacy/` tree is deleted; the whole package is linted/typed/tested. 495
+tests green via the project `.venv`.
 
-Pending: **E8** (triptych orchestration — one config wiring dccd+fynance+brokers), E9
-(web UI), E10 (go-live hardening + final name). Next is **E8**. See `07-roadmap.md` /
+Pending: **E9** (web UI — FastAPI/Jinja2 dashboard), **E10** (go-live hardening +
+final name). Next is **E9**. See `07-roadmap.md` /
 `08-program-plan.md`.
 
 ## Done

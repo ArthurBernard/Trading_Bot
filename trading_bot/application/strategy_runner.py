@@ -177,6 +177,11 @@ class StrategyRunner:
         self._step_index = 0
 
     @property
+    def strategy(self) -> Strategy:
+        """The :class:`Strategy` this runner drives (read-only)."""
+        return self._strategy
+
+    @property
     def step_index(self) -> int:
         """The next step index (== number of windows processed so far)."""
         return self._step_index
