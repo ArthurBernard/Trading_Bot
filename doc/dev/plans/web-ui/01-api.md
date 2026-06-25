@@ -6,7 +6,7 @@ complexity: high
 depends: []
 parallel: false
 branch: feat/web-api
-pr: ""
+pr: "#50"
 ---
 
 # Web API — read-only FastAPI over the engine

@@ -26,7 +26,7 @@ FastAPI `TestClient` over a paper `Engine` (no real server, no network).
 
 ## Leaf checklist
 
-- [ ] 01 api — feat/web-api — high
+- [x] 01 api — feat/web-api — high
 - [ ] 02 ui — feat/web-ui — high (depends on 01)
 
 ## Dependencies

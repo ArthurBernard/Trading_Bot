@@ -49,6 +49,11 @@ risk, the CLI, the orchestration layer, and (later) the UI and go-live hardening
 
 - **Final project name** — kept as `trading_bot` for now (deferred decision).
 - **Default paper-vs-live beyond MVP** — paper-first for now; revisit at go-live.
+- **KPI ratios need a positive starting capital** — `service_factory.build_engine`
+  wires `PerformanceService(v0=0)`, and fynance refuses an equity curve that crosses
+  zero, so the Sharpe/Sortino/Calmar shown by the API (and the CLI `kpi` absent
+  `--capital`) degrade to `0.0`. Robust (never errors), but the ratios are meaningless
+  until a config-driven starting capital is wired into `build_engine` (small follow-up).
 - **Same-instrument strategies commingle in `run_app`** — the orchestrated system
   shares one engine, and the `PositionTracker`/`PerformanceService` key state **by
   instrument**, so two strategies declared on the *same* symbol fold their fills into
