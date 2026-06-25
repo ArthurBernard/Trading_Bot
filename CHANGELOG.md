@@ -12,6 +12,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   source** (exchange/span/start), its **signal** by reference (`module:function` or a
   builtin like `ma_crossover` + params) and its sizing (`reference_qty`, `lookback`),
   plus a top-level `storage` section. Backward-compatible (new fields optional).
+- `application.feed_for` — build a `DataFeed` from a strategy's dccd data source via
+  **library import** (`dccd.Client.read`); optional `backfill=True` drives dccd
+  collection before reading. Injectable client (offline tests run dccd-free).
 
 - Modern packaging via `pyproject.toml`; dev tooling (ruff, mypy, pytest,
   interrogate, pre-commit) and GitHub Actions CI across Python 3.11–3.13.

@@ -46,9 +46,8 @@ risk, the CLI, the orchestration layer, and (later) the UI and go-live hardening
 
 - **Final project name** — kept as `trading_bot` for now (deferred decision).
 - **Default paper-vs-live beyond MVP** — paper-first for now; revisit at go-live.
-- **dccd↔trading_bot orchestration depth** (library import vs driving a service) —
-  decided when the orchestration epic (E8) is planned.
-- **`trading-bot` console script** — not declared until the CLI module exists (E7).
+- ~~**dccd↔trading_bot orchestration depth**~~ — **resolved (E8)**: library import,
+  not a service (`feed_for` uses `dccd.Client.read`/`backfill` in-process). See ADR.
 - **`AddOrder` idempotency at the venue** — the transport retries POSTs on
   5xx/network errors, but `AddOrder` carries no venue idempotency key, so a retry
   after an *ambiguous* failure (order placed, response lost) could double-submit.
