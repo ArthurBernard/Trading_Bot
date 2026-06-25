@@ -6,6 +6,23 @@ rejected approaches as tombstones.
 
 ---
 
+### 2026-06-25 Web API: read-only, money as Decimal strings, SSE via EventBus
+
+**Decision.** `interfaces/api/app.py` `create_app(engine)` is a **read-only** HTTP
+surface over the engine: `GET /api/{health,positions,orders,kpi}` and an SSE
+`GET /api/events`. There is **no** route to place/cancel an order — the only
+money-moving surface stays off the HTTP boundary entirely (a POST to an order path
+returns 405). All money serializes as **`str(Decimal)`** via a `_DecimalJSONResponse`
+encoder (exact, never float); KPI ratios go out as JSON numbers, and a ratio fynance
+can't define on a given curve degrades to `0.0` rather than 500-ing. SSE registers an
+`EventBus.add_queue()` and `remove_queue()`s in a `finally` (mirrors dccd).
+
+**Why.** A dashboard must never become a trading surface — keeping the API observe-only
+means the web can't move money even if exposed. Decimal-string JSON preserves exactness
+to the browser (the UI renders the strings verbatim, no JS float parsing of money).
+
+---
+
 ### 2026-06-25 Single-entrypoint orchestration: one config, one shared engine, N runners
 
 **Decision.** `application/run_app.py` `run_app(config)` is the **system** assembly+run

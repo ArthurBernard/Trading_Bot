@@ -8,6 +8,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `interfaces.api` — read-only FastAPI over the engine: `GET /api/{health,positions,
+  orders,kpi}` (money as **Decimal strings**, never float) + an SSE `/api/events`
+  stream fed by the `EventBus`. The web surface only observes — no order placement.
 - `AppConfig` — full declarative config: each strategy declares its dccd **data
   source** (exchange/span/start), its **signal** by reference (`module:function` or a
   builtin like `ma_crossover` + params) and its sizing (`reference_qty`, `lookback`),

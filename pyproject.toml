@@ -57,6 +57,10 @@ dev = [
     # The CLI (Typer + Rich) so the unit suite / CI can import and exercise it.
     "typer>=0.12",
     "rich>=13.0",
+    # The HTTP API (FastAPI + uvicorn) so the unit suite / CI can import and
+    # exercise interfaces.api via fastapi.testclient.TestClient.
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.29",
 ]
 doc = [
     "sphinx>=7.0",
