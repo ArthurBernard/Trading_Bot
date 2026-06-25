@@ -32,7 +32,7 @@ imports dccd and calls it.
 
 ## Leaf checklist
 
-- [ ] 01 app-config-full — feat/app-config-full — medium
+- [x] 01 app-config-full — feat/app-config-full — medium
 - [ ] 02 dccd-integration — feat/dccd-integration — high (depends on 01)
 - [ ] 03 entrypoint — feat/triptych-entrypoint — high (depends on 01, 02)
 

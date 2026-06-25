@@ -30,13 +30,16 @@ from __future__ import annotations
 
 import pathlib
 from decimal import Decimal
-from typing import Literal
+from typing import Any, Literal
 
 import yaml
 from pydantic import BaseModel, Field, field_validator
 
 __all__ = [
     "BrokerConfig",
+    "DataSourceConfig",
+    "SignalRefConfig",
+    "StorageConfig",
     "StrategyConfig",
     "RiskConfig",
     "AppConfig",
@@ -69,8 +72,92 @@ class BrokerConfig(BaseModel):
         return v
 
 
+class DataSourceConfig(BaseModel):
+    """Where a strategy's bars come from — a dccd OHLC dataset.
+
+    Declares the dccd read a :class:`~trading_bot.application.data_feed.DccdFeed`
+    performs (leaf 02 consumes ``exchange`` / ``span`` / ``start``): the venue,
+    the bar width, an optional history start, and the data kind.
+
+    Parameters
+    ----------
+    exchange : str
+        Exchange/venue key the bars are stored under (e.g. ``"kraken"``). Passed
+        straight to ``dccd.Client.read``. Must be non-empty.
+    span : int
+        Bar width in **seconds** (dccd's ``span``; also the live close cadence).
+        Must be ``> 0``.
+    start : str or int or None, optional
+        Optional history start — a timestamp/ISO marker the feed maps to a
+        ``start_ns`` bound. ``None`` (default) reads from the dataset's start.
+    data_type : str, optional
+        The dccd data kind to read. Defaults to ``"ohlc"`` (the only kind the
+        bars feed normalises).
+
+    """
+
+    exchange: str
+    span: int
+    start: str | int | None = None
+    data_type: str = "ohlc"
+
+    @field_validator("exchange")
+    @classmethod
+    def _non_empty(cls, v: str) -> str:
+        """Reject a blank ``exchange`` (whitespace-only too)."""
+        if not v or not v.strip():
+            raise ValueError("must be a non-empty string")
+        return v
+
+    @field_validator("span")
+    @classmethod
+    def _positive_span(cls, v: int) -> int:
+        """Reject a non-positive bar ``span`` (seconds)."""
+        if v <= 0:
+            raise ValueError(f"span must be positive seconds, got {v}")
+        return v
+
+
+class SignalRefConfig(BaseModel):
+    """The signal a strategy evaluates — a reference plus its parameters.
+
+    A declarative pointer to a :data:`~trading_bot.application.strategy.SignalFn`
+    (leaf 03 resolves it): either a safe ``"module:function"`` dotted import
+    reference *or* a builtin name like ``"ma_crossover"``, plus the keyword
+    ``params`` the signal is built with (e.g. ``{"fast": 10, "slow": 30}``).
+
+    Parameters
+    ----------
+    ref : str
+        Either a ``"module:function"`` dotted reference or a builtin signal name
+        (e.g. ``"ma_crossover"``). Resolution happens in leaf 03; this leaf only
+        declares the shape. Must be non-empty.
+    params : dict, optional
+        Keyword arguments the signal is built with (e.g.
+        ``{"fast": 10, "slow": 30}``). Empty by default.
+
+    """
+
+    ref: str
+    params: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("ref")
+    @classmethod
+    def _non_empty(cls, v: str) -> str:
+        """Reject a blank signal ``ref`` (whitespace-only too)."""
+        if not v or not v.strip():
+            raise ValueError("must be a non-empty string")
+        return v
+
+
 class StrategyConfig(BaseModel):
-    """One strategy the engine should drive (skeleton — grows in E5/E8).
+    """One strategy the engine should drive — data, signal and sizing.
+
+    The full declarative shape of a strategy: the pair it trades, where its bars
+    come from (:class:`DataSourceConfig`), the signal it evaluates
+    (:class:`SignalRefConfig`) and its sizing (``reference_qty`` / ``lookback``).
+    Every field beyond ``name`` / ``symbol`` is **optional with a default**, so a
+    legacy ``{name, symbol}``-only config still validates unchanged.
 
     Parameters
     ----------
@@ -80,11 +167,30 @@ class StrategyConfig(BaseModel):
         The canonical pair the strategy trades, ``BASE/QUOTE`` (e.g.
         ``"BTC/USD"``). Kept as a plain string here; later leaves resolve it to
         a :class:`~trading_bot.domain.instrument.Symbol`. Must be non-empty.
+    data : DataSourceConfig or None, optional
+        The strategy's bar source (dccd dataset). ``None`` (default) when the
+        runner supplies a feed by other means.
+    signal : SignalRefConfig or None, optional
+        The signal the strategy evaluates. ``None`` (default) when the signal is
+        injected programmatically rather than declared.
+    reference_qty : Decimal, optional
+        The max position size (base units) a fractional-exposure signal is a
+        fraction of (see :class:`~trading_bot.application.strategy.Strategy`).
+        Parsed exactly from a YAML scalar (``str``/``int``) without touching
+        ``float``. Must be positive when set. ``None`` (default) when the signal
+        emits explicit-quantity signals.
+    lookback : int, optional
+        Warmup: minimum number of bars before the signal is meaningful. Must be
+        ``>= 0``. Default ``0`` (no warmup).
 
     """
 
     name: str
     symbol: str
+    data: DataSourceConfig | None = None
+    signal: SignalRefConfig | None = None
+    reference_qty: Decimal | None = None
+    lookback: int = 0
 
     @field_validator("name", "symbol")
     @classmethod
@@ -93,6 +199,45 @@ class StrategyConfig(BaseModel):
         if not v or not v.strip():
             raise ValueError("must be a non-empty string")
         return v
+
+    @field_validator("reference_qty")
+    @classmethod
+    def _positive_qty(cls, v: Decimal | None) -> Decimal | None:
+        """Reject a non-positive ``reference_qty`` (``None`` is allowed)."""
+        if v is not None and v <= 0:
+            raise ValueError(f"reference_qty must be positive, got {v}")
+        return v
+
+    @field_validator("lookback")
+    @classmethod
+    def _non_negative_lookback(cls, v: int) -> int:
+        """Reject a negative ``lookback``."""
+        if v < 0:
+            raise ValueError(f"lookback must be non-negative, got {v}")
+        return v
+
+
+class StorageConfig(BaseModel):
+    """Where the engine persists state and finds market data on disk.
+
+    Both paths are optional (``None`` = use the layer's default): ``db_path`` is
+    the append-only SQLite store of order/fill history + engine state (the
+    reconciliation source), and ``data_path`` is the dccd data directory the
+    bars feed reads from.
+
+    Parameters
+    ----------
+    db_path : str or None, optional
+        Path to the engine's SQLite database. ``None`` (default) defers to the
+        storage layer's default location.
+    data_path : str or None, optional
+        Path to the dccd on-disk data directory. ``None`` (default) defers to
+        dccd's own default.
+
+    """
+
+    db_path: str | None = None
+    data_path: str | None = None
 
 
 class RiskConfig(BaseModel):
@@ -145,6 +290,9 @@ class AppConfig(BaseModel):
         The strategies to drive. Empty by default.
     risk : RiskConfig, optional
         Engine-wide risk limits. Defaults to all-unconstrained.
+    storage : StorageConfig, optional
+        Where state is persisted (SQLite) and where the bars feed reads data
+        from (dccd dir). Defaults to all-unset (each layer's own default).
 
     Examples
     --------
@@ -165,6 +313,7 @@ class AppConfig(BaseModel):
     brokers: list[BrokerConfig] = Field(default_factory=list)
     strategies: list[StrategyConfig] = Field(default_factory=list)
     risk: RiskConfig = Field(default_factory=RiskConfig)
+    storage: StorageConfig = Field(default_factory=StorageConfig)
 
     @classmethod
     def from_yaml(cls, path: str | pathlib.Path) -> AppConfig:

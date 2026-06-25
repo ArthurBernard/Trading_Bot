@@ -6,6 +6,24 @@ rejected approaches as tombstones.
 
 ---
 
+### 2026-06-25 Declarative config: signal-by-reference, data-source-per-strategy
+
+**Decision.** `AppConfig` grows so one YAML fully declares a runnable system: each
+`StrategyConfig` carries its **data source** (`DataSourceConfig`: dccd exchange/span/
+start/data_type), its **signal by reference** (`SignalRefConfig.ref` = a
+`module:function` dotted string **or** a builtin name like `ma_crossover`, plus a
+`params` dict — resolved by the safe `load_strategy` loader, no arbitrary-file exec),
+and its sizing (`reference_qty` exact `Decimal`, `lookback`). A top-level
+`StorageConfig` separates state (`db_path`) from market-data (`data_path`). Every new
+field is optional/defaulted — legacy minimal configs validate unchanged.
+
+**Why.** A self-contained per-strategy declaration is what makes one entrypoint run a
+whole multi-strategy system (E8-03). Signal-by-reference keeps the no-arbitrary-exec
+safety of the strategy loader. Additive optional fields keep older configs valid as
+the schema grows.
+
+---
+
 ### 2026-06-23 MVP "first light" reached; legacy tree retired
 
 **Decision.** With the Typer CLI + async orchestration in place, the rewrite is

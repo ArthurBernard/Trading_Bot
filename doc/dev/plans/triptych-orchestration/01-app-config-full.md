@@ -1,12 +1,12 @@
 ---
 plan: triptych-orchestration/01-app-config-full
 kind: leaf
-status: planned
+status: done
 complexity: medium
 depends: []
 parallel: false
 branch: feat/app-config-full
-pr: ""
+pr: "#45"
 ---
 
 # AppConfig — full declarative config (data + signal + sizing)

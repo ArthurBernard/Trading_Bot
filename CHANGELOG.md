@@ -8,6 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `AppConfig` — full declarative config: each strategy declares its dccd **data
+  source** (exchange/span/start), its **signal** by reference (`module:function` or a
+  builtin like `ma_crossover` + params) and its sizing (`reference_qty`, `lookback`),
+  plus a top-level `storage` section. Backward-compatible (new fields optional).
+
 - Modern packaging via `pyproject.toml`; dev tooling (ruff, mypy, pytest,
   interrogate, pre-commit) and GitHub Actions CI across Python 3.11–3.13.
 - Claude Code developer workflow: `CLAUDE.md`, `.claude/` (workflow.json, hooks,
