@@ -49,6 +49,12 @@ risk, the CLI, the orchestration layer, and (later) the UI and go-live hardening
 
 - **Final project name** — kept as `trading_bot` for now (deferred decision).
 - **Default paper-vs-live beyond MVP** — paper-first for now; revisit at go-live.
+- **Same-instrument strategies commingle in `run_app`** — the orchestrated system
+  shares one engine, and the `PositionTracker`/`PerformanceService` key state **by
+  instrument**, so two strategies declared on the *same* symbol fold their fills into
+  one shared position/PnL (silently commingled). Fine for the nominal one-strategy-
+  per-symbol case; per-strategy attribution (or rejecting duplicate symbols) is a
+  later refinement. Distinct-symbol strategies are fully isolated.
 - ~~**dccd↔trading_bot orchestration depth**~~ — **resolved (E8)**: library import,
   not a service (`feed_for` uses `dccd.Client.read`/`backfill` in-process). See ADR.
 - **`AddOrder` idempotency at the venue** — the transport retries POSTs on
