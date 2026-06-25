@@ -1,7 +1,7 @@
 ---
 plan: triptych-orchestration/02-dccd-integration
 kind: leaf
-status: planned
+status: done
 complexity: high
 depends: [01]
 parallel: false

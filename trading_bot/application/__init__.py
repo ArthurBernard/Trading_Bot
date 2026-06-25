@@ -63,6 +63,12 @@ It then layers the engine's use-cases:
   :class:`~trading_bot.application.data_feed.InMemoryFeed` and the dccd-backed
   :class:`~trading_bot.application.data_feed.DccdFeed` (injected client; thin
   coupling), the source of the bars frames a ``signal_fn`` evaluates.
+* data_provider — :func:`~trading_bot.application.data_provider.feed_for`, the
+  config→feed glue that turns a strategy's declared dccd data source into a
+  :class:`~trading_bot.application.data_feed.DccdFeed` (library import: read for
+  bars, optional ``backfill`` to *drive* collection first), keeping the dccd
+  client injectable behind
+  :class:`~trading_bot.application.data_provider.DccdClient`.
 * strategy_runner — the
   :class:`~trading_bot.application.strategy_runner.StrategyRunner`, the engine's
   live loop: it pulls causal windows from a ``DataFeed``, evaluates the
@@ -100,6 +106,7 @@ from trading_bot.application.data_feed import (
     DccdFeed,
     InMemoryFeed,
 )
+from trading_bot.application.data_provider import DccdClient, feed_for
 from trading_bot.application.events import (
     Event,
     EventBus,
@@ -149,6 +156,8 @@ __all__ = [
     "InMemoryFeed",
     "DccdFeed",
     "BARS_SCHEMA",
+    "feed_for",
+    "DccdClient",
     # strategy
     "Strategy",
     "SignalFn",
