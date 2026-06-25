@@ -6,7 +6,7 @@ complexity: medium
 depends: []
 parallel: false
 branch: feat/app-config-full
-pr: ""
+pr: "#45"
 ---
 
 # AppConfig — full declarative config (data + signal + sizing)
