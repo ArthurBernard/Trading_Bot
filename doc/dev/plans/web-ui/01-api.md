@@ -1,7 +1,7 @@
 ---
 plan: web-ui/01-api
 kind: leaf
-status: planned
+status: done
 complexity: high
 depends: []
 parallel: false
