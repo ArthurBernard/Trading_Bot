@@ -55,6 +55,7 @@ from trading_bot import __version__
 from trading_bot.application.config import AppConfig, StrategyConfig
 from trading_bot.application.data_feed import BARS_SCHEMA, InMemoryFeed
 from trading_bot.application.performance_service import PerformanceService
+from trading_bot.application.run_app import run_app
 from trading_bot.application.service_factory import Engine, build_engine
 from trading_bot.application.strategy import (
     Strategy,
@@ -251,13 +252,23 @@ def run(
         help="Explicit acknowledgement required to go --live.",
     ),
 ) -> None:
-    """Run a strategy over a bars source and print a short summary.
+    """Run the declared system (or a quick demo) and print a short summary.
 
-    Builds the engine (paper-by-default), loads the MA-crossover example strategy
-    for the config's symbol, replays the bars source (a ``--bars`` file or the
-    built-in synthetic feed) through the
-    :class:`~trading_bot.application.strategy_runner.StrategyRunner`, then prints
-    orders submitted, the final net position and the realised PnL.
+    Two paths share the same paper-by-default engine and the same ``--live``
+    guard:
+
+    * **declared system** — when the config (``--config``) declares one or more
+      strategies, the whole multi-strategy system is brought up via the triptych
+      entrypoint :func:`~trading_bot.application.run_app.run_app`: the engine is
+      built, a :class:`~trading_bot.application.strategy_runner.StrategyRunner` is
+      created per declared strategy (its signal + dccd feed resolved from the
+      config), and they all run concurrently through the
+      :class:`~trading_bot.application.orchestrator.Orchestrator`. A per-strategy
+      summary + the positions table is printed.
+    * **quick demo** — with no config (or a config that declares no strategies),
+      the built-in MA-crossover example is run over a ``--bars`` file or the
+      synthetic feed, exactly as before, so ``trading-bot run`` does something
+      meaningful out of the box.
 
     **Going live is guarded.** ``--live`` demands both ``--yes-i-understand`` and
     venue credentials; missing either, the command refuses with a non-zero exit
@@ -272,6 +283,13 @@ def run(
 
     mode = _resolve_mode(config, live=live, yes_i_understand=yes_i_understand)
     config = config.model_copy(update={"mode": mode})
+
+    # A config that declares strategies (with their own data + signal) runs the
+    # whole declared system via the triptych entrypoint. A bare config (no
+    # strategies) keeps the quick single-strategy demo path below.
+    if config.strategies:
+        _run_declared_system(config)
+        return
 
     # Build the engine. In live mode build_engine refuses (BrokerError) if the
     # configured venue lacks credentials — caught and surfaced as a clean exit,
@@ -313,6 +331,50 @@ def run(
         f"fees paid        : {_render.fmt_money(engine.perf.fees_paid())}"
     )
     _console.print(_render.positions_table(engine.tracker.all_positions()))
+
+
+def _run_declared_system(config: AppConfig) -> None:
+    """Bring up the whole declared multi-strategy system and print its summary.
+
+    Delegates to the triptych entrypoint
+    :func:`~trading_bot.application.run_app.run_app` (via :func:`asyncio.run`),
+    which builds the engine (paper-by-default — the factory enforces it), a
+    runner per declared strategy, and runs them concurrently through the
+    :class:`~trading_bot.application.orchestrator.Orchestrator`. Then prints a
+    per-strategy summary line (orders + final net qty) followed by the aggregate
+    PnL / fees and the positions table. Any build/config failure (a misdeclared
+    strategy, or a credential-less live venue the factory refuses) is surfaced as
+    a clean non-zero exit — no order placed.
+    """
+    try:
+        report = asyncio.run(run_app(config))
+    except Exception as exc:  # noqa: BLE001 - surface any build/config failure
+        _console.print(f"[red]refusing to run:[/red] {exc}")
+        raise typer.Exit(code=1) from exc
+
+    _console.print(
+        f"[green]run complete[/green] "
+        f"(mode={config.mode}, strategies={len(report.strategies)}, "
+        f"orders={report.total_orders})"
+    )
+    for strat in report.strategies:
+        net_qty = (
+            strat.position.net_qty if strat.position is not None else money("0")
+        )
+        _console.print(
+            f"  - {strat.name} [{strat.instrument}]: "
+            f"orders={strat.orders_submitted} "
+            f"net_qty={_render.fmt_money(net_qty)}"
+        )
+    _console.print(f"realised PnL     : {_render.fmt_money(report.realised_pnl)}")
+    _console.print(f"fees paid        : {_render.fmt_money(report.fees_paid)}")
+
+    positions = {
+        s.instrument: s.position
+        for s in report.strategies
+        if s.position is not None
+    }
+    _console.print(_render.positions_table(positions))
 
 
 def _resolve_mode(

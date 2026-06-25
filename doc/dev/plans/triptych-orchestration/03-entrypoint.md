@@ -1,7 +1,7 @@
 ---
 plan: triptych-orchestration/03-entrypoint
 kind: leaf
-status: planned
+status: done
 complexity: high
 depends: [01, 02]
 parallel: false
