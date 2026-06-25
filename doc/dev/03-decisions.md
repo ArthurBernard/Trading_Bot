@@ -6,6 +6,28 @@ rejected approaches as tombstones.
 
 ---
 
+### 2026-06-25 Single-entrypoint orchestration: one config, one shared engine, N runners
+
+**Decision.** `application/run_app.py` `run_app(config)` is the **system** assembly+run
+seam: `build_engine(config)` builds **one** shared engine (one broker, bus, tracker,
+perf, risk gate); `build_runners` loads every `StrategyConfig` into a `StrategyRunner`
+(signal resolved from `SignalRefConfig` via a closed builtin registry
+`{ma_crossover: …}` **or** a safe `module:function` import — no exec sink; feed via
+`feed_for`); an `Orchestrator` runs them concurrently. All fills fan out on the one bus
+and aggregate in the one tracker/perf, **independent per instrument** (the tracker keys
+by instrument). The CLI `run` delegates here when the config declares strategies,
+keeping the no-config synthetic quick path and the `--live` ack+creds guard. A new
+`domain.errors.ConfigError` flags config-resolution failures.
+
+**Why.** Lifts the factory's "single wiring point" to the *system* level — CLI, tests
+and a future daemon bring the whole declared system up identically through one seam.
+One shared engine means one risk gate / one PnL view across all strategies, while the
+per-instrument tracker keeps distinct-symbol strategies isolated. This is E8: config →
+engine → per-strategy runners → Orchestrator, fulfilling the execution **and**
+orchestration scope (Trading_Bot conducts dccd + fynance + brokers).
+
+---
+
 ### 2026-06-25 dccd integration depth — RESOLVED: library import, not a service
 
 **Decision.** (Resolving the long-deferred decision.) Trading_Bot consumes dccd as an

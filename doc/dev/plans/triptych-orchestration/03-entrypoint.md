@@ -6,7 +6,7 @@ complexity: high
 depends: [01, 02]
 parallel: false
 branch: feat/triptych-entrypoint
-pr: ""
+pr: "#47"
 ---
 
 # Triptych entrypoint — one config runs the whole system

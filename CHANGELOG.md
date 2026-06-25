@@ -15,6 +15,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `application.feed_for` — build a `DataFeed` from a strategy's dccd data source via
   **library import** (`dccd.Client.read`); optional `backfill=True` drives dccd
   collection before reading. Injectable client (offline tests run dccd-free).
+- `application.run_app` + CLI — one `AppConfig` runs the whole declared
+  multi-strategy system: build the shared engine, load every strategy (signal + dccd
+  feed), run them concurrently via the `Orchestrator`, report per-strategy
+  orders/positions/PnL. `trading-bot run <config.yaml>` brings up the declared
+  (paper) system. Completes the **E8 triptych orchestration**.
 
 - Modern packaging via `pyproject.toml`; dev tooling (ruff, mypy, pytest,
   interrogate, pre-commit) and GitHub Actions CI across Python 3.11–3.13.

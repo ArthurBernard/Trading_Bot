@@ -10,12 +10,6 @@ The single source *index* of open work. Each unchecked item is a candidate for
 > **Full decomposition** — every epic broken into its leaves, branches,
 > complexity and dependencies: [`08-program-plan.md`](08-program-plan.md).
 
-## Interfaces & orchestration
-
-- [ ] **E8 — Orchestration of the triptych.** One `AppConfig` declaring data
-  sources (dccd) + strategies (fynance) + brokers; a single entrypoint that wires
-  the three. Decide library-import vs service-driving for dccd here. _(depends on E7)_
-
 ## Later
 
 - [ ] **E9 — Web UI.** FastAPI + Jinja2 dashboard (positions/orders/PnL),
