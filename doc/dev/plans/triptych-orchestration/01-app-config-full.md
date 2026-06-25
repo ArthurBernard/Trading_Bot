@@ -1,7 +1,7 @@
 ---
 plan: triptych-orchestration/01-app-config-full
 kind: leaf
-status: planned
+status: done
 complexity: medium
 depends: []
 parallel: false

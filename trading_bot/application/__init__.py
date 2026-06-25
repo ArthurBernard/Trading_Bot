@@ -88,7 +88,10 @@ from __future__ import annotations
 from trading_bot.application.config import (
     AppConfig,
     BrokerConfig,
+    DataSourceConfig,
     RiskConfig,
+    SignalRefConfig,
+    StorageConfig,
     StrategyConfig,
 )
 from trading_bot.application.data_feed import (
@@ -123,6 +126,9 @@ __all__ = [
     # config
     "AppConfig",
     "BrokerConfig",
+    "DataSourceConfig",
+    "SignalRefConfig",
+    "StorageConfig",
     "StrategyConfig",
     "RiskConfig",
     # events
