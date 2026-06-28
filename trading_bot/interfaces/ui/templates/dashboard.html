@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>trading_bot — dashboard</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <!-- Header: brand + version + mode badge. The only server-rendered values are
+       the version and the mode; all engine state is fetched client-side by
+       app.js from /api/* (the UI is a pure HTTP client of the API). -->
+  <header class="topbar">
+    <div class="brand-group">
+      <span class="brand">trading_bot</span>
+      <span class="ver">v{{ version }}</span>
+    </div>
+    <span class="mode-badge mode-{{ mode }}">{{ mode }}</span>
+    <span id="conn" class="conn"><span class="dot"></span>connecting…</span>
+  </header>
+
+  <main>
+    <!-- Positions ------------------------------------------------------------ -->
+    <section class="card">
+      <h2>Positions</h2>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Instrument</th>
+              <th class="num">Net qty</th>
+              <th class="num">Avg entry</th>
+              <th class="num">Realised PnL</th>
+              <th class="num">Fees</th>
+            </tr>
+          </thead>
+          <tbody id="positions-body">
+            <tr class="empty"><td colspan="5">Loading…</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- Open orders ---------------------------------------------------------- -->
+    <section class="card">
+      <h2>Open orders</h2>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Client id</th>
+              <th>Instrument</th>
+              <th>Side</th>
+              <th>Type</th>
+              <th class="num">Qty</th>
+              <th class="num">Limit</th>
+              <th class="num">Filled</th>
+              <th>Status</th>
+            </tr>
+          </thead>
+          <tbody id="orders-body">
+            <tr class="empty"><td colspan="8">Loading…</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- PnL / KPI ------------------------------------------------------------ -->
+    <section class="card">
+      <h2>PnL / KPI</h2>
+      <div class="table-wrap">
+        <table>
+          <tbody id="kpi-body">
+            <tr class="empty"><td colspan="2">Loading…</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    trading_bot v{{ version }} — read-only dashboard.
+    <a href="https://github.com/ArthurBernard/Trading_Bot">GitHub</a>
+  </footer>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

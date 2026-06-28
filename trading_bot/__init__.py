@@ -1,68 +1,15 @@
-#!/usr/bin/env python3
-# coding: utf-8
-# @Author: ArthurBernard
-# @Email: arthur.bernard.92@gmail.com
-# @Date: 2020-01-28 15:41:40
-# @Last modified by: ArthurBernard
-# @Last modified time: 2020-02-25 12:14:42
+"""trading_bot — execution & orchestration layer of the trading triptych.
 
+The third pillar alongside **dccd** (market data) and **fynance** (research /
+signals): it runs strategies live, routes and manages orders across exchanges,
+and tracks positions / PnL / risk. Hexagonal, async-first — see ``CLAUDE.md``
+and ``doc/dev/`` for the architecture and the developer brief.
+
+The pre-2026 implementation lives in git history only (no in-tree legacy
+package). See ``doc/dev/07-roadmap.md`` for the rewrite roadmap.
 """
-Trading_Bot : A Python package to build autonomous trading bot
-==============================================================
+from __future__ import annotations
 
-Documentation is available at [comming soon]
+__version__ = "0.2.0"
 
-Contents
---------
-Trading_Bot is a Python project that provides tools to build your custom
-autonomous trading bot adapted to your algorithmic financial strategies.
-
-Modules
--------
-bot_manager      --- Set the bot server and run order and strategy clients
-data_requests    --- Request data needed for strategy computations
-order_manager    --- Manage every orders
-result_manager   --- Display results of strategies and portfolio
-strategy_manager --- Set a strategy client and send orders to execute
-order            --- Object to execute orders.
-
-Utility tools
--------------
-API_bfx     --- Bitfinex client API
-API_kraken  --- Kraken client API
-_client     --- Base client to connect to server
-_order      --- Object representing order to execute.
-_exceptions --- Trading_Bot exceptions
-_server     --- Base server to run several bots
-tests       --- Run trading_bot unittests
-tools       --- Time, IO, setting, and configuration tools
-
-"""
-
-# Built-in packages
-
-# Third party packages
-
-# Local packages
-# from .API_bfx import *
-# from .API_kraken import *
-from .bot_manager import *
-# from .call_counters import *
-from .data_requests import *
-from .exchanges import *
-from .orders_manager import *
-# from .results_manager import *
-from .strategy_manager import *
-from .tools import *
-
-
-# __all__ = API_bfx.__all__
-# __all__ += API_kraken.__all__
-__all__ = bot_manager.__all__
-# __all__ += call_counters.__all__
-__all__ += data_requests.__all__
-__all__ += exchanges.__all__
-__all__ += orders_manager.__all__
-# __all__ += results_manager.__all__
-__all__ += strategy_manager.__all__
-__all__ += tools.__all__
+__all__ = ["__version__"]

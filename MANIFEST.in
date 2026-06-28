@@ -1,2 +1,2 @@
-include LICENSE.txt
-include README.md
+include LICENSE.txt README.md CHANGELOG.md
+recursive-include trading_bot *.ini

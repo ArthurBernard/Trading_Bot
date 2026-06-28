@@ -1,0 +1,646 @@
+"""The Typer ``trading-bot`` application — the CLI entrypoint.
+
+This module defines :data:`app`, the :class:`typer.Typer` instance the
+``trading-bot`` console script points at (target
+``trading_bot.interfaces.cli.main:app``). It carries the user-facing commands:
+
+* :func:`version` — print the installed package version;
+* :func:`run` — drive a strategy over a bars source through the engine
+  (paper-by-default; ``--live`` is an explicit, guarded opt-in);
+* :func:`status` — show current positions + open orders;
+* :func:`kpi` — show the realised-PnL / fees / KPI table.
+
+The CLI holds **no business logic**: commands delegate to the use-cases the
+:func:`~trading_bot.application.service_factory.build_engine` factory wires, and
+hand the resulting state to the pure rendering helpers in
+:mod:`trading_bot.interfaces.cli._render`. ``run`` builds a strategy + a
+:class:`~trading_bot.application.data_feed.DataFeed`, drives the
+:class:`~trading_bot.application.strategy_runner.StrategyRunner` (via
+:func:`asyncio.run`), and prints a short summary.
+
+Paper-by-default (the invariant)
+--------------------------------
+A ``run`` defaults to **paper** trading — no venue, no key, no network. Going
+``--live`` requires *all* of: an explicit acknowledgement (``--yes-i-understand``,
+or an interactive confirmation), the config's off-by-default opt-in
+(``live_enabled: true``), *and* venue credentials; absent any of them, ``run``
+**refuses with a non-zero exit and never places an order**, pointing the user at
+the go-live runbook (``doc/dev/09-go-live.md``). The factory
+(:func:`~trading_bot.application.service_factory.build_engine`) enforces the same
+on its side (it raises :class:`~trading_bot.domain.errors.LiveTradingNotEnabled`
+unless ``live_enabled`` is set, and never silently falls back to paper for a
+credential-less live venue), so neither a missing opt-in nor a missing key can
+trade real money by accident.
+
+Offline-testable bars source
+-----------------------------
+``run`` always supports a fully offline path so the whole command is testable
+without a network: ``--bars <path>`` loads a CSV or Parquet OHLC file into a
+:class:`~trading_bot.application.data_feed.InMemoryFeed`; with no ``--bars`` a
+small built-in **synthetic** trending series is used (enough bars for the
+MA-crossover example to cross), so ``trading-bot run`` does something meaningful
+out of the box.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import dataclasses
+import math
+import pathlib
+from collections.abc import Callable
+from decimal import Decimal
+from typing import TYPE_CHECKING
+
+import polars as pl
+import typer
+from rich.console import Console
+
+from trading_bot import __version__
+from trading_bot.application.config import AppConfig, StrategyConfig
+from trading_bot.application.data_feed import BARS_SCHEMA, InMemoryFeed
+from trading_bot.application.performance_service import PerformanceService
+from trading_bot.application.run_app import run_app
+from trading_bot.application.service_factory import Engine, build_engine
+from trading_bot.application.strategy import (
+    Strategy,
+    load_strategy,
+    ma_crossover_signal,
+)
+from trading_bot.application.strategy_runner import StrategyRunner
+from trading_bot.domain.instrument import Instrument, parse_kraken_pair
+from trading_bot.domain.money import Money, from_float, money
+from trading_bot.domain.order import Order, OrderSide, OrderType
+from trading_bot.interfaces.cli import _render
+
+if TYPE_CHECKING:
+    from fastapi import FastAPI
+
+app = typer.Typer(
+    name="trading-bot",
+    help="Execution & orchestration engine of the trading triptych.",
+    no_args_is_help=True,
+    add_completion=False,
+)
+
+#: The shared rich console every command prints through.
+_console = Console()
+
+#: Default synthetic-feed length (bars) when no ``--bars`` file is given — long
+#: enough for the default 10/30 MA windows to warm up and cross at least once.
+_SYNTHETIC_BARS = 80
+
+#: The go-live runbook the ``--live`` refusals point the user at.
+_RUNBOOK = "doc/dev/09-go-live.md"
+
+
+@app.callback()
+def _main() -> None:
+    """``trading-bot`` — the engine's command-line interface.
+
+    A no-op group callback so Typer treats the app as a *multi-command* group
+    (without it a lone command collapses into the root callback). The real
+    commands slot in alongside ``version``.
+    """
+
+
+@app.command()
+def version() -> None:
+    """Print the installed ``trading_bot`` version and exit."""
+    typer.echo(__version__)
+
+
+# --- run ------------------------------------------------------------------- #
+
+
+def _load_bars(path: pathlib.Path) -> pl.DataFrame:
+    """Load an OHLC bars file (``.csv`` or ``.parquet``) into a polars frame.
+
+    The file must carry the :data:`~trading_bot.application.data_feed.BARS_SCHEMA`
+    columns (``time, o, h, l, c, v``); :class:`InMemoryFeed` validates that on
+    construction. Raises a :class:`typer.BadParameter` for a missing file or an
+    unknown extension so the CLI surfaces a clean error.
+    """
+    if not path.exists():
+        raise typer.BadParameter(f"bars file not found: {path}")
+    suffix = path.suffix.lower()
+    if suffix == ".csv":
+        return pl.read_csv(path)
+    if suffix in (".parquet", ".pq"):
+        return pl.read_parquet(path)
+    raise typer.BadParameter(
+        f"unsupported bars file type {suffix!r}; use .csv or .parquet"
+    )
+
+
+def _synthetic_bars(n: int = _SYNTHETIC_BARS) -> pl.DataFrame:
+    """Build a deterministic synthetic OHLC frame that trends up then down.
+
+    A self-contained default bars source: a smooth sine-modulated uptrend that
+    rises then falls, so the fast MA crosses the slow MA in both directions and
+    the MA-crossover example actually trades. Deterministic (no randomness) so a
+    ``run`` with no ``--bars`` is reproducible.
+    """
+    times = list(range(n))
+    closes = [100.0 + 20.0 * math.sin(2.0 * math.pi * t / n) for t in times]
+    return pl.DataFrame(
+        {
+            "time": times,
+            "o": closes,
+            "h": [c + 1.0 for c in closes],
+            "l": [c - 1.0 for c in closes],
+            "c": closes,
+            "v": [1.0] * n,
+        }
+    )
+
+
+def _limit_at_close_factory(
+    close_col: str = "c",
+) -> Callable[[Strategy, Money, pl.DataFrame], Order]:
+    """Build an order factory that prices a step's order at the latest close.
+
+    The runner submits MARKET orders by default, which the
+    :class:`~trading_bot.brokers.paper.PaperBroker` can only fill if a mark price
+    has been injected. Pricing each order as a LIMIT at the bar's **close** makes
+    the offline run fully self-contained — the broker fills at that exact close —
+    and keeps the simulated execution price equal to the price the signal saw.
+    The runner overrides the ``client_order_id`` afterwards, so the factory need
+    not set one meaningfully.
+    """
+
+    def _factory(strategy: Strategy, delta: Money, bars: pl.DataFrame) -> Order:
+        close = from_float(float(bars[close_col][-1]))
+        side = OrderSide.BUY if delta > 0 else OrderSide.SELL
+        return Order(
+            client_order_id="pending",  # overridden by the runner
+            instrument=strategy.instrument,
+            side=side,
+            qty=abs(delta),
+            type=OrderType.LIMIT,
+            limit_price=close,
+        )
+
+    return _factory
+
+
+def _build_strategy(config: AppConfig, *, fast: int, slow: int, qty: Money) -> Strategy:
+    """Load the MA-crossover example strategy for the config's first symbol.
+
+    Uses the first configured strategy's ``symbol`` (or a ``BTC/USD`` default),
+    wires the :func:`~trading_bot.application.strategy.ma_crossover_signal`
+    example, and sets ``reference_qty`` (the base-unit scale a fractional
+    exposure resolves against — required for the EXPOSURE-mode example) and
+    ``lookback`` to the slow window (warmup) so no order fires on partial data.
+    """
+    strat_cfg = (
+        config.strategies[0]
+        if config.strategies
+        else StrategyConfig(name="ma-cross", symbol="BTC/USD")
+    )
+    # The example signal is built *for* an instrument, so resolve the instrument
+    # first (load_strategy with the built callable), then set the exposure scale
+    # (reference_qty, required for the EXPOSURE-mode example) and the warmup
+    # (lookback = slow window). Strategy is frozen, so use dataclasses.replace.
+    instrument = Instrument(parse_kraken_pair(strat_cfg.symbol))
+    signal_fn = ma_crossover_signal(instrument, fast=fast, slow=slow)
+    base = load_strategy(strat_cfg, signal_fn)
+    return dataclasses.replace(base, reference_qty=qty, lookback=slow)
+
+
+async def _run_engine(
+    engine: Engine, strategy: Strategy, feed: InMemoryFeed
+) -> int:
+    """Drive the strategy over the feed through the engine; return orders sent."""
+    runner = StrategyRunner(
+        strategy,
+        feed,
+        engine.router,
+        engine.tracker,
+        event_bus=engine.bus,
+        order_factory=_limit_at_close_factory(),
+    )
+    return await runner.run()
+
+
+@app.command()
+def run(
+    config_path: pathlib.Path | None = typer.Option(
+        None,
+        "--config",
+        "-c",
+        help="YAML AppConfig path. Defaults to a paper config (BTC/USD).",
+    ),
+    bars_path: pathlib.Path | None = typer.Option(
+        None,
+        "--bars",
+        "-b",
+        help="OHLC bars file (.csv/.parquet, schema time,o,h,l,c,v). "
+        "Omit for a built-in synthetic feed.",
+    ),
+    db_path: pathlib.Path | None = typer.Option(
+        None,
+        "--db",
+        help="Persist order/fill history to this SqliteStore path "
+        "(read it back later with status/kpi).",
+    ),
+    qty: float = typer.Option(
+        1.0,
+        "--qty",
+        help="Reference position size (base units) the exposure scales to.",
+    ),
+    fast: int = typer.Option(10, "--fast", help="Fast MA window (bars)."),
+    slow: int = typer.Option(30, "--slow", help="Slow MA window (bars)."),
+    live: bool = typer.Option(
+        False,
+        "--live",
+        help="Trade LIVE (real money). Requires --yes-i-understand AND the "
+        "config's live_enabled: true AND credentials; refuses otherwise "
+        "(see doc/dev/09-go-live.md).",
+    ),
+    yes_i_understand: bool = typer.Option(
+        False,
+        "--yes-i-understand",
+        help="Explicit acknowledgement required to go --live.",
+    ),
+) -> None:
+    """Run the declared system (or a quick demo) and print a short summary.
+
+    Two paths share the same paper-by-default engine and the same ``--live``
+    guard:
+
+    * **declared system** — when the config (``--config``) declares one or more
+      strategies, the whole multi-strategy system is brought up via the triptych
+      entrypoint :func:`~trading_bot.application.run_app.run_app`: the engine is
+      built, a :class:`~trading_bot.application.strategy_runner.StrategyRunner` is
+      created per declared strategy (its signal + dccd feed resolved from the
+      config), and they all run concurrently through the
+      :class:`~trading_bot.application.orchestrator.Orchestrator`. A per-strategy
+      summary + the positions table is printed.
+    * **quick demo** — with no config (or a config that declares no strategies),
+      the built-in MA-crossover example is run over a ``--bars`` file or the
+      synthetic feed, exactly as before, so ``trading-bot run`` does something
+      meaningful out of the box.
+
+    **Going live is guarded.** ``--live`` demands ``--yes-i-understand``, the
+    config's off-by-default opt-in (``live_enabled: true``) *and* venue
+    credentials; missing any of them, the command refuses with a non-zero exit,
+    points at the go-live runbook (``doc/dev/09-go-live.md``) and **never places
+    an order** (the broker is never even built down the live path until every
+    check passes).
+    """
+    config = (
+        AppConfig.from_yaml(config_path)
+        if config_path is not None
+        else AppConfig()
+    )
+
+    mode = _resolve_mode(config, live=live, yes_i_understand=yes_i_understand)
+    config = config.model_copy(update={"mode": mode})
+
+    # A config that declares strategies (with their own data + signal) runs the
+    # whole declared system via the triptych entrypoint. A bare config (no
+    # strategies) keeps the quick single-strategy demo path below.
+    if config.strategies:
+        _run_declared_system(config)
+        return
+
+    # Build the engine. In live mode build_engine refuses (BrokerError) if the
+    # configured venue lacks credentials — caught and surfaced as a clean exit,
+    # with no order ever placed.
+    try:
+        engine = build_engine(config, db_path=db_path)
+    except Exception as exc:  # noqa: BLE001 - surface any build failure cleanly
+        _console.print(f"[red]refusing to run:[/red] {exc}")
+        raise typer.Exit(code=1) from exc
+
+    reference_qty = money(str(Decimal(str(qty))))
+    try:
+        strategy = _build_strategy(config, fast=fast, slow=slow, qty=reference_qty)
+    except Exception as exc:  # noqa: BLE001
+        _console.print(f"[red]bad strategy parameters:[/red] {exc}")
+        raise typer.Exit(code=1) from exc
+
+    frame = (
+        _load_bars(bars_path) if bars_path is not None else _synthetic_bars()
+    )
+    feed = InMemoryFeed(frame.select(list(BARS_SCHEMA)))
+
+    submitted = asyncio.run(_run_engine(engine, strategy, feed))
+
+    position = engine.tracker.position(strategy.instrument)
+    net_qty = position.net_qty if position is not None else money("0")
+
+    _console.print(
+        f"[green]run complete[/green] "
+        f"(mode={config.mode}, strategy={strategy.name}, "
+        f"instrument={strategy.instrument})"
+    )
+    _console.print(f"orders submitted : {submitted}")
+    _console.print(f"final net qty    : {_render.fmt_money(net_qty)}")
+    _console.print(
+        f"realised PnL     : {_render.fmt_money(engine.perf.realised_pnl())}"
+    )
+    _console.print(
+        f"fees paid        : {_render.fmt_money(engine.perf.fees_paid())}"
+    )
+    _console.print(_render.positions_table(engine.tracker.all_positions()))
+
+
+def _run_declared_system(config: AppConfig) -> None:
+    """Bring up the whole declared multi-strategy system and print its summary.
+
+    Delegates to the triptych entrypoint
+    :func:`~trading_bot.application.run_app.run_app` (via :func:`asyncio.run`),
+    which builds the engine (paper-by-default — the factory enforces it), a
+    runner per declared strategy, and runs them concurrently through the
+    :class:`~trading_bot.application.orchestrator.Orchestrator`. Then prints a
+    per-strategy summary line (orders + final net qty) followed by the aggregate
+    PnL / fees and the positions table. Any build/config failure (a misdeclared
+    strategy, or a credential-less live venue the factory refuses) is surfaced as
+    a clean non-zero exit — no order placed.
+    """
+    try:
+        report = asyncio.run(run_app(config))
+    except Exception as exc:  # noqa: BLE001 - surface any build/config failure
+        _console.print(f"[red]refusing to run:[/red] {exc}")
+        raise typer.Exit(code=1) from exc
+
+    _console.print(
+        f"[green]run complete[/green] "
+        f"(mode={config.mode}, strategies={len(report.strategies)}, "
+        f"orders={report.total_orders})"
+    )
+    for strat in report.strategies:
+        net_qty = (
+            strat.position.net_qty if strat.position is not None else money("0")
+        )
+        _console.print(
+            f"  - {strat.name} [{strat.instrument}]: "
+            f"orders={strat.orders_submitted} "
+            f"net_qty={_render.fmt_money(net_qty)}"
+        )
+    _console.print(f"realised PnL     : {_render.fmt_money(report.realised_pnl)}")
+    _console.print(f"fees paid        : {_render.fmt_money(report.fees_paid)}")
+
+    positions = {
+        s.instrument: s.position
+        for s in report.strategies
+        if s.position is not None
+    }
+    _console.print(_render.positions_table(positions))
+
+
+def _resolve_mode(
+    config: AppConfig, *, live: bool, yes_i_understand: bool
+) -> str:
+    """Resolve the effective run mode, guarding the live path.
+
+    Paper unless ``--live`` is set. ``--live`` requires *both* the explicit
+    ``--yes-i-understand`` acknowledgement (or an interactive confirmation) *and*
+    the config's off-by-default opt-in (``live_enabled: true``); missing either,
+    the command refuses with a non-zero exit, points at the go-live runbook
+    (``doc/dev/09-go-live.md``) and never proceeds to build a broker. (Credential
+    presence is enforced one layer down by
+    :func:`~trading_bot.application.service_factory.build_engine`, which also
+    re-checks the opt-in and refuses a credential-less live venue — so the gates
+    together mean a live order is impossible without an acknowledgement, the
+    config opt-in, *and* a key.)
+    """
+    if not live:
+        return "paper"
+
+    acknowledged = yes_i_understand
+    if not acknowledged:
+        # No flag acknowledgement: ask interactively. A non-tty / declined
+        # answer leaves it False and we refuse below.
+        acknowledged = typer.confirm(
+            "LIVE trading uses real money. Are you sure you want to continue?",
+            default=False,
+        )
+    if not acknowledged:
+        _console.print(
+            "[red]refusing to trade live[/red] without explicit confirmation; "
+            f"pass --yes-i-understand (no order was placed). See {_RUNBOOK}."
+        )
+        raise typer.Exit(code=1)
+
+    # Second, off-by-default gate: the config must opt into live explicitly.
+    # Mirrors the factory's LiveTradingNotEnabled — refuse here so no engine is
+    # ever built and no order can be placed.
+    if not config.live_enabled:
+        _console.print(
+            "[red]refusing to trade live[/red]: live is off by default. Set "
+            f"live_enabled: true in the config and read {_RUNBOOK} first "
+            "(no order was placed)."
+        )
+        raise typer.Exit(code=1)
+
+    return "live"
+
+
+# --- status ---------------------------------------------------------------- #
+
+
+@app.command()
+def status(
+    db_path: pathlib.Path = typer.Option(
+        ...,
+        "--db",
+        help="SqliteStore database path to read positions/orders from.",
+    ),
+) -> None:
+    """Show positions + open orders read from a persisted :class:`SqliteStore`.
+
+    The status command reads the **stored** order/fill history (written by a run
+    with a store attached) rather than spinning a fresh engine: it rebuilds each
+    instrument's net position from the stored fills (the PnL source of truth) and
+    lists the stored orders that are still live (not terminal). This is the
+    simplest genuinely-testable source — a file a previous run produced — and
+    avoids re-running a strategy just to observe state.
+    """
+    from trading_bot.application.position_tracker import PositionTracker
+    from trading_bot.domain.order import OrderStatus
+    from trading_bot.storage.sqlite_store import SqliteStore
+
+    if not db_path.exists():
+        raise typer.BadParameter(f"database not found: {db_path}")
+
+    store = SqliteStore(db_path)
+    tracker = PositionTracker()
+    for fill in store.fills():
+        tracker.apply(fill)
+
+    open_orders = [
+        order
+        for order in store.orders()
+        if order.status
+        not in (OrderStatus.FILLED, OrderStatus.CANCELLED, OrderStatus.REJECTED)
+    ]
+
+    _console.print(_render.positions_table(tracker.all_positions()))
+    _console.print(_render.open_orders_table(open_orders))
+
+
+# --- kpi ------------------------------------------------------------------- #
+
+
+#: Built-in fallback starting capital for ``kpi`` when neither ``--capital`` nor
+#: a config's ``starting_capital`` is available. Mirrors
+#: :attr:`AppConfig.starting_capital`'s own default.
+_KPI_DEFAULT_CAPITAL = 100_000.0
+
+
+@app.command()
+def kpi(
+    db_path: pathlib.Path = typer.Option(
+        ...,
+        "--db",
+        help="SqliteStore database path to compute KPIs from.",
+    ),
+    capital: float | None = typer.Option(
+        None,
+        "--capital",
+        help="Starting account capital (quote units) anchoring the equity "
+        "curve the KPI ratios are computed over. Overrides the config's "
+        "starting_capital; defaults to 100000 when neither is given.",
+    ),
+    config_path: pathlib.Path | None = typer.Option(
+        None,
+        "--config",
+        "-c",
+        help="YAML AppConfig path. When given, its starting_capital anchors the "
+        "equity curve unless --capital overrides it.",
+    ),
+) -> None:
+    """Show realised PnL / fees / equity / KPI ratios from a stored fill history.
+
+    Rebuilds a :class:`~trading_bot.application.performance_service.
+    PerformanceService` from the fills persisted in a :class:`SqliteStore` (the
+    fills are the PnL source of truth) and renders the KPI table — realised PnL,
+    fees and the equity endpoint as exact :class:`~decimal.Decimal`, the Sharpe /
+    Sortino / max-drawdown / Calmar ratios as floats.
+
+    The KPI *ratios* are estimators over the equity curve ``capital + cumulative
+    realised PnL``; the anchor must be a realistic, strictly-positive account
+    value (the ratio math needs the curve not to cross zero). The realised PnL /
+    fees themselves are independent of the anchor.
+
+    Capital precedence
+    ------------------
+    The starting capital is resolved as **explicit ``--capital`` > config
+    ``starting_capital`` (when ``--config`` is given) > built-in default
+    (``100000``)**. So ``--capital`` always wins; absent it, a loaded config's
+    ``starting_capital`` is used; absent both, the built-in default applies.
+    """
+    from trading_bot.storage.sqlite_store import SqliteStore
+
+    if not db_path.exists():
+        raise typer.BadParameter(f"database not found: {db_path}")
+
+    resolved_capital = _resolve_kpi_capital(capital, config_path)
+
+    store = SqliteStore(db_path)
+    perf = PerformanceService(v0=resolved_capital)
+    for fill in store.fills():
+        perf.apply(fill)
+
+    _console.print(_render.kpi_table(perf))
+
+
+def _resolve_kpi_capital(
+    capital: float | None, config_path: pathlib.Path | None
+) -> Money:
+    """Resolve the KPI starting capital by the documented precedence.
+
+    Explicit ``--capital`` wins; absent it, a loaded config's
+    ``starting_capital`` is used (when ``--config`` was given); absent both, the
+    built-in default (:data:`_KPI_DEFAULT_CAPITAL`). The float ``--capital`` is
+    routed through ``str`` (``from_float`` semantics) so it never carries a
+    binary rounding error into the equity anchor; the config value is already an
+    exact :class:`~decimal.Decimal`.
+    """
+    if capital is not None:
+        return money(str(Decimal(str(capital))))
+    if config_path is not None:
+        return AppConfig.from_yaml(config_path).starting_capital
+    return money(str(Decimal(str(_KPI_DEFAULT_CAPITAL))))
+
+
+# --- serve ----------------------------------------------------------------- #
+
+
+def _build_serve_app(config: AppConfig) -> FastAPI:
+    """Build the read-only FastAPI dashboard app over a freshly-wired engine.
+
+    The wiring seam :func:`serve` calls so the command is testable **without**
+    launching uvicorn: the test patches :func:`uvicorn.run` and asserts the app
+    this helper returns is what ``serve`` hands it. Builds a paper-by-default
+    engine via :func:`~trading_bot.application.service_factory.build_engine`
+    (persisting to ``config.storage.db_path`` when set) and wraps it in
+    :func:`~trading_bot.interfaces.api.create_app`.
+    """
+    from trading_bot.interfaces.api import create_app
+
+    engine = build_engine(config, db_path=config.storage.db_path)
+    return create_app(engine)
+
+
+@app.command()
+def serve(
+    config_path: pathlib.Path | None = typer.Option(
+        None,
+        "--config",
+        "-c",
+        help="YAML AppConfig path. Defaults to a paper config (no strategies).",
+    ),
+    host: str = typer.Option(
+        "127.0.0.1",
+        "--host",
+        help="Interface to bind. Defaults to loopback (local-only).",
+    ),
+    port: int = typer.Option(
+        8000,
+        "--port",
+        help="TCP port to listen on.",
+    ),
+) -> None:
+    """Serve the read-only web dashboard (positions / orders / PnL) over HTTP.
+
+    Builds a wired engine from ``--config`` (or a paper default), wraps it in the
+    read-only FastAPI app (:func:`~trading_bot.interfaces.api.create_app`) and
+    runs it under uvicorn. The dashboard is a **pure HTTP client** of the API and
+    is **read-only** — it can observe the engine but never place an order.
+
+    MVP scope
+    ---------
+    ``serve`` exposes a **freshly-built** engine: it shows whatever state that
+    engine accumulates (e.g. the order/fill history persisted in the configured
+    ``storage.db_path``, replayed into the tracker/performance views), not a
+    separately-running live trading process. Attaching the dashboard to a
+    long-running live system (one ``run`` driving strategies while ``serve`` views
+    it) is future work; for now ``serve`` + a persisted store is the data path.
+    """
+    import uvicorn
+
+    config = (
+        AppConfig.from_yaml(config_path)
+        if config_path is not None
+        else AppConfig()
+    )
+
+    try:
+        application = _build_serve_app(config)
+    except Exception as exc:  # noqa: BLE001 - surface any build failure cleanly
+        _console.print(f"[red]refusing to serve:[/red] {exc}")
+        raise typer.Exit(code=1) from exc
+
+    _console.print(
+        f"[green]serving dashboard[/green] "
+        f"(mode={config.mode}) on http://{host}:{port}"
+    )
+    uvicorn.run(application, host=host, port=port)
+
+
+if __name__ == "__main__":  # pragma: no cover - manual invocation only
+    app()

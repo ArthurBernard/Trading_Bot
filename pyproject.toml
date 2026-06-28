@@ -1,0 +1,140 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "trading_bot"
+version = "0.2.0"
+description = "Execution & orchestration layer of the trading triptych — live strategies, order routing, risk. Hexagonal, async-first."
+readme = "README.md"
+license = { text = "MIT" }
+authors = [{ name = "Arthur Bernard", email = "arthur.bernard.92@gmail.com" }]
+requires-python = ">=3.11"
+classifiers = [
+    "Development Status :: 2 - Pre-Alpha",
+    "Intended Audience :: Financial and Insurance Industry",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: POSIX",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Office/Business :: Financial",
+]
+dependencies = [
+    "httpx>=0.27",
+    "websockets>=12.0",
+    "pydantic>=2.0",
+    "numpy>=1.26",
+    # polars is the OHLC bars-frame type used across the application layer
+    # (data_feed/data_provider/strategy) and the CLI — a hard runtime dep.
+    "polars>=0.20",
+    # pyyaml backs AppConfig.from_yaml (imported at module level in
+    # application/config.py), so it is a core runtime dep, not just dev/daemon.
+    "pyyaml>=6.0",
+]
+
+[project.optional-dependencies]
+# The other two pillars of the triptych. fynance is on PyPI; dccd is installed
+# editable from its sibling repo (kept out of the hard list so `pip install` and
+# CI never try to resolve it from PyPI):
+#   pip install -e ../Download_Crypto_Currencies_Data
+triptych = [
+    "fynance>=1.0.7",
+]
+daemon = [
+    "typer>=0.12",
+    "rich>=13.0",
+    "uvicorn[standard]>=0.29",
+    "fastapi>=0.110",
+    "jinja2>=3.1",
+    "pyyaml>=6.0",
+    "apscheduler>=3.10,<4",
+]
+dev = [
+    "pytest>=7.4",
+    "pytest-asyncio>=0.23",
+    "pytest-cov>=4.1",
+    "pytest-httpx>=0.30",
+    "ruff>=0.4",
+    "mypy>=1.0",
+    "interrogate>=1.5",
+    "pyyaml>=6.0",
+    # The CLI (Typer + Rich) so the unit suite / CI can import and exercise it.
+    "typer>=0.12",
+    "rich>=13.0",
+    # The HTTP API (FastAPI + uvicorn) so the unit suite / CI can import and
+    # exercise interfaces.api via fastapi.testclient.TestClient.
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.29",
+    # The web UI templating so the unit suite / CI can render the dashboard shell.
+    "jinja2>=3.1",
+]
+doc = [
+    "sphinx>=7.0",
+    "furo",
+    "numpydoc",
+    "sphinx-design",
+    "sphinx-copybutton",
+    "autodoc-pydantic>=2.0",
+]
+
+[project.scripts]
+trading-bot = "trading_bot.interfaces.cli.main:app"
+
+[project.urls]
+Homepage = "https://github.com/ArthurBernard/Trading_Bot"
+Changelog = "https://github.com/ArthurBernard/Trading_Bot/blob/master/CHANGELOG.md"
+
+[tool.setuptools.packages.find]
+include = ["trading_bot*"]
+
+[tool.setuptools.package-data]
+# Ship the web-UI assets in the wheel so `trading-bot serve` works installed
+# (not just from a source checkout). `static/*` matches only the top level —
+# nested asset dirs would need their own line (mirrors dccd).
+"trading_bot.interfaces.ui" = ["templates/*.html", "static/*"]
+
+[tool.pytest.ini_options]
+addopts = "--exitfirst -vv --cov=trading_bot --cov-report=term-missing -m 'not network'"
+testpaths = ["trading_bot"]
+asyncio_mode = "auto"
+markers = [
+    "network: end-to-end tests that hit real exchange / broker APIs (run with -m network)",
+]
+
+[tool.coverage.run]
+omit = ["trading_bot/tests/*"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 88
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I"]
+ignore = ["E501"]
+
+[tool.ruff.lint.per-file-ignores]
+"trading_bot/**/__init__.py" = ["F401", "F403", "F405"]
+
+[tool.mypy]
+python_version = "3.12"
+ignore_missing_imports = true
+warn_unused_configs = true
+follow_imports = "silent"
+# Full annotations are enforced only on the domain layer (strict override below).
+disable_error_code = ["import-untyped", "no-untyped-def", "no-untyped-call"]
+exclude = ["trading_bot/tests/"]
+
+[[tool.mypy.overrides]]
+module = ["trading_bot.domain.*"]
+strict = true
+enable_error_code = ["no-untyped-def", "no-untyped-call"]
+
+[tool.interrogate]
+ignore-init-method = true
+ignore-magic = true
+ignore-semiprivate = true
+ignore-private = true
+fail-under = 80
+exclude = ["trading_bot/tests"]

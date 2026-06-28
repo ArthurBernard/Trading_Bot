@@ -1,0 +1,55 @@
+# Example trading_bot engine config — a runnable *paper* declaration.
+#
+# Load it with:
+#     from trading_bot.application import AppConfig
+#     cfg = AppConfig.from_yaml("examples/config.example.yaml")
+#
+# Paper by default: this never trades real money. Switching `mode: live`
+# is a deliberate, explicit edit (and needs credentials + confirmation).
+
+mode: paper
+
+# Live trading is OFF by default. Beyond `mode: live`, going live also requires
+# this explicit opt-in (and credentials + reading the runbook doc/dev/09-go-live.md).
+# Flipping `mode` alone is not enough: the engine raises LiveTradingNotEnabled
+# until `live_enabled: true` is set. Leave it false for paper.
+live_enabled: false
+
+# Starting account capital (quote units) that anchors the equity curve the KPI
+# ratios (Sharpe/Sortino/Calmar) are computed over: equity = starting_capital +
+# cumulative realised PnL. Must be strictly positive (keeps the curve off zero so
+# the ratio math is well-defined). Exact Decimal; defaults to 100000 if omitted.
+starting_capital: "100000"
+
+# Where the engine persists state and finds market data on disk.
+storage:
+  db_path: ./var/trading_bot.sqlite   # append-only order/fill history + state
+  data_path: ./var/dccd               # dccd on-disk OHLC data directory
+
+# One paper broker (the simulator sits behind the same Broker port as live).
+brokers:
+  - name: paper-main
+    exchange: kraken
+
+# One fully-declared strategy: pair + data source + signal + sizing.
+strategies:
+  - name: btc-ma-cross
+    symbol: BTC/USD
+    data:
+      exchange: kraken
+      span: 3600          # 1h bars (seconds)
+      start: "2024-01-01" # optional history start
+      data_type: ohlc
+    signal:
+      ref: ma_crossover   # builtin name (or a "module:function" import ref)
+      params:
+        fast: 10
+        slow: 30
+    reference_qty: "0.5"  # base units a fractional-exposure signal scales to
+    lookback: 30          # warmup bars before the signal is meaningful
+
+# Engine-wide risk limits (exact Decimals; null = unconstrained).
+risk:
+  max_position: "1.0"
+  max_order: "0.25"
+  max_daily_loss: "500"
