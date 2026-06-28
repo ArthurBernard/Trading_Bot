@@ -6,6 +6,30 @@ rejected approaches as tombstones.
 
 ---
 
+### 2026-06-28 Close known gaps: KPI capital, reject same-symbol, AddOrder non-retry
+
+**Decision.** Three recorded gaps closed (offline; live still off):
+(a) **KPI v0** — `AppConfig.starting_capital` (default `money("100000")`, strictly
+positive) is wired into `PerformanceService(v0=)`; a fill-driven equity curve anchored
+at 0 sign-crosses on the first fee, making fynance's ratio estimators degenerate, so a
+positive anchor makes Sharpe/Sortino/Calmar meaningful (CLI `--capital` > config > the
+built-in default; the API `_safe_ratio` also coerces `inf`/`nan` → `0.0`, since a winning
+curve can now make fynance *return* `inf`). (b) **Same-instrument** — `build_runners`
+**rejects** two strategies on the same normalised `Symbol` with a `ConfigError` (catches
+the `XBT/USD`≡`BTC/USD` alias) rather than silently commingling them in the shared
+per-instrument tracker. (c) **AddOrder retry** — `AsyncHTTPClient.post` gains
+`retry=False` (at-most-once, raising `AmbiguousRequestError`); `KrakenBroker.place_order`
+uses it so a `AddOrder` is never blind-retried after an ambiguous failure, pointing the
+caller at `reconcile`; idempotent reads keep retrying.
+
+**Why.** These were the gaps safe to close without a real venue. (a) and (b) make the
+observability/orchestration honest; (c) closes the transport-level double-submit window
+the router's in-memory dedup didn't cover. **Still deferred to a real-key sandbox:**
+true *venue-level* idempotency (a venue dedup token surviving an engine crash). The
+**final project name** and **default paper-vs-live** also remain deferred.
+
+---
+
 ### 2026-06-28 Hardening: prove safety invariants under fault injection (offline)
 
 **Decision.** `tests/hardening/` *demonstrates* the money-safety invariants

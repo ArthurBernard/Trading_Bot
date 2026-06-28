@@ -12,6 +12,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   under **fault injection** (a `FaultyBroker` over `PaperBroker`): reconciliation
   converges after a simulated disconnect (no order duplicated/lost), idempotent submit
   survives retries/ambiguous failures, and the kill-switch cancels + halts mid-run.
+- `AppConfig.starting_capital` (default 100000) — wired into `PerformanceService(v0=)`
+  so the KPI ratios (Sharpe/Sortino/max-drawdown/Calmar) are **meaningful** (the equity
+  curve no longer starts at zero and sign-crosses); CLI `kpi --capital` overrides it.
+
+### Changed
+
+- `run_app`/`build_runners` now **reject** two strategies declaring the same instrument
+  (a `ConfigError`, catching aliases like `XBT/USD`≡`BTC/USD`) — the shared per-instrument
+  tracker has no per-strategy attribution, so commingling is refused up front.
+- `transport.AsyncHTTPClient.post(retry=...)` — a POST can opt out of retries
+  (`retry=False` → at-most-once, raising `AmbiguousRequestError` on a transient failure
+  so the caller reconciles before retrying). `KrakenBroker.place_order` (`AddOrder`) uses
+  the non-retry path; idempotent reads keep retrying. Closes the blind-retry double-submit
+  window (engine-side; venue-side dedup token still needs a real-key sandbox).
 
 - `interfaces.api` — read-only FastAPI over the engine: `GET /api/{health,positions,
   orders,kpi}` (money as **Decimal strings**, never float) + an SSE `/api/events`

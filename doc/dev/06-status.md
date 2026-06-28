@@ -44,30 +44,28 @@ gaps; explicit live enablement) and the **final project name**. Next is **E10**.
 
 ## Pending
 
-Everything remaining in [`07-roadmap.md`](07-roadmap.md): the
-Kraken broker + paper broker, the order router, the strategy runner, performance/
-risk, the CLI, the orchestration layer, and (later) the UI and go-live hardening.
+Only **E10-03** (go-live runbook + an explicit, off-by-default live opt-in guard) — see
+[`07-roadmap.md`](07-roadmap.md). After that the rewrite is feature-complete; real live
+trading still needs a real-key sandbox validation, and the **final project name** stays
+deferred.
 
 ## Known gaps / deferred
 
 - **Final project name** — kept as `trading_bot` for now (deferred decision).
-- **Default paper-vs-live beyond MVP** — paper-first for now; revisit at go-live.
-- **KPI ratios need a positive starting capital** — `service_factory.build_engine`
-  wires `PerformanceService(v0=0)`, and fynance refuses an equity curve that crosses
-  zero, so the Sharpe/Sortino/Calmar shown by the API (and the CLI `kpi` absent
-  `--capital`) degrade to `0.0`. Robust (never errors), but the ratios are meaningless
-  until a config-driven starting capital is wired into `build_engine` (small follow-up).
-- **Same-instrument strategies commingle in `run_app`** — the orchestrated system
-  shares one engine, and the `PositionTracker`/`PerformanceService` key state **by
-  instrument**, so two strategies declared on the *same* symbol fold their fills into
-  one shared position/PnL (silently commingled). Fine for the nominal one-strategy-
-  per-symbol case; per-strategy attribution (or rejecting duplicate symbols) is a
-  later refinement. Distinct-symbol strategies are fully isolated.
+- **Default paper-vs-live beyond MVP** — paper-first; live behind an explicit
+  off-by-default opt-in (E10-03).
+- ~~**KPI ratios need a positive starting capital**~~ — **resolved (E10)**:
+  `AppConfig.starting_capital` (default 100000) is wired into `PerformanceService(v0=)`,
+  so the ratios are meaningful; CLI `kpi --capital` overrides it.
+- ~~**Same-instrument strategies commingle in `run_app`**~~ — **resolved (E10)**:
+  `build_runners` now **rejects** two strategies on the same symbol (`ConfigError`,
+  alias-aware). A per-strategy book (to *allow* it) remains a future refinement.
 - ~~**dccd↔trading_bot orchestration depth**~~ — **resolved (E8)**: library import,
   not a service (`feed_for` uses `dccd.Client.read`/`backfill` in-process). See ADR.
-- **`AddOrder` idempotency at the venue** — the transport retries POSTs on
-  5xx/network errors, but `AddOrder` carries no venue idempotency key, so a retry
-  after an *ambiguous* failure (order placed, response lost) could double-submit.
-  Today idempotency is engine-side only (`OrderRouter` client-order-id dedup);
-  venue-level idempotency / reconcile-on-ambiguous-failure is go-live hardening
-  (groundwork in E4's order-router, finished in E10).
+- **`AddOrder` idempotency at the venue** — *transport guard added (E10)*:
+  `place_order` now sends `AddOrder` **at most once** (`post(retry=False)` → raises
+  `AmbiguousRequestError` so the caller reconciles before retrying), closing the
+  blind-retry double-submit window. Still **not fully closed**: there is no
+  *venue-side* dedup token, so a retry the engine *forgot* (e.g. a crash before the
+  reject was persisted) could still double-submit — that needs a real-key sandbox to
+  build/validate (the only live-trading prerequisite left).
