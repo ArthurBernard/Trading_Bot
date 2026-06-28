@@ -46,6 +46,7 @@ import math
 import pathlib
 from collections.abc import Callable
 from decimal import Decimal
+from typing import TYPE_CHECKING
 
 import polars as pl
 import typer
@@ -67,6 +68,9 @@ from trading_bot.domain.instrument import Instrument, parse_kraken_pair
 from trading_bot.domain.money import Money, from_float, money
 from trading_bot.domain.order import Order, OrderSide, OrderType
 from trading_bot.interfaces.cli import _render
+
+if TYPE_CHECKING:
+    from fastapi import FastAPI
 
 app = typer.Typer(
     name="trading-bot",
@@ -495,6 +499,81 @@ def kpi(
         perf.apply(fill)
 
     _console.print(_render.kpi_table(perf))
+
+
+# --- serve ----------------------------------------------------------------- #
+
+
+def _build_serve_app(config: AppConfig) -> FastAPI:
+    """Build the read-only FastAPI dashboard app over a freshly-wired engine.
+
+    The wiring seam :func:`serve` calls so the command is testable **without**
+    launching uvicorn: the test patches :func:`uvicorn.run` and asserts the app
+    this helper returns is what ``serve`` hands it. Builds a paper-by-default
+    engine via :func:`~trading_bot.application.service_factory.build_engine`
+    (persisting to ``config.storage.db_path`` when set) and wraps it in
+    :func:`~trading_bot.interfaces.api.create_app`.
+    """
+    from trading_bot.interfaces.api import create_app
+
+    engine = build_engine(config, db_path=config.storage.db_path)
+    return create_app(engine)
+
+
+@app.command()
+def serve(
+    config_path: pathlib.Path | None = typer.Option(
+        None,
+        "--config",
+        "-c",
+        help="YAML AppConfig path. Defaults to a paper config (no strategies).",
+    ),
+    host: str = typer.Option(
+        "127.0.0.1",
+        "--host",
+        help="Interface to bind. Defaults to loopback (local-only).",
+    ),
+    port: int = typer.Option(
+        8000,
+        "--port",
+        help="TCP port to listen on.",
+    ),
+) -> None:
+    """Serve the read-only web dashboard (positions / orders / PnL) over HTTP.
+
+    Builds a wired engine from ``--config`` (or a paper default), wraps it in the
+    read-only FastAPI app (:func:`~trading_bot.interfaces.api.create_app`) and
+    runs it under uvicorn. The dashboard is a **pure HTTP client** of the API and
+    is **read-only** — it can observe the engine but never place an order.
+
+    MVP scope
+    ---------
+    ``serve`` exposes a **freshly-built** engine: it shows whatever state that
+    engine accumulates (e.g. the order/fill history persisted in the configured
+    ``storage.db_path``, replayed into the tracker/performance views), not a
+    separately-running live trading process. Attaching the dashboard to a
+    long-running live system (one ``run`` driving strategies while ``serve`` views
+    it) is future work; for now ``serve`` + a persisted store is the data path.
+    """
+    import uvicorn
+
+    config = (
+        AppConfig.from_yaml(config_path)
+        if config_path is not None
+        else AppConfig()
+    )
+
+    try:
+        application = _build_serve_app(config)
+    except Exception as exc:  # noqa: BLE001 - surface any build failure cleanly
+        _console.print(f"[red]refusing to serve:[/red] {exc}")
+        raise typer.Exit(code=1) from exc
+
+    _console.print(
+        f"[green]serving dashboard[/green] "
+        f"(mode={config.mode}) on http://{host}:{port}"
+    )
+    uvicorn.run(application, host=host, port=port)
 
 
 if __name__ == "__main__":  # pragma: no cover - manual invocation only
