@@ -461,6 +461,12 @@ def status(
 # --- kpi ------------------------------------------------------------------- #
 
 
+#: Built-in fallback starting capital for ``kpi`` when neither ``--capital`` nor
+#: a config's ``starting_capital`` is available. Mirrors
+#: :attr:`AppConfig.starting_capital`'s own default.
+_KPI_DEFAULT_CAPITAL = 100_000.0
+
+
 @app.command()
 def kpi(
     db_path: pathlib.Path = typer.Option(
@@ -468,11 +474,19 @@ def kpi(
         "--db",
         help="SqliteStore database path to compute KPIs from.",
     ),
-    capital: float = typer.Option(
-        100_000.0,
+    capital: float | None = typer.Option(
+        None,
         "--capital",
         help="Starting account capital (quote units) anchoring the equity "
-        "curve the KPI ratios are computed over.",
+        "curve the KPI ratios are computed over. Overrides the config's "
+        "starting_capital; defaults to 100000 when neither is given.",
+    ),
+    config_path: pathlib.Path | None = typer.Option(
+        None,
+        "--config",
+        "-c",
+        help="YAML AppConfig path. When given, its starting_capital anchors the "
+        "equity curve unless --capital overrides it.",
     ),
 ) -> None:
     """Show realised PnL / fees / equity / KPI ratios from a stored fill history.
@@ -484,21 +498,49 @@ def kpi(
     Sortino / max-drawdown / Calmar ratios as floats.
 
     The KPI *ratios* are estimators over the equity curve ``capital + cumulative
-    realised PnL``; ``--capital`` anchors it to a realistic, strictly-positive
-    account value (the ratio math needs the curve not to cross zero). The
-    realised PnL / fees themselves are independent of ``--capital``.
+    realised PnL``; the anchor must be a realistic, strictly-positive account
+    value (the ratio math needs the curve not to cross zero). The realised PnL /
+    fees themselves are independent of the anchor.
+
+    Capital precedence
+    ------------------
+    The starting capital is resolved as **explicit ``--capital`` > config
+    ``starting_capital`` (when ``--config`` is given) > built-in default
+    (``100000``)**. So ``--capital`` always wins; absent it, a loaded config's
+    ``starting_capital`` is used; absent both, the built-in default applies.
     """
     from trading_bot.storage.sqlite_store import SqliteStore
 
     if not db_path.exists():
         raise typer.BadParameter(f"database not found: {db_path}")
 
+    resolved_capital = _resolve_kpi_capital(capital, config_path)
+
     store = SqliteStore(db_path)
-    perf = PerformanceService(v0=money(str(Decimal(str(capital)))))
+    perf = PerformanceService(v0=resolved_capital)
     for fill in store.fills():
         perf.apply(fill)
 
     _console.print(_render.kpi_table(perf))
+
+
+def _resolve_kpi_capital(
+    capital: float | None, config_path: pathlib.Path | None
+) -> Money:
+    """Resolve the KPI starting capital by the documented precedence.
+
+    Explicit ``--capital`` wins; absent it, a loaded config's
+    ``starting_capital`` is used (when ``--config`` was given); absent both, the
+    built-in default (:data:`_KPI_DEFAULT_CAPITAL`). The float ``--capital`` is
+    routed through ``str`` (``from_float`` semantics) so it never carries a
+    binary rounding error into the equity anchor; the config value is already an
+    exact :class:`~decimal.Decimal`.
+    """
+    if capital is not None:
+        return money(str(Decimal(str(capital))))
+    if config_path is not None:
+        return AppConfig.from_yaml(config_path).starting_capital
+    return money(str(Decimal(str(_KPI_DEFAULT_CAPITAL))))
 
 
 # --- serve ----------------------------------------------------------------- #

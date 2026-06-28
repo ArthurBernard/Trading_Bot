@@ -84,7 +84,7 @@ from trading_bot.application.strategy import (
 )
 from trading_bot.application.strategy_runner import StrategyRunner
 from trading_bot.domain.errors import ConfigError
-from trading_bot.domain.instrument import Instrument, parse_kraken_pair
+from trading_bot.domain.instrument import Instrument, Symbol, parse_kraken_pair
 from trading_bot.domain.money import Money, from_float
 from trading_bot.domain.order import Order, OrderSide, OrderType
 
@@ -266,6 +266,45 @@ def _limit_at_close_factory(
     return _factory
 
 
+def _reject_commingled(config: AppConfig) -> None:
+    """Reject two strategies declaring the **same** instrument.
+
+    The whole declared system shares **one** engine — one position tracker, one
+    performance service — keyed *per instrument*, with no per-strategy
+    attribution today (see the single-engine rationale above). So two strategies
+    on the same instrument would **commingle**: their fills fold into the one
+    shared per-instrument position/PnL view and can no longer be told apart (a
+    BUY from one and a SELL from the other net against each other; the reported
+    PnL is the blend, not either strategy's). Rather than silently produce a
+    meaningless blended book, reject the config up front with a clear
+    :class:`~trading_bot.domain.errors.ConfigError` naming the duplicated symbol
+    and the two offending strategies.
+
+    Symbols are compared by their **normalised**
+    :class:`~trading_bot.domain.instrument.Symbol` (via
+    :func:`~trading_bot.domain.instrument.parse_kraken_pair`), so two different
+    spellings of the same pair (e.g. ``"BTC/USD"`` and ``"XBT/USD"``) are still
+    caught as the same instrument.
+
+    The real fix — a **per-strategy book** that attributes fills back to the
+    strategy that originated them — is deferred future work; until it lands,
+    one-instrument-per-strategy is the invariant this guard enforces.
+    """
+    seen: dict[Symbol, str] = {}
+    for strategy_cfg in config.strategies:
+        symbol = parse_kraken_pair(strategy_cfg.symbol)
+        previous = seen.get(symbol)
+        if previous is not None:
+            raise ConfigError(
+                f"strategies {previous!r} and {strategy_cfg.name!r} both trade "
+                f"the same instrument {strategy_cfg.symbol!r}: the shared "
+                "per-instrument tracker/performance view would commingle them "
+                "(no per-strategy attribution today). Give each strategy a "
+                "distinct instrument, or run them as separate systems."
+            )
+        seen[symbol] = strategy_cfg.name
+
+
 def build_runners(
     config: AppConfig,
     engine: Engine,
@@ -313,9 +352,12 @@ def build_runners(
     ------
     ConfigError
         If a strategy declares no ``signal`` or no ``data`` source, names an
-        unknown builtin signal, or its signal cannot be built / imported.
+        unknown builtin signal, its signal cannot be built / imported, or two
+        strategies declare the **same** instrument (see :func:`_reject_commingled`).
 
     """
+    _reject_commingled(config)
+
     runners: list[StrategyRunner] = []
     for strategy_cfg in config.strategies:
         instrument = Instrument(parse_kraken_pair(strategy_cfg.symbol))

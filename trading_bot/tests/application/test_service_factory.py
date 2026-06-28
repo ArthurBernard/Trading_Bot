@@ -15,10 +15,12 @@ These prove the wiring contract:
 
 from __future__ import annotations
 
+import math
+
 import pytest
 
 from trading_bot.application.config import AppConfig, BrokerConfig
-from trading_bot.application.events import EventBus
+from trading_bot.application.events import EventBus, FillEvent
 from trading_bot.application.order_router import OrderRouter
 from trading_bot.application.performance_service import PerformanceService
 from trading_bot.application.position_tracker import PositionTracker
@@ -27,12 +29,37 @@ from trading_bot.application.service_factory import Engine, build_engine
 from trading_bot.brokers.kraken import KrakenBroker
 from trading_bot.brokers.paper import PaperBroker
 from trading_bot.domain.errors import BrokerError
+from trading_bot.domain.fill import Fill
 from trading_bot.domain.instrument import Instrument, Symbol
 from trading_bot.domain.money import money
 from trading_bot.domain.order import Order, OrderSide, OrderType
 from trading_bot.storage.sqlite_store import SqliteStore
 
 _BTCUSD = Instrument(Symbol("BTC", "USD"))
+
+
+def _fill_event(
+    fill_id: str,
+    side: OrderSide,
+    *,
+    qty: str,
+    price: str,
+    fee: str,
+    ts: int = 1,
+) -> FillEvent:
+    """A :class:`FillEvent` for ``_BTCUSD`` — drive the engine's read-side views."""
+    return FillEvent(
+        Fill(
+            fill_id=fill_id,
+            client_order_id="cid",
+            instrument=_BTCUSD,
+            side=side,
+            qty=money(qty),
+            price=money(price),
+            fee=money(fee),
+            ts=ts,
+        )
+    )
 
 
 def test_default_config_builds_paper_engine() -> None:
@@ -48,6 +75,53 @@ def test_default_config_builds_paper_engine() -> None:
     assert isinstance(engine.risk, RiskManager)
     # No db_path → no store.
     assert engine.store is None
+
+
+def test_starting_capital_anchors_perf_equity_curve() -> None:
+    """The config's ``starting_capital`` seeds the perf service's equity curve.
+
+    After one fill, the equity point is ``starting_capital + realised PnL`` — so
+    the curve no longer starts at zero (the gap-(a) closure: a meaningful anchor
+    for the KPI ratios).
+    """
+    cfg = AppConfig.model_validate({"mode": "paper", "starting_capital": "100000"})
+    engine = build_engine(cfg)
+
+    # A fee-free flat buy has zero realised PnL → the equity point is exactly v0.
+    engine.bus.emit(
+        _fill_event("F0", OrderSide.BUY, qty="1", price="100", fee="0")
+    )
+    curve = engine.perf.equity_curve()
+    assert len(curve) == 1
+    assert curve[0] == money("100000")
+
+
+def test_default_starting_capital_flows_to_perf() -> None:
+    """With no explicit ``starting_capital`` the perf anchor is the 100000 default."""
+    engine = build_engine(AppConfig())
+    engine.bus.emit(
+        _fill_event("F0", OrderSide.BUY, qty="1", price="100", fee="0")
+    )
+    assert engine.perf.equity_curve()[0] == money("100000")
+
+
+def test_winning_run_gives_finite_nonzero_sharpe() -> None:
+    """Verification on real data: a winning curve → a non-zero, finite Sharpe.
+
+    Closing gap (a): with the equity curve anchored at a positive
+    ``starting_capital`` it never sign-crosses, so a profitable round-trip yields
+    a *meaningful* Sharpe (non-zero and finite) — where a zero-anchored curve
+    would have made the estimator degenerate / return 0.0.
+    """
+    cfg = AppConfig.model_validate({"mode": "paper", "starting_capital": "100000"})
+    engine = build_engine(cfg)
+    # A profitable round-trip: buy @100, sell @110 → realised PnL +10.
+    engine.bus.emit(_fill_event("F1", OrderSide.BUY, qty="1", price="100", fee="0"))
+    engine.bus.emit(_fill_event("F2", OrderSide.SELL, qty="1", price="110", fee="0"))
+
+    sharpe = engine.perf.sharpe()
+    assert sharpe != 0.0
+    assert math.isfinite(sharpe)
 
 
 def test_paper_engine_shares_one_bus() -> None:

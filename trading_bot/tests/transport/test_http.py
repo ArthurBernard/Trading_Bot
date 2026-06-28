@@ -10,7 +10,11 @@ from __future__ import annotations
 import httpx
 import pytest
 
-from trading_bot.transport import AsyncHTTPClient, HTTPError
+from trading_bot.transport import (
+    AmbiguousRequestError,
+    AsyncHTTPClient,
+    HTTPError,
+)
 
 
 class RecordingSleep:
@@ -128,6 +132,140 @@ async def test_retries_on_transport_error(httpx_mock) -> None:
         result = await client.get("https://example.test/flaky")
 
     assert result == {"recovered": True}
+    assert sleep.calls == [pytest.approx(0.5)]
+
+
+# --- non-idempotent POST: retry=False (venue-idempotency guard) ------------ #
+
+
+async def test_post_no_retry_succeeds_at_most_once(httpx_mock) -> None:
+    """A ``retry=False`` POST that succeeds is sent exactly once, returns JSON."""
+    httpx_mock.add_response(status_code=200, json={"txid": ["OABC-1"]})
+    sleep = RecordingSleep()
+
+    async with AsyncHTTPClient(sleep=sleep) as client:
+        result = await client.post(
+            "https://example.test/AddOrder",
+            data={"pair": "XBTUSD"},
+            retry=False,
+        )
+
+    assert result == {"txid": ["OABC-1"]}
+    # Exactly one request was made; no backoff sleep.
+    assert len(httpx_mock.get_requests()) == 1
+    assert sleep.calls == []
+
+
+async def test_post_no_retry_5xx_raises_ambiguous_not_retried(httpx_mock) -> None:
+    """A 5xx on a ``retry=False`` POST → ``AmbiguousRequestError``, sent once.
+
+    The order may have landed at the venue before the 5xx; the client must NOT
+    retry (that could double-submit) and must signal the caller to reconcile.
+    """
+    httpx_mock.add_response(status_code=503, text="upstream down")
+    sleep = RecordingSleep()
+
+    async with AsyncHTTPClient(max_retries=3, sleep=sleep) as client:
+        with pytest.raises(AmbiguousRequestError) as exc_info:
+            await client.post(
+                "https://example.test/AddOrder",
+                data={"pair": "XBTUSD"},
+                retry=False,
+            )
+
+    # Exactly one attempt (no retry), no backoff sleep.
+    assert len(httpx_mock.get_requests()) == 1
+    assert sleep.calls == []
+    # The error tells the caller to reconcile, never blind-retry.
+    msg = str(exc_info.value)
+    assert "reconcile" in msg
+    assert "503" in msg
+
+
+async def test_post_no_retry_transport_error_raises_ambiguous(httpx_mock) -> None:
+    """A transport error on a ``retry=False`` POST → ``AmbiguousRequestError``.
+
+    A dropped connection after the request left is the canonical ambiguous case.
+    """
+    httpx_mock.add_exception(httpx.ConnectError("boom"))
+    sleep = RecordingSleep()
+
+    async with AsyncHTTPClient(max_retries=3, sleep=sleep) as client:
+        with pytest.raises(AmbiguousRequestError, match="reconcile"):
+            await client.post(
+                "https://example.test/AddOrder",
+                data={"pair": "XBTUSD"},
+                retry=False,
+            )
+
+    assert sleep.calls == []
+
+
+async def test_post_no_retry_429_raises_ambiguous(httpx_mock) -> None:
+    """A 429 on a ``retry=False`` POST → ``AmbiguousRequestError`` (not retried)."""
+    httpx_mock.add_response(status_code=429, headers={"Retry-After": "3"})
+    sleep = RecordingSleep()
+
+    async with AsyncHTTPClient(sleep=sleep) as client:
+        with pytest.raises(AmbiguousRequestError, match="reconcile"):
+            await client.post(
+                "https://example.test/AddOrder",
+                data={"pair": "XBTUSD"},
+                retry=False,
+            )
+
+    assert sleep.calls == []
+
+
+async def test_post_no_retry_4xx_raises_http_error_not_ambiguous(httpx_mock) -> None:
+    """A definite 4xx on a ``retry=False`` POST raises ``HTTPError`` (not ambiguous).
+
+    A 4xx rejection definitely did NOT take effect, so there is nothing to
+    reconcile: it is the ordinary non-retryable :class:`HTTPError`, same as the
+    retrying path.
+    """
+    httpx_mock.add_response(status_code=400, text="bad request")
+
+    async with AsyncHTTPClient() as client:
+        with pytest.raises(HTTPError) as exc_info:
+            await client.post(
+                "https://example.test/AddOrder",
+                data={"pair": "XBTUSD"},
+                retry=False,
+            )
+
+    assert exc_info.value.status == 400
+    assert not isinstance(exc_info.value, AmbiguousRequestError)
+
+
+async def test_post_default_retries_5xx_then_succeeds(httpx_mock) -> None:
+    """The default (``retry=True``) POST path is unchanged: 5xx is retried.
+
+    Proves the opt-out is opt-*in*: an idempotent POST still gets bounded retry.
+    """
+    httpx_mock.add_response(status_code=503)
+    httpx_mock.add_response(status_code=200, json={"ok": True})
+    sleep = RecordingSleep()
+
+    async with AsyncHTTPClient(backoff_base=0.5, sleep=sleep) as client:
+        result = await client.post(
+            "https://example.test/Balance", data={"nonce": "1"}
+        )
+
+    assert result == {"ok": True}
+    assert sleep.calls == [pytest.approx(0.5)]
+
+
+async def test_get_path_unchanged_by_retry_flag(httpx_mock) -> None:
+    """GET keeps retrying 5xx (the idempotent read path is never opted out)."""
+    httpx_mock.add_response(status_code=503)
+    httpx_mock.add_response(status_code=200, json={"ok": 1})
+    sleep = RecordingSleep()
+
+    async with AsyncHTTPClient(backoff_base=0.5, sleep=sleep) as client:
+        result = await client.get("https://example.test/data")
+
+    assert result == {"ok": 1}
     assert sleep.calls == [pytest.approx(0.5)]
 
 

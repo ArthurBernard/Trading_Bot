@@ -1,7 +1,7 @@
 ---
 plan: go-live-hardening/02-close-known-gaps
 kind: leaf
-status: planned
+status: done
 complexity: high
 depends: []
 parallel: false
