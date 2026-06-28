@@ -8,6 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Hardening test suite (`tests/hardening/`) — proves the money-safety invariants
+  under **fault injection** (a `FaultyBroker` over `PaperBroker`): reconciliation
+  converges after a simulated disconnect (no order duplicated/lost), idempotent submit
+  survives retries/ambiguous failures, and the kill-switch cancels + halts mid-run.
+
 - `interfaces.api` — read-only FastAPI over the engine: `GET /api/{health,positions,
   orders,kpi}` (money as **Decimal strings**, never float) + an SSE `/api/events`
   stream fed by the `EventBus`. The web surface only observes — no order placement.

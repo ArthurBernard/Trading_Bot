@@ -6,6 +6,29 @@ rejected approaches as tombstones.
 
 ---
 
+### 2026-06-28 Hardening: prove safety invariants under fault injection (offline)
+
+**Decision.** `tests/hardening/` *demonstrates* the money-safety invariants
+adversarially via a `FaultyBroker` wrapping `PaperBroker` — deterministic one-shot
+faults (`fail_next_place`, `ambiguous_next_place` = the venue records the order but the
+response is "lost", `disconnect`/seed) that change only what the *caller* observes,
+never the venue's recorded truth. Eleven tests prove: reconcile converges after a
+disconnect (no order duplicated/lost; second pass a no-op); engine-side idempotency
+holds under sequential **and** concurrent retries; an ambiguous failure surfaces rather
+than fabricating success, and `reconcile` is the recovery (adopt the live order, never
+re-submit); the kill-switch cancels open orders + halts new ones mid-run.
+
+**Why.** A money-handling engine's safety can't rest on happy-path unit tests — the
+dangerous cases are faults (lost responses, disconnects, concurrent retries). **Proven
+offline:** engine-side idempotency, ambiguous-failure surfacing, reconcile-as-recovery,
+kill-switch. **Still needs a real-key sandbox (E10-02 / live):** *venue-level*
+idempotency — a venue-side dedup token so a retry the engine *forgot* (e.g. a crash
+before the reject was persisted) can't create a second order at the exchange. Today the
+dedup is in-memory engine-side only; this gap is documented at the ambiguous-failure
+tests.
+
+---
+
 ### 2026-06-28 Web UI: pure HTTP client of the API; `serve` over a paper engine
 
 **Decision.** `interfaces/ui/` is a Jinja2 **shell** (header: brand + version + mode

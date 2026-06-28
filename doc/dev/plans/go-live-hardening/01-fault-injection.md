@@ -6,7 +6,7 @@ complexity: high
 depends: []
 parallel: false
 branch: test/go-live-hardening
-pr: ""
+pr: "#53"
 ---
 
 # Fault injection — prove the safety invariants adversarially
