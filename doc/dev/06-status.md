@@ -10,24 +10,27 @@ GitHub Actions CI (3.11–3.13), Git Flow (`develop`/`master`), `CLAUDE.md`,
 `.claude/` workflow + hooks, and this `doc/dev/` pack. The package imports and a
 smoke test passes.
 
-**E1–E8 are complete — Trading_Bot is the conductor of the triptych.** One
-`AppConfig` declares data sources (dccd) + strategies (fynance signals) + brokers +
-risk, and `trading-bot run <config.yaml>` brings up the **whole declared
-multi-strategy system** (paper by default): `run_app` builds one shared engine and
-runs a `StrategyRunner` per strategy concurrently via the `Orchestrator`, reporting
-per-strategy orders/positions/PnL. dccd is integrated by **library import**
-(`feed_for` → `dccd.Client.read`/`backfill`). Layers: `domain/` (pure, mypy-strict),
-`transport/` (http/ws/ratelimit), `brokers/` (`Broker` port + `KrakenBroker` REST+WS +
-port-pure `PaperBroker`), `storage/` (`SqliteStore`, money as TEXT), `application/`
-(declarative `AppConfig`+`EventBus`, idempotent risk-gated `OrderRouter`,
-`PositionTracker`, `reconcile`, `Strategy`+safe loader, causal `DataFeed`+`feed_for`,
-`StrategyRunner`, `PerformanceService`, `RiskManager`+kill-switch, `Orchestrator`,
-`run_app`, `service_factory`), and `interfaces/cli/` (Typer `trading-bot`). The
-pre-2026 `legacy/` tree is deleted; the whole package is linted/typed/tested. 495
-tests green via the project `.venv`.
+**E1–E9 are complete — only go-live hardening (E10) remains.** Trading_Bot conducts
+the triptych: one `AppConfig` declares data (dccd) + strategies (fynance) + brokers +
+risk; `trading-bot run <config.yaml>` runs the whole declared multi-strategy system
+(paper by default) via `run_app` → one shared engine → a `StrategyRunner` per strategy
+through the `Orchestrator`; and `trading-bot serve` exposes a **read-only** web
+dashboard (FastAPI `/api/*` + SSE, Jinja2 UI as a pure HTTP client — money as Decimal
+strings, never trades). dccd is integrated by **library import** (`feed_for`). Layers:
+`domain/` (pure, mypy-strict), `transport/` (http/ws/ratelimit), `brokers/` (`Broker`
+port + `KrakenBroker` REST+WS + port-pure `PaperBroker`), `storage/` (`SqliteStore`,
+money as TEXT), `application/` (declarative `AppConfig`+`EventBus`, idempotent
+risk-gated `OrderRouter`, `PositionTracker`, `reconcile`, `Strategy`+safe loader,
+causal `DataFeed`+`feed_for`, `StrategyRunner`, `PerformanceService`, `RiskManager`+
+kill-switch, `Orchestrator`, `run_app`, `service_factory`), `interfaces/` (Typer
+`trading-bot` CLI + read-only FastAPI `api`/Jinja2 `ui`). The pre-2026 `legacy/` tree
+is deleted; the whole package is linted/typed/tested. **521 tests** green via the
+project `.venv`.
 
-Pending: **E9** (web UI — FastAPI/Jinja2 dashboard), **E10** (go-live hardening +
-final name). Next is **E9**. See `07-roadmap.md` /
+Pending: **E10** — go-live hardening (prove reconciliation / kill-switch / idempotency
+under fault injection; resolve the venue-idempotency + KPI-v0 + same-instrument known
+gaps; explicit live enablement) and the **final project name**. Next is **E10**. See
+`07-roadmap.md` /
 `08-program-plan.md`.
 
 ## Done

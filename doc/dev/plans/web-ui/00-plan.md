@@ -1,7 +1,7 @@
 ---
 plan: web-ui
 kind: global
-status: planning
+status: done
 roadmap: "- [ ] **E9 — Web UI.** FastAPI + Jinja2 dashboard (positions/orders/PnL), mirroring dccd's UI."
 release_on_done: false
 ---
@@ -27,7 +27,7 @@ FastAPI `TestClient` over a paper `Engine` (no real server, no network).
 ## Leaf checklist
 
 - [x] 01 api — feat/web-api — high
-- [ ] 02 ui — feat/web-ui — high (depends on 01)
+- [x] 02 ui — feat/web-ui — high (depends on 01)
 
 ## Dependencies
 

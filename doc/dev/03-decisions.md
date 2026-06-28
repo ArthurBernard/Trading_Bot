@@ -6,6 +6,27 @@ rejected approaches as tombstones.
 
 ---
 
+### 2026-06-28 Web UI: pure HTTP client of the API; `serve` over a paper engine
+
+**Decision.** `interfaces/ui/` is a Jinja2 **shell** (header: brand + version + mode
+badge; three cards — Positions / Open orders / PnL+KPI — with stable tbody ids) served
+by the same FastAPI app at `GET /`. All engine state is fetched **client-side** from
+`/api/{positions,orders,kpi}` and live-updated via the `/api/events` SSE stream; the
+dependency-free `app.js` renders money **verbatim** from the API's Decimal strings (no
+`parseFloat` of money). The templates/JS never touch the application layer — the UI is
+a pure HTTP client and inherits the API's read-only guarantee (no path to place an
+order; POST → 405). `trading-bot serve [--config --host --port]` builds a paper-default
+engine (`_build_serve_app` seam, testable with `uvicorn.run` patched) and serves it;
+templates/static ship via `[tool.setuptools.package-data]`.
+
+**Why.** A pure-client UI keeps the only money-moving surface (order placement) entirely
+off the web — even fully exposed, the dashboard can't trade. Rendering Decimal strings
+verbatim preserves exactness in the browser. `serve` over a freshly-built engine + the
+persisted store is the MVP data path; attaching to a separately-running live system is
+E10/future work. Mirrors dccd's UI = pure HTTP client of its api.
+
+---
+
 ### 2026-06-25 Web API: read-only, money as Decimal strings, SSE via EventBus
 
 **Decision.** `interfaces/api/app.py` `create_app(engine)` is a **read-only** HTTP

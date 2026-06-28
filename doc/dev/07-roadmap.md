@@ -12,8 +12,6 @@ The single source *index* of open work. Each unchecked item is a candidate for
 
 ## Later
 
-- [ ] **E9 — Web UI.** FastAPI + Jinja2 dashboard (positions/orders/PnL),
-  mirroring dccd's UI. _(depends on E8)_
 - [ ] **E10 — Go-live hardening & final name.** Live-trading checklist
   (reconciliation, kill-switch, idempotency proven under fault injection); choose
   and apply the final project name. _(depends on E8)_
