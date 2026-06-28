@@ -61,6 +61,8 @@ dev = [
     # exercise interfaces.api via fastapi.testclient.TestClient.
     "fastapi>=0.110",
     "uvicorn[standard]>=0.29",
+    # The web UI templating so the unit suite / CI can render the dashboard shell.
+    "jinja2>=3.1",
 ]
 doc = [
     "sphinx>=7.0",
@@ -80,6 +82,12 @@ Changelog = "https://github.com/ArthurBernard/Trading_Bot/blob/master/CHANGELOG.
 
 [tool.setuptools.packages.find]
 include = ["trading_bot*"]
+
+[tool.setuptools.package-data]
+# Ship the web-UI assets in the wheel so `trading-bot serve` works installed
+# (not just from a source checkout). `static/*` matches only the top level —
+# nested asset dirs would need their own line (mirrors dccd).
+"trading_bot.interfaces.ui" = ["templates/*.html", "static/*"]
 
 [tool.pytest.ini_options]
 addopts = "--exitfirst -vv --cov=trading_bot --cov-report=term-missing -m 'not network'"

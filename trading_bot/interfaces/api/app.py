@@ -41,6 +41,20 @@ serialized with money as strings and tagged with a ``type`` discriminator), and
 :meth:`~trading_bot.application.events.EventBus.remove_queue` runs in a
 ``finally`` so the queue is always unregistered on disconnect — exactly dccd's
 ``/api/events`` shape.
+
+The dashboard UI — a pure HTTP client mounted on the same app (carried into the ADR)
+------------------------------------------------------------------------------------
+``create_app`` also mounts the read-only web dashboard (leaf 02): ``StaticFiles``
+at ``/static`` over :data:`~trading_bot.interfaces.ui.STATIC_DIR`, a
+:class:`~fastapi.templating.Jinja2Templates` over
+:data:`~trading_bot.interfaces.ui.TEMPLATES_DIR`, and a single ``GET /`` that
+renders ``dashboard.html`` — a **shell** carrying only the package version and the
+engine ``mode`` (no engine data is rendered server-side). The page's ``app.js``
+fetches ``/api/positions|orders|kpi`` and live-updates from ``/api/events``, so the
+UI is a **pure HTTP client** of this API: it shares the API's read-only guarantee
+and has no path to place an order. The directories are resolved from the installed
+package (shipped via ``[tool.setuptools.package-data]``), and the mount is guarded
+on their existence so the API still builds if assets are absent.
 """
 
 from __future__ import annotations
@@ -52,14 +66,18 @@ from decimal import Decimal
 from typing import TYPE_CHECKING, Any
 
 from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
+from fastapi.staticfiles import StaticFiles
+from fastapi.templating import Jinja2Templates
 
+import trading_bot
 from trading_bot.application.events import (
     Event,
     FillEvent,
     LogEvent,
     OrderEvent,
 )
+from trading_bot.interfaces.ui import STATIC_DIR, TEMPLATES_DIR
 
 if TYPE_CHECKING:
     from trading_bot.application.service_factory import Engine
@@ -253,6 +271,41 @@ def create_app(engine: Engine) -> FastAPI:
     def _engine(request: Request) -> Engine:
         """Read the wired engine off ``app.state`` (explicit, testable access)."""
         return request.app.state.engine  # type: ignore[no-any-return]
+
+    # -- UI: dashboard shell + static assets --------------------------------- #
+    # Mount the read-only web dashboard on the same app. The page is a *shell*
+    # (version + mode only); all engine data is fetched client-side from /api/*,
+    # so the UI is a pure HTTP client of this API (read-only, no order path).
+    # Guarded on the dirs existing so the API still builds without the assets.
+    if STATIC_DIR.is_dir():
+        app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+
+    templates = (
+        Jinja2Templates(directory=str(TEMPLATES_DIR))
+        if TEMPLATES_DIR.is_dir()
+        else None
+    )
+
+    if templates is not None:
+
+        @app.get("/", response_class=HTMLResponse)
+        async def dashboard(request: Request) -> Any:
+            """Render the read-only dashboard shell (no engine data server-side).
+
+            Returns ``dashboard.html`` carrying only the package version and the
+            engine ``mode`` (for the header badge). The page's ``app.js`` fetches
+            ``/api/positions|orders|kpi`` and live-updates from ``/api/events`` —
+            the UI never renders engine state server-side and never mutates it.
+            """
+            eng = _engine(request)
+            return templates.TemplateResponse(
+                request,
+                "dashboard.html",
+                {
+                    "version": trading_bot.__version__,
+                    "mode": eng.config.mode,
+                },
+            )
 
     # -- Health -------------------------------------------------------------- #
 
