@@ -28,7 +28,7 @@ from trading_bot.application.risk import RiskManager
 from trading_bot.application.service_factory import Engine, build_engine
 from trading_bot.brokers.kraken import KrakenBroker
 from trading_bot.brokers.paper import PaperBroker
-from trading_bot.domain.errors import BrokerError
+from trading_bot.domain.errors import BrokerError, LiveTradingNotEnabled
 from trading_bot.domain.fill import Fill
 from trading_bot.domain.instrument import Instrument, Symbol
 from trading_bot.domain.money import money
@@ -174,15 +174,51 @@ def test_db_path_attaches_sqlite_store(tmp_path) -> None:
     assert engine.store.get_order("cid-store") is not None
 
 
-def test_live_mode_without_credentials_refuses() -> None:
-    """A live-mode config whose venue lacks credentials raises — no broker back.
+def test_live_mode_not_enabled_refuses_regardless_of_credentials(
+    monkeypatch,
+) -> None:
+    """Live OFF by default: ``mode="live"`` + ``live_enabled=False`` always raises.
 
-    The paper-by-default invariant: live trading is opt-in *and* gated on
-    credentials. Without them the factory must refuse, never silently fall back
-    to paper and never return a live broker that cannot trade.
+    The opt-in gate fires *before* the credential check, so it refuses even when
+    credentials are present — flipping ``mode`` alone (without ``live_enabled``)
+    can never reach a real venue. The message points at the go-live runbook.
+    """
+    # Even with credentials present, the opt-in gate refuses first.
+    monkeypatch.setenv("KRAKEN_API_KEY", "k")
+    monkeypatch.setenv("KRAKEN_API_SECRET", "c2VjcmV0")  # base64("secret")
+    cfg = AppConfig(
+        mode="live",
+        live_enabled=False,
+        brokers=[BrokerConfig(name="kraken-main", exchange="kraken")],
+    )
+
+    with pytest.raises(LiveTradingNotEnabled) as exc:
+        build_engine(cfg)
+    # The refusal names the runbook so the user knows the deliberate next step.
+    assert "doc/dev/09-go-live.md" in str(exc.value)
+
+
+def test_live_mode_not_enabled_default_refuses_no_credentials() -> None:
+    """``live_enabled`` defaults to False → live refuses even with no credentials."""
+    cfg = AppConfig(
+        mode="live",
+        brokers=[BrokerConfig(name="kraken-main", exchange="kraken")],
+    )
+    assert cfg.live_enabled is False
+    with pytest.raises(LiveTradingNotEnabled):
+        build_engine(cfg)
+
+
+def test_live_enabled_without_credentials_refuses() -> None:
+    """Opt-in set but no credentials → the credential gate still raises BrokerError.
+
+    With ``live_enabled=True`` the opt-in gate passes; the factory then enforces
+    credentials and refuses a credential-less live venue (never falls back to
+    paper). The two gates are independent: opt-in *and* a key are both required.
     """
     cfg = AppConfig(
         mode="live",
+        live_enabled=True,
         brokers=[BrokerConfig(name="kraken-main", exchange="kraken")],
     )
 
@@ -194,24 +230,37 @@ def test_live_mode_without_credentials_refuses() -> None:
         build_engine(cfg)
 
 
-def test_live_mode_with_credentials_builds_live_broker(monkeypatch) -> None:
-    """Live mode + credentials present → the live venue adapter is built."""
+def test_live_enabled_with_credentials_builds_live_broker_no_order(
+    monkeypatch,
+) -> None:
+    """Opt-in + credentials → the live adapter is *constructed* (no order sent).
+
+    With both gates satisfied the factory builds the live ``KrakenBroker``
+    object. Construction is pure (no network, no order) — the test only asserts
+    the broker's *type* and that it reports credentials; it never calls it. This
+    is the whole point of the off-by-default opt-in: enabling it constructs the
+    adapter without trading.
+    """
     monkeypatch.setenv("KRAKEN_API_KEY", "k")
     monkeypatch.setenv("KRAKEN_API_SECRET", "c2VjcmV0")  # base64("secret")
     cfg = AppConfig(
         mode="live",
+        live_enabled=True,
         brokers=[BrokerConfig(name="kraken-main", exchange="kraken")],
     )
 
     engine = build_engine(cfg)
+    # The adapter object exists and is the live venue — but is never invoked,
+    # so no order / no network call was ever made.
     assert isinstance(engine.broker, KrakenBroker)
     assert engine.broker.has_credentials
 
 
 def test_live_mode_unknown_venue_refuses() -> None:
-    """Live mode with an unknown venue raises clearly (no silent fallback)."""
+    """Live mode (opted in) with an unknown venue raises clearly (no fallback)."""
     cfg = AppConfig(
         mode="live",
+        live_enabled=True,
         brokers=[BrokerConfig(name="x", exchange="not-a-venue")],
     )
     with pytest.raises(BrokerError):
@@ -220,7 +269,7 @@ def test_live_mode_unknown_venue_refuses() -> None:
 
 def test_live_mode_no_broker_configured_refuses() -> None:
     """Live mode with no configured broker raises — never trade without a venue."""
-    cfg = AppConfig(mode="live")
+    cfg = AppConfig(mode="live", live_enabled=True)
     with pytest.raises(BrokerError):
         build_engine(cfg)
 

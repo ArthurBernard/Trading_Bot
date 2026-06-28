@@ -21,12 +21,16 @@ hand the resulting state to the pure rendering helpers in
 Paper-by-default (the invariant)
 --------------------------------
 A ``run`` defaults to **paper** trading — no venue, no key, no network. Going
-``--live`` requires *both* an explicit acknowledgement (``--yes-i-understand``,
-or an interactive confirmation) *and* venue credentials; absent either, ``run``
-**refuses with a non-zero exit and never places an order**. The factory
+``--live`` requires *all* of: an explicit acknowledgement (``--yes-i-understand``,
+or an interactive confirmation), the config's off-by-default opt-in
+(``live_enabled: true``), *and* venue credentials; absent any of them, ``run``
+**refuses with a non-zero exit and never places an order**, pointing the user at
+the go-live runbook (``doc/dev/09-go-live.md``). The factory
 (:func:`~trading_bot.application.service_factory.build_engine`) enforces the same
-on its side (it never silently falls back to paper for a credential-less live
-venue), so a missing key cannot trade real money by accident.
+on its side (it raises :class:`~trading_bot.domain.errors.LiveTradingNotEnabled`
+unless ``live_enabled`` is set, and never silently falls back to paper for a
+credential-less live venue), so neither a missing opt-in nor a missing key can
+trade real money by accident.
 
 Offline-testable bars source
 -----------------------------
@@ -85,6 +89,9 @@ _console = Console()
 #: Default synthetic-feed length (bars) when no ``--bars`` file is given — long
 #: enough for the default 10/30 MA windows to warm up and cross at least once.
 _SYNTHETIC_BARS = 80
+
+#: The go-live runbook the ``--live`` refusals point the user at.
+_RUNBOOK = "doc/dev/09-go-live.md"
 
 
 @app.callback()
@@ -247,8 +254,9 @@ def run(
     live: bool = typer.Option(
         False,
         "--live",
-        help="Trade LIVE (real money). Requires --yes-i-understand AND "
-        "credentials; refuses otherwise.",
+        help="Trade LIVE (real money). Requires --yes-i-understand AND the "
+        "config's live_enabled: true AND credentials; refuses otherwise "
+        "(see doc/dev/09-go-live.md).",
     ),
     yes_i_understand: bool = typer.Option(
         False,
@@ -274,10 +282,12 @@ def run(
       synthetic feed, exactly as before, so ``trading-bot run`` does something
       meaningful out of the box.
 
-    **Going live is guarded.** ``--live`` demands both ``--yes-i-understand`` and
-    venue credentials; missing either, the command refuses with a non-zero exit
-    and **never places an order** (the broker is never even built down the live
-    path until both checks pass).
+    **Going live is guarded.** ``--live`` demands ``--yes-i-understand``, the
+    config's off-by-default opt-in (``live_enabled: true``) *and* venue
+    credentials; missing any of them, the command refuses with a non-zero exit,
+    points at the go-live runbook (``doc/dev/09-go-live.md``) and **never places
+    an order** (the broker is never even built down the live path until every
+    check passes).
     """
     config = (
         AppConfig.from_yaml(config_path)
@@ -386,13 +396,16 @@ def _resolve_mode(
 ) -> str:
     """Resolve the effective run mode, guarding the live path.
 
-    Paper unless ``--live`` is set. ``--live`` requires the explicit
-    ``--yes-i-understand`` acknowledgement (or an interactive confirmation);
-    without it the command refuses with a non-zero exit and never proceeds to
-    build a broker. (Credential presence is enforced one layer down by
-    :func:`~trading_bot.application.service_factory.build_engine`, which refuses a
-    credential-less live venue — so the two gates together mean a live order is
-    impossible without *both* an acknowledgement and a key.)
+    Paper unless ``--live`` is set. ``--live`` requires *both* the explicit
+    ``--yes-i-understand`` acknowledgement (or an interactive confirmation) *and*
+    the config's off-by-default opt-in (``live_enabled: true``); missing either,
+    the command refuses with a non-zero exit, points at the go-live runbook
+    (``doc/dev/09-go-live.md``) and never proceeds to build a broker. (Credential
+    presence is enforced one layer down by
+    :func:`~trading_bot.application.service_factory.build_engine`, which also
+    re-checks the opt-in and refuses a credential-less live venue — so the gates
+    together mean a live order is impossible without an acknowledgement, the
+    config opt-in, *and* a key.)
     """
     if not live:
         return "paper"
@@ -408,7 +421,18 @@ def _resolve_mode(
     if not acknowledged:
         _console.print(
             "[red]refusing to trade live[/red] without explicit confirmation; "
-            "pass --yes-i-understand (no order was placed)."
+            f"pass --yes-i-understand (no order was placed). See {_RUNBOOK}."
+        )
+        raise typer.Exit(code=1)
+
+    # Second, off-by-default gate: the config must opt into live explicitly.
+    # Mirrors the factory's LiveTradingNotEnabled — refuse here so no engine is
+    # ever built and no order can be placed.
+    if not config.live_enabled:
+        _console.print(
+            "[red]refusing to trade live[/red]: live is off by default. Set "
+            f"live_enabled: true in the config and read {_RUNBOOK} first "
+            "(no order was placed)."
         )
         raise typer.Exit(code=1)
 

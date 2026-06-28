@@ -29,11 +29,17 @@ The **paper-by-default** invariant lives here. The broker is chosen by
 * ``mode == "paper"`` (the :class:`AppConfig` default) → always a
   :class:`~trading_bot.brokers.paper.PaperBroker`. No venue, no key, no network
   — a fresh config can never trade real money.
-* ``mode == "live"`` → the configured venue's adapter is built **only if it has
-  credentials**. The first :class:`~trading_bot.application.config.BrokerConfig`
-  selects the venue (``exchange``); a known live venue (``"kraken"``) without
-  credentials, an unknown venue, or no broker configured at all each raise a
-  clear :class:`~trading_bot.domain.errors.BrokerError` — the factory **never**
+* ``mode == "live"`` → live is **off by default**. The factory first checks the
+  explicit opt-in :attr:`~trading_bot.application.config.AppConfig.live_enabled`:
+  while it is ``False`` (the default), live raises
+  :class:`~trading_bot.domain.errors.LiveTradingNotEnabled` (pointing at the
+  go-live runbook, ``doc/dev/09-go-live.md``) — so flipping ``mode`` alone never
+  reaches a real venue. Only when ``live_enabled`` is ``True`` does the venue's
+  adapter get built, and then **only if it has credentials**. The first
+  :class:`~trading_bot.application.config.BrokerConfig` selects the venue
+  (``exchange``); a known live venue (``"kraken"``) without credentials, an
+  unknown venue, or no broker configured at all each raise a clear
+  :class:`~trading_bot.domain.errors.BrokerError` — the factory **never**
   silently falls back to paper and **never** trades live by accident.
 
 A ``"paper"`` exchange entry is also honoured under either mode, so a config can
@@ -54,7 +60,7 @@ from trading_bot.application.risk import RiskManager
 from trading_bot.brokers.base import Broker
 from trading_bot.brokers.kraken import KrakenBroker
 from trading_bot.brokers.paper import PaperBroker
-from trading_bot.domain.errors import BrokerError
+from trading_bot.domain.errors import BrokerError, LiveTradingNotEnabled
 from trading_bot.storage.sqlite_store import SqliteStore
 
 __all__ = ["Engine", "build_engine"]
@@ -63,6 +69,8 @@ __all__ = ["Engine", "build_engine"]
 _LIVE_VENUES = ("kraken",)
 #: The venue key for the in-process simulator.
 _PAPER_VENUE = "paper"
+#: The go-live runbook the live-opt-in refusals point users at.
+_RUNBOOK = "doc/dev/09-go-live.md"
 
 
 @dataclass(frozen=True, slots=True)
@@ -142,9 +150,16 @@ def build_engine(
 
     Raises
     ------
+    LiveTradingNotEnabled
+        In live mode when the explicit opt-in
+        :attr:`~trading_bot.application.config.AppConfig.live_enabled` is
+        ``False`` (the default) — live is off by default; the message points at
+        the go-live runbook. Checked *before* credentials, so it fires
+        regardless of whether keys are present.
     BrokerError
-        In live mode, if the configured venue lacks credentials, is unknown, or
-        no broker is configured at all. The factory never falls back to paper.
+        In live mode (with ``live_enabled`` set), if the configured venue lacks
+        credentials, is unknown, or no broker is configured at all. The factory
+        never falls back to paper.
 
     """
     bus = EventBus()
@@ -180,9 +195,14 @@ def _build_broker(config: AppConfig, bus: EventBus) -> Broker:
     """Select and construct the broker for ``config`` — paper-by-default.
 
     In paper mode (the default), always a bus-wired
-    :class:`~trading_bot.brokers.paper.PaperBroker`. In live mode, the configured
-    venue's adapter, built only when it has credentials; an explicit ``"paper"``
-    venue entry yields the simulator under either mode. Refuses (raises
+    :class:`~trading_bot.brokers.paper.PaperBroker`. In live mode, live is **off
+    by default**: unless :attr:`~trading_bot.application.config.AppConfig.
+    live_enabled` is ``True`` the live path raises
+    :class:`~trading_bot.domain.errors.LiveTradingNotEnabled` (the opt-in gate,
+    checked before credentials); only then is the configured venue's adapter
+    built, and only when it has credentials. An explicit ``"paper"`` venue entry
+    yields the simulator under either mode (no opt-in needed — it cannot trade
+    real money). Refuses (raises
     :class:`~trading_bot.domain.errors.BrokerError`) rather than falling back to
     paper for a live venue that cannot trade.
     """
@@ -192,8 +212,20 @@ def _build_broker(config: AppConfig, bus: EventBus) -> Broker:
         # Paper-by-default: the simulator, wired to the bus so its fills fan out.
         return PaperBroker(event_bus=bus)
 
-    # mode == "live" with a non-paper venue: build the real adapter, but only if
-    # it can actually trade. Never silently downgrade to paper.
+    # mode == "live" with a non-paper venue. Live is OFF by default: require the
+    # explicit opt-in *before* even looking at credentials, so flipping `mode`
+    # alone (or a stray --live) can never reach a real venue. No order is sent
+    # by constructing the adapter; this only gates whether it is built at all.
+    if not config.live_enabled:
+        raise LiveTradingNotEnabled(
+            "live trading is not enabled (live_enabled is False): set "
+            "live_enabled: true in the config (and provide credentials) after "
+            f"reading the go-live runbook at {_RUNBOOK}. Paper is the default; "
+            "live is off by default. No order placed."
+        )
+
+    # Opt-in is set: build the real adapter, but only if it can actually trade.
+    # Never silently downgrade to paper.
     if venue in _LIVE_VENUES:
         broker = _build_live_venue(venue)
         if not broker.has_credentials:

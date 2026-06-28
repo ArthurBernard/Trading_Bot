@@ -27,6 +27,7 @@ __all__ = [
     "BrokerError",
     "SignalError",
     "ConfigError",
+    "LiveTradingNotEnabled",
 ]
 
 
@@ -218,6 +219,39 @@ class ConfigError(TradingBotError):
 
     def __init__(self, msg: str) -> None:
         super().__init__(msg)
+
+
+class LiveTradingNotEnabled(TradingBotError):
+    """Live trading was requested but the explicit opt-in is not set.
+
+    The off-by-default guard for going live. The engine refuses to wire a live
+    venue adapter for ``mode == "live"`` unless ``AppConfig.live_enabled`` is
+    explicitly ``True`` — so a config that merely flips ``mode`` to ``"live"``
+    (or a stray ``--live`` flag) can never reach a real venue by accident. Going
+    live is a deliberate, documented choice: read the runbook
+    (``doc/dev/09-go-live.md``), provide credentials and set ``live_enabled:
+    true``. Distinct from :class:`BrokerError` (which gates on *credentials*
+    once live is enabled): this gates on the *opt-in itself*.
+
+    Parameters
+    ----------
+    msg : str, optional
+        Human-readable detail. When omitted a default message naming the opt-in
+        flag (``live_enabled``) and the runbook (``doc/dev/09-go-live.md``) is
+        built.
+
+    """
+
+    #: The default refusal — names the opt-in flag and the runbook to read.
+    _DEFAULT = (
+        "live trading is not enabled: set live_enabled: true in the config "
+        "(and provide credentials) after reading the go-live runbook at "
+        "doc/dev/09-go-live.md. Paper trading is the default; live is "
+        "off by default and must be opted into deliberately. No order placed."
+    )
+
+    def __init__(self, msg: str | None = None) -> None:
+        super().__init__(msg if msg is not None else self._DEFAULT)
 
 
 class NoCapability(TradingBotError):

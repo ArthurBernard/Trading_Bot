@@ -61,6 +61,31 @@ def test_mode_defaults_to_paper() -> None:
     assert cfg.risk.max_position is None
 
 
+def test_live_enabled_defaults_to_false() -> None:
+    """``live_enabled`` is off by default — live is an explicit opt-in."""
+    cfg = AppConfig()
+    assert cfg.live_enabled is False
+
+
+def test_live_enabled_round_trips_from_yaml(tmp_path: pathlib.Path) -> None:
+    """``live_enabled: true`` survives a YAML round-trip as a bool."""
+    path = tmp_path / "live.yml"
+    path.write_text("mode: live\nlive_enabled: true\n")
+    cfg = AppConfig.from_yaml(path)
+    assert cfg.mode == "live"
+    assert cfg.live_enabled is True
+
+
+def test_live_enabled_omitted_in_yaml_defaults_false(
+    tmp_path: pathlib.Path,
+) -> None:
+    """A YAML config that omits ``live_enabled`` parses it as ``False``."""
+    path = tmp_path / "paper.yml"
+    path.write_text("mode: live\n")
+    cfg = AppConfig.from_yaml(path)
+    assert cfg.live_enabled is False
+
+
 def test_starting_capital_defaults_to_100000() -> None:
     """An unset ``starting_capital`` is the strictly-positive default 100000."""
     cfg = AppConfig()

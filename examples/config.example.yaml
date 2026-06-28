@@ -9,6 +9,12 @@
 
 mode: paper
 
+# Live trading is OFF by default. Beyond `mode: live`, going live also requires
+# this explicit opt-in (and credentials + reading the runbook doc/dev/09-go-live.md).
+# Flipping `mode` alone is not enough: the engine raises LiveTradingNotEnabled
+# until `live_enabled: true` is set. Leave it false for paper.
+live_enabled: false
+
 # Starting account capital (quote units) that anchors the equity curve the KPI
 # ratios (Sharpe/Sortino/Calmar) are computed over: equity = starting_capital +
 # cumulative realised PnL. Must be strictly positive (keeps the curve off zero so

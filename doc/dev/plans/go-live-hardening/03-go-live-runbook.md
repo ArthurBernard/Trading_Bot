@@ -1,7 +1,7 @@
 ---
 plan: go-live-hardening/03-go-live-runbook
 kind: leaf
-status: planned
+status: done
 complexity: medium
 depends: [01, 02]
 parallel: false
