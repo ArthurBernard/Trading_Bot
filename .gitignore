@@ -32,10 +32,11 @@ _README.md
 *.log
 *.db
 *.dat
-*.html
 *.ipynb_checkpoints
 logs/
 errors/
+# (no blanket *.html ignore — the web UI ships Jinja2 templates under
+#  trading_bot/interfaces/ui/templates/ that MUST be tracked.)
 
 # Sphinx generated
 doc/source/generated/
