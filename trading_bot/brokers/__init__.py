@@ -27,6 +27,9 @@ Public surface:
   failure (re-exported for convenience);
 * :class:`~trading_bot.brokers.kraken.KrakenBroker` — the concrete Kraken REST
   adapter (signed orders/balances/fills + public market data);
+* :class:`~trading_bot.brokers.binance.BinanceBroker` — the concrete Binance spot
+  REST adapter (HMAC-SHA256-signed orders/balances/fills + public market data,
+  testnet-capable);
 * :class:`~trading_bot.brokers.kraken_ws.KrakenPrivateWS` — the Kraken v2 private
   WebSocket adapter streaming ``executions`` (own trades / order updates) into
   domain :class:`~trading_bot.domain.fill.Fill`s (auth-token flow; live private
@@ -38,6 +41,7 @@ Public surface:
 from __future__ import annotations
 
 from trading_bot.brokers.base import Broker, BrokerError, Capability, require
+from trading_bot.brokers.binance import BinanceBroker
 from trading_bot.brokers.kraken import KrakenBroker
 from trading_bot.brokers.kraken_ws import KrakenPrivateWS
 from trading_bot.brokers.paper import PaperBroker
@@ -49,6 +53,7 @@ __all__ = [
     "require",
     "BrokerError",
     "BrokerRegistry",
+    "BinanceBroker",
     "KrakenBroker",
     "KrakenPrivateWS",
     "PaperBroker",

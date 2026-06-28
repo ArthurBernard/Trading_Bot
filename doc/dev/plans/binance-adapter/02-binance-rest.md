@@ -1,12 +1,12 @@
 ---
 plan: binance-adapter/02-binance-rest
 kind: leaf
-status: planned
+status: done
 complexity: high
 depends: [01]
 parallel: false
 branch: feat/binance-rest
-pr: ""
+pr: "#61"
 ---
 
 # BinanceBroker — REST (signing, orders, balances, fills, ticker) + testnet E2E
@@ -147,7 +147,7 @@ enough for an execution adapter):
   signed orders/balances/fills/ticker, `newClientOrderId` idempotency, testnet-capable),
   wired into `service_factory` as the 2nd live venue." (Changed: `service_factory`
   `_LIVE_VENUES` now includes `binance`.)
-- ADR (PR #NN): (a) **composite venue-order-id** `"<SYMBOL>:<orderId>"` to satisfy
+- ADR (PR #61): (a) **composite venue-order-id** `"<SYMBOL>:<orderId>"` to satisfy
   Binance's symbol-scoped cancel under the symbol-free port; (b) **`fills()`
   symbol-scoping** via a configured symbol set (no account-wide trade history on
   Binance); (c) `newClientOrderId` venue-level idempotency (improves on Kraken) kept

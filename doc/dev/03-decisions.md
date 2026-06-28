@@ -6,6 +6,49 @@ rejected approaches as tombstones.
 
 ---
 
+### 2026-06-28 BinanceBroker — 2nd live venue; composite id, fills scoping, newClientOrderId, testnet (PR #61)
+
+**Decision.** `BinanceBroker` (spot REST) is the second adapter behind the
+venue-neutral `Broker` port, proving the multi-exchange design end-to-end. Four
+Binance-specific choices were made to fit the symbol-free, Kraken-shaped port:
+- **Composite venue-order-id `"<SYMBOL>:<orderId>"`.** Binance's `cancel`/order
+  endpoints require the **symbol**, but `Broker.cancel_order(venue_order_id)`
+  carries only an id. The adapter therefore makes its venue id the composite
+  `symbol:orderId` (produced identically by `place_order` *and* `open_orders`, split
+  on the **last** `:`), so reconcile→cancel works. The id stays opaque text to the
+  router/store.
+- **`fills()` over a configured symbol set.** Binance has no account-wide trade
+  history; `myTrades` is per-symbol. `BinanceBroker(symbols=…)` queries each; with no
+  symbols it raises a clear `BrokerError` rather than silently returning `[]`.
+- **`newClientOrderId` venue-level idempotency.** The domain `client_order_id`
+  (`f"{name}-{step}"`) is forwarded as `newClientOrderId` when it fits Binance's
+  `[.A-Za-z0-9:/_-]{1,36}` constraint — a real venue-side dedup (Binance rejects a
+  duplicate with `-2010`), kept **alongside** the `retry=False` reconcile-on-ambiguous
+  policy (defence in depth; improves on Kraken, which has no usable client id).
+- **Testnet-capable base URL.** `base_url` (env `BINANCE_API_BASE`) toggles
+  `testnet.binance.vision`, enabling an opt-in `network` E2E real round-trip in paper
+  money — Binance offers a real spot testnet (Kraken did not), so this is the cheapest
+  path to real-venue order verification.
+
+Two supporting changes: a small public `transport.AsyncHTTPClient.request(method, …)`
+seam (Binance signs `DELETE` for cancels — GET/POST-only was insufficient), same
+retry/ambiguity semantics; and `STOP_LOSS` maps to Binance `STOP_LOSS_LIMIT` resting
+at the stop price (Binance has no symbol-free stop-market that fits the domain shape).
+Posture unchanged: public data key-free, private path proven by mocks + the signing
+vector + a key-gated testnet E2E; **no mainnet order is ever sent**; paper stays the
+default behind the `live_enabled` opt-in.
+
+**Why.** A second venue is the real test of the port abstraction. Binance breaks two
+of Kraken's conveniences (symbol-free cancel, account-wide trade history); solving both
+inside the adapter (composite id, configured symbol set) keeps the port and the engine
+unchanged — the abstraction holds. `newClientOrderId` is a genuine idempotency upgrade
+worth taking even though live is still off. **Rejected:** widening the `Broker` port to
+pass a symbol into `cancel_order`/`fills` (would leak a venue quirk into every adapter
+and the engine); a per-call DELETE hack in the adapter instead of the transport seam
+(bypasses the shared retry loop).
+
+---
+
 ### 2026-06-28 Binance symbol parsing — longest-first quote-suffix table (PR #60)
 
 **Decision.** `domain.instrument.parse_binance_symbol` splits Binance's
