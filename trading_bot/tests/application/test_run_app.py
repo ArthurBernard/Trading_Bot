@@ -175,6 +175,7 @@ async def test_run_app_two_strategies_independent_positions_and_pnl() -> None:
     broker's own fills (``Position.from_fills`` per instrument) and must agree
     exactly — fills are the PnL source of truth.
     """
+    pytest.importorskip("fynance")  # ma_crossover signals evaluate fynance.sma
     config = _two_strategy_config()
     client = _fake_client_for(config)
 
@@ -211,6 +212,7 @@ async def test_run_app_positions_match_independent_fill_computation() -> None:
     reported per-strategy position to an independent fold of exactly that
     instrument's broker fills.
     """
+    pytest.importorskip("fynance")  # ma_crossover signals evaluate fynance.sma
     config = _two_strategy_config()
     client = _fake_client_for(config)
 

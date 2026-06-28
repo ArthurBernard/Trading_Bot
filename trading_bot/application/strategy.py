@@ -38,8 +38,13 @@ sink. Here only an *already-importable* dotted module can be named; nothing is
 executed from a loose file.
 
 This module lives in the application layer: it may import the pure domain and
-depends on :mod:`polars` (the bars frame type) and, for the example signal,
-:mod:`fynance`. It performs no I/O of its own.
+depends on :mod:`polars` (the bars frame type). The built-in
+:func:`ma_crossover_signal` additionally needs :mod:`fynance`, but that is an
+**optional** ``[triptych]`` dependency: it is imported *lazily*, inside the
+signal callable, so importing this module never requires fynance — only
+*calling* the built-in MA-crossover signal does (mirroring how
+:mod:`trading_bot.domain.performance` defers its KPI imports). This module
+performs no I/O of its own.
 """
 
 from __future__ import annotations
@@ -49,7 +54,6 @@ import warnings
 from collections.abc import Callable
 from dataclasses import dataclass
 
-import fynance as fy
 import numpy as np
 import polars as pl
 
@@ -317,6 +321,11 @@ def ma_crossover_signal(
     ------
     ValueError
         If the windows are not ``1 <= fast < slow``.
+    ImportError
+        Raised by the returned callable (not here) when it is *evaluated* in an
+        environment without the optional ``fynance`` dependency. fynance is
+        imported lazily inside the callable, so building the ``SignalFn`` — and
+        importing this module — never requires it; only running the signal does.
 
     """
     if fast < 1 or slow <= fast:
@@ -325,6 +334,12 @@ def ma_crossover_signal(
         )
 
     def _signal(bars: pl.DataFrame) -> Signal:
+        # fynance is an optional [triptych] dependency: import it here, when the
+        # signal is actually evaluated, so importing this module stays free of it
+        # (mirrors domain.performance's lazy KPI imports). A missing fynance
+        # surfaces as a clear ImportError at evaluation time, not at import time.
+        import fynance as fy
+
         ts = _bar_ts_ms(bars)
         if bars.height == 0 or _CLOSE_COL not in bars.columns:
             return Signal.exposure(instrument, money("0"), ts=ts)

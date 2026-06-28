@@ -192,6 +192,7 @@ def test_api_endpoints_back_the_dashboard_with_real_state(
     positions/KPI endpoints report it as exact Decimal strings — the verbatim
     money the JS renders.
     """
+    pytest.importorskip("fynance")  # the seeded curve makes /api/kpi compute fynance ratios
     positions = client.get("/api/positions").json()
     assert positions, "engine should hold a position"
     btc = next(p for p in positions if p["instrument"] == "BTC/USD")

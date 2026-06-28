@@ -141,6 +141,7 @@ async def test_two_runners_run_concurrently_and_independently() -> None:
     result maps each runner to its order count, and each tracker reflects only
     its own strategy's fills (independent books).
     """
+    pytest.importorskip("fynance")  # ma_crossover signal evaluates fynance.sma
     up = [float(100 + i) for i in range(20)]
     down = [float(120 - i) for i in range(1, 21)]
 
@@ -281,6 +282,7 @@ async def test_one_runner_raising_does_not_hang_siblings() -> None:
     runs to completion, and the orchestrator re-raises the lone failure (not a
     group error). The sibling is never left hung.
     """
+    pytest.importorskip("fynance")  # the good runner's ma_crossover evaluates fynance.sma
 
     class _BoomFeed:
         def __iter__(self) -> Iterator[pl.DataFrame]:
@@ -437,6 +439,7 @@ async def test_install_signal_handlers_falls_back_when_unsupported() -> None:
 
 async def test_orchestrator_emits_lifecycle_log_events() -> None:
     """With an event bus, the orchestrator emits start/finish LogEvents."""
+    pytest.importorskip("fynance")  # ma_crossover signal evaluates fynance.sma
     logs: list[LogEvent] = []
     bus = EventBus()
     bus.subscribe(lambda e: logs.append(e) if isinstance(e, LogEvent) else None)
