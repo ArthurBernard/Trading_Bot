@@ -44,7 +44,7 @@ Binance (mainnet *or* testnet) sits behind the same `live_enabled` opt-in gate �
 
 ## Leaf checklist
 
-- [ ] 01 binance-symbol — feat/binance-symbol — low (→ opus)
+- [x] 01 binance-symbol — feat/binance-symbol — low (→ opus)
 - [ ] 02 binance-rest — feat/binance-rest — high (→ opus) (depends on 01)
 
 ## Dependencies

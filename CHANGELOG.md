@@ -8,6 +8,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `domain.instrument.parse_binance_symbol` — parse Binance separator-less pair codes
+  (`BTCUSDT` → `BTC/USDT`) into canonical `Symbol`s via a longest-first quote-suffix
+  table; groundwork for the Binance adapter (E11). (#60)
 - Hardening test suite (`tests/hardening/`) — proves the money-safety invariants
   under **fault injection** (a `FaultyBroker` over `PaperBroker`): reconciliation
   converges after a simulated disconnect (no order duplicated/lost), idempotent submit

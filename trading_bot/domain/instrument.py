@@ -14,6 +14,11 @@ particular has two layers of weirdness:
 :func:`parse_kraken_pair` turns a Kraken pair string into a :class:`Symbol`, and
 :meth:`Symbol.to_venue_symbol` renders a canonical symbol back to a venue's code.
 
+Binance is simpler: it concatenates canonical asset codes with no separator
+(``BTCUSDT``, ``ETHBTC``) and uses no X/Z prefixes and no ``XBT`` alias.
+:func:`parse_binance_symbol` is the inverse that rebuilds a :class:`Symbol` from
+a Binance pair string.
+
 The alias table (``XBT→BTC``, ``XDG→DOGE``) is the one used by the **dccd**
 Kraken adapter (``dccd/sources/kraken.py`` ``_KRAKEN_ALIASES`` and
 ``dccd/domain/symbol.py`` ``_ALIASES``); the X/Z legacy-prefix rule is Kraken's
@@ -30,6 +35,7 @@ __all__ = [
     "Instrument",
     "normalise",
     "parse_kraken_pair",
+    "parse_binance_symbol",
 ]
 
 # --- Kraken asset normalisation -------------------------------------------- #
@@ -50,6 +56,31 @@ _CANONICAL_TO_KRAKEN: dict[str, str] = {
 # legacy 4-char form. Used to split a concatenated legacy pair on the boundary.
 _FIAT: frozenset[str] = frozenset(
     {"USD", "EUR", "GBP", "JPY", "CAD", "AUD", "CHF"}
+)
+
+# --- Binance pair parsing -------------------------------------------------- #
+
+# Binance concatenates legs with no separator (``BTCUSDT``, ``ETHBTC``) using
+# canonical asset codes (no X/Z prefixes, no XBT alias — Binance Bitcoin is
+# ``BTC``). To split a concatenated pair we match a trailing quote asset; the
+# tuple is ordered **longest first** so the suffix match is unambiguous (e.g.
+# ``FDUSD`` is tried before ``USD``, ``USDT`` before ``USD``).
+_BINANCE_QUOTES: tuple[str, ...] = (
+    "FDUSD",
+    "USDT",
+    "USDC",
+    "TUSD",
+    "BUSD",
+    "DAI",
+    "BTC",
+    "ETH",
+    "BNB",
+    "EUR",
+    "GBP",
+    "TRY",
+    "AUD",
+    "BRL",
+    "USD",
 )
 
 
@@ -152,8 +183,8 @@ class Symbol:
         ----------
         venue : str
             The venue name. Only ``"kraken"`` (case-insensitive) has a bespoke
-            rendering today (altname form, ``XBTUSD`` / ``ETHXBT``); any other
-            venue gets the concatenated canonical legs.
+            rendering today (altname form, ``XBTUSD`` / ``ETHXBT``); ``"binance"``
+            and any other venue get the concatenated canonical legs (``BTCUSDT``).
 
         Returns
         -------
@@ -166,10 +197,14 @@ class Symbol:
         'XBTUSD'
         >>> Symbol("ETH", "BTC").to_venue_symbol("kraken")
         'ETHXBT'
+        >>> Symbol("BTC", "USDT").to_venue_symbol("binance")
+        'BTCUSDT'
 
         """
         if venue.lower() == "kraken":
             return f"{_to_kraken_asset(self.base)}{_to_kraken_asset(self.quote)}"
+        # Binance (and any other venue) use the bare concatenated canonical legs;
+        # the explicit branch keeps the no-alias guarantee visible.
         return f"{self.base}{self.quote}"
 
 
@@ -235,6 +270,63 @@ def parse_kraken_pair(pair: str) -> Symbol:
                 return Symbol(base_raw, quote_raw)
 
     raise ValueError(f"cannot parse Kraken pair {pair!r}")
+
+
+def parse_binance_symbol(pair: str) -> Symbol:
+    """Parse a Binance pair string into a canonical :class:`Symbol`.
+
+    Binance concatenates the legs with no separator and uses canonical asset
+    codes (``BTCUSDT``, ``ETHBTC``, ``BNBUSDT``) — no Kraken-style ``X``/``Z``
+    prefixes and no ``XBT`` alias (Binance Bitcoin is ``BTC``).
+
+    The split strategy:
+
+    * a separator (``/``, ``-``, ``_``) is honoured if present;
+    * otherwise the first quote in :data:`_BINANCE_QUOTES` (longest first) that
+      the upper-cased string **ends with**, leaving a non-empty base, wins.
+
+    :meth:`Symbol.__post_init__` canonicalises both legs, but :func:`normalise`
+    passes Binance codes through unchanged, so no Binance alias table is needed.
+
+    Parameters
+    ----------
+    pair : str
+        A Binance pair string (``"BTCUSDT"``, ``"ETHBTC"``, ``"BTC/USDT"``).
+
+    Returns
+    -------
+    Symbol
+        The canonical symbol.
+
+    Raises
+    ------
+    ValueError
+        If the pair cannot be split into a base and a quote.
+
+    Examples
+    --------
+    >>> str(parse_binance_symbol("BTCUSDT"))
+    'BTC/USDT'
+    >>> str(parse_binance_symbol("ETHBTC"))
+    'ETH/BTC'
+    >>> str(parse_binance_symbol("ETHFDUSD"))
+    'ETH/FDUSD'
+
+    """
+    raw = pair.strip()
+    # Explicit separator wins.
+    for sep in ("/", "-", "_"):
+        if sep in raw:
+            base, quote = raw.split(sep, 1)
+            return Symbol(base, quote)
+
+    code = raw.upper()
+    # Longest-first suffix match so e.g. ``FDUSD`` wins over ``USD``.
+    for quote in _BINANCE_QUOTES:
+        if code.endswith(quote) and len(code) > len(quote):
+            return Symbol(code[: -len(quote)], quote)
+
+    raise ValueError(f"cannot parse Binance pair {pair!r}")
 
 
 @dataclass(frozen=True, slots=True)

@@ -8,6 +8,7 @@ from trading_bot.domain.instrument import (
     Instrument,
     Symbol,
     normalise,
+    parse_binance_symbol,
     parse_kraken_pair,
 )
 
@@ -71,6 +72,57 @@ class TestParseKrakenPair:
     def test_unparseable_raises(self) -> None:
         with pytest.raises(ValueError):
             parse_kraken_pair("ZZ")
+
+
+# Representative real Binance pair strings (canonical codes, no separator).
+REAL_BINANCE_PAIRS = [
+    "BTCUSDT",
+    "ETHUSDT",
+    "BNBUSDT",
+    "SOLUSDT",
+    "XRPUSDT",
+    "ADAUSDT",
+    "DOGEUSDT",
+    "ETHBTC",
+]
+
+
+class TestParseBinanceSymbol:
+    def test_concatenated_form(self) -> None:
+        assert parse_binance_symbol("BTCUSDT") == Symbol("BTC", "USDT")
+        assert parse_binance_symbol("ETHBTC") == Symbol("ETH", "BTC")
+        assert parse_binance_symbol("BNBUSDT") == Symbol("BNB", "USDT")
+
+    def test_longest_quote_wins(self) -> None:
+        # FDUSD must win over the shorter USD suffix.
+        assert parse_binance_symbol("ETHFDUSD") == Symbol("ETH", "FDUSD")
+
+    @pytest.mark.parametrize("base", ["BTC", "ETH", "BNB", "SOL", "XRP", "ADA", "DOGE"])
+    def test_round_trip_from_symbol(self, base: str) -> None:
+        sym = Symbol(base, "USDT")
+        rendered = sym.to_venue_symbol("binance")
+        assert parse_binance_symbol(rendered) == sym
+
+    def test_explicit_separator(self) -> None:
+        assert parse_binance_symbol("BTC/USDT") == Symbol("BTC", "USDT")
+        assert parse_binance_symbol("BTC-USDT") == Symbol("BTC", "USDT")
+        assert parse_binance_symbol("btc_usdt") == Symbol("BTC", "USDT")
+
+    def test_no_xbt_aliasing_on_render(self) -> None:
+        # Unlike Kraken, Binance never aliases BTC to XBT.
+        assert Symbol("BTC", "USDT").to_venue_symbol("binance") == "BTCUSDT"
+        assert Symbol("ETH", "BTC").to_venue_symbol("binance") == "ETHBTC"
+
+    def test_unparseable_raises(self) -> None:
+        with pytest.raises(ValueError):
+            parse_binance_symbol("BTC")  # bare base, no quote suffix left
+        with pytest.raises(ValueError):
+            parse_binance_symbol("ZZZZ")  # no known quote suffix
+
+    @pytest.mark.parametrize("pair", REAL_BINANCE_PAIRS)
+    def test_real_pairs_round_trip(self, pair: str) -> None:
+        # Honesty check: the parse table matches the codes Binance actually uses.
+        assert parse_binance_symbol(pair).to_venue_symbol("binance") == pair
 
 
 class TestSymbol:
