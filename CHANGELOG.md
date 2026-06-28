@@ -8,6 +8,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+### Changed
+
+### Fixed
+
+### Deprecated
+
+### Removed
+
+## [0.2.0] - 2026-06-28
+
+### Added
+
 - `brokers.BinanceBroker` — Binance spot REST adapter behind the `Broker` port
   (HMAC-SHA256 signed orders/balances/fills/ticker; public market data key-free),
   the **2nd live venue**. `newClientOrderId` carries the client-order-id for
