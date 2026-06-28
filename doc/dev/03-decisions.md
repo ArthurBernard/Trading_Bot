@@ -6,6 +6,29 @@ rejected approaches as tombstones.
 
 ---
 
+### 2026-06-28 Go-live is an off-by-default opt-in; rewrite feature-complete
+
+**Decision.** Going live is an explicit, documented, **off-by-default** opt-in:
+`mode: live` alone is insufficient — `AppConfig.live_enabled` (default `False`) is a
+second gate that `build_engine` checks **before** credentials, raising
+`LiveTradingNotEnabled` (pointing at `doc/dev/09-go-live.md`) when not set; the CLI
+`run --live` mirrors it (interactive ack **and** `live_enabled`, else a clear refusal
+that places nothing). Even when enabled with credentials, the live `KrakenBroker` is
+only *constructed*, never called — **no real order is ever sent from this repo**. The
+runbook documents the deliberate enable steps, the pre-trade safety checklist, and a
+proven-vs-pending table. This closes **E10** and the E1–E10 rewrite: a feature-complete
+hexagonal engine (paper-validated, hardened under fault injection) conducting the
+triptych via CLI + web UI.
+
+**Why.** Paper-by-default + a second explicit opt-in makes "no live by accident"
+structural at every layer (config, factory, CLI). The one remaining live prerequisite —
+**validating private endpoints + venue-level idempotency against a real-key sandbox** —
+is intentionally out of the repo (needs a real key, maintainer decision). **Still
+deferred:** the **final project name** (kept `trading_bot`) and real-key live
+enablement; both stay open in the roadmap.
+
+---
+
 ### 2026-06-28 Close known gaps: KPI capital, reject same-symbol, AddOrder non-retry
 
 **Decision.** Three recorded gaps closed (offline; live still off):

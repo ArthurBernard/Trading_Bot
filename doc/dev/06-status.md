@@ -1,14 +1,37 @@
 # 06 — Status
 
-_Last updated: 2026-06-20_
+_Last updated: 2026-06-28_
 
 ## Where things stand
 
-**Phase 0 (bootstrap) — done / in this branch.** The repo now has the dccd/fynance
-developer standard: `pyproject.toml`, ruff/mypy/pytest/interrogate, pre-commit,
-GitHub Actions CI (3.11–3.13), Git Flow (`develop`/`master`), `CLAUDE.md`,
-`.claude/` workflow + hooks, and this `doc/dev/` pack. The package imports and a
-smoke test passes.
+**The E1–E10 rewrite is complete — the engine is feature-complete and hardened.**
+Phase 0 (tooling) plus all ten epics shipped: `domain/` (pure, mypy-strict),
+`transport/` (http/ws/ratelimit), `brokers/` (`Broker` port + `KrakenBroker` REST+WS +
+port-pure `PaperBroker`), `storage/` (`SqliteStore`, money as TEXT), `application/`
+(declarative `AppConfig`+`EventBus`, idempotent risk-gated `OrderRouter`,
+`PositionTracker`, `reconcile`, `Strategy`+safe loader, causal `DataFeed`+`feed_for`,
+`StrategyRunner`, `PerformanceService`, `RiskManager`+kill-switch, `Orchestrator`,
+`run_app`, `service_factory`), and `interfaces/` (Typer `trading-bot` CLI +
+read-only FastAPI `api`/Jinja2 `ui`). One `AppConfig` conducts the triptych — dccd
+data (library import) + fynance signals + brokers — and `trading-bot run <config>`
+runs the whole declared multi-strategy system (paper by default); `trading-bot serve`
+exposes the read-only dashboard. The money-safety invariants (reconcile convergence,
+idempotency, kill-switch) are **proven under fault injection** (`tests/hardening/`).
+**Live trading is off by default** behind an explicit `live_enabled` opt-in +
+credentials + the go-live runbook (`doc/dev/09-go-live.md`) — **no real order is ever
+sent from the repo**. ~570 tests green via the project `.venv`; ruff + mypy clean
+across the whole package.
+
+**Remaining (maintainer decisions, see `07-roadmap.md`):** the **final project name**
+(kept `trading_bot`), and **real-key live enablement** (validate Kraken private
+endpoints + venue-level idempotency against a real-key sandbox, then flip
+`live_enabled`).
+
+### Bootstrap (Phase 0, historical)
+
+The dccd/fynance developer standard: `pyproject.toml`, ruff/mypy/pytest/interrogate,
+pre-commit, GitHub Actions CI (3.11–3.13), Git Flow (`develop`/`master`), `CLAUDE.md`,
+`.claude/` workflow + hooks, and this `doc/dev/` pack.
 
 **E1–E9 are complete — only go-live hardening (E10) remains.** Trading_Bot conducts
 the triptych: one `AppConfig` declares data (dccd) + strategies (fynance) + brokers +

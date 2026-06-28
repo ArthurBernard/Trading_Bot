@@ -1,7 +1,7 @@
 ---
 plan: go-live-hardening
 kind: global
-status: planning
+status: done
 roadmap: "- [ ] **E10 — Go-live hardening & final name.** Live-trading checklist (reconciliation, kill-switch, idempotency proven under fault injection); choose and apply the final project name."
 release_on_done: false
 ---
@@ -33,7 +33,7 @@ explicitly turned on, with a real-key sandbox the only thing left to do later).
 
 - [x] 01 fault-injection — test/go-live-hardening — high
 - [x] 02 close-known-gaps — feat/close-known-gaps — high
-- [ ] 03 go-live-runbook — feat/go-live-opt-in — medium (depends on 01, 02)
+- [x] 03 go-live-runbook — feat/go-live-opt-in — medium (depends on 01, 02)
 
 ## Dependencies
 
