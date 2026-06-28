@@ -77,6 +77,7 @@ def test_run_over_fixture_paper_moves_position(tmp_path: pathlib.Path) -> None:
     recomputed *independently* from the broker's fills (read back from the
     persisted store) and must agree exactly — fills are the source of truth.
     """
+    pytest.importorskip("fynance")  # the ma_crossover run evaluates fynance.sma
     bars = tmp_path / "bars.csv"
     _ohlc_fixture(bars)
     db = tmp_path / "run.db"
@@ -117,6 +118,7 @@ def test_run_over_fixture_paper_moves_position(tmp_path: pathlib.Path) -> None:
 
 def test_run_synthetic_feed_default(tmp_path: pathlib.Path) -> None:
     """`run` with no --bars uses the built-in synthetic feed and exits 0."""
+    pytest.importorskip("fynance")  # the synthetic demo uses the ma_crossover signal
     result = runner.invoke(app, ["run"])
 
     assert result.exit_code == 0, result.output
@@ -270,6 +272,7 @@ def test_kpi_renders_realised_pnl(tmp_path: pathlib.Path) -> None:
     A known two-fill sequence (buy 2 @ 30000, sell 1 @ 31000, no fees) realises
     exactly 1000 on the closed unit; the table must show that figure.
     """
+    pytest.importorskip("fynance")  # the KPI table computes fynance ratios over the curve
     db = tmp_path / "kpi.db"
     _seed_store(db)
 
@@ -289,6 +292,7 @@ def test_kpi_default_capital_anchors_equity_endpoint(
     The realised PnL is 1000 (buy 2 @ 30000, sell 1 @ 31000), so the equity
     endpoint is ``100000 + 1000 = 101000``.
     """
+    pytest.importorskip("fynance")  # the KPI table computes fynance ratios over the curve
     db = tmp_path / "kpi.db"
     _seed_store(db)
 
@@ -300,6 +304,7 @@ def test_kpi_default_capital_anchors_equity_endpoint(
 
 def test_kpi_explicit_capital_overrides_default(tmp_path: pathlib.Path) -> None:
     """`--capital` wins: equity endpoint anchors to the flag, not the default."""
+    pytest.importorskip("fynance")  # the KPI table computes fynance ratios over the curve
     db = tmp_path / "kpi.db"
     _seed_store(db)
 
@@ -314,6 +319,7 @@ def test_kpi_config_starting_capital_used_when_no_capital_flag(
     tmp_path: pathlib.Path,
 ) -> None:
     """A ``--config`` ``starting_capital`` anchors the curve absent ``--capital``."""
+    pytest.importorskip("fynance")  # the KPI table computes fynance ratios over the curve
     db = tmp_path / "kpi.db"
     _seed_store(db)
     cfg = tmp_path / "cfg.yml"
@@ -329,6 +335,7 @@ def test_kpi_capital_flag_beats_config_starting_capital(
     tmp_path: pathlib.Path,
 ) -> None:
     """Precedence: explicit ``--capital`` > config ``starting_capital``."""
+    pytest.importorskip("fynance")  # the KPI table computes fynance ratios over the curve
     db = tmp_path / "kpi.db"
     _seed_store(db)
     cfg = tmp_path / "cfg.yml"
@@ -365,6 +372,7 @@ def test_positions_table_contains_formatted_values() -> None:
 
 def test_kpi_table_contains_realised_pnl_and_ratios() -> None:
     """`kpi_table` shows realised PnL + the named ratios for a known fill set."""
+    pytest.importorskip("fynance")  # kpi_table computes fynance ratios over the curve
     perf = PerformanceService(v0=money("100000"))
     perf.apply(
         Fill("F1", "c-0", _BTC_USD, OrderSide.BUY, money("2"),

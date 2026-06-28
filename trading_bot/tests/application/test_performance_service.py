@@ -25,6 +25,8 @@ from __future__ import annotations
 
 from decimal import Decimal
 
+import pytest
+
 from trading_bot.application import (
     EventBus,
     FillEvent,
@@ -218,6 +220,7 @@ def test_kpis_equal_domain_performance_over_equity_curve() -> None:
     A monotonic-up equity curve gives a finite, strictly-positive Sharpe and a
     zero max drawdown — concrete assertions that prove the wrappers ran fynance.
     """
+    pytest.importorskip("fynance")  # KPI ratios delegate to fynance
     # A win, a win, a bigger win across one instrument (all closes from flat).
     fills = [
         _fill(fill_id="F1", side=OrderSide.BUY, qty="1", price="100", fee="0"),
@@ -259,6 +262,7 @@ def test_kpis_equal_domain_performance_over_equity_curve() -> None:
 
 def test_max_drawdown_nonzero_on_dip() -> None:
     """A curve that dips has a positive fractional max drawdown matching domain."""
+    pytest.importorskip("fynance")  # max_drawdown delegates to fynance
     fills = [
         # +10 (peak), then -30 (dip), then +50 (recover).
         _fill(fill_id="F1", side=OrderSide.BUY, qty="1", price="100", fee="0"),
@@ -312,6 +316,7 @@ async def test_end_to_end_router_paperbroker_drives_performance() -> None:
     * KPIs == ``domain.performance`` over the service's equity curve (they run —
       fynance present).
     """
+    pytest.importorskip("fynance")  # KPI ratios delegate to fynance
     bus = EventBus()
     svc = PerformanceService(v0=money("1000000"), event_bus=bus)
     broker = PaperBroker(

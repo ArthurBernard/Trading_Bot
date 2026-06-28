@@ -27,6 +27,7 @@ from collections.abc import Iterator
 from decimal import Decimal
 
 import polars as pl
+import pytest
 
 from trading_bot.application import (
     EventBus,
@@ -109,6 +110,7 @@ async def test_end_to_end_position_follows_signal() -> None:
     2 and ``-1`` targets short 2. We assert the tracked net_qty is long after the
     up-leg and short after the down-leg, with exact ``Decimal`` money.
     """
+    pytest.importorskip("fynance")  # ma_crossover_signal evaluates fynance.sma
     # 20 up then 20 down — comfortably past a fast=3/slow=6 crossover each way.
     up = [float(100 + i) for i in range(20)]
     down = [float(120 - i) for i in range(1, 21)]
@@ -153,6 +155,7 @@ async def test_position_goes_long_then_short_across_the_cross() -> None:
     long *before* the down-cross — proving the track follows the signal at the
     crossover, not just at the end.
     """
+    pytest.importorskip("fynance")  # ma_crossover_signal evaluates fynance.sma
     up = [float(100 + i) for i in range(20)]
     frame_up = _bars(up)
     strat = Strategy(
@@ -368,6 +371,7 @@ async def test_idempotent_rerun_does_not_double_submit() -> None:
     router deduped every id. This is the runner-half (stable ids) meeting the
     router-half (one id → one venue order) of the E4 idempotency contract.
     """
+    pytest.importorskip("fynance")  # ma_crossover_signal evaluates fynance.sma
     up = [float(100 + i) for i in range(20)]
     down = [float(120 - i) for i in range(1, 21)]
     frame = _bars(up + down)
@@ -434,6 +438,7 @@ async def test_client_order_ids_are_deterministic_and_per_step() -> None:
     of per-step ids — determinism — and every id matches ``f"{name}-{step}"``
     with the step index aligned to the bar it traded on.
     """
+    pytest.importorskip("fynance")  # ma_crossover_signal evaluates fynance.sma
     up = [float(100 + i) for i in range(12)]
     frame = _bars(up)
 
@@ -522,6 +527,7 @@ async def test_order_factory_and_log_events() -> None:
     overrides its client-order-id with the deterministic per-step id. A LogEvent
     is emitted per submitted order on the bus.
     """
+    pytest.importorskip("fynance")  # ma_crossover_signal evaluates fynance.sma
     logs: list[LogEvent] = []
 
     closes = [float(100 + i) for i in range(12)]

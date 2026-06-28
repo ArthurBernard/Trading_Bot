@@ -114,6 +114,7 @@ def test_run_config_two_strategies_prints_multistrategy_summary(
     The dccd feed is replaced by a fake (InMemoryFeed over canned bars) so the
     whole command is offline; the paper broker is the engine's real data path.
     """
+    pytest.importorskip("fynance")  # ma_crossover strategies + KPI summary evaluate fynance
     # Replace the feed seam the entrypoint uses with the offline fake.
     import importlib
 
@@ -139,6 +140,7 @@ def test_run_config_two_strategies_prints_multistrategy_summary(
 
 def test_run_config_synthetic_path_still_works() -> None:
     """Backward-compat: `run` with no config still runs the synthetic demo."""
+    pytest.importorskip("fynance")  # the synthetic demo uses the ma_crossover signal
     result = runner.invoke(app, ["run"])
 
     assert result.exit_code == 0, result.output

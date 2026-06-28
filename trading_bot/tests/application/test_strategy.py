@@ -118,6 +118,7 @@ def test_warmup_returns_flat_below_lookback() -> None:
 
 
 def test_warmup_calls_fn_at_lookback() -> None:
+    pytest.importorskip("fynance")  # evaluate() at lookback invokes ma_crossover (fynance.sma)
     strat = Strategy(
         name="s",
         instrument=BTC_USD,
@@ -140,6 +141,7 @@ def test_ma_crossover_rejects_bad_windows() -> None:
 
 
 def test_ma_crossover_long_then_short() -> None:
+    pytest.importorskip("fynance")  # ma_crossover signal evaluates fynance.sma
     fn = ma_crossover_signal(BTC_USD, fast=2, slow=4)
 
     # A clear up-trend: fast MA rises above slow MA -> long.
@@ -155,6 +157,7 @@ def test_ma_crossover_long_then_short() -> None:
 
 
 def test_ma_crossover_flips_at_crossover() -> None:
+    pytest.importorskip("fynance")  # ma_crossover signal evaluates fynance.sma
     fn = ma_crossover_signal(BTC_USD, fast=2, slow=4)
     # up then down: collect the exposure at each step (using only bars <= t).
     closes = [10.0, 11.0, 13.0, 16.0, 20.0, 25.0, 22.0, 17.0, 12.0, 9.0, 7.0]
@@ -168,6 +171,7 @@ def test_ma_crossover_flips_at_crossover() -> None:
 
 def test_ma_crossover_is_causal() -> None:
     """The signal at bar t must not depend on any bar > t (no lookahead)."""
+    pytest.importorskip("fynance")  # ma_crossover signal evaluates fynance.sma
     fn = ma_crossover_signal(BTC_USD, fast=3, slow=5)
     closes = [10.0, 12.0, 11.0, 14.0, 18.0, 22.0, 19.0, 15.0, 11.0, 8.0]
 
@@ -184,6 +188,7 @@ def test_ma_crossover_is_causal() -> None:
 
 
 def test_ma_crossover_ts_from_latest_bar() -> None:
+    pytest.importorskip("fynance")  # ma_crossover signal evaluates fynance.sma
     fn = ma_crossover_signal(BTC_USD, fast=2, slow=4)
     bars = _bars([10.0, 11.0, 13.0, 16.0], start_ts=1_700_000_000)
     sig = fn(bars)
@@ -246,6 +251,7 @@ def test_load_strategy_non_callable_attr_raises() -> None:
 
 def test_verify_on_realistic_series() -> None:
     """Trend up then down: exposure flips at the crossovers; fully causal."""
+    pytest.importorskip("fynance")  # ma_crossover signal evaluates fynance.sma
     rng = np.random.default_rng(42)
     up = np.linspace(100.0, 200.0, 60)
     down = np.linspace(200.0, 100.0, 60)

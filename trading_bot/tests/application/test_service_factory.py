@@ -113,6 +113,7 @@ def test_winning_run_gives_finite_nonzero_sharpe() -> None:
     a *meaningful* Sharpe (non-zero and finite) — where a zero-anchored curve
     would have made the estimator degenerate / return 0.0.
     """
+    pytest.importorskip("fynance")  # engine.perf.sharpe() delegates to fynance
     cfg = AppConfig.model_validate({"mode": "paper", "starting_capital": "100000"})
     engine = build_engine(cfg)
     # A profitable round-trip: buy @100, sell @110 → realised PnL +10.

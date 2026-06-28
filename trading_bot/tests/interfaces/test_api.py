@@ -239,6 +239,7 @@ def test_kpi_realised_pnl_string_matches_engine_and_has_ratios(
     client: TestClient, engine: Engine
 ) -> None:
     """``/api/kpi`` realised PnL (string) equals the perf service; ratios present."""
+    pytest.importorskip("fynance")  # the seeded curve makes /api/kpi compute fynance ratios
     resp = client.get("/api/kpi")
     assert resp.status_code == 200
     body = resp.json()
@@ -428,6 +429,7 @@ def test_kpi_endpoint_stays_robust_over_a_profitable_curve() -> None:
     whichever fynance can compute on this curve, and ``0.0`` (via ``_safe_ratio``)
     for any it rejects. The point is the read-only KPI view is always 200 + numeric.
     """
+    pytest.importorskip("fynance")  # the profitable curve makes /api/kpi compute fynance ratios
     engine = build_engine(AppConfig.model_validate({"mode": "paper"}))
     perf = engine.perf
     perf.apply(
