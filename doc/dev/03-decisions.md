@@ -6,6 +6,26 @@ rejected approaches as tombstones.
 
 ---
 
+### 2026-06-28 Binance symbol parsing — longest-first quote-suffix table (PR #60)
+
+**Decision.** `domain.instrument.parse_binance_symbol` splits Binance's
+separator-less pair codes (`BTCUSDT`) by matching the **longest** known quote
+asset as a suffix, from a module `_BINANCE_QUOTES` table (`FDUSD/USDT/USDC/…/USD`,
+ordered longest-first), leaving the remainder as the base; an explicit separator
+(`/`, `-`, `_`) short-circuits first. Mirrors `parse_kraken_pair`. Binance uses
+canonical asset codes (no Kraken `X`/`Z` prefixes, no `XBT` alias), so `normalise`
+passes them through and `to_venue_symbol`'s generic `f"{base}{quote}"` branch
+already renders Binance pairs — only the inverse parse was missing.
+
+**Why.** A Binance symbol carries no separator and no embedded base/quote split,
+so the quote must be inferred. A longest-first suffix table disambiguates
+`USDT`/`USD` and `FDUSD`/`USD` deterministically and keeps the domain **pure**
+(no network). **Rejected:** resolving base/quote via a `/exchangeInfo` call
+(impure — couples the domain to I/O); a regex (less explicit, same ambiguity
+risk).
+
+---
+
 ### 2026-06-28 Go-live is an off-by-default opt-in; rewrite feature-complete
 
 **Decision.** Going live is an explicit, documented, **off-by-default** opt-in:

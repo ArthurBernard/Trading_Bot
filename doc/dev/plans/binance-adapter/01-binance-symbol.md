@@ -1,12 +1,12 @@
 ---
 plan: binance-adapter/01-binance-symbol
 kind: leaf
-status: planned
+status: done
 complexity: low
 depends: []
 parallel: false
 branch: feat/binance-symbol
-pr: ""
+pr: "#60"
 ---
 
 # Binance symbol parsing (venue-neutral ↔ Binance pair codes)
