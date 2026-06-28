@@ -1,12 +1,12 @@
 ---
 plan: go-live-hardening/03-go-live-runbook
 kind: leaf
-status: planned
+status: done
 complexity: medium
 depends: [01, 02]
 parallel: false
 branch: feat/go-live-opt-in
-pr: ""
+pr: "#55"
 ---
 
 # Go-live runbook + explicit opt-in guard (live OFF by default)

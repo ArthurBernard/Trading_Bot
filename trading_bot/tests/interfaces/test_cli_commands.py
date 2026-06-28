@@ -142,14 +142,40 @@ def test_run_live_without_confirmation_refuses_no_order() -> None:
     assert "run complete" not in result.output
 
 
-def test_run_live_acknowledged_without_credentials_refuses(
+def test_run_live_without_opt_in_refuses_no_order(
+    tmp_path: pathlib.Path,
+) -> None:
+    """`run --live --yes-i-understand` without ``live_enabled`` refuses, no order.
+
+    The acknowledgement passes the first CLI gate, but the config's off-by-default
+    ``live_enabled`` is unset, so the CLI refuses *before building anything*: a
+    non-zero exit, a message pointing at the runbook, and no order placed.
+    """
+    cfg = tmp_path / "live.yaml"
+    # mode flipped to live by --live, but live_enabled omitted (defaults False).
+    cfg.write_text(
+        "mode: paper\nbrokers:\n  - name: k\n    exchange: kraken\n"
+    )
+
+    result = runner.invoke(
+        app,
+        ["run", "--live", "--yes-i-understand", "-c", str(cfg)],
+    )
+
+    assert result.exit_code != 0
+    assert "refusing to trade live" in result.output
+    assert "09-go-live.md" in result.output
+    assert "run complete" not in result.output
+
+
+def test_run_live_acknowledged_opted_in_without_credentials_refuses(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """`run --live --yes-i-understand` without creds refuses, places no order.
+    """`run --live` opted-in but without creds refuses, places no order.
 
-    The acknowledgement passes the CLI gate, but ``build_engine`` refuses a
-    credential-less live Kraken venue (paper-by-default invariant): a non-zero
-    exit, a clear message, no order placed.
+    The acknowledgement *and* ``live_enabled: true`` pass the CLI gates, but
+    ``build_engine`` refuses a credential-less live Kraken venue
+    (paper-by-default invariant): a non-zero exit, a clear message, no order.
     """
     # Ensure no Kraken credentials are visible.
     monkeypatch.delenv("KRAKEN_API_KEY", raising=False)
@@ -157,7 +183,8 @@ def test_run_live_acknowledged_without_credentials_refuses(
 
     cfg = tmp_path / "live.yaml"
     cfg.write_text(
-        "mode: paper\nbrokers:\n  - name: k\n    exchange: kraken\n"
+        "mode: live\nlive_enabled: true\n"
+        "brokers:\n  - name: k\n    exchange: kraken\n"
     )
 
     result = runner.invoke(

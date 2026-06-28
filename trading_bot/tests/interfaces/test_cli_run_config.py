@@ -154,10 +154,10 @@ def test_run_config_live_without_creds_refuses_no_order(
 ) -> None:
     """`run -c <live-config> --live --yes-i-understand` without creds refuses.
 
-    A config declaring a strategy + a credential-less Kraken venue, run ``--live``
-    with the acknowledgement: the CLI gate passes, but ``build_engine`` (inside
-    ``run_app``) refuses the credential-less live venue — a non-zero exit, a clear
-    message, and no order placed.
+    A config declaring a strategy + a credential-less Kraken venue, opted into
+    live (``live_enabled: true``), run ``--live`` with the acknowledgement: both
+    CLI gates pass, but ``build_engine`` (inside ``run_app``) refuses the
+    credential-less live venue — a non-zero exit, a clear message, no order.
     """
     monkeypatch.delenv("KRAKEN_API_KEY", raising=False)
     monkeypatch.delenv("KRAKEN_API_SECRET", raising=False)
@@ -168,8 +168,11 @@ def test_run_config_live_without_creds_refuses_no_order(
     monkeypatch.setattr(run_app_module, "feed_for", _fake_feed_for_factory())
 
     cfg = tmp_path / "live.yaml"
+    # Opt in (live_enabled) so the CLI's opt-in gate passes and the refusal comes
+    # from the credential check inside build_engine.
     cfg.write_text(
-        "mode: paper\n"
+        "mode: live\n"
+        "live_enabled: true\n"
         "brokers:\n"
         "  - name: k\n"
         "    exchange: kraken\n"

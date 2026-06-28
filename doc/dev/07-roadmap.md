@@ -10,8 +10,15 @@ The single source *index* of open work. Each unchecked item is a candidate for
 > **Full decomposition** — every epic broken into its leaves, branches,
 > complexity and dependencies: [`08-program-plan.md`](08-program-plan.md).
 
-## Later
+**The E1–E10 rewrite is complete.** The hexagonal engine conducts the triptych
+(dccd data + fynance signals + brokers) via the `trading-bot` CLI and a read-only web
+dashboard; paper-by-default, hardened under fault injection, live behind an explicit
+off-by-default opt-in. History in git + `CHANGELOG.md`; see `06-status.md`.
 
-- [ ] **E10 — Go-live hardening & final name.** Live-trading checklist
-  (reconciliation, kill-switch, idempotency proven under fault injection); choose
-  and apply the final project name. _(depends on E8)_
+## Open / deferred (maintainer decisions)
+
+- [ ] **Final project name.** Kept `trading_bot` for now — choose and apply a final
+  name when ready (touches the package/repo/docs).
+- [ ] **Real-key live enablement.** Validate Kraken private endpoints + venue-level
+  order idempotency against a **real-key sandbox**, then flip `live_enabled` — the one
+  remaining prerequisite before real-money trading. See `doc/dev/09-go-live.md`.

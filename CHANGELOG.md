@@ -12,6 +12,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   under **fault injection** (a `FaultyBroker` over `PaperBroker`): reconciliation
   converges after a simulated disconnect (no order duplicated/lost), idempotent submit
   survives retries/ambiguous failures, and the kill-switch cancels + halts mid-run.
+- Go-live runbook (`doc/dev/09-go-live.md`) + a `LiveTradingNotEnabled` opt-in guard:
+  live trading is **off by default** — `mode: live` alone is refused; it requires
+  `AppConfig.live_enabled` **and** credentials. The live adapter is only constructed,
+  never called — **no real order is ever sent**. Completes the **E10 go-live
+  hardening** (the final project name stays deferred).
 - `AppConfig.starting_capital` (default 100000) — wired into `PerformanceService(v0=)`
   so the KPI ratios (Sharpe/Sortino/max-drawdown/Calmar) are **meaningful** (the equity
   curve no longer starts at zero and sign-crosses); CLI `kpi --capital` overrides it.

@@ -12,6 +12,12 @@ Design choices (carried into the ADR):
   trades real money by accident. Switching to ``"live"`` is always an explicit,
   deliberate edit. ``mode`` is a ``Literal["paper", "live"]`` so any other value
   is rejected at validation time.
+* **Live is off by default — a second opt-in gate.** Beyond ``mode``, going live
+  also requires ``live_enabled: true`` (default ``False``). The factory raises
+  :class:`~trading_bot.domain.errors.LiveTradingNotEnabled` for ``mode == "live"``
+  while ``live_enabled`` is ``False``, so flipping ``mode`` alone never reaches a
+  real venue. Enabling live is a documented, deliberate choice — read the go-live
+  runbook (``doc/dev/09-go-live.md``) and provide credentials.
 * **Money stays exact.** Risk limits (:class:`RiskConfig`) and the
   ``starting_capital`` are :class:`~decimal.Decimal`, parsed from ``str``/``int``
   without ever touching ``float`` — pydantic builds a ``Decimal`` directly from
@@ -291,6 +297,14 @@ class AppConfig(BaseModel):
         Execution mode. Defaults to ``"paper"`` so a fresh config never trades
         real money by accident; ``"live"`` must be set deliberately. Any other
         value is rejected.
+    live_enabled : bool, optional
+        The explicit, off-by-default opt-in for live trading. Defaults to
+        ``False``: even with ``mode == "live"`` and credentials present,
+        :func:`~trading_bot.application.service_factory.build_engine` raises
+        :class:`~trading_bot.domain.errors.LiveTradingNotEnabled` until this is
+        set ``True``. Set it ``True`` *and* provide credentials *and* read the
+        go-live runbook (``doc/dev/09-go-live.md``) to trade real money. Paper
+        mode ignores it entirely.
     starting_capital : Decimal, optional
         Initial account capital (quote units) that anchors the equity curve the
         KPI ratios are computed over (``equity = starting_capital + cumulative
@@ -326,6 +340,7 @@ class AppConfig(BaseModel):
     """
 
     mode: Literal["paper", "live"] = "paper"
+    live_enabled: bool = False
     starting_capital: Decimal = Field(default_factory=lambda: money("100000"))
     brokers: list[BrokerConfig] = Field(default_factory=list)
     strategies: list[StrategyConfig] = Field(default_factory=list)

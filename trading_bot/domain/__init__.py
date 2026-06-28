@@ -32,6 +32,7 @@ from trading_bot.domain.errors import (
     ConfigError,
     InstrumentMismatch,
     InsufficientFunds,
+    LiveTradingNotEnabled,
     MissingOrder,
     NoCapability,
     OrderError,
@@ -134,4 +135,5 @@ __all__ = [
     "BrokerError",
     "SignalError",
     "ConfigError",
+    "LiveTradingNotEnabled",
 ]
