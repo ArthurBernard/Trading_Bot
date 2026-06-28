@@ -152,7 +152,10 @@ def build_engine(
     broker = _build_broker(config, bus)
 
     tracker = PositionTracker(event_bus=bus)
-    perf = PerformanceService(event_bus=bus)
+    # Seed the equity curve with the configured starting capital so the KPI
+    # ratios are computed over a strictly-positive account value (the curve does
+    # not sign-cross), making Sharpe/Sortino/Calmar over a real run meaningful.
+    perf = PerformanceService(v0=config.starting_capital, event_bus=bus)
     risk = RiskManager(config.risk, position_tracker=tracker)
     router = OrderRouter(broker, bus, risk_manager=risk)
 

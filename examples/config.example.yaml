@@ -9,6 +9,12 @@
 
 mode: paper
 
+# Starting account capital (quote units) that anchors the equity curve the KPI
+# ratios (Sharpe/Sortino/Calmar) are computed over: equity = starting_capital +
+# cumulative realised PnL. Must be strictly positive (keeps the curve off zero so
+# the ratio math is well-defined). Exact Decimal; defaults to 100000 if omitted.
+starting_capital: "100000"
+
 # Where the engine persists state and finds market data on disk.
 storage:
   db_path: ./var/trading_bot.sqlite   # append-only order/fill history + state

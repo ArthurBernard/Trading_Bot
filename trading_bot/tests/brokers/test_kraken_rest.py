@@ -17,6 +17,7 @@ from __future__ import annotations
 
 from decimal import Decimal
 
+import httpx
 import pytest
 
 from trading_bot.brokers import BrokerError, Capability, KrakenBroker
@@ -29,6 +30,7 @@ from trading_bot.domain import (
     Symbol,
     money,
 )
+from trading_bot.transport import AmbiguousRequestError, AsyncHTTPClient
 from trading_bot.transport.ratelimit import KrakenCallCounter
 
 BTC_USD = Instrument(Symbol("BTC", "USD"), price_precision=1, qty_precision=8)
@@ -66,15 +68,24 @@ def _fast_counter() -> KrakenCallCounter:
     )
 
 
-def _broker(monkeypatch: pytest.MonkeyPatch, *, creds: bool = True) -> KrakenBroker:
-    """Build a broker; with ``creds`` set dummy env credentials (signing runs)."""
+def _broker(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    creds: bool = True,
+    http: AsyncHTTPClient | None = None,
+) -> KrakenBroker:
+    """Build a broker; with ``creds`` set dummy env credentials (signing runs).
+
+    An optional ``http`` client is injected so a test can control retry timing
+    (a recording sleep) and assert how many attempts a call makes.
+    """
     if creds:
         monkeypatch.setenv("KRAKEN_API_KEY", "DUMMY-KEY")
         monkeypatch.setenv("KRAKEN_API_SECRET", _VECTOR_SECRET)
     else:
         monkeypatch.delenv("KRAKEN_API_KEY", raising=False)
         monkeypatch.delenv("KRAKEN_API_SECRET", raising=False)
-    return KrakenBroker(call_counter=_fast_counter())
+    return KrakenBroker(call_counter=_fast_counter(), http=http)
 
 
 # --- signing: the deterministic proof ------------------------------------- #
@@ -366,6 +377,99 @@ async def test_fills_since_ms_passes_start_seconds(
     body = httpx_mock.get_request().content.decode()
     # ms -> seconds for Kraken's ``start`` cursor.
     assert "start=1616492376.594" in body
+
+
+# --- venue-idempotency: AddOrder is sent at most once --------------------- #
+
+
+class _RecordingSleep:
+    """Async ``asyncio.sleep`` stand-in recording every requested backoff delay."""
+
+    def __init__(self) -> None:
+        self.calls: list[float] = []
+
+    async def __call__(self, delay: float) -> None:
+        self.calls.append(delay)
+
+
+async def test_place_order_does_not_retry_on_ambiguous_5xx(
+    httpx_mock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A 5xx on ``AddOrder`` is attempted **once** and raises an ambiguous error.
+
+    Closing gap (c): ``place_order`` posts with ``retry=False``, so a blind retry
+    can never double-submit the (non-idempotent) order. A single 5xx surfaces an
+    :class:`AmbiguousRequestError` telling the caller to reconcile — and exactly
+    one HTTP request is made (no retry, no backoff sleep).
+
+    Only **one** 503 is registered even though the client's ``max_retries`` is 3:
+    a retrying call would request a second (unregistered) response and error;
+    the single registered response being the sole request is itself the proof
+    that the order was attempted at most once.
+    """
+    httpx_mock.add_response(status_code=503, text="upstream down")
+    sleep = _RecordingSleep()
+    http = AsyncHTTPClient(exchange="kraken", max_retries=3, sleep=sleep)
+    broker = _broker(monkeypatch, http=http)
+    order = Order(
+        client_order_id="cid-ambiguous",
+        instrument=BTC_USD,
+        side=OrderSide.BUY,
+        qty=money("1"),
+        type=OrderType.MARKET,
+    )
+
+    with pytest.raises(AmbiguousRequestError, match="reconcile"):
+        await broker.place_order(order)
+
+    # AddOrder attempted at most once — no duplicate submission, no backoff.
+    assert len(httpx_mock.get_requests()) == 1
+    assert sleep.calls == []
+
+
+async def test_place_order_does_not_retry_on_transport_error(
+    httpx_mock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A dropped connection on ``AddOrder`` raises ambiguous, sent once."""
+    httpx_mock.add_exception(httpx.ConnectError("dropped"))
+    sleep = _RecordingSleep()
+    http = AsyncHTTPClient(exchange="kraken", max_retries=3, sleep=sleep)
+    broker = _broker(monkeypatch, http=http)
+    order = Order(
+        client_order_id="cid-drop",
+        instrument=BTC_USD,
+        side=OrderSide.SELL,
+        qty=money("1"),
+        type=OrderType.MARKET,
+    )
+
+    with pytest.raises(AmbiguousRequestError, match="reconcile"):
+        await broker.place_order(order)
+
+    assert len(httpx_mock.get_requests()) == 1
+    assert sleep.calls == []
+
+
+async def test_balances_still_retries_idempotent_read(
+    httpx_mock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An idempotent private read (``Balance``) still retries a transient 5xx.
+
+    The retry opt-out is scoped to ``AddOrder``; the query endpoints keep their
+    bounded retry (a duplicate read is harmless).
+    """
+    httpx_mock.add_response(status_code=503, text="blip")
+    httpx_mock.add_response(json={"error": [], "result": {"ZUSD": "100.0"}})
+    sleep = _RecordingSleep()
+    http = AsyncHTTPClient(exchange="kraken", max_retries=3, sleep=sleep)
+    broker = _broker(monkeypatch, http=http)
+
+    balances = await broker.balances()
+
+    assert balances == {"USD": Decimal("100.0")}
+    # Two attempts (one retried 5xx) → one backoff sleep: the read path is intact.
+    assert len(httpx_mock.get_requests()) == 2
+    assert len(sleep.calls) == 1
 
 
 # --- ticker (public, mocked) ---------------------------------------------- #

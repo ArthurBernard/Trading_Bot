@@ -254,6 +254,68 @@ def test_kpi_renders_realised_pnl(tmp_path: pathlib.Path) -> None:
     assert "Sharpe" in result.output
 
 
+def test_kpi_default_capital_anchors_equity_endpoint(
+    tmp_path: pathlib.Path,
+) -> None:
+    """With no ``--capital`` / ``--config`` the built-in 100000 default anchors.
+
+    The realised PnL is 1000 (buy 2 @ 30000, sell 1 @ 31000), so the equity
+    endpoint is ``100000 + 1000 = 101000``.
+    """
+    db = tmp_path / "kpi.db"
+    _seed_store(db)
+
+    result = runner.invoke(app, ["kpi", "--db", str(db)])
+
+    assert result.exit_code == 0, result.output
+    assert "101000" in result.output  # 100000 default + 1000 realised
+
+
+def test_kpi_explicit_capital_overrides_default(tmp_path: pathlib.Path) -> None:
+    """`--capital` wins: equity endpoint anchors to the flag, not the default."""
+    db = tmp_path / "kpi.db"
+    _seed_store(db)
+
+    result = runner.invoke(app, ["kpi", "--db", str(db), "--capital", "5000"])
+
+    assert result.exit_code == 0, result.output
+    assert "6000" in result.output  # 5000 capital + 1000 realised
+    assert "101000" not in result.output  # not the default anchor
+
+
+def test_kpi_config_starting_capital_used_when_no_capital_flag(
+    tmp_path: pathlib.Path,
+) -> None:
+    """A ``--config`` ``starting_capital`` anchors the curve absent ``--capital``."""
+    db = tmp_path / "kpi.db"
+    _seed_store(db)
+    cfg = tmp_path / "cfg.yml"
+    cfg.write_text("starting_capital: \"200000\"\n")
+
+    result = runner.invoke(app, ["kpi", "--db", str(db), "--config", str(cfg)])
+
+    assert result.exit_code == 0, result.output
+    assert "201000" in result.output  # 200000 config + 1000 realised
+
+
+def test_kpi_capital_flag_beats_config_starting_capital(
+    tmp_path: pathlib.Path,
+) -> None:
+    """Precedence: explicit ``--capital`` > config ``starting_capital``."""
+    db = tmp_path / "kpi.db"
+    _seed_store(db)
+    cfg = tmp_path / "cfg.yml"
+    cfg.write_text("starting_capital: \"200000\"\n")
+
+    result = runner.invoke(
+        app, ["kpi", "--db", str(db), "--config", str(cfg), "--capital", "5000"]
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "6000" in result.output  # 5000 flag wins
+    assert "201000" not in result.output  # not the config anchor
+
+
 # --- _render helpers (no CLI) ---------------------------------------------- #
 
 

@@ -61,6 +61,46 @@ def test_mode_defaults_to_paper() -> None:
     assert cfg.risk.max_position is None
 
 
+def test_starting_capital_defaults_to_100000() -> None:
+    """An unset ``starting_capital`` is the strictly-positive default 100000."""
+    cfg = AppConfig()
+    assert cfg.starting_capital == Decimal("100000")
+    assert isinstance(cfg.starting_capital, Decimal)
+
+
+def test_starting_capital_parses_exact_decimal_without_float_error() -> None:
+    """A YAML/JSON number for ``starting_capital`` keeps its exact meaning."""
+    cfg = AppConfig.model_validate({"starting_capital": 250000.5})
+    assert cfg.starting_capital == Decimal("250000.5")
+    assert isinstance(cfg.starting_capital, Decimal)
+
+
+def test_starting_capital_string_parses_exact() -> None:
+    """A string ``starting_capital`` parses to an exact Decimal."""
+    cfg = AppConfig.model_validate({"starting_capital": "1000000"})
+    assert cfg.starting_capital == Decimal("1000000")
+
+
+def test_zero_starting_capital_raises() -> None:
+    """A zero ``starting_capital`` is rejected (curve would sit at zero)."""
+    with pytest.raises(ValidationError):
+        AppConfig.model_validate({"starting_capital": "0"})
+
+
+def test_negative_starting_capital_raises() -> None:
+    """A negative ``starting_capital`` is rejected."""
+    with pytest.raises(ValidationError):
+        AppConfig.model_validate({"starting_capital": "-1"})
+
+
+def test_starting_capital_round_trips_from_yaml(tmp_path) -> None:
+    """``starting_capital`` survives a YAML round-trip as an exact Decimal."""
+    path = tmp_path / "cap.yml"
+    path.write_text("starting_capital: \"500000\"\n")
+    cfg = AppConfig.from_yaml(path)
+    assert cfg.starting_capital == Decimal("500000")
+
+
 def test_model_validate_realistic_dict() -> None:
     """A realistic dict parses into fully-typed sub-models."""
     cfg = AppConfig.model_validate(REALISTIC)

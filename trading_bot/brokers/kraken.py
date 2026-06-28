@@ -139,6 +139,20 @@ class KrakenBroker(Broker):
     :func:`_sign`. A private call attempted without credentials raises
     :class:`~trading_bot.domain.errors.BrokerError` before any I/O.
 
+    Retry policy — idempotency-aware
+    --------------------------------
+    The transport retries transient failures (5xx / 429 / dropped connections)
+    with backoff. That is safe for the **idempotent** private endpoints — the
+    read/query calls :meth:`balances`, :meth:`open_orders`, :meth:`fills`,
+    :meth:`cancel_order` (cancelling an already-cancelled order is a no-op) — so
+    they keep retrying. It is **not** safe for :meth:`place_order` (``AddOrder``):
+    a blind retry after an *ambiguous* failure (the order landed but the response
+    was lost) would place a **second** order. :meth:`place_order` therefore opts
+    out of retries (``retry=False``); on an ambiguous failure the transport
+    raises :class:`~trading_bot.transport.http.AmbiguousRequestError` and the
+    caller must reconcile
+    (:func:`~trading_bot.application.reconcile.reconcile`) — never blind-retry.
+
     Parameters
     ----------
     api_key : str, optional
@@ -261,13 +275,25 @@ class KrakenBroker(Broker):
         return self._raise_on_error(payload, context=endpoint)
 
     async def _private_post(
-        self, endpoint: str, data: Mapping[str, Any]
+        self, endpoint: str, data: Mapping[str, Any], *, retry: bool = True
     ) -> dict[str, Any]:
         """Sign and POST a private endpoint, returning its ``result`` (or raise).
 
         Builds a fresh ``nonce``-first body, throttles via the Kraken call
         counter at the endpoint's cost, signs with :func:`_sign`, and sends the
         ``API-Key`` / ``API-Sign`` headers. Requires credentials.
+
+        Parameters
+        ----------
+        endpoint : str
+            The private endpoint name (e.g. ``"Balance"``, ``"AddOrder"``).
+        data : mapping
+            The endpoint body (the ``nonce`` is prepended here).
+        retry : bool, default True
+            Forwarded to :meth:`~trading_bot.transport.http.AsyncHTTPClient.post`.
+            ``True`` for **idempotent** endpoints (queries/reads — a duplicate is
+            harmless); ``False`` for the **non-idempotent** ``AddOrder`` so a
+            blind retry can never double-submit (see :meth:`place_order`).
         """
         self._require_credentials()
         path = f"{_PRIVATE}/{endpoint}"
@@ -280,7 +306,9 @@ class KrakenBroker(Broker):
         await self._counter.acquire_method(endpoint)
         url = f"{_API_BASE}{path}"
         async with self._http as client:
-            payload = await client.post(url, data=body, headers=headers)
+            payload = await client.post(
+                url, data=body, headers=headers, retry=retry
+            )
         return self._raise_on_error(payload, context=endpoint)
 
     # --- public endpoints -------------------------------------------------- #
@@ -389,6 +417,22 @@ class KrakenBroker(Broker):
         stop-loss from :class:`OrderType`, ``volume``=qty, ``pair`` from the
         instrument, ``price``=``limit_price`` (limit) or ``stop_price`` (stop).
 
+        Venue-idempotency
+        -----------------
+        ``AddOrder`` is **non-idempotent** — a second submission places a second
+        order. So this call is sent **at most once** (``retry=False``): the
+        transport will not blindly retry it on an ambiguous transient failure (a
+        5xx / dropped connection after the order may already have landed).
+        Instead it raises
+        :class:`~trading_bot.transport.http.AmbiguousRequestError`, signalling
+        the caller to reconcile
+        (:func:`~trading_bot.application.reconcile.reconcile` — refetch open
+        orders + fills) and decide from the venue's actual state — **never** to
+        blind-retry and risk a duplicate. (Engine-side, the
+        :class:`~trading_bot.application.order_router.OrderRouter`'s
+        client-order-id dedup also guards against re-submitting the *same* logical
+        order; this guard closes the remaining transport-level retry window.)
+
         Parameters
         ----------
         order : Order
@@ -404,9 +448,15 @@ class KrakenBroker(Broker):
         BrokerError
             Without credentials, on a Kraken error, or if no ``txid`` is
             returned.
+        AmbiguousRequestError
+            On an ambiguous transient failure — the order may have landed;
+            reconcile (:func:`~trading_bot.application.reconcile.reconcile`)
+            before any retry.
 
         """
-        result = await self._private_post("AddOrder", self._add_order_params(order))
+        result = await self._private_post(
+            "AddOrder", self._add_order_params(order), retry=False
+        )
         txids = result.get("txid") or []
         if not txids:
             raise BrokerError(
@@ -424,9 +474,10 @@ class KrakenBroker(Broker):
         The domain ``client_order_id`` is **not** forwarded to Kraken here:
         Kraken's ``cl_ord_id`` requires a UUID and ``userref`` is a 32-bit int,
         neither of which fits an arbitrary id. Idempotency is enforced
-        engine-side by the ``OrderRouter`` (client-order-id dedup); venue-level
-        idempotency — and *not* blindly retrying a non-idempotent ``AddOrder``
-        POST — is a deferred go-live hardening item (see ``doc/dev/06-status.md``).
+        engine-side by the ``OrderRouter`` (client-order-id dedup); the
+        transport-level half — *not* blindly retrying a non-idempotent
+        ``AddOrder`` POST on an ambiguous failure — is enforced by
+        :meth:`place_order` (``retry=False``; reconcile-before-retry).
         """
         params: dict[str, str] = {
             "pair": order.instrument.symbol.to_venue_symbol(self.name),

@@ -32,7 +32,7 @@ explicitly turned on, with a real-key sandbox the only thing left to do later).
 ## Leaf checklist
 
 - [x] 01 fault-injection — test/go-live-hardening — high
-- [ ] 02 close-known-gaps — feat/close-known-gaps — high
+- [x] 02 close-known-gaps — feat/close-known-gaps — high
 - [ ] 03 go-live-runbook — feat/go-live-opt-in — medium (depends on 01, 02)
 
 ## Dependencies

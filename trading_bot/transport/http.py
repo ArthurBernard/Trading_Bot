@@ -9,6 +9,19 @@ domain business logic — :class:`HTTPError` is a transport-local error type.
 Mirrors ``dccd.transport.http.AsyncHTTPClient``; adapted for execution by adding
 :meth:`AsyncHTTPClient.post` (order placement is a POST) and an injectable
 ``sleep`` seam so retry timing is testable without real waits.
+
+Idempotency of POST retries
+---------------------------
+A blind retry is safe only for an **idempotent** request — one a duplicate of
+which has no extra effect. GETs and idempotent POSTs (balance/open-orders/
+trade-history queries) retry freely. But a non-idempotent POST — placing an
+order — must **not** be blindly retried: after an *ambiguous* failure (the order
+landed at the venue but the response was lost to a 5xx or a dropped connection),
+a retry would submit a **second** order. :meth:`AsyncHTTPClient.post` therefore
+takes a ``retry`` flag; with ``retry=False`` the request is sent **at most
+once** and an ambiguous failure raises :class:`AmbiguousRequestError` telling the
+caller to *reconcile before retrying* — never to blind-retry. See
+:meth:`trading_bot.brokers.kraken.KrakenBroker.place_order`.
 """
 
 from __future__ import annotations
@@ -22,7 +35,7 @@ import httpx
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable, Mapping
 
-__all__ = ["AsyncHTTPClient", "HTTPError"]
+__all__ = ["AsyncHTTPClient", "AmbiguousRequestError", "HTTPError"]
 
 logger = logging.getLogger(__name__)
 
@@ -52,6 +65,36 @@ class HTTPError(Exception):
         self.url = url
         self.body = body
         super().__init__(f"HTTP {status} from {url}: {body[:200]}")
+
+
+class AmbiguousRequestError(Exception):
+    """A non-retryable request failed *ambiguously* — outcome unknown.
+
+    Raised by :meth:`AsyncHTTPClient.post` with ``retry=False`` when a single
+    attempt fails on a 5xx / 429 / transport error: the request may or may not
+    have taken effect at the server (e.g. an order that landed but whose response
+    was lost). Because the request is non-idempotent, the client refuses to
+    retry — a retry could duplicate the effect — and surfaces this error instead.
+    The caller must **reconcile** the server's actual state before deciding
+    whether to retry; it must **never** blind-retry.
+
+    Parameters
+    ----------
+    url : str
+        Target URL of the ambiguous request.
+    reason : str
+        Human-readable description of the failure that made the outcome
+        ambiguous (status code or transport error).
+    """
+
+    def __init__(self, url: str, reason: str) -> None:
+        self.url = url
+        self.reason = reason
+        super().__init__(
+            f"ambiguous non-idempotent request to {url}: {reason}; "
+            "the request may have taken effect — reconcile before retrying "
+            "(never blind-retry a non-idempotent request)"
+        )
 
 
 class _Limiter(Protocol):
@@ -185,8 +228,9 @@ class AsyncHTTPClient:
         data: Mapping[str, Any] | None = None,
         json: Any | None = None,
         headers: Mapping[str, str] | None = None,
+        retry: bool = True,
     ) -> Any:
-        """Perform a POST request with retry/backoff. Returns parsed JSON.
+        """Perform a POST request. Returns parsed JSON.
 
         Parameters
         ----------
@@ -198,6 +242,16 @@ class AsyncHTTPClient:
             JSON body (mutually exclusive with *data*, per httpx).
         headers : mapping, optional
             Per-request headers, merged over the client defaults.
+        retry : bool, default True
+            Whether transient failures (5xx / 429 / transport errors) may be
+            retried with backoff. ``True`` (the default) is for **idempotent**
+            POSTs (balance / open-orders / trade-history queries). Pass
+            ``False`` for a **non-idempotent** POST (placing an order): the
+            request is then sent **at most once** and an ambiguous transient
+            failure raises :class:`AmbiguousRequestError` rather than risking a
+            duplicate by retrying. A definite 4xx rejection still raises
+            :class:`HTTPError` either way (it did not take effect, nothing to
+            reconcile).
 
         Returns
         -------
@@ -207,10 +261,14 @@ class AsyncHTTPClient:
         Raises
         ------
         HTTPError
-            On a non-retryable 4xx, or once retries are exhausted.
+            On a non-retryable 4xx, or (when ``retry=True``) once retries are
+            exhausted.
+        AmbiguousRequestError
+            When ``retry=False`` and the single attempt fails on a 5xx / 429 /
+            transport error — the outcome is unknown; reconcile before retrying.
         """
         return await self._request(
-            "POST", url, data=data, json=json, headers=headers
+            "POST", url, data=data, json=json, headers=headers, retry=retry
         )
 
     async def _request(
@@ -222,16 +280,28 @@ class AsyncHTTPClient:
         data: Mapping[str, Any] | None = None,
         json: Any | None = None,
         headers: Mapping[str, str] | None = None,
+        retry: bool = True,
     ) -> Any:
-        """Shared retry/backoff loop for GET and POST."""
+        """Shared request loop for GET and POST.
+
+        With ``retry=True`` (the default) transient failures (5xx / 429 /
+        transport) are retried with backoff up to ``max_retries``. With
+        ``retry=False`` the request is attempted **once**; a transient failure
+        then raises :class:`AmbiguousRequestError` instead of retrying, so a
+        non-idempotent request is never duplicated.
+        """
         client = self._client
         if client is None:
             raise RuntimeError(
                 "AsyncHTTPClient must be used as an async context manager"
             )
 
+        # A non-retrying request is attempted exactly once; the retrying path
+        # keeps its bounded-retry budget unchanged.
+        max_attempts = self._max_retries if retry else 1
+
         last_exc: Exception | None = None
-        for attempt in range(self._max_retries):
+        for attempt in range(max_attempts):
             try:
                 # Proactive throttle: wait for a token before each outbound
                 # request so concurrent operations on the same exchange stay
@@ -250,6 +320,10 @@ class AsyncHTTPClient:
                 )
 
                 if resp.status_code == 429:
+                    if not retry:
+                        raise AmbiguousRequestError(
+                            url, f"HTTP 429 (rate-limited): {resp.text[:200]}"
+                        )
                     wait = self._retry_after(resp, attempt)
                     logger.warning(
                         "Rate-limited by %s, sleeping %.1fs", url, wait
@@ -259,6 +333,10 @@ class AsyncHTTPClient:
                     continue
 
                 if resp.status_code >= 500:
+                    if not retry:
+                        raise AmbiguousRequestError(
+                            url, f"HTTP {resp.status_code}: {resp.text[:200]}"
+                        )
                     wait = self._backoff(attempt)
                     logger.warning(
                         "HTTP %d from %s, retry in %.1fs",
@@ -276,6 +354,12 @@ class AsyncHTTPClient:
                 return resp.json()
 
             except httpx.TransportError as exc:
+                if not retry:
+                    # The request may have reached the server before the
+                    # connection dropped — outcome unknown. Refuse to retry.
+                    raise AmbiguousRequestError(
+                        url, f"transport error: {exc}"
+                    ) from exc
                 wait = self._backoff(attempt)
                 logger.warning(
                     "Transport error %s (attempt %d/%d), retry in %.1fs",

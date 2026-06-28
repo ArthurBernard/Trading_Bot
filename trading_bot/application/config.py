@@ -12,10 +12,15 @@ Design choices (carried into the ADR):
   trades real money by accident. Switching to ``"live"`` is always an explicit,
   deliberate edit. ``mode`` is a ``Literal["paper", "live"]`` so any other value
   is rejected at validation time.
-* **Money stays exact.** Risk limits (:class:`RiskConfig`) are
-  :class:`~decimal.Decimal`, parsed from ``str``/``int`` without ever touching
-  ``float`` — pydantic builds a ``Decimal`` directly from the YAML scalar, so a
-  value like ``0.1`` keeps its exact decimal meaning.
+* **Money stays exact.** Risk limits (:class:`RiskConfig`) and the
+  ``starting_capital`` are :class:`~decimal.Decimal`, parsed from ``str``/``int``
+  without ever touching ``float`` — pydantic builds a ``Decimal`` directly from
+  the YAML scalar, so a value like ``0.1`` keeps its exact decimal meaning.
+* **KPIs anchor to a real account value.** ``starting_capital`` seeds the
+  performance service's equity curve (``equity = starting_capital + cumulative
+  realised PnL``). Defaulting it to a strictly-positive ``100000`` keeps the
+  curve from crossing zero, so the KPI ratios (Sharpe/Sortino/Calmar) computed
+  over a real run are statistically meaningful rather than degenerate.
 * **Skeletons that grow.** :class:`StrategyConfig` and :class:`RiskConfig` are
   intentionally minimal here (just enough to parse a realistic file); they gain
   fields in later leaves (E5 / E8). :class:`BrokerConfig` carries only the
@@ -34,6 +39,8 @@ from typing import Any, Literal
 
 import yaml
 from pydantic import BaseModel, Field, field_validator
+
+from trading_bot.domain.money import money
 
 __all__ = [
     "BrokerConfig",
@@ -284,6 +291,15 @@ class AppConfig(BaseModel):
         Execution mode. Defaults to ``"paper"`` so a fresh config never trades
         real money by accident; ``"live"`` must be set deliberately. Any other
         value is rejected.
+    starting_capital : Decimal, optional
+        Initial account capital (quote units) that anchors the equity curve the
+        KPI ratios are computed over (``equity = starting_capital + cumulative
+        realised PnL``). Parsed exactly from a YAML scalar (``str``/``int``)
+        without touching ``float``. Must be **strictly positive** so the curve
+        stays above zero and the ratio math is well-defined. Defaults to
+        ``Decimal("100000")``. Wired into the engine's
+        :class:`~trading_bot.application.performance_service.PerformanceService`
+        (``v0``) by :func:`~trading_bot.application.service_factory.build_engine`.
     brokers : list of BrokerConfig, optional
         The brokers to wire up. Empty by default.
     strategies : list of StrategyConfig, optional
@@ -310,10 +326,25 @@ class AppConfig(BaseModel):
     """
 
     mode: Literal["paper", "live"] = "paper"
+    starting_capital: Decimal = Field(default_factory=lambda: money("100000"))
     brokers: list[BrokerConfig] = Field(default_factory=list)
     strategies: list[StrategyConfig] = Field(default_factory=list)
     risk: RiskConfig = Field(default_factory=RiskConfig)
     storage: StorageConfig = Field(default_factory=StorageConfig)
+
+    @field_validator("starting_capital")
+    @classmethod
+    def _positive_capital(cls, v: Decimal) -> Decimal:
+        """Reject a non-positive ``starting_capital`` (zero too).
+
+        The equity curve the KPI ratios are computed over is
+        ``starting_capital + cumulative realised PnL``; a non-positive anchor
+        would let the curve sit at / cross zero, where the ratio estimators are
+        undefined.
+        """
+        if v <= 0:
+            raise ValueError(f"starting_capital must be positive, got {v}")
+        return v
 
     @classmethod
     def from_yaml(cls, path: str | pathlib.Path) -> AppConfig:

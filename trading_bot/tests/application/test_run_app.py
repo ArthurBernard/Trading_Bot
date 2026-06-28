@@ -371,6 +371,84 @@ def test_build_runners_bad_builtin_params_is_config_error() -> None:
         build_runners(config, engine, dccd_client=_FakeDccdClient({}))
 
 
+# --- same-instrument commingling: detect & reject -------------------------- #
+
+
+def _same_symbol_config(second_symbol: str = "BTC/USD") -> AppConfig:
+    """A 2-strategy config where both strategies trade the same instrument."""
+    return AppConfig.model_validate(
+        {
+            "mode": "paper",
+            "strategies": [
+                {
+                    "name": "btc-fast",
+                    "symbol": "BTC/USD",
+                    "data": {"exchange": "kraken", "span": 60},
+                    "signal": {"ref": "ma_crossover", "params": {"fast": 3, "slow": 6}},
+                    "reference_qty": "1",
+                },
+                {
+                    "name": "btc-slow",
+                    "symbol": second_symbol,
+                    "data": {"exchange": "kraken", "span": 60},
+                    "signal": {"ref": "ma_crossover", "params": {"fast": 4, "slow": 8}},
+                    "reference_qty": "1",
+                },
+            ],
+        }
+    )
+
+
+def test_build_runners_same_symbol_is_config_error() -> None:
+    """Two strategies on the same symbol → a clear :class:`ConfigError`.
+
+    The shared per-instrument tracker / performance view has no per-strategy
+    attribution, so two strategies on one instrument would commingle. The config
+    is rejected up front, naming the duplicated symbol and both strategies.
+    """
+    config = _same_symbol_config()
+    engine = build_engine(config, db_path=None)
+    with pytest.raises(ConfigError) as exc_info:
+        build_runners(config, engine, dccd_client=_FakeDccdClient({}))
+
+    msg = str(exc_info.value)
+    assert "BTC/USD" in msg
+    assert "btc-fast" in msg
+    assert "btc-slow" in msg
+    assert "commingle" in msg
+
+
+def test_build_runners_equivalent_symbol_spellings_commingle() -> None:
+    """Two spellings of the *same* instrument (BTC/USD vs XBT/USD) are caught.
+
+    Detection is by the normalised :class:`Symbol`, not the raw string, so a
+    Kraken-style ``XBT`` alias of ``BTC`` does not slip past the guard.
+    """
+    config = _same_symbol_config(second_symbol="XBT/USD")
+    engine = build_engine(config, db_path=None)
+    with pytest.raises(ConfigError, match="commingle"):
+        build_runners(config, engine, dccd_client=_FakeDccdClient({}))
+
+
+def test_run_app_same_symbol_rejected() -> None:
+    """`run_app` surfaces the same-symbol commingling as a :class:`ConfigError`."""
+    import asyncio
+
+    config = _same_symbol_config()
+    with pytest.raises(ConfigError, match="commingle"):
+        asyncio.run(run_app(config, dccd_client=_FakeDccdClient({})))
+
+
+def test_build_runners_distinct_symbols_build_fine() -> None:
+    """Distinct symbols build a runner each — the guard only rejects duplicates."""
+    config = _two_strategy_config()
+    engine = build_engine(config, db_path=None)
+    runners = build_runners(config, engine, dccd_client=_fake_client_for(config))
+    assert len(runners) == 2
+    instruments = {r.strategy.instrument for r in runners}
+    assert instruments == {BTC_USD, ETH_USD}
+
+
 def test_run_app_empty_config_runs_no_strategies() -> None:
     """A config with no strategies yields an empty, well-formed report."""
     import asyncio

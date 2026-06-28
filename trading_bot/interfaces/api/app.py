@@ -61,6 +61,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import math
 from collections.abc import Callable
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any
@@ -199,19 +200,32 @@ def _fill_dict(fill: Fill) -> dict[str, Any]:
 def _safe_ratio(compute: Callable[[], float]) -> float:
     """Evaluate a KPI ratio, returning ``0.0`` when it is undefined on this curve.
 
-    The fynance-backed ratio estimators reject some real equity curves the
-    fill-driven :class:`~trading_bot.application.performance_service.
-    PerformanceService` produces: with the factory's default ``v0 = 0`` the
-    equity series starts at (or crosses) zero the moment a fee is charged, and
-    fynance raises a :class:`ValueError` ("initial value cannot be null" / "must
-    be of the same sign"). A read-only KPI view must not turn that into a 500;
-    instead it reports ``0.0`` — the same "undefined estimator → 0.0" convention
-    the service already uses for a too-short series.
+    The fynance-backed ratio estimators can both *raise* and *return a
+    non-finite value* on some real equity curves the fill-driven
+    :class:`~trading_bot.application.performance_service.PerformanceService`
+    produces:
+
+    * they **raise** a :class:`ValueError` when the curve is degenerate (e.g. a
+      curve that starts at / crosses zero — fynance's "initial value cannot be
+      null" / "must be of the same sign");
+    * they **return ``inf`` / ``nan``** when a ratio's denominator is zero on an
+      otherwise valid curve — e.g. a *monotonically rising* curve has zero
+      drawdown, so Calmar (return / max-drawdown) and Sortino (excess /
+      downside-deviation) are ``inf``. With a strictly-positive
+      ``starting_capital`` (the config default) this is now the *common* shape
+      for a winning run, where the old ``v0 = 0`` curve would instead have made
+      fynance raise.
+
+    A read-only KPI view must stay 200 + JSON-numeric in both cases (a bare
+    ``inf`` / ``nan`` is not valid JSON and serializes to ``null``). So this
+    reports ``0.0`` for a raised *and* a non-finite ratio — the same "undefined
+    estimator → 0.0" convention the service uses for a too-short series.
     """
     try:
-        return compute()
+        value = compute()
     except (ValueError, ZeroDivisionError, ArithmeticError):
         return 0.0
+    return value if math.isfinite(value) else 0.0
 
 
 def _event_dict(event: Event) -> dict[str, Any]:

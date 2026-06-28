@@ -1,12 +1,12 @@
 ---
 plan: go-live-hardening/02-close-known-gaps
 kind: leaf
-status: planned
+status: done
 complexity: high
 depends: []
 parallel: false
 branch: feat/close-known-gaps
-pr: ""
+pr: "#54"
 ---
 
 # Close the safe-to-fix known gaps
