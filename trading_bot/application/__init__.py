@@ -128,6 +128,12 @@ from trading_bot.application.events import (
 from trading_bot.application.orchestrator import Orchestrator, RunnerGroupError
 from trading_bot.application.order_router import OrderRouter
 from trading_bot.application.performance_service import PerformanceService
+from trading_bot.application.portfolio import (
+    PortfolioSignalFn,
+    PortfolioStrategy,
+    load_portfolio_signal,
+    weights_to_signals,
+)
 from trading_bot.application.position_tracker import PositionTracker
 from trading_bot.application.reconcile import ReconResult, reconcile
 from trading_bot.application.risk import RiskManager
@@ -180,6 +186,11 @@ __all__ = [
     "SignalFn",
     "load_strategy",
     "ma_crossover_signal",
+    # portfolio (multi-asset signal)
+    "PortfolioStrategy",
+    "PortfolioSignalFn",
+    "weights_to_signals",
+    "load_portfolio_signal",
     # strategy runner
     "StrategyRunner",
     "OrderFactory",

@@ -8,6 +8,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `application.portfolio` — the multi-asset `PortfolioSignalFn` contract
+  (`(asof_ms, frames) -> {Symbol: weight}`, weight = signed fraction of capital),
+  a frozen `PortfolioStrategy` (universe + signal + capital + optional gross cap),
+  a pure `weights_to_signals` sizer (`qty = weight × capital / price` →
+  `Signal.target_qty`, exact `Decimal`), and a safe by-reference
+  `load_portfolio_signal` loader. Groundwork for native multi-asset strategies (LS1). (#63)
+
 ### Changed
 
 ### Fixed
