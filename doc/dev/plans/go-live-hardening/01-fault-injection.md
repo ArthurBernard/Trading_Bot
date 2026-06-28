@@ -1,7 +1,7 @@
 ---
 plan: go-live-hardening/01-fault-injection
 kind: leaf
-status: planned
+status: done
 complexity: high
 depends: []
 parallel: false
