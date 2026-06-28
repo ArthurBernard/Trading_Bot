@@ -17,7 +17,6 @@ off-by-default opt-in. History in git + `CHANGELOG.md`; see `06-status.md`.
 
 ## Active epics (post-0.2.0)
 
-- [ ] **E11 — Binance adapter (2nd live venue).** `BinanceBroker` REST behind the `Broker` port (HMAC-SHA256 signing vs Binance's vector; orders/balances/fills/ticker; `newClientOrderId` idempotency; testnet-capable), wired into `service_factory`. Public market data key-free; private path proven by mocks + an opt-in Binance **testnet** E2E. WS deferred.
 - [ ] **Multi-asset / portfolio strategy unit** (signalé par `fynance-research`). Today a
   `SignalFn` is `(bars) -> Signal` for **one** instrument; the first validated research
   strategy, **LS1**, is a **multi-asset long/short book** (a *vector* of target weights over

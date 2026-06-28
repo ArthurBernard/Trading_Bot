@@ -1,7 +1,7 @@
 ---
 plan: binance-adapter
 kind: global
-status: planning
+status: done
 roadmap: "- [ ] **E11 — Binance adapter (2nd live venue).** `BinanceBroker` REST behind the `Broker` port (HMAC-SHA256 signing vs Binance's vector; orders/balances/fills/ticker; `newClientOrderId` idempotency; testnet-capable), wired into `service_factory`. Public market data key-free; private path proven by mocks + an opt-in Binance **testnet** E2E. WS deferred."
 release_on_done: false
 ---
@@ -45,7 +45,7 @@ Binance (mainnet *or* testnet) sits behind the same `live_enabled` opt-in gate �
 ## Leaf checklist
 
 - [x] 01 binance-symbol — feat/binance-symbol — low (→ opus)
-- [ ] 02 binance-rest — feat/binance-rest — high (→ opus) (depends on 01)
+- [x] 02 binance-rest — feat/binance-rest — high (→ opus) (depends on 01)
 
 ## Dependencies
 

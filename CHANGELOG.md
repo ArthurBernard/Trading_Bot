@@ -8,6 +8,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `brokers.BinanceBroker` — Binance spot REST adapter behind the `Broker` port
+  (HMAC-SHA256 signed orders/balances/fills/ticker; public market data key-free),
+  the **2nd live venue**. `newClientOrderId` carries the client-order-id for
+  venue-level idempotency; the non-idempotent order POST stays `retry=False`
+  (reconcile-on-ambiguous). Composite venue-order-id `"<SYMBOL>:<orderId>"` lets
+  the symbol-free port drive Binance's symbol-scoped cancel; `fills()` queries
+  `myTrades` over a configured symbol set. **Testnet-capable** (configurable base
+  URL) with an opt-in `network` E2E doing a real place→read→cancel round-trip on
+  `testnet.binance.vision`. Wired into `service_factory` (`binance` ∈ live venues);
+  paper stays the default, live behind the existing off-by-default opt-in. Completes
+  **E11**. (#61)
 - `domain.instrument.parse_binance_symbol` — parse Binance separator-less pair codes
   (`BTCUSDT` → `BTC/USDT`) into canonical `Symbol`s via a longest-first quote-suffix
   table; groundwork for the Binance adapter (E11). (#60)
@@ -26,6 +37,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `service_factory` recognises `binance` as a live venue (`_LIVE_VENUES`); a `binance`
+  live config without credentials raises `BrokerError` (never a silent paper fallback).
+- `transport.AsyncHTTPClient.request(method, …)` — a thin public seam over the shared
+  request loop for arbitrary verbs (Binance signs `DELETE /api/v3/order` for cancels),
+  with the same `retry`/`AmbiguousRequestError` semantics as `post`. (#61)
 - `run_app`/`build_runners` now **reject** two strategies declaring the same instrument
   (a `ConfigError`, catching aliases like `XBT/USD`≡`BTC/USD`) — the shared per-instrument
   tracker has no per-strategy attribution, so commingling is refused up front.

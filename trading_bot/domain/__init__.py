@@ -46,6 +46,7 @@ from trading_bot.domain.instrument import (
     Instrument,
     Symbol,
     normalise,
+    parse_binance_symbol,
     parse_kraken_pair,
 )
 from trading_bot.domain.money import (
@@ -96,6 +97,7 @@ __all__ = [
     "Instrument",
     "normalise",
     "parse_kraken_pair",
+    "parse_binance_symbol",
     # order
     "Order",
     "OrderSide",

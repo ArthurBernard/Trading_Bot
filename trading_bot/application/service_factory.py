@@ -50,6 +50,7 @@ from __future__ import annotations
 
 import pathlib
 from dataclasses import dataclass
+from typing import Protocol, runtime_checkable
 
 from trading_bot.application.config import AppConfig, BrokerConfig
 from trading_bot.application.events import EventBus
@@ -58,6 +59,7 @@ from trading_bot.application.performance_service import PerformanceService
 from trading_bot.application.position_tracker import PositionTracker
 from trading_bot.application.risk import RiskManager
 from trading_bot.brokers.base import Broker
+from trading_bot.brokers.binance import BinanceBroker
 from trading_bot.brokers.kraken import KrakenBroker
 from trading_bot.brokers.paper import PaperBroker
 from trading_bot.domain.errors import BrokerError, LiveTradingNotEnabled
@@ -66,11 +68,30 @@ from trading_bot.storage.sqlite_store import SqliteStore
 __all__ = ["Engine", "build_engine"]
 
 #: Venue keys recognised as live (non-simulated) adapters.
-_LIVE_VENUES = ("kraken",)
+_LIVE_VENUES = ("kraken", "binance")
 #: The venue key for the in-process simulator.
 _PAPER_VENUE = "paper"
 #: The go-live runbook the live-opt-in refusals point users at.
 _RUNBOOK = "doc/dev/09-go-live.md"
+
+
+@runtime_checkable
+class _LiveBroker(Broker, Protocol):
+    """A live venue adapter: a :class:`Broker` that also reports credentials.
+
+    The credential gate in :func:`_build_broker` consults ``has_credentials``,
+    which is *not* part of the venue-neutral :class:`Broker` port (the simulator
+    has no credentials concept). Every live adapter
+    (:class:`~trading_bot.brokers.kraken.KrakenBroker`,
+    :class:`~trading_bot.brokers.binance.BinanceBroker`) exposes it, so this
+    narrow structural extension of the port lets the factory check it (and return
+    a value still assignable to :class:`Broker`) without widening the port itself.
+    """
+
+    @property
+    def has_credentials(self) -> bool:
+        """Whether the adapter holds both API key and secret."""
+        ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -260,11 +281,16 @@ def _selected_venue(config: AppConfig) -> str:
     return first.exchange.lower()
 
 
-def _build_live_venue(venue: str) -> KrakenBroker:
+def _build_live_venue(venue: str) -> _LiveBroker:
     """Construct the live adapter for ``venue`` (reads credentials from env)."""
     if venue == "kraken":
         # KrakenBroker reads KRAKEN_API_KEY / KRAKEN_API_SECRET from the
         # environment; ``has_credentials`` reports whether both are present.
         return KrakenBroker()
+    if venue == "binance":
+        # BinanceBroker reads BINANCE_API_KEY / BINANCE_API_SECRET (and the
+        # optional BINANCE_API_BASE testnet toggle) from the environment;
+        # ``has_credentials`` reports whether both key + secret are present.
+        return BinanceBroker()
     # Unreachable: callers gate on ``_LIVE_VENUES`` first. Defensive only.
     raise BrokerError(f"no live adapter for venue {venue!r}")

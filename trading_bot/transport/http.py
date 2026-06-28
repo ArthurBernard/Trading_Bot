@@ -271,6 +271,55 @@ class AsyncHTTPClient:
             "POST", url, data=data, json=json, headers=headers, retry=retry
         )
 
+    async def request(
+        self,
+        method: str,
+        url: str,
+        *,
+        params: Mapping[str, Any] | None = None,
+        headers: Mapping[str, str] | None = None,
+        retry: bool = True,
+    ) -> Any:
+        """Perform an arbitrary-verb request (GET / POST / DELETE / ...).
+
+        A thin public seam over the shared request loop for venues whose signed
+        endpoints use verbs beyond GET/POST (e.g. Binance signs ``DELETE
+        /api/v3/order`` for cancels, carrying all params on the query string and
+        an empty body). The same retry / ambiguity semantics as :meth:`post`
+        apply: ``retry=True`` for idempotent calls, ``retry=False`` for a
+        non-idempotent one (an ambiguous transient failure then raises
+        :class:`AmbiguousRequestError` instead of risking a duplicate).
+
+        Parameters
+        ----------
+        method : str
+            The HTTP verb (``"GET"``, ``"POST"``, ``"DELETE"``, ...).
+        url : str
+            Request URL (or path, if ``base_url`` is set).
+        params : mapping, optional
+            Query-string parameters.
+        headers : mapping, optional
+            Per-request headers, merged over the client defaults.
+        retry : bool, default True
+            Whether transient failures may be retried (see :meth:`post`).
+
+        Returns
+        -------
+        Any
+            The parsed JSON body of the 2xx response.
+
+        Raises
+        ------
+        HTTPError
+            On a non-retryable 4xx, or (when ``retry=True``) once retries are
+            exhausted.
+        AmbiguousRequestError
+            When ``retry=False`` and the single attempt fails ambiguously.
+        """
+        return await self._request(
+            method, url, params=params, headers=headers, retry=retry
+        )
+
     async def _request(
         self,
         method: str,
