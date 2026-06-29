@@ -23,7 +23,7 @@ from decimal import Decimal
 import httpx
 import pytest
 
-from trading_bot.application.config import AppConfig, BrokerConfig
+from trading_bot.application.config import AppConfig, BrokerConfig, RiskConfig
 from trading_bot.application.service_factory import build_engine
 from trading_bot.brokers import BinanceBroker, BrokerError, Capability
 from trading_bot.brokers.binance import TESTNET_API_BASE, _sign
@@ -734,6 +734,12 @@ def test_factory_live_binance_with_creds_builds_adapter_no_order(
         mode="live",
         live_enabled=True,
         brokers=[BrokerConfig(name="binance-main", exchange="binance")],
+        # A real-money live config must carry explicit risk limits.
+        risk=RiskConfig(
+            max_order=money("1"),
+            max_position=money("5"),
+            max_daily_loss=money("1000"),
+        ),
     )
 
     engine = build_engine(cfg)

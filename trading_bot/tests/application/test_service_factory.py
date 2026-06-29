@@ -247,12 +247,20 @@ def test_live_enabled_with_credentials_builds_live_broker_no_order(
     is the whole point of the off-by-default opt-in: enabling it constructs the
     adapter without trading.
     """
+    from trading_bot.application.config import RiskConfig
+
     monkeypatch.setenv("KRAKEN_API_KEY", "k")
     monkeypatch.setenv("KRAKEN_API_SECRET", "c2VjcmV0")  # base64("secret")
     cfg = AppConfig(
         mode="live",
         live_enabled=True,
         brokers=[BrokerConfig(name="kraken-main", exchange="kraken")],
+        # A real-money live config must carry explicit risk limits (see below).
+        risk=RiskConfig(
+            max_order=money("1"),
+            max_position=money("5"),
+            max_daily_loss=money("1000"),
+        ),
     )
 
     engine = build_engine(cfg)
@@ -260,6 +268,49 @@ def test_live_enabled_with_credentials_builds_live_broker_no_order(
     # so no order / no network call was ever made.
     assert isinstance(engine.broker, KrakenBroker)
     assert engine.broker.has_credentials
+
+
+def test_live_without_risk_limits_refuses(monkeypatch) -> None:
+    """A real-money live config with no risk limits refuses (BrokerError).
+
+    `RiskConfig` defaults every limit to None (unconstrained); going live with an
+    all-None config would trade with no size/exposure/daily-loss cap. With opt-in
+    + credentials present, `build_engine` refuses and names the missing limits —
+    *after* the credential gate (so this is the real-money completeness check).
+    """
+    monkeypatch.setenv("KRAKEN_API_KEY", "k")
+    monkeypatch.setenv("KRAKEN_API_SECRET", "c2VjcmV0")
+    cfg = AppConfig(
+        mode="live",
+        live_enabled=True,
+        brokers=[BrokerConfig(name="kraken-main", exchange="kraken")],
+    )  # no risk block → all limits None
+    with pytest.raises(BrokerError, match="risk limits") as exc:
+        build_engine(cfg)
+    msg = str(exc.value)
+    assert "max_order" in msg
+    assert "max_position" in msg
+    assert "max_daily_loss" in msg
+
+
+def test_live_with_partial_risk_limits_refuses_naming_the_gaps(monkeypatch) -> None:
+    """Partial limits still refuse, naming exactly the unset ones."""
+    from trading_bot.application.config import RiskConfig
+
+    monkeypatch.setenv("KRAKEN_API_KEY", "k")
+    monkeypatch.setenv("KRAKEN_API_SECRET", "c2VjcmV0")
+    cfg = AppConfig(
+        mode="live",
+        live_enabled=True,
+        brokers=[BrokerConfig(name="kraken-main", exchange="kraken")],
+        risk=RiskConfig(max_order=money("1")),  # the other two still None
+    )
+    with pytest.raises(BrokerError, match="risk limits") as exc:
+        build_engine(cfg)
+    msg = str(exc.value)
+    assert "max_position" in msg
+    assert "max_daily_loss" in msg
+    assert "max_order" not in msg.split("unset")[0]  # max_order is set, not listed
 
 
 def test_live_mode_unknown_venue_refuses() -> None:
