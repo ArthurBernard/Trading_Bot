@@ -8,9 +8,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Live fill streaming.** `application.LiveFillStreamer` pumps a venue's private
+  fill stream (e.g. `KrakenPrivateWS`) onto the engine bus — each confirmed
+  execution becomes a `FillEvent`, so the tracker / performance service / store
+  update from the venue in real time (fill-id dedup guards the snapshot replayed on
+  resubscribe). `KrakenPrivateWS` gains an `on_connected` hook awaited after each
+  (re)connect's subscribe, and `run_app` wires it: a **real-money live Kraken** run
+  builds the streamer with an `on_connected` that **reconciles on every reconnect**
+  and hosts it in the orchestrator (paper/testnet add nothing). Validated read-only
+  against real Kraken (executions snapshot streamed + parsed; no order sent). (#87)
+
 ### Changed
 
 ### Fixed
+
+- **Kraken `GetWebSocketsToken` was missing from the call-counter cost table**, so
+  `cost_of` raised "Unknown method" and the private executions WebSocket could never
+  fetch a token (it was wholly non-functional). Added (cost 1); the live WS read path
+  now works. Found by the read-only live validation. (#87)
 
 ### Deprecated
 

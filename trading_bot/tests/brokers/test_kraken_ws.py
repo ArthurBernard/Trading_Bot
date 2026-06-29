@@ -443,3 +443,49 @@ async def test_from_broker_builds_token_provider_from_signed_rest() -> None:
 
     assert calls == ["GetWebSocketsToken"]
     assert json.loads(ws.sent[0])["params"]["token"] == "from-rest-token"
+
+
+# --- on_connected reconcile hook ------------------------------------------- #
+
+
+async def test_on_connected_hook_fires_after_subscribe_on_each_connect() -> None:
+    """The ``on_connected`` hook is awaited on connect AND on every reconnect.
+
+    The first socket yields one trade then ends (forcing a reconnect); the second
+    yields another. The hook (a live caller's reconcile trigger) must fire once per
+    (re)connect — twice here.
+    """
+    calls: list[int] = []
+
+    async def hook() -> None:
+        calls.append(1)
+
+    private = KrakenPrivateWS(
+        FakeTokenProvider(),
+        connect=FakeConnector([FakeWS([_TRADE_UPDATE_FRAME]), FakeWS([_TRADE_UPDATE_FRAME])]),
+        sleep=RecordingSleep(),
+        on_connected=hook,
+    )
+
+    events = await _drain(private, limit=2)
+
+    assert len(events) == 2  # one trade per connect
+    assert len(calls) == 2  # hook fired on connect AND reconnect
+
+
+async def test_on_connected_failure_does_not_break_the_stream() -> None:
+    """A raising ``on_connected`` hook is logged, not propagated — the stream lives."""
+
+    async def bad_hook() -> None:
+        raise RuntimeError("reconcile boom")
+
+    private = KrakenPrivateWS(
+        FakeTokenProvider(),
+        connect=FakeConnector([FakeWS([_TRADE_UPDATE_FRAME])]),
+        sleep=RecordingSleep(),
+        on_connected=bad_hook,
+    )
+
+    events = await _drain(private, limit=1)
+
+    assert len(events) == 1  # the trade still streamed despite the hook raising

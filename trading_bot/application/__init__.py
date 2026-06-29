@@ -140,6 +140,7 @@ from trading_bot.application.events import (
     LogEvent,
     OrderEvent,
 )
+from trading_bot.application.live_fills import FillSource, LiveFillStreamer
 from trading_bot.application.orchestrator import Orchestrator, RunnerGroupError
 from trading_bot.application.order_router import OrderRouter
 from trading_bot.application.performance_service import PerformanceService
@@ -196,6 +197,8 @@ __all__ = [
     "PositionTracker",
     "PerformanceService",
     "RiskManager",
+    "LiveFillStreamer",
+    "FillSource",
     "reconcile",
     "ReconResult",
     # data feed
