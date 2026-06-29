@@ -8,6 +8,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- LS1 runnable on **Kraken (USD)** as well as Binance: `examples/ls1_signal.py` gains
+  `ls1_kraken_signal` (calls `target_weights("kraken")`) + `configs/ls1_kraken.yaml`
+  (the `-USD` universe, dccd Kraken store). Two **live tests** prove the chain on real
+  data: `test_ls1_real_e2e` (Binance) and `test_ls1_kraken_real_e2e` (Kraken — real LS1
+  signal + real dccd bars + a **live Kraken public-ticker** check, routed through the
+  `PaperBroker`: **no real order**, since Kraken has no spot testnet). The Binance order
+  round-trip remains the opt-in **testnet** test. (#69)
 - `BrokerConfig.testnet` — a per-venue **testnet** flag: `mode: live` + `testnet: true`
   (Binance only — Kraken has no public spot testnet) builds an adapter **hard-pinned**
   to the venue's sandbox URL (`testnet.binance.vision`), so it **cannot reach mainnet**

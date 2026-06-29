@@ -21,6 +21,14 @@ off-by-default opt-in. History in git + `CHANGELOG.md`; see `06-status.md`.
 
 ## Known issues / follow-ups
 
+- [ ] **Portfolio config → real-dccd store-key convention unpinned.** The default
+  `PortfolioFeed` renders pairs via `to_venue_symbol(exchange)` (`BTCUSDT`; Kraken
+  `XBTUSD`/`TRXUSD`), which (a) doesn't match a hyphen-keyed `BASE-QUOTE` dccd store and
+  (b) is ambiguous to invert (`XBTUSD`→`XB/TUSD`, `TRXUSD`→`TR/USD` under the parsers).
+  The LS1 tests' fake dccd client normalises by existence-checking the store; a real
+  `trading-bot run configs/ls1*.yaml` against a live `dccd.Client` needs the convention
+  pinned (a `symbol_for`/store-key field on `PortfolioStrategyConfig`, or a canonical
+  render). Until then LS1 runs are verified via the test harness, not raw `run_app`.
 - [ ] **PaperBroker/engine drain is superlinear (~O(n²)) over accumulated ticks.** A
   full multi-year daily run through `run_app` is slow (≈10 ticks 6.5s → 200 ticks 118s);
   the LS1 real-data tests assert on a single latest-cross-section rebalance instead.
