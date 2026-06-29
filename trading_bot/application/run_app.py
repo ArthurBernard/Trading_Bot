@@ -74,6 +74,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, cast
 
 from trading_bot.application.data_provider import feed_for
+from trading_bot.application.live_fills import LiveFillStreamer
 from trading_bot.application.orchestrator import Orchestrator
 from trading_bot.application.portfolio import (
     PortfolioStrategy,
@@ -90,6 +91,8 @@ from trading_bot.application.strategy import (
     ma_crossover_signal,
 )
 from trading_bot.application.strategy_runner import StrategyRunner
+from trading_bot.brokers.kraken import KrakenBroker
+from trading_bot.brokers.kraken_ws import KrakenPrivateWS
 from trading_bot.domain.errors import ConfigError
 from trading_bot.domain.instrument import Instrument, Symbol, parse_kraken_pair
 from trading_bot.domain.money import Money, from_float, money
@@ -652,6 +655,36 @@ def _store_key_renderer(
     return lambda sym: sym.to_venue_symbol(exchange)
 
 
+def _maybe_build_fill_streamer(
+    config: AppConfig, engine: Engine
+) -> LiveFillStreamer | None:
+    """Build a live private-fill streamer for a **real-money live Kraken** broker.
+
+    Only an opted-in live :class:`~trading_bot.brokers.kraken.KrakenBroker` has a
+    private ``executions`` WebSocket; paper, testnet (``live_enabled`` is False
+    there) and Binance have none — this returns ``None`` for them, so a paper /
+    testnet run is unchanged. When it applies, a
+    :class:`~trading_bot.brokers.kraken_ws.KrakenPrivateWS` is built from the
+    broker (token from its signed REST) with an ``on_connected`` hook that
+    **reconciles** the engine to the venue after every (re)connect, and wrapped in
+    a :class:`~trading_bot.application.live_fills.LiveFillStreamer` so the venue's
+    confirmed fills fan out onto the engine bus in real time (fill-id dedup guards
+    the snapshot Kraken replays on resubscribe). Construction performs **no I/O**
+    (no token fetch, no connection); the stream opens only when the streamer runs.
+    """
+    if config.mode != "live" or not config.live_enabled:
+        return None
+    broker = engine.broker
+    if not isinstance(broker, KrakenBroker):
+        return None
+
+    async def _reconcile_on_reconnect() -> None:
+        await reconcile(broker, engine.router, engine.tracker, event_bus=engine.bus)
+
+    ws = KrakenPrivateWS.from_broker(broker, on_connected=_reconcile_on_reconnect)
+    return LiveFillStreamer(ws, engine.bus)
+
+
 def _portfolio_start_ns(start: str | int | None) -> int | None:
     """Map a portfolio data source ``start`` to an epoch-ns bound.
 
@@ -782,6 +815,11 @@ async def run_app(
     orchestrator = Orchestrator(event_bus=engine.bus)
     orchestrator.add_all(runners)
     orchestrator.add_all(portfolio_runners)  # type: ignore[arg-type]
+    # A real-money live Kraken run also streams the venue's confirmed fills onto the
+    # bus (and reconciles on every WS (re)connect); paper/testnet add nothing here.
+    fill_streamer = _maybe_build_fill_streamer(config, engine)
+    if fill_streamer is not None:
+        orchestrator.add(fill_streamer)  # type: ignore[arg-type]
     results = await orchestrator.run()
 
     strategies: list[StrategyReport] = []

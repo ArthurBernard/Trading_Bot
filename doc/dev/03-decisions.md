@@ -6,6 +6,38 @@ rejected approaches as tombstones.
 
 ---
 
+### 2026-06-29 Live fill streaming via a `LiveFillStreamer` hosted by the orchestrator (PR #87)  [accepted]
+
+**Choice.** A new `application.LiveFillStreamer` consumes a structural `FillSource`
+(`fills()` async-iterator + `stop()`; `KrakenPrivateWS` satisfies it) and emits a
+`FillEvent` per fill onto the engine bus. It exposes the runner's
+`run(stop_event=...) -> int` contract, so the `Orchestrator` hosts it as just another
+concurrent task; consumption is raced against the stop event and **cancelled** on stop
+(a quiet stream never delays shutdown). `KrakenPrivateWS` gains an injected
+`on_connected` async hook (awaited after each (re)connect's subscribe); `run_app` builds
+the streamer **only** for a real-money live Kraken broker, with `on_connected` =
+reconcile, so the engine re-syncs to the venue after every reconnect.
+
+**Why.** The audit's "after-disconnect reconcile + live fills not streamed" follow-up.
+The private WS already re-runs `on_connect` on every reconnect, so an injected hook is
+the clean reconcile trigger (the WS layer stays ignorant of reconcile — pure DI). The
+streamer matches the runner contract so the existing orchestrator hosts it with no new
+lifecycle machinery, sharing the one cooperative stop event. Validated **read-only**
+against real Kraken (executions snapshot streamed + parsed; **no order sent**).
+
+**Found + fixed in passing.** The read-only live validation exposed that
+`GetWebSocketsToken` was absent from the Kraken call-counter cost table — `cost_of`
+raised "Unknown method", so the private WS could *never* fetch a token. Added (cost 1).
+
+**Rejected alternatives.** Hooking reconcile inside the transport WS layer (a layering
+violation — the WS would import application reconcile); a bespoke lifecycle for the
+streamer outside the orchestrator (the runner contract already fits); streaming for
+testnet/Binance too (Binance has no private-fill WS adapter; testnet is paper money).
+The live **order** path (AddOrder/cancel against a real venue) stays unvalidated by
+deliberate choice — read-only live testing only, per the go-live runbook.
+
+---
+
 ### 2026-06-29 Project name finalized — keep `trading_bot` (no rename) (PR #84)  [accepted]
 
 **Choice.** The triptych keeps its names: **`trading_bot`** (execution/orchestration),

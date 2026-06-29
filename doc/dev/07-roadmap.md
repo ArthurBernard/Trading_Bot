@@ -22,13 +22,13 @@ the gitignored `strategies/`, real dccd-data verified). History in `CHANGELOG.md
 
 ## Known issues / follow-ups
 
-- [ ] **Live fill streaming + post-disconnect reconcile.** Reconcile is now wired
-  **on startup** (`run_app` converges the engine to the venue before the first order),
-  but the **after-disconnect** half of *reconcile, don't assume* is not: the private
-  fill WS (`KrakenPrivateWS`) is not wired into the run loop, so there is no reconnect
-  to trigger a reconcile pass on, and live fills are not streamed onto the bus. Wire
-  the private fill WS into the engine and trigger `reconcile` on each reconnect (and
-  land fill-id dedup — see below — before that stream feeds the tracker).
+_None open — the engine-side roadmap is clear. Remaining work is the maintainer's
+real-key go-live step below._
+
+> **Live fill streaming — done.** The private `KrakenPrivateWS` is wired into the run
+> loop via `LiveFillStreamer` (real-money live Kraken only), reconcile fires on every
+> WS (re)connect, and fills are de-duplicated by id. Validated **read-only** against
+> real Kraken (no order sent). See `03-decisions.md`.
 
 ## Open / deferred (maintainer decisions)
 

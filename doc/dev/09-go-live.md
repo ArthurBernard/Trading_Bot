@@ -103,10 +103,11 @@ Before the first live order, confirm every item:
 - [ ] **Kill-switch tested** — confirm the `RiskManager` kill-switch cancels open
       orders and halts new ones (covered offline by the hardening suite). It is
       now auto-triggered on a `max_daily_loss` breach.
-- [ ] **Reconcile-on-startup** — on start the engine refetches open orders +
-      balances + fills and reconciles local state (now wired into `run_app`,
-      before the first order); confirm it converges (proven offline). Reconcile
-      *after a disconnect* is deferred to live fill streaming (roadmap).
+- [ ] **Reconcile on startup *and* reconnect** — on start the engine refetches open
+      orders + balances + fills and reconciles before the first order; and on a live
+      Kraken run the private fill WS (`KrakenPrivateWS` → `LiveFillStreamer`) re-runs
+      `reconcile` on **every (re)connect**, so a disconnect re-syncs automatically.
+      Both wired into `run_app`; convergence proven offline.
 - [ ] **Strategy paper-validated** — the exact strategy you intend to run has
       been validated in `mode: paper` over representative data and behaves as
       expected.
@@ -121,7 +122,8 @@ Before the first live order, confirm every item:
 
 | Concern | Proven offline (`tests/hardening/`) | Pending — needs a real-key sandbox |
 |---|---|---|
-| Reconciliation | Reconcile converges local state to broker-reported open orders / balances / fills after a disconnect | Real private-endpoint reads (OpenOrders / balances / fills) against a live key |
+| Reconciliation | Reconcile converges local state to broker-reported open orders / balances / fills after a disconnect | — |
+| **Private reads (read-only live ✓)** | — | **Validated read-only against real Kraken**: `OpenOrders` + `TradesHistory` (`fills`) returned + parsed; the private executions **WS** streamed a real snapshot. `balances` needs the key's *Query Funds* permission. **No order was sent.** |
 | Idempotency | **Engine-side** idempotency: a retried submit with the same client-order-id never double-submits locally | **Venue-level** idempotency token: Kraken honouring the client-order-id so a retry never creates a duplicate *at the venue* |
 | Ambiguous failures | Ambiguous submit failures (timeout / unknown outcome) are surfaced, not silently assumed filled or failed | Real network-edge behaviour against the live API |
 | Kill-switch | Kill-switch cancels open orders + halts new ones | Real cancel against the venue |

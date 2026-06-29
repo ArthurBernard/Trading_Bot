@@ -189,6 +189,26 @@ def test_costs_match_legacy_table() -> None:
         KrakenCallCounter.cost_of("NotAMethod")
 
 
+def test_every_private_method_the_broker_calls_has_a_cost() -> None:
+    """Each private endpoint `KrakenBroker` / the private WS posts must be costed.
+
+    Regression for the live-validation finding: `GetWebSocketsToken` was missing
+    from the cost table, so `cost_of` raised "Unknown method" and the private
+    executions WebSocket could never fetch a token (it was wholly non-functional).
+    Every signed endpoint the engine actually calls must be in `COSTS`.
+    """
+    for method in (
+        "AddOrder",
+        "CancelOrder",
+        "Balance",
+        "OpenOrders",
+        "TradesHistory",
+        "GetWebSocketsToken",  # the WS token endpoint — was missing
+    ):
+        KrakenCallCounter.cost_of(method)  # must not raise
+    assert KrakenCallCounter.cost_of("GetWebSocketsToken") == 1
+
+
 def test_tiers_match_legacy_constants() -> None:
     # Legacy KrakenCallCounter.__init__: starter (3, 15), intermediate (2, 20),
     # pro (1, 20).

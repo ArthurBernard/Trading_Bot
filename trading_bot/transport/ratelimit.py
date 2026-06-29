@@ -265,6 +265,7 @@ class KrakenCallCounter:
         "QueryTrades": 1,
         "OpenPositions": 1,
         "TradeVolume": 1,
+        "GetWebSocketsToken": 1,
         "AddExport": 1,
         "ExportStatus": 1,
         "RetrieveExport": 1,
