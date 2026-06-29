@@ -23,6 +23,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The two `-m network` real-dccd replay tests now use `async with dccd.Client() as c`
+  (current dccd's `Client` is an async context manager — `inventory()`/`read` require it
+  entered); they previously called `inventory()` on a non-entered client. (#83)
+
 ### Deprecated
 
 ### Removed

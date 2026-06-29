@@ -29,9 +29,6 @@ the gitignored `strategies/`, real dccd-data verified). History in `CHANGELOG.md
   to trigger a reconcile pass on, and live fills are not streamed onto the bus. Wire
   the private fill WS into the engine and trigger `reconcile` on each reconnect (and
   land fill-id dedup — see below — before that stream feeds the tracker).
-- [ ] **dccd API drift breaks two `-m network` data-feed tests.** `dccd.Client().inventory()`
-  is now called outside an `async with` in `test_data_feed.py` / `test_data_provider.py`
-  (current dccd rejects it). Network-only (not in CI). Realign the dccd client usage.
 
 ## Open / deferred (maintainer decisions)
 
