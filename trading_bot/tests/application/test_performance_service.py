@@ -359,3 +359,37 @@ async def test_end_to_end_router_paperbroker_drives_performance() -> None:
     assert svc.max_drawdown() == perf.max_drawdown(curve)
     # max drawdown is a finite fraction in [0, 1].
     assert 0.0 <= svc.max_drawdown() <= 1.0
+
+
+# --- fill-id dedup (a re-emitted execution never corrupts realised PnL) ----- #
+
+
+def test_apply_dedups_by_fill_id() -> None:
+    """A re-applied fill (seen ``fill_id``) leaves PnL/fees/equity unchanged."""
+    svc = PerformanceService(v0=money("1000"))
+    svc.apply(_fill(fill_id="F1", side=OrderSide.BUY, qty="1", price="100", fee="1"))
+    svc.apply(_fill(fill_id="F2", side=OrderSide.SELL, qty="1", price="110", fee="1"))
+    realised = svc.realised_pnl()
+    fees = svc.fees_paid()
+    points = len(svc.equity_curve())
+
+    # The SELL execution is re-emitted (same fill_id) — must be ignored.
+    svc.apply(_fill(fill_id="F2", side=OrderSide.SELL, qty="1", price="110", fee="1"))
+    assert svc.realised_pnl() == realised  # not double-counted
+    assert svc.fees_paid() == fees
+    assert len(svc.equity_curve()) == points  # no spurious equity point
+
+
+def test_subscribed_service_dedups_reemitted_fill_event() -> None:
+    """A re-emitted ``FillEvent`` (same ``fill_id``) does not corrupt realised PnL."""
+    bus = EventBus()
+    svc = PerformanceService(v0=money("1000"), event_bus=bus)
+    bus.emit(FillEvent(_fill(fill_id="F1", side=OrderSide.BUY, qty="1", price="100",
+                             fee="1")))
+    sell = FillEvent(_fill(fill_id="F2", side=OrderSide.SELL, qty="1", price="110",
+                           fee="1"))
+    bus.emit(sell)
+    bus.emit(sell)  # the venue re-emits the same execution after a reconnect
+    # Realised PnL == one BUY 1@100 (fee 1) then one SELL 1@110 (fee 1): +10 - 2 = 8.
+    assert svc.realised_pnl() == Decimal("8")
+    assert svc.fees_paid() == Decimal("2")

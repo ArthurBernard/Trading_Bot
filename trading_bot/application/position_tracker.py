@@ -94,6 +94,10 @@ class PositionTracker:
         # cached snapshot recomputed on each new fill.
         self._fills: dict[Instrument, list[Fill]] = {}
         self._positions: dict[Instrument, Position] = {}
+        # Fill ids already folded — guards against a venue re-emitting the same
+        # execution (e.g. a private-WS snapshot replay after a reconnect), which
+        # would otherwise double-count the position. See :meth:`apply`.
+        self._seen_fill_ids: set[str] = set()
         self._bus = event_bus
         if event_bus is not None:
             event_bus.subscribe(self._on_event)
@@ -114,10 +118,13 @@ class PositionTracker:
         Appends the fill to that instrument's ordered list and recomputes the
         instrument's :class:`Position` via
         :meth:`~trading_bot.domain.position.Position.from_fills` over the full
-        sequence seen so far (arrival order). Idempotent only in the trivial
-        sense that re-applying a *new* ``Fill`` object always reflects it — the
-        tracker does **not** dedup by ``fill_id``; the broker's fill stream is the
-        de-duplicated source.
+        sequence seen so far (arrival order).
+
+        **Idempotent by ``fill_id``.** A fill whose ``fill_id`` was already folded
+        is ignored (the standing position is returned unchanged) — so a venue
+        re-emitting the same execution (e.g. a private-WS snapshot replay after a
+        reconnect) never double-counts. A genuinely new execution must carry a new
+        ``fill_id``.
 
         Parameters
         ----------
@@ -127,10 +134,16 @@ class PositionTracker:
         Returns
         -------
         Position
-            The instrument's net position after folding in ``fill``.
+            The instrument's net position after folding in ``fill`` (or unchanged
+            if ``fill`` was a duplicate).
 
         """
         instrument = fill.instrument
+        if fill.fill_id in self._seen_fill_ids:
+            # Duplicate execution — never double-count. The instrument was already
+            # seen (this id was folded into it), so its position is cached.
+            return self._positions[instrument]
+        self._seen_fill_ids.add(fill.fill_id)
         fills = self._fills.setdefault(instrument, [])
         fills.append(fill)
         position = Position.from_fills(fills)
@@ -164,6 +177,7 @@ class PositionTracker:
         """
         self._fills = {}
         self._positions = {}
+        self._seen_fill_ids = set()
         for fill in fills:
             self.apply(fill)
 
