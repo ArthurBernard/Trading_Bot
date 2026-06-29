@@ -56,7 +56,20 @@ if TYPE_CHECKING:
 __all__ = [
     "feed_for",
     "DccdClient",
+    "ResamplingDccdClient",
 ]
+
+#: dccd OHLC columns the resampler aggregates over (the source-frame schema).
+_OHLC_COLS: tuple[str, ...] = (
+    "TS",
+    "open",
+    "high",
+    "low",
+    "close",
+    "volume",
+    "quote_volume",
+    "trades",
+)
 
 
 @runtime_checkable
@@ -92,6 +105,198 @@ class DccdClient(Protocol):
     ) -> Any:
         """Drive dccd to collect/store bars for ``exchange``/``symbol``."""
         ...
+
+
+class ResamplingDccdClient:
+    """A dccd client that **resamples** a finer stored span up to a coarser one.
+
+    The live daily-bars seam for the portfolio. dccd's store serves bars at the
+    span they were collected at, and the Binance store the LS1 universe lives in
+    holds only **1-minute** bars — so a plain ``client.read(span=86400)`` against
+    it returns *zero* daily rows (dccd does not resample). Daily bars are a
+    *consumer* responsibility (this mirrors ``fynance_research.data.load_ohlc``,
+    which resamples 1m→1d via polars ``group_by_dynamic(every="1d")``).
+
+    This adapter wraps a real :class:`DccdClient`: a ``read`` for the
+    ``daily_span`` is satisfied by reading the wrapped client at the finer
+    ``source_span`` (default ``60`` = 1m) and aggregating each calendar day's
+    minute bars into one daily OHLCV bar —
+
+    ===========  =========================================================
+    column       aggregation over the day's minute bars
+    ===========  =========================================================
+    ``open``     ``first`` (the day's opening minute)
+    ``high``     ``max``
+    ``low``      ``min``
+    ``close``    ``last`` (the day's closing minute)
+    ``volume``   ``sum``
+    ===========  =========================================================
+
+    via polars ``group_by_dynamic(every="1d")`` on a ``time`` derived from the
+    ``TS`` column. The grouping is **left-closed / left-labelled** (polars'
+    default), so each daily bar is stamped at the **day's open** and aggregates
+    only that day's minutes — never a future minute (the **causality** the whole
+    feed depends on). The **last (still-forming) day is dropped** whenever the
+    source's latest minute does not reach that day's final minute boundary, so a
+    partial day never enters the cross-section; a day whose source data runs to
+    its end is kept. Only the OHLCV columns are aggregated — every price stays the
+    *exact* :class:`~decimal.Decimal`-friendly value dccd reported (no ``float``
+    coercion); only the ``time``/``TS`` math is integer/datetime.
+
+    A read whose ``span`` is **not** the ``daily_span`` is forwarded to the
+    wrapped client unchanged (so the same adapter can serve a mixed config). The
+    adapter is **injectable**: the offline tests pass a fake *daily* client
+    directly and never need it; a live portfolio reading a 1m store wraps its real
+    client in this.
+
+    Parameters
+    ----------
+    inner : DccdClient
+        The wrapped real (or fake) client read at ``source_span``.
+    daily_span : int, optional
+        The coarse span (seconds) a ``read`` for which triggers resampling.
+        Defaults to ``86400`` (one day). A read at any other span is passed
+        through to ``inner`` unchanged.
+    source_span : int, optional
+        The fine span (seconds) the wrapped client is read at and aggregated up
+        from. Defaults to ``60`` (one minute). Must be ``> 0`` and ``<
+        daily_span``.
+    every : str, optional
+        The polars ``group_by_dynamic`` bucket width. Defaults to ``"1d"``
+        (matching the daily ``daily_span``). Override only to resample to a
+        different coarse bar.
+
+    Raises
+    ------
+    ValueError
+        If ``source_span`` is not a positive value strictly smaller than
+        ``daily_span``.
+
+    """
+
+    def __init__(
+        self,
+        inner: DccdClient,
+        *,
+        daily_span: int = 86_400,
+        source_span: int = 60,
+        every: str = "1d",
+    ) -> None:
+        if source_span <= 0:
+            raise ValueError(
+                f"source_span must be positive seconds, got {source_span}"
+            )
+        if source_span >= daily_span:
+            raise ValueError(
+                f"source_span ({source_span}) must be finer than daily_span "
+                f"({daily_span}) to resample up"
+            )
+        self._inner = inner
+        self._daily_span = daily_span
+        self._source_span = source_span
+        self._every = every
+
+    def read(
+        self,
+        exchange: str,
+        symbol: str,
+        data_type: str = "ohlc",
+        span: int | None = None,
+        start_ns: int | None = None,
+        end_ns: int | None = None,
+    ) -> pl.DataFrame:
+        """Read bars, resampling source→daily when ``span`` is the daily span.
+
+        For ``span == daily_span`` the wrapped client is read at
+        ``source_span`` (forwarding the same ``exchange`` / ``symbol`` /
+        ``data_type`` / ``start_ns`` / ``end_ns`` bounds) and the result is
+        aggregated to daily via :meth:`_resample`. Any other ``span`` is passed
+        straight through to the wrapped client.
+        """
+        if span != self._daily_span:
+            return self._inner.read(
+                exchange, symbol, data_type, span, start_ns, end_ns
+            )
+        raw = self._inner.read(
+            exchange, symbol, data_type, self._source_span, start_ns, end_ns
+        )
+        return self._resample(raw)
+
+    def backfill(
+        self,
+        exchange: str,
+        symbol: str,
+        data_type: str = "ohlc",
+        span: int | None = None,
+        start: str = "last",
+    ) -> object:
+        """Forward a backfill to the wrapped client at the **source** span.
+
+        Backfilling collects the *stored* (fine) bars the resample reads from, so
+        a daily-span backfill request is driven at ``source_span``; any other
+        span is forwarded unchanged.
+        """
+        drive_span = self._source_span if span == self._daily_span else span
+        return self._inner.backfill(exchange, symbol, data_type, drive_span, start)
+
+    def _resample(self, raw: pl.DataFrame) -> pl.DataFrame:
+        """Aggregate fine ``raw`` OHLCV bars up to the coarse bar (causal).
+
+        Groups the source frame by calendar day (``group_by_dynamic`` over a
+        ``time`` derived from ``TS``), taking ``open=first, high=max, low=min,
+        close=last, volume=sum`` over each day's minutes — left-closed /
+        left-labelled so a day's bar is stamped at the day's open and aggregates
+        only that day's minutes (never a future one). The still-forming last day
+        (whose source minutes do not reach the next day boundary) is dropped, so
+        no partial day enters the result. Returns a dccd-shaped OHLC frame (the
+        same column set the source had), sorted oldest→newest. An empty source
+        yields an empty (but correctly-shaped) frame.
+
+        OHLC prices are carried through polars' aggregation without any ``float``
+        coercion — whatever exact value dccd stored is what comes out.
+        """
+        if raw.height == 0:
+            return raw
+
+        every_ns = self._daily_span * 1_000_000_000
+        daily = (
+            raw.with_columns(pl.from_epoch("TS", time_unit="ns").alias("dt"))
+            .group_by_dynamic("dt", every=self._every, closed="left", label="left")
+            .agg(
+                pl.col("open").first(),
+                pl.col("high").max(),
+                pl.col("low").min(),
+                pl.col("close").last(),
+                pl.col("volume").sum(),
+            )
+            .sort("dt")
+            .with_columns(pl.col("dt").dt.timestamp("ns").alias("TS"))
+        )
+
+        # Drop the still-forming last day: keep a day only when the source data
+        # reaches at least its closing boundary (its last source minute is at or
+        # beyond the next day's open). This keeps the cross-section to *closed*
+        # days only — a partial last day is never emitted (causality).
+        # newest source minute's open time (raw is non-empty here)
+        last_ts = int(raw["TS"].max())  # type: ignore[arg-type]
+        daily = daily.filter(
+            (pl.col("TS") + every_ns - self._source_span * 1_000_000_000) <= last_ts
+        )
+
+        # Re-attach the dccd OHLC columns the source carried but we did not
+        # aggregate (quote_volume / trades), zero-filled, so the result keeps the
+        # source schema the normaliser expects. Only ever present if the source
+        # had them.
+        extras: list[pl.Expr] = []
+        if "quote_volume" in raw.columns:
+            extras.append(pl.lit(0.0).alias("quote_volume"))
+        if "trades" in raw.columns:
+            extras.append(pl.lit(0).alias("trades"))
+        if extras:
+            daily = daily.with_columns(extras)
+
+        keep = [c for c in _OHLC_COLS if c in daily.columns]
+        return daily.select(keep)
 
 
 def _resolve_start_ns(start: str | int | None) -> int | None:

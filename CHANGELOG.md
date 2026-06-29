@@ -26,8 +26,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   weights is targeted **flat**). Per-leg failures (`RiskLimitBreached`/`BrokerError`)
   are collected on a `RebalanceResult` and don't abort the book; cooperative
   `run(stop_event=...)`. (#65)
+- `AppConfig.portfolios` + `PortfolioStrategyConfig` + `run_app` wiring — declare and
+  run a native multi-asset portfolio (universe + weight-vector signal by reference +
+  capital + daily dccd source) alongside single-instrument strategies on the shared
+  engine; per-coin `PortfolioReport`. Overlap detection now spans strategies **and**
+  portfolio universes (no instrument claimed twice). (#66)
+- `application.ResamplingDccdClient` — an injectable resample-on-read dccd client
+  (reads the 1-minute store, aggregates OHLCV to daily via `group_by_dynamic`,
+  causal: closed days only, partial last day dropped, OHLC carried exact). The live
+  daily-bars seam for the portfolio path (dccd serves only 1m). (#66)
 
 ### Changed
+
+- `[triptych]` extra documents `fynance-research` as an editable sibling install
+  (`pip install -e ../fynance-research`, like `dccd`) — the source of validated
+  portfolio signals (LS1); kept out of the hard deps. (#66)
 
 ### Fixed
 
