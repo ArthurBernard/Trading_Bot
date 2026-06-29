@@ -311,11 +311,13 @@ def as_portfolio_signal(
       ``float``.
 
     It is the **only** research-aware glue and it is fully generic: it hardcodes
-    no universe, no LS1 specifics, only key-normalisation and the return-shape
+    no universe, no strategy specifics, only key-normalisation and the return-shape
     handling. To wire a concrete research signal by config, expose a parameter-free
     module-level callable that returns ``as_portfolio_signal(target_weights)`` (or
-    the adapted signal directly) and point the config's ``signal.ref`` at it (see
-    ``examples/ls1_signal.py``).
+    the adapted signal directly) and point the config's ``signal.ref`` at it. Such
+    wrappers + their configs are **strategy-specific and kept local-only** under the
+    gitignored ``strategies/`` tree (never committed to this engine repo); see
+    ``strategies/README.md`` and ``doc/dev/09-go-live.md``.
 
     Parameters
     ----------

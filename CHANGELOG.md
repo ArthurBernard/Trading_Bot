@@ -8,13 +8,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- LS1 runnable on **Kraken (USD)** as well as Binance: `examples/ls1_signal.py` gains
-  `ls1_kraken_signal` (calls `target_weights("kraken")`) + `configs/ls1_kraken.yaml`
-  (the `-USD` universe, dccd Kraken store). Two **live tests** prove the chain on real
-  data: `test_ls1_real_e2e` (Binance) and `test_ls1_kraken_real_e2e` (Kraken — real LS1
-  signal + real dccd bars + a **live Kraken public-ticker** check, routed through the
-  `PaperBroker`: **no real order**, since Kraken has no spot testnet). The Binance order
-  round-trip remains the opt-in **testnet** test. (#69)
 - `BrokerConfig.testnet` — a per-venue **testnet** flag: `mode: live` + `testnet: true`
   (Binance only — Kraken has no public spot testnet) builds an adapter **hard-pinned**
   to the venue's sandbox URL (`testnet.binance.vision`), so it **cannot reach mainnet**
@@ -51,13 +44,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   causal: closed days only, partial last day dropped, OHLC carried exact). The live
   daily-bars seam for the portfolio path (dccd serves only 1m). (#66)
 - `application.as_portfolio_signal` — a generic adapter bridging an argument-free
-  research weight oracle (`() -> {pair: weight}`, e.g. `ls1_live.target_weights`) to
-  the `PortfolioSignalFn` contract (normalises pair keys → `Symbol`, weights → exact
-  `Decimal`). **LS1 runnable end-to-end by config**: `configs/ls1.yaml` (paper) wires
-  the 10-coin Binance USDT book via `examples/ls1_signal.py` (lazy `fynance_research`
-  import); delta-correctness verified on **real** dccd Binance bars (resampled 1m→1d),
-  with an opt-in Binance **testnet** rebalance round-trip. Completes the multi-asset
-  / portfolio-strategy epic. (#67)
+  research weight oracle (`() -> {pair: weight}`) to the `PortfolioSignalFn` contract
+  (normalises pair keys → `Symbol`, weights → exact `Decimal`, handles a bare mapping
+  or `(mapping, asof)`). With it, a **concrete strategy** is wired purely by reference
+  (`module:function` + a YAML config) and the engine never imports it — completing the
+  generic multi-asset / portfolio-strategy support. **Concrete strategies (signal
+  wrappers, configs, their e2e tests) are kept local-only** under the gitignored
+  `strategies/` tree and are **never** committed to this engine repo. (#67)
 
 ### Changed
 

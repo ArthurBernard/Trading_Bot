@@ -34,12 +34,14 @@ behind the opt-in.
 `PortfolioStrategy`/`PortfolioRunner` drives a whole universe from a **weight vector**
 (`PortfolioSignalFn` → `weights_to_signals` → N idempotent risk-gated maker-LIMIT legs),
 fed by a common-index, freshness-gated `PortfolioFeed` over the dccd Binance store
-(daily via the resample-on-read `ResamplingDccdClient`). **LS1 is runnable by config**
-(`configs/ls1.yaml` + `examples/ls1_signal.py`, `fynance_research` lazily imported) —
-delta-correctness verified on **real** dccd Binance bars; an opt-in Binance **testnet**
-rebalance round-trip is ready (gated on a testnet key). The engine stays generic (LS1 is
-config + a generic weight-oracle adapter). Two follow-ups are tracked in `07-roadmap.md`
-(engine O(n²) drain; a dccd `inventory()` API drift in two network tests).
+(daily via the resample-on-read `ResamplingDccdClient`). A **concrete strategy** is
+wired purely by reference (a signal wrapper + a config), via the generic
+`as_portfolio_signal` adapter — and **kept local-only** under the gitignored
+`strategies/` tree (never committed; the engine stays generic). On real dccd data the
+routed per-coin deltas equal `weightᵢ × capital / priceᵢ`; opt-in venue order tests run
+locally (Binance **testnet** with a key; Kraken public-data + PaperBroker, no real order).
+Two follow-ups are tracked in `07-roadmap.md` (engine O(n²) drain; a dccd `inventory()`
+API drift in two network tests).
 
 **Remaining (maintainer decisions, see `07-roadmap.md`):** the **final project name**
 (kept `trading_bot`), and **real-key live enablement** (validate Kraken private
