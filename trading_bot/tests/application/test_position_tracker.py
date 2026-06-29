@@ -229,3 +229,49 @@ async def test_end_to_end_router_paperbroker_fills_drive_tracker() -> None:
     assert pos is not None
     assert pos.net_qty == Decimal("2")
     assert pos.avg_entry_price == Decimal("30500")
+
+
+# --- fill-id dedup (a re-emitted execution never double-counts) ------------ #
+
+
+def test_apply_dedups_by_fill_id() -> None:
+    """Re-applying a fill with a seen ``fill_id`` is ignored (no double-count)."""
+    tracker = PositionTracker()
+    tracker.apply(_fill(fill_id="T1", side=OrderSide.BUY, qty="2", price="30000"))
+    first = tracker.position(BTC_USD)
+    assert first is not None and first.net_qty == Decimal("2")
+
+    # The very same execution arrives again (e.g. a private-WS snapshot replay).
+    returned = tracker.apply(
+        _fill(fill_id="T1", side=OrderSide.BUY, qty="2", price="30000")
+    )
+    again = tracker.position(BTC_USD)
+    assert again is not None and again.net_qty == Decimal("2")  # unchanged, not 4
+    assert returned is again  # the standing position is returned for a duplicate
+
+
+def test_subscribed_tracker_dedups_reemitted_fill_event() -> None:
+    """A re-emitted ``FillEvent`` (same ``fill_id``) does not double the position."""
+    bus = EventBus()
+    tracker = PositionTracker(event_bus=bus)
+    event = FillEvent(_fill(fill_id="T1", side=OrderSide.BUY, qty="2", price="30000"))
+    bus.emit(event)
+    bus.emit(event)  # the venue re-emits the same execution after a reconnect
+    pos = tracker.position(BTC_USD)
+    assert pos is not None and pos.net_qty == Decimal("2")  # counted exactly once
+
+
+def test_reset_clears_seen_fill_ids_so_rebuild_folds_them() -> None:
+    """``reset`` clears the dedup set: a previously-seen id folds again (fresh truth).
+
+    Reconciliation rebuilds the tracker from the broker's confirmed fills via
+    :meth:`reset`. Those fills carry the same ``fill_id``\\ s the live stream
+    already showed, so the dedup set must be cleared on reset — otherwise the
+    rebuild would skip every fill and reconcile to flat.
+    """
+    tracker = PositionTracker()
+    f = _fill(fill_id="T1", side=OrderSide.BUY, qty="2", price="30000")
+    tracker.apply(f)
+    tracker.reset([f])  # same id, fresh rebuild from the broker's truth
+    pos = tracker.position(BTC_USD)
+    assert pos is not None and pos.net_qty == Decimal("2")  # folded, not skipped

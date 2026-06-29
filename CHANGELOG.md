@@ -54,21 +54,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- `[triptych]` extra documents `fynance-research` as an editable sibling install
-  (`pip install -e ../fynance-research`, like `dccd`) — the source of validated
-  portfolio signals (LS1); kept out of the hard deps. (#66)
-
-### Changed
-
 - **Real-money live now requires explicit risk limits.** `build_engine` refuses a
   `mode: live` + `live_enabled` config (with credentials) whose `RiskConfig` leaves
   any of `max_order` / `max_position` / `max_daily_loss` unset — a `BrokerError`
   naming the gaps, checked **after** the credential gate. An all-`None` `RiskConfig`
   is *unconstrained*; trading real money with no size/exposure/daily-loss cap is
   refused. Paper and testnet (paper money) are exempt. (#73)
+- `[triptych]` extra documents `fynance-research` as an editable sibling install
+  (`pip install -e ../fynance-research`, like `dccd`) — the source of validated
+  portfolio signals (LS1); kept out of the hard deps. (#66)
 
 ### Fixed
 
+- **Fills are now de-duplicated by `fill_id`** in both the `PositionTracker` and the
+  `PerformanceService`: a re-applied execution (e.g. a private-WS snapshot replay after
+  a reconnect) is ignored instead of silently double-counting the position / corrupting
+  the running realised PnL. `PositionTracker.reset` clears the seen-id set so a reconcile
+  rebuild from the broker's fills still folds them. (#74)
 - **Daily-loss circuit breaker is now wired.** `build_engine` feeds the `RiskManager`
   the live signed realised PnL (`daily_pnl_provider=perf.realised_pnl`) — previously it
   saw a constant zero, so `max_daily_loss` never engaged. Reaching the limit now refuses

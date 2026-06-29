@@ -6,6 +6,30 @@ rejected approaches as tombstones.
 
 ---
 
+### 2026-06-29 Fills are de-duplicated by `fill_id` in the read-side views (PR #74)  [accepted]
+
+**Choice.** `PositionTracker.apply` and `PerformanceService.apply` each keep a
+`set[str]` of folded `fill_id`s and ignore a fill whose id was already seen (the
+tracker returns the standing position; the service makes no PnL/fee/equity change).
+`PositionTracker.reset` clears the set so a reconcile rebuild from the broker's fills
+re-folds them.
+
+**Why.** The audit found both `apply` paths explicitly skipped dedup, trusting "the
+broker's fill stream is the de-duplicated source." That holds for the PaperBroker today,
+but a live **private fill WS** can re-emit an execution (Kraken v2 resends a snapshot on
+resubscribe after a reconnect). With no dedup, the tracker would double the position and
+the service's *incremental* running realised PnL would be silently corrupted with no
+detectable error. Dedup-by-id makes both views safe to feed from a live stream.
+
+**Rejected alternatives.** Relying on the upstream stream to never duplicate (fragile —
+exactly the reconnect case we must survive); deduping by object identity (a re-emit is a
+*new* `Fill` object with the same id); keying the set by `(instrument, fill_id)` (venue
+trade ids are unique per venue — a flat id set is enough and simpler). Not adding a perf
+`reset` (the service accumulates over the run session; the id set growing is bounded by
+fills seen and is fine).
+
+---
+
 ### 2026-06-29 Real-money live requires all three risk limits (PR #73)  [accepted]
 
 **Choice.** On the real-money live path (`mode: live` + `live_enabled` + credentials),

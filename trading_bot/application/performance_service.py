@@ -147,6 +147,11 @@ class PerformanceService:
         # realised PnL is the delta of its instrument's position realised PnL).
         self._realised_pnl: Money = _ZERO
         self._fees_paid: Money = _ZERO
+        # Fill ids already folded — guards against a venue re-emitting the same
+        # execution (e.g. a private-WS snapshot replay after a reconnect), which
+        # would otherwise silently corrupt the running realised PnL. See
+        # :meth:`apply`.
+        self._seen_fill_ids: set[str] = set()
         self._bus = event_bus
         if event_bus is not None:
             event_bus.subscribe(self._on_event)
@@ -172,8 +177,10 @@ class PerformanceService:
         fill introduced to its instrument's realised PnL (so totals stay the sum
         across instruments, and the equity series gains exactly one point).
 
-        The service does **not** dedup by ``fill_id`` — the broker's fill stream
-        is the de-duplicated source, mirroring the
+        **Idempotent by ``fill_id``.** A fill whose ``fill_id`` was already folded
+        is ignored (no PnL/fee/equity change), so a venue re-emitting the same
+        execution (e.g. a private-WS snapshot replay after a reconnect) never
+        corrupts the running realised PnL. Mirrors the
         :class:`~trading_bot.application.position_tracker.PositionTracker`.
 
         Parameters
@@ -182,6 +189,10 @@ class PerformanceService:
             A broker-confirmed execution (the PnL source of truth).
 
         """
+        if fill.fill_id in self._seen_fill_ids:
+            return  # duplicate execution — never double-count.
+        self._seen_fill_ids.add(fill.fill_id)
+
         instrument = fill.instrument
         inst_fills = self._by_instrument.setdefault(instrument, [])
 
