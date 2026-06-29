@@ -171,7 +171,7 @@ class KrakenBroker(Broker):
     Attributes
     ----------
     name : str
-        The venue key, ``"kraken"`` (the registry key for this adapter).
+        The venue key, ``"kraken"`` (the factory selects this adapter on it).
 
     """
 

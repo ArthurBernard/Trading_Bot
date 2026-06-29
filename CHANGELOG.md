@@ -103,6 +103,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 
+- `brokers.BrokerRegistry` — removed as dead code. Venue selection is an explicit
+  per-venue dispatch in `service_factory.build_engine`, never a registry; the class was
+  unused by any non-test code (only its own tests exercised it). Adapter/port docstrings
+  updated to drop the registry references. (#77)
+
 ## [0.2.0] - 2026-06-28
 
 ### Added

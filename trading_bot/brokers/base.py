@@ -20,10 +20,10 @@ rather than an abstract base class. The reasons, carried into the ADR:
   inherited a base — no import coupling from adapters back to this module, which
   keeps the venue layer a flat set of independent adapters. This mirrors the
   spirit of dccd's source mixins while avoiding the inheritance ceremony.
-* **Registry-friendly.** ``@runtime_checkable`` lets the
-  :class:`~trading_bot.brokers.registry.BrokerRegistry` (and the
-  :func:`require` helper) ``isinstance``-check what it stores, so a misconfigured
-  registration fails loudly at the boundary rather than at first call.
+* **Runtime-checkable.** ``@runtime_checkable`` lets the
+  :func:`require` helper (and the service factory's venue dispatch)
+  ``isinstance``-check an adapter, so a misconfigured wiring fails loudly at the
+  boundary rather than at first call.
 * **Capabilities are declared, not inherited.** Whether an adapter actually
   *supports* an operation is answered by :meth:`Broker.capabilities` returning a
   :class:`Capability` set, **not** by which base classes it subclasses. The port
@@ -103,11 +103,12 @@ class Broker(Protocol):
     Attributes
     ----------
     name : str
-        The venue key (e.g. ``"kraken"``). Used as the registry key.
+        The venue key (e.g. ``"kraken"``). Used to select this adapter in the
+        service factory's venue dispatch.
 
     """
 
-    #: The venue key (e.g. ``"kraken"``); the registry key for this adapter.
+    #: The venue key (e.g. ``"kraken"``); the service factory selects on it.
     name: str
 
     async def place_order(self, order: Order) -> str:

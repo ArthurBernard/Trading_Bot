@@ -6,6 +6,23 @@ rejected approaches as tombstones.
 
 ---
 
+### 2026-06-29 Remove the unused `BrokerRegistry` (delete, don't wire) (PR #77)  [accepted]
+
+**Choice.** Delete `brokers/registry.py` (`BrokerRegistry`) rather than wire it into the
+factory.
+
+**Why.** The audit found it entirely bypassed: `service_factory.build_engine` selects
+venues with an explicit per-venue dispatch (paper / testnet / live + the credential and
+opt-in gates), and only the registry's own tests exercised the class. Dead infrastructure
+contradicts the repo's "no dead code" stance.
+
+**Rejected alternatives.** Wiring the factory through the registry (no benefit at two-to-
+three venues; the explicit dispatch is clearer and already carries the live/testnet/paper
+gating that a generic registry would not). If the venue count grows it can be reintroduced
+from git history.
+
+---
+
 ### 2026-06-29 Portfolio store-key convention is pinned by config, not guessed (PR #76)  [accepted]
 
 **Choice.** `PortfolioStrategyConfig` gains `store_key_format`

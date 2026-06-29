@@ -233,7 +233,7 @@ class BinanceBroker(Broker):
     Attributes
     ----------
     name : str
-        The venue key, ``"binance"`` (the registry key for this adapter).
+        The venue key, ``"binance"`` (the factory selects this adapter on it).
 
     """
 

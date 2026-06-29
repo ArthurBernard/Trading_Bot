@@ -2,12 +2,12 @@
 
 This is the **execution layer**: the venue-neutral
 :class:`~trading_bot.brokers.base.Broker` contract that every exchange adapter
-implements, a :class:`~trading_bot.brokers.base.Capability` model declaring what
-a given adapter actually serves, and a
-:class:`~trading_bot.brokers.registry.BrokerRegistry` mapping venue names to
-adapters. The port speaks :mod:`trading_bot.domain` types only and its concrete
-adapters use the :mod:`trading_bot.transport` plumbing; the domain never imports
-a broker.
+implements and a :class:`~trading_bot.brokers.base.Capability` model declaring
+what a given adapter actually serves. The port speaks :mod:`trading_bot.domain`
+types only and its concrete adapters use the :mod:`trading_bot.transport`
+plumbing; the domain never imports a broker. Venue selection lives in
+:func:`~trading_bot.application.service_factory.build_engine` (an explicit
+per-venue dispatch), not a registry.
 
 The :class:`~trading_bot.brokers.paper.PaperBroker` is the in-process default
 (paper-trading) adapter; :class:`~trading_bot.brokers.kraken.KrakenBroker` is the
@@ -22,7 +22,6 @@ Public surface:
 * :func:`~trading_bot.brokers.base.require` — the gate that raises
   :class:`~trading_bot.domain.errors.NoCapability` when an adapter is asked for
   an operation it has not declared;
-* :class:`~trading_bot.brokers.registry.BrokerRegistry` — venue key to adapter;
 * :class:`~trading_bot.domain.errors.BrokerError` — the venue-neutral broker
   failure (re-exported for convenience);
 * :class:`~trading_bot.brokers.kraken.KrakenBroker` — the concrete Kraken REST
@@ -45,14 +44,12 @@ from trading_bot.brokers.binance import BinanceBroker
 from trading_bot.brokers.kraken import KrakenBroker
 from trading_bot.brokers.kraken_ws import KrakenPrivateWS
 from trading_bot.brokers.paper import PaperBroker
-from trading_bot.brokers.registry import BrokerRegistry
 
 __all__ = [
     "Broker",
     "Capability",
     "require",
     "BrokerError",
-    "BrokerRegistry",
     "BinanceBroker",
     "KrakenBroker",
     "KrakenPrivateWS",
