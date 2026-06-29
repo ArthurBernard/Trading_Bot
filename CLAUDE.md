@@ -57,34 +57,22 @@ ruff check trading_bot/
 mypy trading_bot/
 ```
 
-## Git Flow
+## Common conventions
 
-**Branch model:**
-```
-master          ← stable releases only (tagged vX.Y.Z)
-  └── develop   ← integration branch
-        ├── feat/<topic>   new feature or rewrite axis
-        ├── fix/<topic>    bug fix
-        ├── chore/<topic>  tooling, CI, deps
-        └── docs/<topic>   documentation only
-```
+Shared across my repos, mirrored from `~/.claude/CLAUDE.md` (the single source of
+truth — if they ever disagree, the global file wins). Restated here so the repo
+stays self-contained:
 
-**Rules — always follow these before committing or pushing:**
-1. **Never commit directly to `master`.**
-2. **Never commit directly to `develop`** — always use a feature branch + PR.
-3. Branch off `develop`: `git checkout develop && git checkout -b feat/my-topic`
-4. Open a PR into `develop` when done. `develop` → `master` only at release time.
-
-**Commit style (Conventional Commits):** `feat:`, `fix:`, `chore:`, `docs:`.
-
-Do not add `Co-Authored-By` trailers to commits — this is a personal repo (parity
-with dccd/fynance).
-
-**Before every commit:** run `pytest` and `ruff check trading_bot/`. Both must pass.
-
-**One PR = one concern, small and disposable.** Even a large plan ships as
-*several* small atomic PRs — never one fourre-tout branch. This is what makes
-`/abandon-task` (kill a bad PR, keep the lesson) viable.
+- **Git Flow** — `master` (tagged releases) ← `develop` (integration) ←
+  `feat|fix|chore|docs/<topic>`. **Never commit directly to `develop` or `master`**
+  — always a feature branch + PR into `develop`; `develop` → `master` only at release.
+- **Conventional Commits** — `feat:` `fix:` `chore:` `docs:`. **Never add
+  `Co-Authored-By` trailers** (personal repo).
+- **One PR = one concern**, small and disposable — a big plan ships as several small
+  atomic PRs, never one catch-all branch.
+- **Model: `opus`, always** — interactive sessions and every spawned subagent; a plan
+  leaf's `complexity` is effort/ordering only and never downgrades the model.
+- **Before every commit** — `.venv/bin/python -m pytest` and `.venv/bin/ruff check trading_bot/` must pass.
 
 ### Dev loop & docs of record
 
@@ -98,7 +86,9 @@ sources of truth:
 | `doc/dev/03-decisions.md` | the *why* — ADR journal | `/finish-task` (accepted), `/abandon-task` (rejected/tombstone) |
 | `doc/dev/06-status.md` | where things stand | `/finish-task`, `/groom-docs` |
 
-`CHANGELOG.md` + git log stay authoritative for *what* shipped. The loop:
+`CHANGELOG.md` + git log stay authoritative for *what* shipped. The "one PR = one
+concern" rule is what makes `/abandon-task` (kill a bad PR, keep the lesson)
+viable. The loop:
 
 `/pick-task` (smallest coherent slice; **no branch yet**) →
 `/plan` (decompose into a `doc/dev/plans/<epic>/` tree — single leaf for a trivial
@@ -111,12 +101,6 @@ real data**) →
 checklist) → … per leaf … → last leaf removes the roadmap line → `/release`.
 
 The full plan-tree format lives in [`doc/dev/plans/README.md`](doc/dev/plans/README.md).
-
-**Model: `opus`, always.** Per the maintainer's standing preference, **all work on
-this repo runs on `opus`** — interactive sessions *and* every spawned subagent
-(including `/execute-leaf`), regardless of a leaf's `complexity`. The `complexity`
-tag still records effort/risk and orders the execution queue, but it **does not
-downgrade the model**: treat `low | medium | high` all as `opus`.
 
 ## Architecture (target — hexagonal, mirrors dccd)
 
