@@ -98,6 +98,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   *reconcile, don't assume* invariant was implemented + hardening-tested but had **no
   production caller**; it is now enforced on every start (a no-op on a fresh
   `PaperBroker`; the safety backstop on a live/testnet venue). (#71)
+- `run_app`'s limit-at-close order factory prices via `money(str(...))` instead of
+  `from_float(float(...))` — exact `Decimal`, never through `float` (matching
+  `PortfolioRunner`; carries full precision if the dccd close column is `Decimal`). (#78)
 
 ### Deprecated
 

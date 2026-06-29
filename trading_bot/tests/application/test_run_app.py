@@ -677,3 +677,36 @@ async def test_dedup_survives_restart_via_store(tmp_path) -> None:
     assert resubmitted is recovered
     assert await engine2.broker.fills() == []  # the broker was never called
     engine2.store.close()
+
+
+# --- the limit-at-close factory prices via Decimal, never through float ---- #
+
+
+def test_limit_at_close_prices_exactly_from_decimal_close_no_float() -> None:
+    """The limit-at-close factory prices via str->Decimal — exact, never via float.
+
+    A close stored as polars ``Decimal`` with more precision than a ``float`` can
+    hold is carried **exactly** into the order's limit price (the previous
+    ``from_float(float(...))`` would have truncated it), matching
+    ``PortfolioRunner``'s ``money(str(...))`` idiom.
+    """
+    from decimal import Decimal
+
+    from trading_bot.application.run_app import _limit_at_close_factory
+    from trading_bot.application.strategy import Strategy
+    from trading_bot.domain.money import from_float
+    from trading_bot.domain.signal import Signal
+
+    exact = Decimal("100.123456789012345678")  # 18 frac digits: a float can't hold it
+    bars = pl.DataFrame({"c": pl.Series("c", [exact], dtype=pl.Decimal(scale=18))})
+    strat = Strategy(
+        name="x",
+        instrument=BTC_USD,
+        signal_fn=lambda _bars: Signal.exposure(BTC_USD, money("0"), ts=0),
+    )
+
+    order = _limit_at_close_factory()(strat, money("1"), bars)
+
+    assert order.limit_price == money("100.123456789012345678")  # exact
+    # And strictly better than the old float round-trip, which loses the tail.
+    assert order.limit_price != from_float(float(exact))
