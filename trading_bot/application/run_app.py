@@ -672,6 +672,12 @@ async def run_app(
     recovers state after a restart. The pass emits one
     :class:`~trading_bot.application.events.LogEvent` on the engine bus.
 
+    When a store is configured, the router's dedup map is first **restored** from
+    the persisted order history (``engine.router.restore(engine.store.orders())``),
+    so a re-submit of any previously-recorded order id is de-duplicated after a
+    restart even before reconcile runs — closing the crash-restart double-submit
+    window for ids the in-memory map lost.
+
     Reconciling **after a disconnect** (the WS-reconnect half of the invariant)
     attaches to the private fill stream, which is not yet wired into this run
     loop; that lands with live fill streaming (tracked in the roadmap).
@@ -715,6 +721,14 @@ async def run_app(
 
     """
     engine = build_engine(config, db_path=config.storage.db_path)
+    # Recover idempotency state across a restart: seed the router's dedup map from
+    # the persisted store (the append-only order history) so a re-submit of any
+    # previously-recorded order id is de-duplicated — closing the crash-restart
+    # double-submit window for ids the in-memory map lost (the residual gap for a
+    # venue, like Kraken, with no venue-side idempotency token). No events emitted;
+    # done *before* reconcile, which then converges to the venue's current truth.
+    if engine.store is not None:
+        engine.router.restore(engine.store.orders())
     # Reconcile, don't assume: converge the fresh engine's empty maps to the
     # broker's truth (open orders + fills) before the first order is placed, so a
     # restart never re-submits a venue-held order or trades a stale position. A

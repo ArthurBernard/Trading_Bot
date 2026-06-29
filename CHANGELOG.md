@@ -66,6 +66,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Order idempotency now survives a restart.** `OrderRouter.restore(orders)` seeds the
+  dedup map from persisted orders (no events emitted), and `run_app` calls it on startup
+  from the configured store — so a re-submit of any previously-recorded `client_order_id`
+  is de-duplicated even after the in-memory map is lost, closing the crash-restart
+  double-submit window for a venue (like Kraken) that issues no venue-side idempotency
+  token. Runs before the startup reconcile. (#75)
 - **Fills are now de-duplicated by `fill_id`** in both the `PositionTracker` and the
   `PerformanceService`: a re-applied execution (e.g. a private-WS snapshot replay after
   a reconnect) is ignored instead of silently double-counting the position / corrupting

@@ -376,3 +376,44 @@ async def test_daily_loss_breach_escalates_to_kill_switch_and_cancels_resting() 
     with pytest.raises(RiskLimitBreached) as again:
         await router.submit(_order("blocked-2"))
     assert again.value.limit == "kill_switch"
+
+
+# --- restore: recover dedup state across a restart ------------------------- #
+
+
+async def test_restore_seeds_dedup_so_resubmit_skips_broker() -> None:
+    """`restore` recovers ids from persistence: a re-submit dedups, no broker call."""
+    broker = _SpyBroker()
+    router = OrderRouter(broker, EventBus())
+
+    # An order the engine submitted before a crash (reconstructed from the store).
+    prior = _order("prior-1")
+    prior.submit()
+    prior.open("SPY-OLD")  # its last-known live venue state
+
+    assert router.restore([prior]) == 1
+    assert router.get("prior-1") is prior
+
+    # A re-submit of the same id returns the restored order; the broker is untouched
+    # — the crash-restart double-submit window is closed.
+    returned = await router.submit(_order("prior-1"))
+    assert returned is prior
+    assert broker.place_calls == 0
+
+
+def test_restore_emits_no_events_and_never_clobbers_a_tracked_id() -> None:
+    """`restore` is silent (historical, not fresh) and keeps a tracked id intact."""
+    broker = _SpyBroker()
+    bus = EventBus()
+    seen = _capture(bus)
+    router = OrderRouter(broker, bus)
+
+    a = _order("a")
+    a.submit()
+    a.open("V1")
+    assert router.restore([a]) == 1
+    assert seen == []  # no OrderEvent emitted for a restored historical order
+
+    # Re-restoring the same id is a no-op (count 0) and does not replace the object.
+    assert router.restore([_order("a")]) == 0
+    assert router.get("a") is a  # original kept, not clobbered
