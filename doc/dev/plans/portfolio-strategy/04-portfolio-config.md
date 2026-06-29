@@ -1,12 +1,12 @@
 ---
 plan: portfolio-strategy/04-portfolio-config
 kind: leaf
-status: planned
+status: done
 complexity: medium
 depends: [02, 03]
 parallel: false
 branch: feat/portfolio-config
-pr: ""
+pr: "#66"
 ---
 
 # Portfolio config + wiring into run_app; fynance-research extra

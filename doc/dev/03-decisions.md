@@ -6,6 +6,40 @@ rejected approaches as tombstones.
 
 ---
 
+### 2026-06-29 Portfolio config + run_app wiring; resample-on-read daily seam (PR #66)
+
+**Decision.** A portfolio is declarable via `PortfolioStrategyConfig` (universe +
+`SignalRefConfig` + `capital` + daily `DataSourceConfig` + optional `gross_cap` +
+`venue`) on `AppConfig.portfolios`; `run_app`'s `build_portfolio_runners` resolves
+the signal by reference, builds a `PortfolioFeed` + `PortfolioRunner` on the **shared**
+engine, and reports per-coin. **Overlap detection** is widened: no instrument may be
+claimed by two runners — strategy↔strategy (existing), strategy↔portfolio, or
+portfolio↔portfolio — because the shared per-instrument tracker has no attribution. A
+portfolio is exempt from the *intra*-single-instrument `_reject_commingled` (it owns
+its whole universe) but its universe must not intersect any other runner's.
+
+The daily-bars seam: `ResamplingDccdClient` wraps a real dccd client, reads the
+**1-minute** store and aggregates OHLCV to daily (`open=first, high=max, low=min,
+close=last, volume=sum` via `group_by_dynamic(every="1d", closed="left",
+label="left")`), causal — closed days only, the still-forming last day dropped, OHLC
+carried **exact** (no float). It is **injectable, not auto-wrapped** by `run_app`:
+the caller wraps the real client when a daily portfolio reads a 1m store; offline
+tests inject a fake *daily* client directly. `fynance-research` is documented as an
+editable `[triptych]` extra (LS1's signals live there; the engine stays generic).
+
+**Why.** dccd serves only 1m (it does not resample — `read(span=86400)` → 0 rows), so
+a daily consumer must resample, mirroring `fynance_research/data.py`. Making the
+resampler an injectable client keeps `PortfolioFeed`/`run_app` agnostic and the
+offline tests resample-free; auto-wrapping was rejected because `run_app` can't tell
+the store's native span from the requested span without a new config signal — deferred
+until needed. Widened overlap detection prevents two runners silently fighting over
+one instrument's shared position. **Rejected:** resampling inside `PortfolioFeed`
+(couples it to the store's native span); auto-wrapping in `run_app` (needs a
+source-span config field — premature); a hard `fynance-research` dependency (would
+force the research repo on every install).
+
+---
+
 ### 2026-06-29 PortfolioRunner — whole-universe targeting, per-leg failure isolation (PR #65)
 
 **Decision.** `application.PortfolioRunner` mirrors `StrategyRunner` for a whole

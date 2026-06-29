@@ -46,6 +46,7 @@ from typing import Any, Literal
 import yaml
 from pydantic import BaseModel, Field, field_validator
 
+from trading_bot.domain.instrument import Symbol, parse_kraken_pair
 from trading_bot.domain.money import money
 
 __all__ = [
@@ -54,6 +55,7 @@ __all__ = [
     "SignalRefConfig",
     "StorageConfig",
     "StrategyConfig",
+    "PortfolioStrategyConfig",
     "RiskConfig",
     "AppConfig",
 ]
@@ -230,6 +232,121 @@ class StrategyConfig(BaseModel):
         return v
 
 
+class PortfolioStrategyConfig(BaseModel):
+    """One **multi-asset** strategy the engine should drive — a universe + sizing.
+
+    The portfolio analogue of :class:`StrategyConfig`. Where a
+    :class:`StrategyConfig` names *one* ``symbol`` and an optional fractional
+    ``reference_qty``, a portfolio names a whole ``universe`` of pairs and an
+    explicit ``capital`` base its signal's weight vector is a fraction of (a
+    weight ``w`` for a coin targets a position worth ``w * capital``). The signal
+    is a ``"module:function"`` :class:`SignalRefConfig` resolving to a
+    ``target_weights``-shaped callable (a
+    :data:`~trading_bot.application.portfolio.PortfolioSignalFn`); the data is the
+    dccd dataset the universe's bars come from (daily by default — ``span =
+    86400``). Rebalance cadence is the data's daily ``span``.
+
+    Parameters
+    ----------
+    name : str
+        Logical, config-unique id for the portfolio instance. Must be non-empty.
+    universe : list of str
+        The canonical pairs the portfolio allocates across, ``BASE/QUOTE`` (e.g.
+        ``["BTC/USDT", "ETH/USDT"]``). Must be **non-empty**, every entry must
+        parse to a :class:`~trading_bot.domain.instrument.Symbol`, and the
+        universe must hold **no duplicate** instruments (two spellings of the same
+        pair — e.g. ``"BTC/USDT"`` and ``"XBT/USDT"`` — are caught as the same
+        instrument).
+    signal : SignalRefConfig
+        The weight-vector signal the portfolio evaluates — a ``"module:function"``
+        reference to a :data:`~trading_bot.application.portfolio.PortfolioSignalFn`
+        (there is no builtin portfolio-signal registry yet, so a bare name is
+        rejected at resolution time). **Required**.
+    capital : Decimal
+        The capital base (quote units) the signal's weights are a fraction of.
+        Parsed exactly from a YAML scalar (``str``/``int``) without touching
+        ``float``. Must be **strictly positive**.
+    data : DataSourceConfig
+        The portfolio's bar source (dccd dataset). The same source feeds every
+        coin in the universe (same ``exchange`` / ``span``); ``span`` is the daily
+        ``86400`` for a daily rebalance. **Required**.
+    gross_cap : Decimal or None, optional
+        An optional declared gross-exposure cap (``Σ|w| ≤ gross_cap``), carried
+        through to the
+        :class:`~trading_bot.application.portfolio.PortfolioStrategy` for a
+        signal/runner to honour. The engine does **not** enforce or re-normalise
+        against it. Must be positive when set. ``None`` (default) means uncapped.
+    venue : str, optional
+        The venue key the universe's bars are stored under / rendered for (e.g.
+        ``"binance"``). Defaults to ``"binance"``. Must be non-empty.
+
+    """
+
+    name: str
+    universe: list[str]
+    signal: SignalRefConfig
+    capital: Decimal
+    data: DataSourceConfig
+    gross_cap: Decimal | None = None
+    venue: str = "binance"
+
+    @field_validator("name", "venue")
+    @classmethod
+    def _non_empty(cls, v: str) -> str:
+        """Reject blank portfolio ``name`` / ``venue`` (whitespace-only too)."""
+        if not v or not v.strip():
+            raise ValueError("must be a non-empty string")
+        return v
+
+    @field_validator("universe")
+    @classmethod
+    def _valid_universe(cls, v: list[str]) -> list[str]:
+        """Reject an empty universe, an unparseable pair, or a duplicate coin.
+
+        Each entry must parse to a :class:`~trading_bot.domain.instrument.Symbol`
+        (so a malformed pair is caught at config time), and no two entries may
+        resolve to the **same** normalised :class:`Symbol` — the shared
+        per-instrument tracker has no attribution, so a coin cannot appear twice.
+        """
+        if not v:
+            raise ValueError("universe must be a non-empty list of pairs")
+        seen: dict[Symbol, str] = {}
+        for raw in v:
+            if not raw or not raw.strip():
+                raise ValueError("universe entries must be non-empty pair strings")
+            try:
+                symbol = parse_kraken_pair(raw)
+            except ValueError as exc:
+                raise ValueError(
+                    f"universe entry {raw!r} is not a valid pair: {exc}"
+                ) from exc
+            previous = seen.get(symbol)
+            if previous is not None:
+                raise ValueError(
+                    f"universe has duplicate instrument {raw!r} "
+                    f"(same as {previous!r}): a coin may appear only once "
+                    "(the shared per-instrument tracker has no attribution)"
+                )
+            seen[symbol] = raw
+        return v
+
+    @field_validator("capital")
+    @classmethod
+    def _positive_capital(cls, v: Decimal) -> Decimal:
+        """Reject a non-positive ``capital`` (zero too)."""
+        if v <= 0:
+            raise ValueError(f"capital must be positive, got {v}")
+        return v
+
+    @field_validator("gross_cap")
+    @classmethod
+    def _positive_gross_cap(cls, v: Decimal | None) -> Decimal | None:
+        """Reject a non-positive ``gross_cap`` (``None`` is allowed)."""
+        if v is not None and v <= 0:
+            raise ValueError(f"gross_cap must be positive, got {v}")
+        return v
+
+
 class StorageConfig(BaseModel):
     """Where the engine persists state and finds market data on disk.
 
@@ -317,7 +434,14 @@ class AppConfig(BaseModel):
     brokers : list of BrokerConfig, optional
         The brokers to wire up. Empty by default.
     strategies : list of StrategyConfig, optional
-        The strategies to drive. Empty by default.
+        The single-instrument strategies to drive. Empty by default.
+    portfolios : list of PortfolioStrategyConfig, optional
+        The multi-asset portfolio strategies to drive (each allocates across a
+        whole ``universe`` via a weight-vector signal). Empty by default. A
+        portfolio runs alongside the single-instrument strategies through the same
+        shared engine; no instrument may be claimed by both a portfolio and a
+        single-instrument strategy (or by two portfolios) — see
+        :func:`~trading_bot.application.run_app.build_portfolio_runners`.
     risk : RiskConfig, optional
         Engine-wide risk limits. Defaults to all-unconstrained.
     storage : StorageConfig, optional
@@ -344,6 +468,7 @@ class AppConfig(BaseModel):
     starting_capital: Decimal = Field(default_factory=lambda: money("100000"))
     brokers: list[BrokerConfig] = Field(default_factory=list)
     strategies: list[StrategyConfig] = Field(default_factory=list)
+    portfolios: list[PortfolioStrategyConfig] = Field(default_factory=list)
     risk: RiskConfig = Field(default_factory=RiskConfig)
     storage: StorageConfig = Field(default_factory=StorageConfig)
 

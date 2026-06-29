@@ -35,10 +35,14 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# The other two pillars of the triptych. fynance is on PyPI; dccd is installed
-# editable from its sibling repo (kept out of the hard list so `pip install` and
-# CI never try to resolve it from PyPI):
-#   pip install -e ../Download_Crypto_Currencies_Data
+# The other two pillars of the triptych. fynance is on PyPI; dccd and
+# fynance-research are installed editable from their sibling repos (kept out of
+# the hard list so `pip install` and CI never try to resolve them from PyPI):
+#   pip install -e ../Download_Crypto_Currencies_Data   # dccd — market data
+#   pip install -e ../fynance-research                  # LS1 portfolio signals
+# fynance-research provides the live portfolio signal a PortfolioStrategyConfig's
+# `signal` ref imports (e.g. leaf 05's LS1); it is optional, like dccd, so the
+# unit suite skips its real-signal tests when it is absent.
 triptych = [
     "fynance>=1.0.7",
 ]
