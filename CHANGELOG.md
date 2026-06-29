@@ -19,6 +19,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   gated so a rebalance date is emitted only when **every** coin has that day's closed
   bar (never forward-filling a stale close); reuses the single-coin `DccdFeed` read
   path, injectable client, `asof_ms()` helper. Feeds the `PortfolioSignalFn`. (#64)
+- `application.PortfolioRunner` — the multi-asset rebalance loop: each tick calls the
+  `PortfolioSignalFn` for the whole book, sizes the weight vector to per-coin target
+  quantities, and routes **N** idempotent (`{name}-{symbol}-{step}`), risk-gated
+  **maker-LIMIT** legs through the shared `OrderRouter` (a coin omitted from the
+  weights is targeted **flat**). Per-leg failures (`RiskLimitBreached`/`BrokerError`)
+  are collected on a `RebalanceResult` and don't abort the book; cooperative
+  `run(stop_event=...)`. (#65)
 
 ### Changed
 

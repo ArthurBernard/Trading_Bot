@@ -6,6 +6,35 @@ rejected approaches as tombstones.
 
 ---
 
+### 2026-06-29 PortfolioRunner — whole-universe targeting, per-leg failure isolation (PR #65)
+
+**Decision.** `application.PortfolioRunner` mirrors `StrategyRunner` for a whole
+universe: per tick it sizes the weight vector (`weights_to_signals`) and routes one
+leg per coin through the **shared** `OrderRouter`/`PositionTracker`/`EventBus`.
+Three choices: (1) **whole-universe targeting** — it iterates `strategy.universe`,
+not the weight keys, synthesising a **0-weight (flat)** target for any coin the
+signal omits, so a dropped name is closed rather than left stranded (the book always
+covers the full universe). (2) **Per-coin idempotency id** `f"{name}-{symbol}-{step}"`
+— a re-run/retry dedups per coin per rebalance at the router. (3) **Per-leg failure
+isolation** — a leg that raises `RiskLimitBreached`/`BrokerError` is caught, recorded
+as a `RebalanceFailure` on the `RebalanceResult`, and the **other legs still route**
+(not all-or-nothing). Maker-LIMIT legs priced at each coin's latest close (fee +
+self-contained paper fills). The optional gross guard stays **off** (trust the
+signal's cap, per [[the leaf-01 portfolio-signal ADR]]).
+
+**Why.** A cross-sectional book is only correct as a *set* — leaving an omitted coin
+at its old position silently changes the realised exposure, so omitted ⇒ flat. Per-leg
+isolation: aborting the whole rebalance because one coin breached a limit would leave
+the book half-rebalanced and let one bad name veto every good one; recording the
+failure and continuing keeps the rest of the book on target and surfaces the breach.
+Idempotency at the position level (delta vs the shared tracker) already makes a
+deterministic re-run a no-op *before* id-dedup matters; the namespaced id covers the
+retry-after-ambiguous case. **Rejected:** all-or-nothing rebalance (one bad leg
+freezes the book); iterating the weight keys (would strand omitted coins);
+re-implementing submission instead of reusing the risk-gated `OrderRouter`.
+
+---
+
 ### 2026-06-29 PortfolioFeed — common-index inner-join, no forward-fill; dccd serves 1m only (PR #64)
 
 **Decision.** `application.PortfolioFeed` assembles the N-coin cross-section by an

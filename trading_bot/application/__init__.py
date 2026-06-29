@@ -87,6 +87,21 @@ It then layers the engine's use-cases:
   opt-in/injectable (the process entrypoint calls
   :meth:`~trading_bot.application.orchestrator.Orchestrator.install_signal_handlers`;
   importing installs nothing). Replaces the legacy multiprocessing server.
+* portfolio_runner — the
+  :class:`~trading_bot.application.portfolio_runner.PortfolioRunner`, the
+  **multi-asset** analogue of the ``StrategyRunner``: each (daily) rebalance tick
+  it evaluates the
+  :data:`~trading_bot.application.portfolio.PortfolioSignalFn` for the whole book,
+  sizes the weight vector into per-coin target quantities
+  (:func:`~trading_bot.application.portfolio.weights_to_signals`), diffs each
+  against the **shared** ``PositionTracker``, and routes **N** idempotent,
+  risk-gated orders through the **shared** ``OrderRouter`` — a coin omitted from
+  the weights is targeted *flat* (the book covers the whole universe), each leg's
+  ``client_order_id`` is symbol-namespaced (``f"{name}-{symbol}-{step}"``) so a
+  re-run dedups per coin, and a per-leg failure (risk breach / broker error) is
+  collected without aborting the other legs (a
+  :class:`~trading_bot.application.portfolio_runner.RebalanceResult` reports
+  submitted-vs-failed).
 * run_app — :func:`~trading_bot.application.run_app.run_app` (and
   :func:`~trading_bot.application.run_app.build_runners`), the **triptych
   entrypoint**: one :class:`~trading_bot.application.config.AppConfig` →
@@ -135,6 +150,13 @@ from trading_bot.application.portfolio import (
     weights_to_signals,
 )
 from trading_bot.application.portfolio_feed import PortfolioFeed
+from trading_bot.application.portfolio_runner import (
+    PortfolioOrderFactory,
+    PortfolioRunner,
+    RebalanceFailure,
+    RebalanceResult,
+    portfolio_limit_at_close_factory,
+)
 from trading_bot.application.position_tracker import PositionTracker
 from trading_bot.application.reconcile import ReconResult, reconcile
 from trading_bot.application.risk import RiskManager
@@ -196,6 +218,12 @@ __all__ = [
     # strategy runner
     "StrategyRunner",
     "OrderFactory",
+    # portfolio runner (multi-asset loop)
+    "PortfolioRunner",
+    "PortfolioOrderFactory",
+    "RebalanceResult",
+    "RebalanceFailure",
+    "portfolio_limit_at_close_factory",
     # orchestration
     "Orchestrator",
     "RunnerGroupError",
