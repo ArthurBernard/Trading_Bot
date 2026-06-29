@@ -6,6 +6,23 @@ rejected approaches as tombstones.
 
 ---
 
+### 2026-06-29 Project name finalized — keep `trading_bot` (no rename) (PR #84)  [accepted]
+
+**Choice.** The triptych keeps its names: **`trading_bot`** (execution/orchestration),
+**`dccd`** (data), **`fynance`** (research). The long-deferred "final project name"
+decision is **closed** — there is no rename of the package / repo / docs.
+
+**Why.** The maintainer reviewed naming and chose to keep the existing names. The names
+are clear, already established across the three repos and their tooling, and a rename
+would churn the package import path, the repo, CI, and every cross-repo reference for no
+functional gain. Closing the decision removes a standing "deferred" item that was
+otherwise blocking the roadmap from reaching zero open work before go-live.
+
+**Rejected alternatives.** A themed rename of the project/package (considered earlier in
+the session, then dropped — "on garde ces noms là"): pure churn, no benefit.
+
+---
+
 ### 2026-06-29 Linear position drain via an incremental `Position.with_fill` (PR #82)  [accepted]
 
 **Choice.** Add `Position.with_fill(fill) -> Position` (+ `Position.flat`); reimplement

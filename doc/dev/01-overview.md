@@ -40,7 +40,7 @@ deepens it epic by epic.
   [`07-roadmap.md`](07-roadmap.md) for what comes next.
 - **Decided direction:** full rewrite (not incremental); execution **and**
   orchestration; multi-exchange-ready with **Kraken first**; **paper-first**;
-  name kept as `trading_bot` for now (final name deferred). See
+  name **decided** — kept as `trading_bot` (with `dccd` / `fynance`); no rename. See
   [`03-decisions.md`](03-decisions.md).
 
 ## Repo map
