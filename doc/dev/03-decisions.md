@@ -6,6 +6,47 @@ rejected approaches as tombstones.
 
 ---
 
+### 2026-06-29 Project name finalized — keep `trading_bot` (no rename) (PR #84)  [accepted]
+
+**Choice.** The triptych keeps its names: **`trading_bot`** (execution/orchestration),
+**`dccd`** (data), **`fynance`** (research). The long-deferred "final project name"
+decision is **closed** — there is no rename of the package / repo / docs.
+
+**Why.** The maintainer reviewed naming and chose to keep the existing names. The names
+are clear, already established across the three repos and their tooling, and a rename
+would churn the package import path, the repo, CI, and every cross-repo reference for no
+functional gain. Closing the decision removes a standing "deferred" item that was
+otherwise blocking the roadmap from reaching zero open work before go-live.
+
+**Rejected alternatives.** A themed rename of the project/package (considered earlier in
+the session, then dropped — "on garde ces noms là"): pure churn, no benefit.
+
+---
+
+### 2026-06-29 Linear position drain via an incremental `Position.with_fill` (PR #82)  [accepted]
+
+**Choice.** Add `Position.with_fill(fill) -> Position` (+ `Position.flat`); reimplement
+`from_fills` as a fold of `with_fill` from `flat`; have `PositionTracker` and
+`PerformanceService` keep a **running** per-instrument `Position` advanced one fill at a
+time, dropping the per-instrument fill lists.
+
+**Why.** The audit's O(n²) follow-up: both `apply` paths recomputed `Position.from_fills`
+over the full accumulated fill list on every fill (the performance service did it
+*twice*), so draining N fills was Σk = O(n²) — a multi-year daily run/replay through the
+engine was slow. Incremental folding is O(1) per fill, O(n) overall.
+
+**Why it stays exact.** `from_fills` is now *implemented* as the same `with_fill` fold, so
+the one-shot and incremental results are identical **by construction** — the existing
+per-step equivalence tests (`apply` == `from_fills` at every prefix) remain the guard and
+stay green; the two can't drift.
+
+**Rejected alternatives.** A bespoke incremental updater duplicated in each service
+(re-implements the close/flip/fee logic — invites divergence; instead the single source of
+truth is the pure `Position.with_fill`); prefix-memoised `from_fills` (still O(n) list
+memory, more complex, same result).
+
+---
+
 ### 2026-06-29 Remove the unused `BrokerRegistry` (delete, don't wire) (PR #77)  [accepted]
 
 **Choice.** Delete `brokers/registry.py` (`BrokerRegistry`) rather than wire it into the

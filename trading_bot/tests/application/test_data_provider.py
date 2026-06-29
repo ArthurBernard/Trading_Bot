@@ -283,42 +283,46 @@ def test_feed_for_requires_data_source() -> None:
 
 
 @pytest.mark.network
-def test_feed_for_real_inventory_causal_replay() -> None:
+async def test_feed_for_real_inventory_causal_replay() -> None:
     """Real dccd: feed_for over a stored OHLC dataset replays with no lookahead.
 
     Skips with a clear reason when no OHLC dataset is stored (the injected-client
     tests above cover the logic; this only adds real-data coverage when present).
+    The dccd ``Client`` is an **async context manager** — ``inventory()`` / ``read``
+    require it entered (``async with``), which builds the store.
     """
     dccd = pytest.importorskip("dccd")
-    client = dccd.Client()
-    ohlc = [
-        d
-        for d in client.inventory()
-        if d.get("data_type") == "ohlc" and d.get("rows", 0) > 0
-    ]
-    if not ohlc:
-        pytest.skip("no stored dccd OHLC dataset to replay (inventory empty)")
+    async with dccd.Client() as client:
+        ohlc = [
+            d
+            for d in client.inventory()
+            if d.get("data_type") == "ohlc" and d.get("rows", 0) > 0
+        ]
+        if not ohlc:
+            pytest.skip("no stored dccd OHLC dataset to replay (inventory empty)")
 
-    entry = ohlc[0]
-    cfg = StrategyConfig.model_validate(
-        {
-            "name": "real",
-            "symbol": entry["pair"],
-            "data": {"exchange": entry["exchange"], "span": int(entry["span"])},
-        }
-    )
-    feed = feed_for(cfg, client=client)
-    full = feed.latest()
-    if full.height == 0:
-        pytest.skip(f"dccd OHLC dataset {entry['exchange']}/{entry['pair']} read empty")
+        entry = ohlc[0]
+        cfg = StrategyConfig.model_validate(
+            {
+                "name": "real",
+                "symbol": entry["pair"],
+                "data": {"exchange": entry["exchange"], "span": int(entry["span"])},
+            }
+        )
+        feed = feed_for(cfg, client=client)
+        full = feed.latest()
+        if full.height == 0:
+            pytest.skip(
+                f"dccd OHLC dataset {entry['exchange']}/{entry['pair']} read empty"
+            )
 
-    assert list(full.columns) == list(BARS_SCHEMA)
-    times = full["time"].to_list()
-    assert times == sorted(times)  # monotonic non-decreasing
+        assert list(full.columns) == list(BARS_SCHEMA)
+        times = full["time"].to_list()
+        assert times == sorted(times)  # monotonic non-decreasing
 
-    for t, window in enumerate(feed):
-        assert window.height == t + 1
-        assert window["time"][-1] == full["time"][t]
-        assert window["time"].max() == full["time"][t]
-        if t >= 4:
-            break
+        for t, window in enumerate(feed):
+            assert window.height == t + 1
+            assert window["time"][-1] == full["time"][t]
+            assert window["time"].max() == full["time"][t]
+            if t >= 4:
+                break

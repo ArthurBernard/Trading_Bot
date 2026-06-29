@@ -16,6 +16,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 
+## [0.4.0] - 2026-06-29
+
+### Added
+
+- `Position.with_fill(fill)` + `Position.flat(instrument)` — the exact **incremental**
+  fold (`from_fills` is now a fold of `with_fill`). (#82)
+
+### Changed
+
+- **Tracker & performance drain is now O(n)**, not O(n²). The `PositionTracker` and
+  `PerformanceService` keep a **running** `Position` per instrument advanced one fill at
+  a time (`Position.with_fill`) instead of recomputing `Position.from_fills` over the
+  whole accumulated fill history on every fill (the perf service did it *twice* per
+  fill). Behaviour is identical — `from_fills` is now implemented as the same fold, so
+  one-shot and incremental results agree by construction (existing equivalence tests stay
+  green) — but a long run / replay through the engine is no longer quadratic. (#82)
+
+### Fixed
+
+- The two `-m network` real-dccd replay tests now use `async with dccd.Client() as c`
+  (current dccd's `Client` is an async context manager — `inventory()`/`read` require it
+  entered); they previously called `inventory()` on a non-entered client. (#83)
+
+### Deprecated
+
+### Removed
+
 ## [0.3.0] - 2026-06-29
 
 ### Added
