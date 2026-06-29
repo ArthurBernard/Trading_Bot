@@ -29,11 +29,6 @@ the gitignored `strategies/`, real dccd-data verified). History in `CHANGELOG.md
   to trigger a reconcile pass on, and live fills are not streamed onto the bus. Wire
   the private fill WS into the engine and trigger `reconcile` on each reconnect (and
   land fill-id dedup — see below — before that stream feeds the tracker).
-- [ ] **PaperBroker/engine drain is superlinear (~O(n²)) over accumulated ticks.** A
-  full multi-year daily run through `run_app` is slow (≈10 ticks 6.5s → 200 ticks 118s);
-  the LS1 real-data tests assert on a single latest-cross-section rebalance instead.
-  Profile the per-fill rebuild (tracker/perf/bus) and make the drain linear before any
-  long backtest/live-replay through the engine.
 - [ ] **dccd API drift breaks two `-m network` data-feed tests.** `dccd.Client().inventory()`
   is now called outside an `async with` in `test_data_feed.py` / `test_data_provider.py`
   (current dccd rejects it). Network-only (not in CI). Realign the dccd client usage.

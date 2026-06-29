@@ -135,13 +135,123 @@ class Position:
         return self.net_qty < 0
 
     @classmethod
+    def flat(cls, instrument: Instrument) -> Position:
+        """A flat (zero-exposure) position for ``instrument`` — the fold identity.
+
+        The starting point of a fold: ``net_qty`` ``0``, no average entry, zero
+        realised PnL/fees. :meth:`from_fills` folds :meth:`with_fill` over the
+        fills starting from this; a live caller (the position tracker /
+        performance service) keeps one of these per instrument and advances it
+        one fill at a time.
+        """
+        return cls(
+            instrument=instrument,
+            net_qty=_ZERO,
+            avg_entry_price=None,
+            realised_pnl=_ZERO,
+            fees_paid=_ZERO,
+        )
+
+    def with_fill(self, fill: Fill) -> Position:
+        """Fold one more ``fill`` into this position, returning the next snapshot.
+
+        The **incremental** counterpart of :meth:`from_fills`: it applies exactly
+        the same per-fill rules — fee accrual, quantity-weighted-average increase,
+        partial/full close (realise PnL on the closed part), and flip (close then
+        re-open at the flipping fill's price) — to *this* position's state and
+        returns the next :class:`Position`. Because :meth:`from_fills` is itself
+        implemented as a fold of ``with_fill`` from :meth:`flat`,
+        ``Position.from_fills(fills)`` **equals** folding ``with_fill`` over those
+        fills — by construction, so the two can never diverge. This lets a caller
+        maintain a running position in **O(1) per fill** (O(n) overall) instead of
+        recomputing the whole fill history on every new fill.
+
+        Parameters
+        ----------
+        fill : Fill
+            The next fill to fold in (execution order). Must name this position's
+            instrument.
+
+        Returns
+        -------
+        Position
+            The net position after folding in ``fill``.
+
+        Raises
+        ------
+        InstrumentMismatch
+            If ``fill`` names a different instrument than this position.
+
+        """
+        if fill.instrument != self.instrument:
+            raise InstrumentMismatch(str(self.instrument), str(fill.instrument))
+
+        net_qty = self.net_qty
+        # Average entry of the open exposure; 0 when flat (the value is irrelevant
+        # while flat — the opening branch overwrites it).
+        avg_entry: Money = (
+            self.avg_entry_price if self.avg_entry_price is not None else _ZERO
+        )
+        # Fees always accrue and always reduce realised PnL.
+        fees_paid = self.fees_paid + fill.fee
+        realised_pnl = self.realised_pnl - fill.fee
+
+        signed = fill.signed_qty  # +qty for BUY, -qty for SELL
+        price = fill.price
+
+        if net_qty == 0:
+            # Opening from flat: the fill becomes the whole exposure.
+            net_qty = signed
+            avg_entry = price
+        elif (net_qty > 0) == (fill.side is OrderSide.BUY):
+            # Increasing exposure: quantity-weighted average of old + added.
+            old_mag = abs(net_qty)
+            add_mag = fill.qty
+            total_mag = old_mag + add_mag
+            avg_entry = (avg_entry * old_mag + price * add_mag) / total_mag
+            net_qty += signed
+        else:
+            # Opposite direction: this fill reduces (and maybe flips) exposure.
+            open_mag = abs(net_qty)
+            closed_mag = min(open_mag, fill.qty)
+            realised_pnl += _close_pnl(
+                was_long=net_qty > 0,
+                entry=avg_entry,
+                exit_price=price,
+                closed_qty=closed_mag,
+            )
+            new_net = net_qty + signed
+            if new_net == 0:
+                # Exact close back to flat.
+                net_qty = _ZERO
+                avg_entry = _ZERO
+            elif (new_net > 0) == (net_qty > 0):
+                # Partial close: same sign, entry unchanged, qty reduced.
+                net_qty = new_net
+            else:
+                # Flip: old side fully closed above; remainder opens at the
+                # flipping fill's price, which becomes the new average entry.
+                net_qty = new_net
+                avg_entry = price
+
+        return Position(
+            instrument=self.instrument,
+            net_qty=net_qty,
+            avg_entry_price=None if net_qty == 0 else avg_entry,
+            realised_pnl=realised_pnl,
+            fees_paid=fees_paid,
+        )
+
+    @classmethod
     def from_fills(cls, fills: Iterable[Fill]) -> Position:
         """Fold an **ordered** sequence of fills into a net :class:`Position`.
 
         Handles increases (quantity-weighted average entry), partial closes and
         full closes (realise PnL on the closed part), flips (close then re-open
         at the flipping fill's price), and fee accrual. See the module docstring
-        for the PnL sign convention and flip handling.
+        for the PnL sign convention and flip handling. Implemented as a fold of
+        :meth:`with_fill` from :meth:`flat`, so a one-shot ``from_fills`` and an
+        incremental per-fill caller compute identical positions.
 
         Parameters
         ----------
@@ -166,76 +276,10 @@ class Position:
         if not ordered:
             raise ValueError("from_fills requires at least one fill")
 
-        instrument: Instrument = ordered[0].instrument
-
-        net_qty: Money = _ZERO
-        # Average entry price of the *currently open* exposure. Only meaningful
-        # while net_qty != 0; kept as a plain Decimal (defaults to zero when
-        # flat) and exposed as None when flat in the final snapshot.
-        avg_entry: Money = _ZERO
-        realised_pnl: Money = _ZERO
-        fees_paid: Money = _ZERO
-
+        position = cls.flat(ordered[0].instrument)
         for fill in ordered:
-            if fill.instrument != instrument:
-                raise InstrumentMismatch(str(instrument), str(fill.instrument))
-
-            # Fees always accrue and always reduce realised PnL.
-            fees_paid += fill.fee
-            realised_pnl -= fill.fee
-
-            signed = fill.signed_qty  # +qty for BUY, -qty for SELL
-            price = fill.price
-
-            if net_qty == 0:
-                # Opening from flat: the fill becomes the whole exposure.
-                net_qty = signed
-                avg_entry = price
-                continue
-
-            same_direction = (net_qty > 0) == (fill.side is OrderSide.BUY)
-
-            if same_direction:
-                # Increasing exposure: quantity-weighted average of old + added.
-                # Work in magnitudes; both legs share the position's sign.
-                old_mag = abs(net_qty)
-                add_mag = fill.qty
-                total_mag = old_mag + add_mag
-                avg_entry = (avg_entry * old_mag + price * add_mag) / total_mag
-                net_qty += signed
-                continue
-
-            # Opposite direction: this fill reduces (and maybe flips) exposure.
-            open_mag = abs(net_qty)
-            closed_mag = min(open_mag, fill.qty)
-            realised_pnl += _close_pnl(
-                was_long=net_qty > 0,
-                entry=avg_entry,
-                exit_price=price,
-                closed_qty=closed_mag,
-            )
-
-            new_net = net_qty + signed
-            if new_net == 0:
-                # Exact close back to flat.
-                net_qty = _ZERO
-                avg_entry = _ZERO
-            elif (new_net > 0) == (net_qty > 0):
-                # Partial close: same sign, entry unchanged, qty reduced.
-                net_qty = new_net
-            else:
-                # Flip: old side fully closed above; remainder opens at the
-                # flipping fill's price, which becomes the new average entry.
-                net_qty = new_net
-                avg_entry = price
-
-        return cls(
-            instrument=instrument,
-            net_qty=net_qty,
-            avg_entry_price=None if net_qty == 0 else avg_entry,
-            realised_pnl=realised_pnl,
-            fees_paid=fees_paid,
-        )
+            position = position.with_fill(fill)
+        return position
 
 
 def _close_pnl(
