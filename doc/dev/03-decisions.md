@@ -6,6 +6,42 @@ rejected approaches as tombstones.
 
 ---
 
+### 2026-06-29 LS1 multi-venue live tests; Kraken is public+PaperBroker (no testnet) (PR #69)
+
+**Decision.** LS1 is now wired for **both venues** by config — `ls1_kraken_signal`
+(calls the research oracle with `venue="kraken"`, USD pairs) alongside the Binance
+`ls1_portfolio_signal`, each a thin `examples/ls1_signal.py` wrapper over the generic
+`as_portfolio_signal` adapter; `configs/ls1_kraken.yaml` mirrors `configs/ls1.yaml`
+on the `-USD` universe + dccd Kraken store. The **live tests** differ by venue because
+the venues differ: **Binance** has a testnet, so its order round-trip is the opt-in
+`network` testnet test (real orders, paper money); **Kraken has no public spot
+testnet**, so its live test (`test_ls1_kraken_real_e2e`) runs the **real** LS1 Kraken
+signal over the **real** dccd Kraken store + a **live Kraken public-ticker** sanity
+check, but routes the rebalance through the **`PaperBroker`** — **no real order is ever
+placed** (the maintainer chose public+PaperBroker over a real-money Kraken order test).
+
+**Why.** A live test on Kraken that *places* orders is real money (no sandbox exists),
+which violates the project's "no real order by accident" posture; running the real
+signal + real data + live public prices through the simulator validates the whole
+chain (data → signal → sizing → delta → routing → risk) bar the venue's order
+acceptance, with zero financial risk. Real Kraken order placement stays the deliberate
+go-live opt-in (`doc/dev/09-go-live.md`). **Rejected:** a real-money Kraken order test
+(footgun — a stray `-m network` run with a real key trades for real); a Kraken testnet
+(does not exist).
+
+**Finding (tracked in `07-roadmap.md`): venue symbol renders are ambiguous to invert.**
+`to_venue_symbol("kraken")` yields `XBTUSD` (which `parse_binance_symbol` mis-reads as
+`XB/TUSD` — the `TUSD` quote) and `TRXUSD` (which `parse_kraken_pair` mis-reads as
+`TR/USD` — the trailing `X` looks like a legacy prefix); no single parser inverts both.
+The test's fake dccd client disambiguates by trying both parsers and picking the
+candidate dir that **exists** in the store — but this exposes that the **production**
+config → real-dccd path has no agreed store-key convention (the default `PortfolioFeed`
+render does not match a hyphen-keyed `BASE-QUOTE` store for either venue; only the test
+client normalises). A real `trading-bot run configs/ls1*.yaml` against a live dccd
+client needs that convention pinned.
+
+---
+
 ### 2026-06-29 Testnet is a third broker path; it bypasses live_enabled by being mainnet-incapable (PR #68)
 
 **Decision.** A `BrokerConfig.testnet: true` selects a venue's **testnet/sandbox**

@@ -63,6 +63,7 @@ from trading_bot.domain.instrument import (
     Instrument,
     Symbol,
     parse_binance_symbol,
+    parse_kraken_pair,
 )
 from trading_bot.domain.money import Money, money
 
@@ -70,6 +71,9 @@ from trading_bot.domain.money import Money, money
 
 #: The real dccd Binance store root (1m parquet, dirs keyed "BTC-USDT").
 _STORE = Path.home() / "data" / "arthurserver" / "binance" / "ohlc"
+
+#: The real dccd Kraken store root (1m parquet, dirs keyed "BTC-USD").
+_KRAKEN_STORE = Path.home() / "data" / "arthurserver" / "kraken" / "ohlc"
 
 #: The 10 LS1 coins (all *-USDT, daily) — DEPLOY_LS1.md §2.
 _LS1_COINS = ["BTC", "ETH", "BCH", "LTC", "XRP", "XLM", "DOGE", "DOT", "TRX", "ZEC"]
@@ -114,15 +118,42 @@ class _ParquetSource:
     real 1m→daily resampling code (not a hand-rolled copy) is what the e2e
     exercises. Store dirs are keyed ``"BTC-USDT"`` (hyphen); a requested pair in
     any form (``"BTCUSDT"`` / ``"BTC/USDT"`` / ``"BTC-USDT"``) is normalised to it,
-    so the **default** ``run_app`` feed (which renders ``"BTCUSDT"``) resolves
-    without any config-side ``symbol_for`` hook.
+    so the **default** ``run_app`` feed (which renders ``"BTCUSDT"`` for Binance or
+    ``"XBTUSD"`` for Kraken) resolves without any config-side ``symbol_for`` hook —
+    every spelling normalises back to the canonical ``BASE-QUOTE`` store key.
+
+    Parameters
+    ----------
+    store : Path, optional
+        The venue's OHLC store root (``<root>/<PAIR>/1m/*.parquet``). Defaults to
+        the Binance store; pass :data:`_KRAKEN_STORE` for the Kraken USD pairs.
     """
 
-    @staticmethod
-    def _dir_for(symbol: str) -> str:
-        """Map any pair spelling to the store's hyphen dir key (``"BTC-USDT"``)."""
-        sym = parse_binance_symbol(symbol)
-        return f"{sym.base}-{sym.quote}"
+    def __init__(self, store: Path = _STORE) -> None:
+        self._store = store
+
+    def _dir_for(self, symbol: str) -> str:
+        """Map any venue render to the store's ``BASE-QUOTE`` dir key.
+
+        Venue renders are ambiguous to invert — ``to_venue_symbol("kraken")``
+        gives ``XBTUSD`` (which ``parse_binance_symbol`` mis-reads as ``XB/TUSD``)
+        and ``TRXUSD`` (which ``parse_kraken_pair`` mis-reads as ``TR/USD`` — the
+        ``X`` looks like a legacy prefix). So try **both** canonical parsers and
+        pick the candidate whose dir actually **exists** in this store; fall back
+        to the first parse. Robust for Binance (``BTCUSDT``) and Kraken
+        (``XBTUSD``/``TRXUSD``) renders alike.
+        """
+        candidates: list[str] = []
+        for parse in (parse_kraken_pair, parse_binance_symbol):
+            try:
+                sym = parse(symbol)
+            except ValueError:
+                continue
+            candidates.append(f"{sym.base}-{sym.quote}")
+        for cand in candidates:
+            if (self._store / cand).is_dir():
+                return cand
+        return candidates[0] if candidates else symbol
 
     def read(
         self,
@@ -133,7 +164,7 @@ class _ParquetSource:
         start_ns: int | None = None,
         end_ns: int | None = None,
     ) -> pl.DataFrame:
-        base = _STORE / self._dir_for(symbol) / "1m"
+        base = self._store / self._dir_for(symbol) / "1m"
         files = sorted(base.glob("*.parquet"))
         if not files:
             pytest.skip(f"no 1m parquet for {symbol} under {base}")
@@ -542,6 +573,113 @@ async def test_ls1_real_e2e() -> None:
 
     # Each coin's broker-confirmed net == weightᵢ × capital / priceᵢ on the latest
     # real close (a coin with weight 0 is flat — no position).
+    for sym in universe:
+        want = money(str(weights.get(sym, money("0")) * capital / closes[sym]))
+        pos = engine.tracker.position(Instrument(sym))
+        got = pos.net_qty if pos is not None else money("0")
+        assert got == want, f"{sym}: confirmed {got} != intended {want}"
+
+
+# =========================================================================== #
+# 3a-kraken. LS1 on Kraken (USD) — real signal + real data + LIVE public ticker,
+#            but PaperBroker (NO real order; Kraken has no testnet → real money)
+# =========================================================================== #
+
+
+@pytest.mark.network
+async def test_ls1_kraken_real_e2e() -> None:
+    """The real LS1 signal on **Kraken** (USD) → real dccd Kraken bars → PaperBroker.
+
+    The Kraken counterpart of :func:`test_ls1_real_e2e`. **Kraken has no public
+    spot testnet**, so a live test that *places* orders on Kraken would be real
+    money. This therefore runs the **real** LS1 Kraken book
+    (``fynance_research...target_weights("kraken")`` via ``ls1_kraken_signal``)
+    over the **real dccd Kraken store**, with a **live Kraken public-ticker**
+    sanity check (key-free) — but routes the rebalance through the **PaperBroker**:
+    **no real order is ever placed**. Asserts Σ|w| ≤ 2 and each coin's
+    broker-confirmed position == ``weightᵢ × capital / priceᵢ`` on the latest real
+    Kraken close.
+
+    SKIPS without the research package. To run::
+
+        pip install -e ../fynance-research
+        .venv/bin/python -m pytest \\
+            trading_bot/tests/application/test_ls1_e2e.py::test_ls1_kraken_real_e2e \\
+            -m network -v
+    """
+    pytest.importorskip(
+        "fynance_research",
+        reason="LS1 needs the research package: pip install -e ../fynance-research",
+    )
+    if not _KRAKEN_STORE.is_dir():
+        pytest.skip(
+            "no dccd Kraken store at ~/data/arthurserver/kraken/ohlc; sync the 10 "
+            "LS1 *-USD 1m pairs via the dccd daemon"
+        )
+
+    from examples.ls1_signal import ls1_kraken_signal
+
+    capital = money("100000")
+    gross_cap = money("2")
+    client = ResamplingDccdClient(_ParquetSource(_KRAKEN_STORE))
+    universe = [Symbol(c, "USD") for c in _LS1_COINS]
+
+    # The real Kraken oracle (reads its own store), Σ|w| ≤ 2.
+    weights = ls1_kraken_signal(0, {})
+    assert_gross_within(weights, gross_cap)
+
+    cfg = AppConfig.model_validate(
+        {
+            "mode": "paper",
+            "starting_capital": str(capital),
+            "brokers": [{"name": "paper-kraken", "exchange": "paper"}],
+            "portfolios": [
+                {
+                    "name": "ls1-kraken",
+                    "venue": "kraken",
+                    "universe": [f"{s.base}/{s.quote}" for s in universe],
+                    "signal": {"ref": "examples.ls1_signal:ls1_kraken_signal"},
+                    "capital": str(capital),
+                    "gross_cap": str(gross_cap),
+                    "data": {"exchange": "kraken", "span": 86_400},
+                }
+            ],
+        }
+    )
+
+    from trading_bot.application.portfolio_feed import PortfolioFeed
+    from trading_bot.application.run_app import build_portfolio_runners
+    from trading_bot.application.service_factory import build_engine
+    from trading_bot.brokers.kraken import KrakenBroker
+
+    feed = PortfolioFeed(
+        universe,
+        exchange="kraken",
+        client=client,
+        span=86_400,
+        symbol_for=lambda s: f"{s.base}-{s.quote}",
+    )
+    latest = feed.latest()
+    closes = {sym: money(str(latest[sym]["c"][-1])) for sym in universe}
+
+    # LIVE Kraken public ticker (key-free) — confirm the venue responds live and the
+    # latest dccd daily close is in the same ballpark as the intraday price (a wide
+    # band, since one is a daily close and the other is live intraday).
+    live_btc = await KrakenBroker().ticker(Instrument(Symbol("BTC", "USD")))
+    assert live_btc > 0
+    ratio = live_btc / closes[Symbol("BTC", "USD")]
+    assert money("0.5") < ratio < money("2"), (
+        f"live Kraken BTC/USD {live_btc} far from dccd close "
+        f"{closes[Symbol('BTC', 'USD')]}"
+    )
+
+    # Assemble exactly as run_app does and rebalance ONCE on the latest window —
+    # through the PaperBroker (no real order). Each coin's broker-confirmed net ==
+    # weightᵢ × capital / priceᵢ on the latest real Kraken close.
+    engine = build_engine(cfg, db_path=cfg.storage.db_path)
+    runner = build_portfolio_runners(cfg, engine, dccd_client=client)[0]
+    await runner.rebalance(runner._feed.latest())
+
     for sym in universe:
         want = money(str(weights.get(sym, money("0")) * capital / closes[sym]))
         pos = engine.tracker.position(Instrument(sym))
