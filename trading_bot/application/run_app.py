@@ -348,7 +348,9 @@ def _limit_at_close_factory(
     """
 
     def _factory(strategy: Strategy, delta: Money, bars: "pl.DataFrame") -> Order:
-        close = from_float(float(bars[close_col][-1]))
+        # Price exactly via str -> Decimal (never through float), matching
+        # PortfolioRunner._latest_closes; robust if the close column is Decimal.
+        close = money(str(bars[close_col][-1]))
         side = OrderSide.BUY if delta > 0 else OrderSide.SELL
         return Order(
             client_order_id="pending",  # overridden by the runner
