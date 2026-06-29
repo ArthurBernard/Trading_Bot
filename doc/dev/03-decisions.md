@@ -6,6 +6,39 @@ rejected approaches as tombstones.
 
 ---
 
+### 2026-06-29 PortfolioFeed — common-index inner-join, no forward-fill; dccd serves 1m only (PR #64)
+
+**Decision.** `application.PortfolioFeed` assembles the N-coin cross-section by an
+**inner-join on the bar timestamp**: a rebalance date is emitted only when **every**
+coin has that day's closed bar. A coin lagging the universe is **logged, never
+raised**, and its missing tail days are simply not emitted — a stale close is
+**never forward-filled** into the cross-section. It reuses the single-coin
+`DccdFeed` per coin (no new dccd read logic), stays causal (`frame[:t+1]` per coin,
+no lookahead), and is client-injectable (offline tests dccd-free). A `symbol_for`
+hook renders a canonical `Symbol` to the store's pair-key convention (the real
+Binance store is keyed `BTC-USDT`; `to_venue_symbol("binance")` yields `BTCUSDT`).
+
+**Finding (load-bearing downstream): dccd serves only 1-minute bars.** dccd's
+`read` is keyed by `span` and does **not** resample — `read(span=86400)` against the
+real Binance store returns 0 rows. Daily bars are a **consumer** responsibility
+(mirroring `fynance_research/data.py`, which resamples 1m→1d via polars
+`group_by_dynamic(every="1d")`). `PortfolioFeed` is kept **agnostic** — it consumes
+whatever daily bars the injected client returns — so the **live wiring (leaf 04)
+must inject a resample-on-read dccd client (1m→1d)**, and leaf 05's LS1 run must
+resample before feeding. The real-data verification ran against the live store with
+a resample-on-read client: 10 coins, 2011 daily dates (2020-08-18 → 2026-06-28),
+common index, causality verified.
+
+**Why.** A cross-sectional signal ranks each coin *relative to* the others *as of
+the same day*; a missing/stale bar on one coin silently shifts the ranking (today's
+BTC vs yesterday's ZEC) — a quiet corruption. Inner-join + no-forward-fill makes
+"all coins fresh, or the day is skipped" structural. **Rejected:** forward-filling a
+stale close (corrupts the cross-section); raising on a lagging coin (a single late
+sync would halt the whole book — degrade to the common-complete prefix instead);
+re-implementing the dccd read here (would duplicate/diverge from the single-coin path).
+
+---
+
 ### 2026-06-28 Portfolio signal contract — weight vector + explicit-qty sizing (PR #63)
 
 **Decision.** The multi-asset strategy contract is a `PortfolioSignalFn`
