@@ -32,8 +32,9 @@ the gitignored `strategies/`, real dccd-data verified). History in `CHANGELOG.md
 
 ## Open / deferred (maintainer decisions)
 
-- [ ] **Final project name.** Kept `trading_bot` for now — choose and apply a final
-  name when ready (touches the package/repo/docs).
 - [ ] **Real-key live enablement.** Validate Kraken private endpoints + venue-level
   order idempotency against a **real-key sandbox**, then flip `live_enabled` — the one
   remaining prerequisite before real-money trading. See `doc/dev/09-go-live.md`.
+
+> **Project name — decided:** kept as `trading_bot` (with `dccd` / `fynance`). The
+> deferred "final name" decision is **closed**; no rename. See `03-decisions.md`.

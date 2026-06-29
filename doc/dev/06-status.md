@@ -55,10 +55,11 @@ store-key convention is pinned** by config (`store_key_format`). Hygiene in the 
 removed the dead `BrokerRegistry`, and the limit-at-close price is exact `Decimal` (no
 float). Remaining venue-side idempotency token is the real-key-sandbox prerequisite.
 
-**Remaining (maintainer decisions, see `07-roadmap.md`):** the **final project name**
-(kept `trading_bot`), and **real-key live enablement** (validate Kraken private
-endpoints + venue-level idempotency against a real-key sandbox, then flip
-`live_enabled`). Engine layers, the triptych wiring (one `AppConfig` →
+**Remaining:** **real-key live enablement** (validate Kraken private endpoints +
+venue-level idempotency against a real-key sandbox, then flip `live_enabled`) — the one
+maintainer step left, see `07-roadmap.md`. The **project name is decided** (kept
+`trading_bot`, with `dccd` / `fynance`; no rename). Engine layers, the triptych wiring
+(one `AppConfig` →
 `run_app` → one engine → runners via the `Orchestrator`; `trading-bot serve` for the
 read-only dashboard), and the Phase-0 dev standard (packaging, CI 3.11–3.13, Git Flow,
 `.claude/` workflow, this `doc/dev/` pack) are all in place — see the paragraphs above
@@ -78,12 +79,13 @@ and `CHANGELOG.md` for what shipped.
 
 The engine is feature-complete and the safety machinery is wired. What remains is **not**
 engine code: **real-key live enablement** (validate Kraken private endpoints +
-venue-level idempotency against a real-key sandbox, then flip `live_enabled`) and the
-**final project name** — both maintainer decisions in [`07-roadmap.md`](07-roadmap.md).
+venue-level idempotency against a real-key sandbox, then flip `live_enabled`) — the one
+maintainer step in [`07-roadmap.md`](07-roadmap.md).
 
 ## Known gaps / deferred
 
-- **Final project name** — kept as `trading_bot` for now (deferred decision).
+- ~~**Final project name**~~ — **decided**: kept as `trading_bot` (with `dccd` /
+  `fynance`); no rename.
 - ~~**KPI ratios need a positive starting capital**~~ — **resolved (E10)**:
   `AppConfig.starting_capital` (default 100000) is wired into `PerformanceService(v0=)`.
 - ~~**Same-instrument strategies commingle in `run_app`**~~ — **resolved (E10)**:
