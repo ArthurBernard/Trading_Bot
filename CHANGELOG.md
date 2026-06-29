@@ -8,6 +8,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+### Changed
+
+### Fixed
+
+### Deprecated
+
+### Removed
+
+## [0.5.0] - 2026-06-29
+
+### Added
+
 - **Live monitoring — `trading-bot run --serve`.** Runs the declared system **and**
   serves the read-only dashboard over the **same** engine in one process, so positions
   / orders / PnL update in real time (engine bus + SSE) while the strategies run — not a
