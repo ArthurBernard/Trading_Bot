@@ -224,6 +224,7 @@ class KrakenPrivateWS(WebSocketBase):
         *,
         snap_trades: bool = True,
         snap_orders: bool = True,
+        on_connected: Callable[[], Awaitable[None]] | None = None,
         url: str = _WS_AUTH_URL,
         **ws_kwargs: Any,
     ) -> None:
@@ -231,6 +232,7 @@ class KrakenPrivateWS(WebSocketBase):
         self._token_provider = token_provider
         self._snap_trades = snap_trades
         self._snap_orders = snap_orders
+        self._on_connected = on_connected
 
     @classmethod
     def from_broker(
@@ -239,6 +241,7 @@ class KrakenPrivateWS(WebSocketBase):
         *,
         snap_trades: bool = True,
         snap_orders: bool = True,
+        on_connected: Callable[[], Awaitable[None]] | None = None,
         url: str = _WS_AUTH_URL,
         **ws_kwargs: Any,
     ) -> KrakenPrivateWS:
@@ -247,12 +250,14 @@ class KrakenPrivateWS(WebSocketBase):
         Wires the default :data:`TokenProvider` to ``broker``'s signed private
         REST (``GetWebSocketsToken``). Requires the broker to carry credentials;
         the token fetch raises :class:`~trading_bot.domain.errors.BrokerError`
-        without them, before any I/O.
+        without them, before any I/O. ``on_connected`` (if given) is awaited after
+        each (re)connect's subscribe — the seam a live caller uses to reconcile.
         """
         return cls(
             _broker_token_provider(broker),
             snap_trades=snap_trades,
             snap_orders=snap_orders,
+            on_connected=on_connected,
             url=url,
             **ws_kwargs,
         )
@@ -263,7 +268,10 @@ class KrakenPrivateWS(WebSocketBase):
         Obtains a fresh token via the injected ``token_provider`` and sends the
         v2 ``subscribe`` for the ``executions`` channel with the token in
         ``params``. Because the base re-runs this on every reconnect, the token
-        is refreshed and the subscription re-established automatically.
+        is refreshed and the subscription re-established automatically — and, if an
+        ``on_connected`` hook was supplied, it is awaited afterwards (the seam a
+        live caller uses to **reconcile** the engine to the venue after every
+        reconnect; a failure there is logged, never breaking the stream).
         """
         token = await self._token_provider()
         sub: dict[str, Any] = {
@@ -276,6 +284,11 @@ class KrakenPrivateWS(WebSocketBase):
             },
         }
         await ws.send(json.dumps(sub))
+        if self._on_connected is not None:
+            try:
+                await self._on_connected()
+            except Exception:
+                logger.exception("on_connected hook failed after WS (re)connect")
 
     async def events(self) -> AsyncIterator[Fill | OrderUpdate]:
         """Yield domain :class:`Fill`s and :class:`OrderUpdate`s from the feed.

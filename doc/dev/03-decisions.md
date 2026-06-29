@@ -6,6 +6,64 @@ rejected approaches as tombstones.
 
 ---
 
+### 2026-06-29 Live monitoring via `run --serve` over the same engine (PR #89)  [accepted]
+
+**Choice.** A `--serve` flag on `trading-bot run` serves the read-only dashboard
+(`create_app(engine)`) under uvicorn **concurrently** with the orchestrator, over the
+**same** `Engine`. The build is factored into `prepare_system(config) -> PreparedSystem`
+(engine + an orchestrator loaded with runners), shared by `run_app` (run + report) and
+the serve path. uvicorn owns `SIGINT`: `await server.serve()` blocks until Ctrl-C, then a
+`finally` stops the orchestrator (set its stop event, then await/cancel). The dashboard
+keeps the existing read-only API + SSE — it never places an order.
+
+**Why.** The dashboard's pre-existing `serve` builds a *fresh* engine and reads the
+persisted store — it cannot show a *running* `run`'s live in-memory state, which is what
+"monitor the strategies in prod" needs. Sharing the one engine (and its bus, so SSE is
+live) is the smallest change that makes the dashboard reflect the running system in real
+time. Factoring `prepare_system` avoids duplicating the restore/reconcile/build sequence.
+
+**Rejected alternatives.** Two processes coordinating via the SQLite store (lossy,
+lagged, no live SSE — only persisted snapshots); a separate long-lived daemon exposing
+the engine over IPC (far heavier than a flag); cloning dccd's full multi-page UI
+(custom fonts/logo/auth) for a single read-only dashboard — disproportionate; the
+existing clean dark dashboard is kept, a visual restyle left as reviewable polish.
+uvicorn-owns-SIGINT over installing the orchestrator's own handlers (avoids two handlers
+racing for Ctrl-C).
+
+---
+
+### 2026-06-29 Live fill streaming via a `LiveFillStreamer` hosted by the orchestrator (PR #87)  [accepted]
+
+**Choice.** A new `application.LiveFillStreamer` consumes a structural `FillSource`
+(`fills()` async-iterator + `stop()`; `KrakenPrivateWS` satisfies it) and emits a
+`FillEvent` per fill onto the engine bus. It exposes the runner's
+`run(stop_event=...) -> int` contract, so the `Orchestrator` hosts it as just another
+concurrent task; consumption is raced against the stop event and **cancelled** on stop
+(a quiet stream never delays shutdown). `KrakenPrivateWS` gains an injected
+`on_connected` async hook (awaited after each (re)connect's subscribe); `run_app` builds
+the streamer **only** for a real-money live Kraken broker, with `on_connected` =
+reconcile, so the engine re-syncs to the venue after every reconnect.
+
+**Why.** The audit's "after-disconnect reconcile + live fills not streamed" follow-up.
+The private WS already re-runs `on_connect` on every reconnect, so an injected hook is
+the clean reconcile trigger (the WS layer stays ignorant of reconcile — pure DI). The
+streamer matches the runner contract so the existing orchestrator hosts it with no new
+lifecycle machinery, sharing the one cooperative stop event. Validated **read-only**
+against real Kraken (executions snapshot streamed + parsed; **no order sent**).
+
+**Found + fixed in passing.** The read-only live validation exposed that
+`GetWebSocketsToken` was absent from the Kraken call-counter cost table — `cost_of`
+raised "Unknown method", so the private WS could *never* fetch a token. Added (cost 1).
+
+**Rejected alternatives.** Hooking reconcile inside the transport WS layer (a layering
+violation — the WS would import application reconcile); a bespoke lifecycle for the
+streamer outside the orchestrator (the runner contract already fits); streaming for
+testnet/Binance too (Binance has no private-fill WS adapter; testnet is paper money).
+The live **order** path (AddOrder/cancel against a real venue) stays unvalidated by
+deliberate choice — read-only live testing only, per the go-live runbook.
+
+---
+
 ### 2026-06-29 Project name finalized — keep `trading_bot` (no rename) (PR #84)  [accepted]
 
 **Choice.** The triptych keeps its names: **`trading_bot`** (execution/orchestration),

@@ -710,3 +710,113 @@ def test_limit_at_close_prices_exactly_from_decimal_close_no_float() -> None:
     assert order.limit_price == money("100.123456789012345678")  # exact
     # And strictly better than the old float round-trip, which loses the tail.
     assert order.limit_price != from_float(float(exact))
+
+
+# --- live private-fill streamer wiring (real-money live Kraken only) -------- #
+
+
+def test_no_fill_streamer_for_paper() -> None:
+    """Paper runs add no private-fill streamer (nothing to stream)."""
+    from trading_bot.application.run_app import _maybe_build_fill_streamer
+    from trading_bot.application.service_factory import build_engine
+
+    config = AppConfig()  # paper
+    engine = build_engine(config)
+    assert _maybe_build_fill_streamer(config, engine) is None
+
+
+def test_no_fill_streamer_for_testnet(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Testnet (``live_enabled`` False, paper money) adds no streamer."""
+    from trading_bot.application.config import BrokerConfig
+    from trading_bot.application.run_app import _maybe_build_fill_streamer
+    from trading_bot.application.service_factory import build_engine
+
+    monkeypatch.setenv("BINANCE_API_KEY", "k")
+    monkeypatch.setenv("BINANCE_API_SECRET", "s")
+    monkeypatch.delenv("BINANCE_API_BASE", raising=False)
+    config = AppConfig(
+        mode="live",
+        live_enabled=False,
+        brokers=[BrokerConfig(name="bn", exchange="binance", testnet=True)],
+    )
+    engine = build_engine(config)
+    assert _maybe_build_fill_streamer(config, engine) is None
+
+
+def test_fill_streamer_built_for_live_kraken(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A real-money live Kraken run builds a `LiveFillStreamer` (construction only).
+
+    No network: `build_engine` + `KrakenPrivateWS.from_broker` perform no I/O (no
+    token fetch, no WS connect) — only the wiring is asserted.
+    """
+    from trading_bot.application.config import BrokerConfig, RiskConfig
+    from trading_bot.application.live_fills import LiveFillStreamer
+    from trading_bot.application.run_app import _maybe_build_fill_streamer
+    from trading_bot.application.service_factory import build_engine
+
+    monkeypatch.setenv("KRAKEN_API_KEY", "k")
+    monkeypatch.setenv("KRAKEN_API_SECRET", "c2VjcmV0")  # base64("secret")
+    config = AppConfig(
+        mode="live",
+        live_enabled=True,
+        brokers=[BrokerConfig(name="kraken", exchange="kraken")],
+        risk=RiskConfig(
+            max_order=money("1"),
+            max_position=money("5"),
+            max_daily_loss=money("1000"),
+        ),
+    )
+    engine = build_engine(config)
+    streamer = _maybe_build_fill_streamer(config, engine)
+    assert isinstance(streamer, LiveFillStreamer)
+
+
+# --- prepare_system + live-dashboard monitoring (run --serve) -------------- #
+
+
+async def test_prepare_system_builds_engine_and_loaded_orchestrator() -> None:
+    """`prepare_system` returns a ready engine + an orchestrator loaded with runners."""
+    from trading_bot.application.run_app import PreparedSystem, prepare_system
+
+    pytest.importorskip("fynance")  # the MA-crossover strategies evaluate fynance
+    config = _two_strategy_config()
+    system = await prepare_system(config, dccd_client=_fake_client_for(config))
+
+    assert isinstance(system, PreparedSystem)
+    assert len(system.runners) == 2
+    assert len(system.orchestrator.runners) == 2  # the two strategy runners
+
+
+def test_dashboard_reflects_a_live_run_engine() -> None:
+    """The read-only dashboard, built on the run's engine, shows its positions.
+
+    This is exactly what ``run --serve`` does: `prepare_system`, run the
+    orchestrator, and serve the dashboard over the **same** engine. After a finite
+    offline run the dashboard's ``/api/positions`` reflects the engine's live
+    tracker — proving the dashboard monitors the running engine, not a fresh one.
+    """
+    import asyncio
+
+    from fastapi.testclient import TestClient
+
+    from trading_bot.application.run_app import prepare_system
+    from trading_bot.interfaces.api import create_app
+
+    pytest.importorskip("fynance")
+    config = _two_strategy_config()
+    client = _fake_client_for(config)
+
+    async def _build_and_run():  # noqa: ANN202
+        system = await prepare_system(config, dccd_client=client)
+        await system.orchestrator.run()
+        return system
+
+    system = asyncio.run(_build_and_run())
+
+    http = TestClient(create_app(system.engine))
+    resp = http.get("/api/positions")
+    assert resp.status_code == 200
+
+    instruments = {p["instrument"] for p in resp.json()}
+    # The run traded both instruments; the dashboard on the SAME engine sees them.
+    assert {"BTC/USD", "ETH/USD"} & instruments
