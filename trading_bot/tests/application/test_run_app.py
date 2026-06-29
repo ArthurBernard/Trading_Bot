@@ -590,3 +590,90 @@ async def test_run_app_startup_reconcile_converges_to_venue(
     # rebuilt from the venue's confirmed fill — the engine converged to the venue.
     assert router.get("pre-existing") is not None
     assert BTC_USD in tracker.all_positions()
+
+
+# --- restore dedup state from the store across a restart ------------------- #
+
+
+async def test_run_app_restores_dedup_when_store_present(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    """`run_app` seeds the router's dedup map from the store when one is configured."""
+    from trading_bot.application.order_router import OrderRouter
+
+    calls: list[int] = []
+
+    def _spy(self: OrderRouter, orders: object) -> int:
+        calls.append(1)
+        return 0
+
+    monkeypatch.setattr(OrderRouter, "restore", _spy)
+
+    db = str(tmp_path / "engine.db")
+    cfg = AppConfig.model_validate({"mode": "paper", "storage": {"db_path": db}})
+    await run_app(cfg)
+
+    assert calls == [1]  # restore called exactly once (a store was configured)
+
+
+async def test_run_app_skips_restore_without_store(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """With no store (no db_path) there is nothing to restore from — restore unused."""
+    from trading_bot.application.order_router import OrderRouter
+
+    calls: list[int] = []
+    monkeypatch.setattr(
+        OrderRouter, "restore", lambda self, orders: calls.append(1) or 0
+    )
+
+    await run_app(AppConfig())  # no storage.db_path → engine.store is None
+    assert calls == []
+
+
+async def test_dedup_survives_restart_via_store(tmp_path) -> None:
+    """Real restart: an order persisted to SQLite is recovered into a fresh engine.
+
+    Verification on real persisted state: submit an order through engine #1 (its
+    attached SQLite store records it), then build engine #2 on the SAME db_path
+    (the restart — its router map is empty) and restore from the store. A re-submit
+    of the same id on engine #2 dedups against the recovered record — the (fresh)
+    broker is never asked again — closing the crash-restart double-submit window.
+    """
+    from trading_bot.application.service_factory import build_engine
+    from trading_bot.domain.order import Order, OrderSide, OrderType
+
+    db = str(tmp_path / "engine.db")
+    config = AppConfig.model_validate({"mode": "paper", "storage": {"db_path": db}})
+
+    def _order(cid: str) -> Order:
+        return Order(
+            client_order_id=cid,
+            instrument=BTC_USD,
+            side=OrderSide.BUY,
+            qty=money("1"),
+            type=OrderType.LIMIT,
+            limit_price=money("30000"),
+        )
+
+    # Engine #1: submit an order; the attached store persists it.
+    engine1 = build_engine(config, db_path=db)
+    await engine1.router.submit(_order("restart-1"))
+    assert engine1.store is not None
+    assert engine1.store.get_order("restart-1") is not None  # persisted
+    engine1.store.close()
+
+    # Engine #2 on the SAME db (a restart): the router map starts empty.
+    engine2 = build_engine(config, db_path=db)
+    assert engine2.store is not None
+    assert engine2.router.get("restart-1") is None
+    assert engine2.router.restore(engine2.store.orders()) >= 1
+    recovered = engine2.router.get("restart-1")
+    assert recovered is not None
+
+    # A re-submit of the same id dedups against the recovered record: it returns the
+    # restored order and the (fresh) broker is never asked → no fill created.
+    resubmitted = await engine2.router.submit(_order("restart-1"))
+    assert resubmitted is recovered
+    assert await engine2.broker.fills() == []  # the broker was never called
+    engine2.store.close()

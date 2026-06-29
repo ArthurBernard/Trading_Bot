@@ -72,6 +72,8 @@ from trading_bot.domain.errors import (
 from trading_bot.domain.order import Order, OrderStatus
 
 if TYPE_CHECKING:
+    from collections.abc import Iterable
+
     from trading_bot.application.risk import RiskManager
 
 __all__ = ["OrderRouter"]
@@ -425,3 +427,41 @@ class OrderRouter:
         if the id was not tracked (a no-op, so a second reconcile is clean).
         """
         return self._orders.pop(client_order_id, None)
+
+    def restore(self, orders: Iterable[Order]) -> int:
+        """Seed the dedup map from persisted orders after a restart — **no events**.
+
+        Recovers the router's idempotency state from the append-only store
+        (:meth:`~trading_bot.storage.sqlite_store.SqliteStore.orders`) on startup:
+        every persisted order's ``client_order_id`` is re-registered so a
+        re-submit of that id is de-duplicated (:meth:`submit` returns the recorded
+        order and never re-calls the broker). This closes the **crash-restart
+        double-submit window** for ids the in-memory map lost — the residual gap
+        for a venue like Kraken that issues no venue-side idempotency token.
+
+        Unlike :meth:`ingest`, this emits **no** :class:`~trading_bot.application.
+        events.OrderEvent` (these are *historical* records, not fresh order
+        activity, so a dashboard/store must not see them as new) and never
+        clobbers an id the router already tracks (the live object wins). Call it
+        **before** the startup reconcile, which then converges the recovered map
+        to the venue's *current* truth (ingest still-open orders, rebuild
+        positions from confirmed fills).
+
+        Parameters
+        ----------
+        orders : Iterable[Order]
+            The persisted orders to recover (their ``client_order_id`` is the
+            dedup key; their last-known status/venue id is carried as-is).
+
+        Returns
+        -------
+        int
+            How many ids were newly registered (already-tracked ids are skipped).
+
+        """
+        restored = 0
+        for order in orders:
+            if order.client_order_id not in self._orders:
+                self._orders[order.client_order_id] = order
+                restored += 1
+        return restored

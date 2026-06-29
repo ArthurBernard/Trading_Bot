@@ -6,6 +6,30 @@ rejected approaches as tombstones.
 
 ---
 
+### 2026-06-29 Order dedup state is restored from the store on startup (PR #75)  [accepted]
+
+**Choice.** `OrderRouter.restore(orders)` seeds the in-memory dedup map (`_orders`)
+from the append-only `SqliteStore` on startup — emitting **no** events and never
+clobbering an id the router already tracks — and `run_app` calls it (when a store is
+configured) **before** the startup reconcile. A re-submit of any persisted
+`client_order_id` then dedups in `submit` (returns the recorded order, no broker call).
+
+**Why.** The audit's most dangerous interaction: Kraken issues no venue-side idempotency
+token, so dedup rests entirely on the in-memory map. A crash between `AddOrder` success
+and recording it loses that map; on restart a deterministic id (`{name}-{step}`) would
+re-submit and **duplicate the order at the venue**. Reconcile-on-startup (PR #71) only
+recovers orders the venue still reports **open**; the store recovers *every* recorded id
+(including filled/rejected) — together they close the common crash-restart window.
+
+**Rejected alternatives.** Reusing `ingest` to seed (it emits an `OrderEvent`, so a
+dashboard/store would see historical orders as fresh activity — `restore` is silent);
+deduping by object identity (a re-submit is a new `Order` with the same id). **Residual
+gap (unclosed):** an order that *filled during the crash gap, before any persist* leaves
+no local record and reconcile sees no open order — only a venue-side dedup token closes
+that, which Kraken lacks (the documented real-key-sandbox prerequisite).
+
+---
+
 ### 2026-06-29 Fills are de-duplicated by `fill_id` in the read-side views (PR #74)  [accepted]
 
 **Choice.** `PositionTracker.apply` and `PerformanceService.apply` each keep a
