@@ -346,39 +346,47 @@ async def test_live_does_not_emit_unclosed_bar_when_none_closed() -> None:
 
 
 @pytest.mark.network
-def test_dccd_real_inventory_causal_replay() -> None:
+async def test_dccd_real_inventory_causal_replay() -> None:
     """Real dccd: replay a stored OHLC dataset and assert no lookahead.
 
     Skips with a clear reason when no OHLC dataset is stored (the injected-client
     tests above cover the logic; this only adds real-data coverage when present).
+    The dccd ``Client`` is an **async context manager** — ``inventory()`` / ``read``
+    require it entered (``async with``), which builds the store.
     """
     dccd = pytest.importorskip("dccd")
-    client = dccd.Client()
-    ohlc = [d for d in client.inventory() if d.get("data_type") == "ohlc" and d.get("rows", 0) > 0]
-    if not ohlc:
-        pytest.skip("no stored dccd OHLC dataset to replay (inventory empty)")
+    async with dccd.Client() as client:
+        ohlc = [
+            d
+            for d in client.inventory()
+            if d.get("data_type") == "ohlc" and d.get("rows", 0) > 0
+        ]
+        if not ohlc:
+            pytest.skip("no stored dccd OHLC dataset to replay (inventory empty)")
 
-    entry = ohlc[0]
-    feed = DccdFeed(
-        client,
-        entry["exchange"],
-        entry["pair"],
-        int(entry["span"]),
-    )
-    full = feed.latest()
-    if full.height == 0:
-        pytest.skip(f"dccd OHLC dataset {entry['exchange']}/{entry['pair']} read empty")
+        entry = ohlc[0]
+        feed = DccdFeed(
+            client,
+            entry["exchange"],
+            entry["pair"],
+            int(entry["span"]),
+        )
+        full = feed.latest()
+        if full.height == 0:
+            pytest.skip(
+                f"dccd OHLC dataset {entry['exchange']}/{entry['pair']} read empty"
+            )
 
-    assert list(full.columns) == list(BARS_SCHEMA)
-    # Monotonic non-decreasing timestamps over the whole frame.
-    times = full["time"].to_list()
-    assert times == sorted(times)
+        assert list(full.columns) == list(BARS_SCHEMA)
+        # Monotonic non-decreasing timestamps over the whole frame.
+        times = full["time"].to_list()
+        assert times == sorted(times)
 
-    # Replay a few causal prefixes and assert each window's last time is its
-    # current bar's — never a later one.
-    for t, window in enumerate(feed):
-        assert window.height == t + 1
-        assert window["time"][-1] == full["time"][t]
-        assert window["time"].max() == full["time"][t]
-        if t >= 4:
-            break
+        # Replay a few causal prefixes and assert each window's last time is its
+        # current bar's — never a later one.
+        for t, window in enumerate(feed):
+            assert window.height == t + 1
+            assert window["time"][-1] == full["time"][t]
+            assert window["time"].max() == full["time"][t]
+            if t >= 4:
+                break
