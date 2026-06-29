@@ -288,6 +288,23 @@ class PortfolioStrategyConfig(BaseModel):
     venue : str, optional
         The venue key the universe's bars are stored under / rendered for (e.g.
         ``"binance"``). Defaults to ``"binance"``. Must be non-empty.
+    store_key_format : {"venue", "hyphen", "slash"}, optional
+        How each universe pair (a canonical
+        :class:`~trading_bot.domain.instrument.Symbol`) is rendered to the **dccd
+        store key** the bars are read under. The universe is written in canonical
+        ``BASE/QUOTE`` form, but a real dccd store may key its pairs differently;
+        this pins the convention rather than guessing:
+
+        * ``"venue"`` (default) — the venue's native code via
+          :meth:`~trading_bot.domain.instrument.Symbol.to_venue_symbol`
+          (Binance ``BTCUSDT``; Kraken ``XBTUSD``). Backward-compatible.
+        * ``"hyphen"`` — ``BASE-QUOTE`` (e.g. ``BTC-USDT``), the common
+          hyphen-keyed dccd layout.
+        * ``"slash"`` — ``BASE/QUOTE`` (e.g. ``BTC/USDT``), the canonical form
+          verbatim.
+
+        Single-instrument strategies need no equivalent: they read under the exact
+        ``symbol`` string the config gives, so there is nothing to re-render.
 
     """
 
@@ -298,6 +315,7 @@ class PortfolioStrategyConfig(BaseModel):
     data: DataSourceConfig
     gross_cap: Decimal | None = None
     venue: str = "binance"
+    store_key_format: Literal["venue", "hyphen", "slash"] = "venue"
 
     @field_validator("name", "venue")
     @classmethod

@@ -6,6 +6,29 @@ rejected approaches as tombstones.
 
 ---
 
+### 2026-06-29 Portfolio store-key convention is pinned by config, not guessed (PR #76)  [accepted]
+
+**Choice.** `PortfolioStrategyConfig` gains `store_key_format`
+(`"venue"` | `"hyphen"` | `"slash"`, default `"venue"`); `build_portfolio_runners`
+maps it to a `Symbol -> str` renderer and threads it into the `PortfolioFeed`'s existing
+`symbol_for` hook. The universe stays written in canonical `BASE/QUOTE`; the field pins
+how those pairs render to the dccd store keys (`BTCUSDT` / `BTC-USDT` / `BTC/USDT`).
+
+**Why.** The audit's open follow-up: `PortfolioFeed` had a `symbol_for` hook but the
+config/`run_app` path never exposed it, so a real `trading-bot run <portfolio>.yaml` was
+locked to `to_venue_symbol` (`BTCUSDT`/`XBTUSD`) — which doesn't match a hyphen-keyed
+dccd store and is ambiguous to invert. LS1 runs were therefore only verified via the test
+harness, not raw `run_app`. A declared format removes the guess.
+
+**Rejected alternatives.** Auto-detecting the store key by existence-checking the dccd
+store (what a strategy's local test client does — convenient but implicit and untestable
+in the engine); putting the field on `DataSourceConfig` (single-instrument strategies
+read under the exact `symbol` string given, so they have no re-render ambiguity — the
+field is portfolio-specific); a free-form format string (a `Literal` catches typos at
+config time).
+
+---
+
 ### 2026-06-29 Order dedup state is restored from the store on startup (PR #75)  [accepted]
 
 **Choice.** `OrderRouter.restore(orders)` seeds the in-memory dedup map (`_orders`)
