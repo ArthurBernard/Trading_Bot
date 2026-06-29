@@ -8,6 +8,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Live monitoring — `trading-bot run --serve`.** Runs the declared system **and**
+  serves the read-only dashboard over the **same** engine in one process, so positions
+  / orders / PnL update in real time (engine bus + SSE) while the strategies run — not a
+  separate, freshly-built engine. uvicorn owns `SIGINT` (Ctrl-C ends serve, then the
+  orchestrator drains); a finite paper run keeps the dashboard up on its final state
+  until Ctrl-C. The dashboard stays **read-only** (never places an order).
+  `application.prepare_system` / `PreparedSystem` factor the build (engine + an
+  orchestrator loaded with runners) shared by `run_app` and the serve path. (#89)
 - **Live fill streaming.** `application.LiveFillStreamer` pumps a venue's private
   fill stream (e.g. `KrakenPrivateWS`) onto the engine bus — each confirmed
   execution becomes a `FillEvent`, so the tracker / performance service / store

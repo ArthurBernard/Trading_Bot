@@ -23,7 +23,8 @@ engine — harmonised with dccd. The full engine is in place and hardened: domai
 transport, **Kraken** + **Binance** brokers behind a multi-exchange port, a
 paper-trading broker, the idempotent order router, single-instrument **and**
 native **multi-asset / portfolio** strategy runners, performance/risk services,
-SQLite persistence, a Typer CLI and a read-only FastAPI/Jinja2 dashboard. One
+SQLite persistence, a Typer CLI and a read-only FastAPI/Jinja2 dashboard (`trading-bot serve`, or
+`trading-bot run --serve` to monitor a live run in real time). One
 `AppConfig` conducts the triptych (dccd data + fynance signals + brokers). The
 money-safety invariants are proven under fault injection (`tests/hardening/`) and
 the safety machinery is wired into the run loop (reconcile-on-startup, the
