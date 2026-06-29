@@ -1,12 +1,12 @@
-"""Tests for the :class:`Broker` port, :class:`Capability` model and registry.
+"""Tests for the :class:`Broker` port and :class:`Capability` model.
 
 This is the interface layer — there is no live I/O. The contract is proven
 *implementable and coherent* by a :class:`StubBroker` that satisfies the
 :class:`~trading_bot.brokers.base.Broker` :class:`~typing.Protocol` purely with
 domain objects, round-trips an :class:`~trading_bot.domain.order.Order` through
 ``place_order`` -> ``open_orders``, and returns ``Decimal``/domain types from
-``balances``/``fills``/``ticker``. The registry and the
-:func:`~trading_bot.brokers.base.require` capability gate are covered too.
+``balances``/``fills``/``ticker``. The
+:func:`~trading_bot.brokers.base.require` capability gate is covered too.
 """
 
 from __future__ import annotations
@@ -18,7 +18,6 @@ import pytest
 from trading_bot.brokers import (
     Broker,
     BrokerError,
-    BrokerRegistry,
     Capability,
     require,
 )
@@ -187,37 +186,6 @@ async def test_ticker_returns_decimal_price() -> None:
     price = await StubBroker().ticker(BTC_USD)
     assert price == Decimal("30100.5")
     assert isinstance(price, Decimal)
-
-
-# --- registry -------------------------------------------------------------- #
-
-
-def test_registry_register_get_round_trip() -> None:
-    """A registered broker is returned by ``get`` (case-insensitive key)."""
-    reg = BrokerRegistry()
-    broker = StubBroker(name="kraken")
-    reg.register("kraken", broker)
-
-    assert reg.get("kraken") is broker
-    assert reg.get("KRAKEN") is broker  # case-insensitive
-    assert reg.venues == ["kraken"]
-    assert reg.adapters == {"kraken": broker}
-
-
-def test_registry_get_unknown_raises_broker_error() -> None:
-    """``get`` of an unregistered venue raises :class:`BrokerError`."""
-    reg = BrokerRegistry()
-    with pytest.raises(BrokerError):
-        reg.get("nope")
-
-
-def test_registry_adapters_view_is_a_copy() -> None:
-    """The ``adapters`` view is a copy — mutating it does not touch the registry."""
-    reg = BrokerRegistry()
-    reg.register("kraken", StubBroker(name="kraken"))
-    view = reg.adapters
-    view.clear()
-    assert reg.venues == ["kraken"]
 
 
 # --- capability gate ------------------------------------------------------- #

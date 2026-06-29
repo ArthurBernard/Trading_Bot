@@ -185,7 +185,7 @@ class PaperBroker(Broker):
     Attributes
     ----------
     name : str
-        The venue key, ``"paper"`` (the registry key for this adapter).
+        The venue key, ``"paper"`` (the factory selects this adapter on it).
 
     """
 
