@@ -36,6 +36,7 @@ from trading_bot.domain import (
     OrderSide,
     OrderStatus,
     OrderType,
+    RiskLimitBreached,
     Symbol,
     money,
 )
@@ -323,3 +324,55 @@ async def test_real_paperbroker_concurrent_duplicate_one_order() -> None:
 
     assert a is b
     assert len(await broker.fills()) == 1, "one paper fill despite two submits"
+
+
+# --- daily-loss circuit breaker (router escalates to the kill-switch) ------ #
+
+
+async def test_daily_loss_breach_escalates_to_kill_switch_and_cancels_resting() -> None:
+    """A ``max_daily_loss`` breach trips the switch and cancels resting orders.
+
+    ``max_daily_loss`` is the day's *halt* threshold, not a one-order cap: reaching
+    it must stop trading for the day. So when ``risk.check`` raises it, the router
+    escalates to ``RiskManager.kill`` — cancel every resting order **and** trip the
+    switch — before re-raising. After the breach the previously-open order is
+    ``CANCELLED`` and any further order is refused as the kill-switch, not merely
+    the per-order limit.
+    """
+    from trading_bot.application.config import RiskConfig
+    from trading_bot.application.risk import RiskManager
+
+    bus = EventBus()
+    # A partial fill leaves the first order OPEN (resting) with a venue id to cancel.
+    broker = PaperBroker(fill_model="partial", partial_fill_ratio=money("0.5"))
+    pnl = {"v": money("0")}  # the day's signed realised PnL the provider reads
+    risk = RiskManager(
+        RiskConfig(max_daily_loss=money("100")),
+        daily_pnl_provider=lambda: pnl["v"],
+    )
+    router = OrderRouter(broker, bus, risk_manager=risk)
+
+    # No loss yet → the first order places and rests OPEN on the venue.
+    resting = await router.submit(_order("rest-1", qty="4"))
+    assert resting.status is OrderStatus.OPEN
+    assert resting.venue_order_id is not None
+    assert risk.tripped is False
+
+    # The day's realised loss now exceeds the cap.
+    pnl["v"] = money("-150")
+
+    # The next order breaches max_daily_loss → the router escalates to kill().
+    with pytest.raises(RiskLimitBreached) as excinfo:
+        await router.submit(_order("blocked-1"))
+    assert excinfo.value.limit == "max_daily_loss"
+
+    # The switch is now tripped (hard halt) and the resting order was cancelled.
+    assert risk.tripped is True
+    cancelled = router.get("rest-1")
+    assert cancelled is not None
+    assert cancelled.status is OrderStatus.CANCELLED
+
+    # Any further order is now refused as the kill-switch, not the per-order limit.
+    with pytest.raises(RiskLimitBreached) as again:
+        await router.submit(_order("blocked-2"))
+    assert again.value.limit == "kill_switch"

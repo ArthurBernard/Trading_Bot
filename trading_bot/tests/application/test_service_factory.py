@@ -29,7 +29,11 @@ from trading_bot.application.service_factory import Engine, build_engine
 from trading_bot.brokers.binance import TESTNET_API_BASE, BinanceBroker
 from trading_bot.brokers.kraken import KrakenBroker
 from trading_bot.brokers.paper import PaperBroker
-from trading_bot.domain.errors import BrokerError, LiveTradingNotEnabled
+from trading_bot.domain.errors import (
+    BrokerError,
+    LiveTradingNotEnabled,
+    RiskLimitBreached,
+)
 from trading_bot.domain.fill import Fill
 from trading_bot.domain.instrument import Instrument, Symbol
 from trading_bot.domain.money import money
@@ -397,3 +401,44 @@ def test_paper_mode_ignores_testnet() -> None:
 def test_brokerconfig_testnet_defaults_false() -> None:
     """``testnet`` defaults to False (a plain broker is mainnet/live)."""
     assert BrokerConfig(name="bn", exchange="binance").testnet is False
+
+
+# --- the daily-loss circuit breaker is wired to live PnL ------------------- #
+
+
+def test_build_engine_wires_daily_loss_provider_to_performance_service() -> None:
+    """``build_engine`` feeds the risk gate the day's realised PnL from ``perf``.
+
+    Verification on real engine state: with ``max_daily_loss`` set, a BUY then a
+    lower SELL are emitted as fills on the engine bus (realising a loss in the
+    shared :class:`PerformanceService`). The risk gate — which previously saw a
+    constant zero and never engaged — now reads that loss through the wired
+    provider and refuses the next order with ``max_daily_loss``.
+    """
+    from trading_bot.application.config import RiskConfig
+
+    config = AppConfig(risk=RiskConfig(max_daily_loss=money("5")))
+    engine = build_engine(config)
+
+    # Before any loss, the gate passes.
+    probe = Order(
+        client_order_id="probe-0",
+        instrument=_BTCUSD,
+        side=OrderSide.BUY,
+        qty=money("1"),
+        type=OrderType.LIMIT,
+        limit_price=money("100"),
+    )
+    engine.risk.check(probe)  # no raise — flat day
+
+    # Realise a loss of 10 (BUY 1 @ 100, SELL 1 @ 90) via fills on the bus, so the
+    # shared performance service reports realised_pnl == -10.
+    engine.bus.emit(_fill_event("F1", OrderSide.BUY, qty="1", price="100", fee="0"))
+    engine.bus.emit(_fill_event("F2", OrderSide.SELL, qty="1", price="90", fee="0"))
+    assert engine.perf.realised_pnl() == money("-10")
+
+    # The gate now reads that loss through the wired provider and halts.
+    with pytest.raises(RiskLimitBreached) as excinfo:
+        engine.risk.check(probe)
+    assert excinfo.value.limit == "max_daily_loss"
+    assert excinfo.value.value == money("10")  # the loss magnitude

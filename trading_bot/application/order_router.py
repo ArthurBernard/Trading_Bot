@@ -63,7 +63,12 @@ from typing import TYPE_CHECKING
 
 from trading_bot.application.events import EventBus, OrderEvent
 from trading_bot.brokers.base import Broker, Capability, require
-from trading_bot.domain.errors import BrokerError, MissingOrder, OrderError
+from trading_bot.domain.errors import (
+    BrokerError,
+    MissingOrder,
+    OrderError,
+    RiskLimitBreached,
+)
 from trading_bot.domain.order import Order, OrderStatus
 
 if TYPE_CHECKING:
@@ -242,11 +247,32 @@ class OrderRouter:
         so it leaves no ``REJECTED`` record and the dedup map is unchanged (a
         subsequent submit of the same id is a fresh attempt, not a deduped
         replay).
+
+        One breach is escalated rather than merely refused: ``max_daily_loss`` is
+        the day's *halt* threshold (not a one-order cap), so when the gate raises
+        it the router first calls :meth:`~trading_bot.application.risk.RiskManager
+        .kill` (cancel every resting order + trip the switch) and *then* re-raises
+        — the whole book halts for the day, not just this order.
         """
         if self._risk is not None:
             # Pre-trade gate: raises RiskLimitBreached before the broker is ever
-            # touched. Left to propagate untracked (see the docstring).
-            self._risk.check(order)
+            # touched. Left to propagate untracked (see the docstring). A
+            # ``max_daily_loss`` breach is special: that limit is the day's *halt*
+            # threshold, not a one-order cap, so reaching it must stop trading for
+            # the day — the router escalates to the kill-switch (cancel resting
+            # orders + trip) before re-raising. Other breaches propagate unchanged.
+            try:
+                self._risk.check(order)
+            except RiskLimitBreached as breach:
+                if breach.limit == "max_daily_loss" and not self._risk.tripped:
+                    await self._risk.kill(
+                        router=self,
+                        reason=(
+                            f"max_daily_loss breached: daily loss {breach.value} "
+                            f">= {breach.threshold} — halting for the day"
+                        ),
+                    )
+                raise
         try:
             venue_id = await self._broker.place_order(order)
             order.submit()
