@@ -72,11 +72,20 @@ class BrokerConfig(BaseModel):
     exchange : str
         The venue key the broker adapter is resolved by (e.g. ``"kraken"``).
         Must be non-empty.
+    testnet : bool, optional
+        Route this venue to its **testnet / sandbox** (paper money on the real
+        venue) instead of production. Defaults to ``False``. When ``True`` (only
+        venues that *have* a testnet, e.g. ``"binance"`` →
+        ``testnet.binance.vision``), the adapter is **hard-pinned** to the testnet
+        endpoint — it cannot reach mainnet — so it does **not** require the
+        ``live_enabled`` opt-in (it still needs testnet credentials). Ignored in
+        paper mode (the simulator). A venue with no testnet (``"kraken"``) raises.
 
     """
 
     name: str
     exchange: str
+    testnet: bool = False
 
     @field_validator("name", "exchange")
     @classmethod

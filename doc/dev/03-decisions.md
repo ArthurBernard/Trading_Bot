@@ -6,6 +6,34 @@ rejected approaches as tombstones.
 
 ---
 
+### 2026-06-29 Testnet is a third broker path; it bypasses live_enabled by being mainnet-incapable (PR #68)
+
+**Decision.** A `BrokerConfig.testnet: true` selects a venue's **testnet/sandbox**
+(paper money on the real testnet venue) as a path distinct from both paper (the
+in-process simulator) and live (real mainnet). Under `mode: live`, a `testnet: true`
+broker builds the venue adapter **hard-pinned** to the testnet URL — the base URL is
+passed explicitly (`BinanceBroker(base_url=TESTNET_API_BASE)`), overriding any
+`BINANCE_API_BASE` env — so it is structurally incapable of reaching mainnet. Because
+it cannot touch real money, this path is **exempt from the `live_enabled` opt-in**
+(checked *before* that gate); it still requires (testnet) credentials. Only venues with
+a testnet qualify (`_TESTNET_VENUES = ("binance",)`); **Kraken raises** (no public spot
+sandbox). Paper mode still wins (testnet ignored). `BinanceBroker` gained `base_url`/
+`is_testnet` read-only introspection.
+
+**Why.** The maintainer wanted to live-test orders on the engine path *safely and
+without ceremony*. The previous route — `mode: live` + `live_enabled: true` + setting
+`BINANCE_API_BASE` to the testnet — overloaded the real-money opt-in for a paper-money
+sandbox and risked **mainnet by omission** (the base URL defaults to mainnet, so a
+forgotten env var trades for real). Pinning the URL from the flag makes "testnet
+cannot become mainnet" structural, which is precisely what justifies skipping
+`live_enabled` — the gate exists to prevent *real-money* accidents, and there are none
+here. **Rejected:** a separate `mode: "testnet"` (more surface; the venue, not the
+mode, is what has a sandbox); honouring `BINANCE_API_BASE` under the flag (re-opens the
+mainnet-by-omission hole); making testnet require `live_enabled` (the friction the
+request set out to remove). Kraken testnet was rejected because it does not exist.
+
+---
+
 ### 2026-06-29 LS1 wired by config via a generic weight-oracle adapter (PR #67)
 
 **Decision.** LS1 runs end-to-end **without any LS1 code in the engine**. A generic

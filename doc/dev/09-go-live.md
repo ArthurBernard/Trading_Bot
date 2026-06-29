@@ -191,6 +191,26 @@ The testnet test places ONE rebalance with a tiny capital, reads the venue's
 `open_orders()`/`balances()` back, asserts the placed legs match the intended
 deltas, then **cancels** every leg — and refuses to run against mainnet.
 
+### Testnet on the engine path (the safe, low-ceremony way)
+
+To live-test orders through the **engine** (`trading-bot run` / `build_engine`)
+rather than the test, set **`testnet: true`** on the broker — do **not** flip
+`live_enabled` or `BINANCE_API_BASE`:
+
+```yaml
+mode: live
+# live_enabled NOT needed — testnet cannot reach mainnet (paper money)
+brokers:
+  - { name: binance, exchange: binance, testnet: true }
+```
+
+With testnet credentials in `.env`, the factory builds a `BinanceBroker`
+**hard-pinned** to `testnet.binance.vision` (the URL is forced from the flag, so a
+stray `BINANCE_API_BASE` pointing at mainnet is ignored) — it is structurally
+incapable of trading real money, which is why it is exempt from the `live_enabled`
+opt-in. Only Binance qualifies; `testnet: true` on Kraken raises (no public spot
+testnet). **Real mainnet** still requires `live_enabled: true` + a real key (above).
+
 ### Going live with LS1
 
 Live LS1 follows the **same** gates as any live run (above): `mode: live` +
