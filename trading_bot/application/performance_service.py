@@ -136,10 +136,9 @@ class PerformanceService:
         self, *, v0: Money = _ZERO, event_bus: EventBus | None = None
     ) -> None:
         self._v0: Money = v0
-        # Global arrival-order fill list — drives the aggregate equity series.
-        self._fills: list[Fill] = []
-        # Per-instrument arrival-order fill lists — drive position()/realised_pnl.
-        self._by_instrument: dict[Instrument, list[Fill]] = {}
+        # Running net position per instrument, advanced one fill at a time via
+        # Position.with_fill (O(1) per fill — no full-history refold).
+        self._positions: dict[Instrument, Position] = {}
         # Running aggregate realised PnL after each global fill (one entry per
         # fill). Rebuilt incrementally so equity_curve() is O(1) to read.
         self._equity: list[Money] = []
@@ -169,13 +168,13 @@ class PerformanceService:
     def apply(self, fill: Fill) -> None:
         """Fold ``fill`` into the aggregate and per-instrument performance views.
 
-        Appends the fill to the global arrival-order list and to its instrument's
-        list, recomputes that instrument's
-        :class:`~trading_bot.domain.position.Position` via
-        :meth:`~trading_bot.domain.position.Position.from_fills`, and updates the
-        running aggregate realised PnL / fees / equity step by the **delta** the
-        fill introduced to its instrument's realised PnL (so totals stay the sum
-        across instruments, and the equity series gains exactly one point).
+        Advances that instrument's **running**
+        :class:`~trading_bot.domain.position.Position` by exactly this fill via
+        :meth:`~trading_bot.domain.position.Position.with_fill` (O(1) per fill, no
+        full-history refold), and updates the running aggregate realised PnL / fees
+        / equity by the **delta** the fill introduced to its instrument's realised
+        PnL (so totals stay the sum across instruments, and the equity series gains
+        exactly one point).
 
         **Idempotent by ``fill_id``.** A fill whose ``fill_id`` was already folded
         is ignored (no PnL/fee/equity change), so a venue re-emitting the same
@@ -194,23 +193,14 @@ class PerformanceService:
         self._seen_fill_ids.add(fill.fill_id)
 
         instrument = fill.instrument
-        inst_fills = self._by_instrument.setdefault(instrument, [])
+        prev = self._positions.get(instrument) or Position.flat(instrument)
+        now = prev.with_fill(fill)
+        self._positions[instrument] = now
 
-        # Realised PnL / fees the instrument had *before* this fill.
-        prev_realised = _ZERO
-        prev_fees = _ZERO
-        if inst_fills:
-            prev = Position.from_fills(inst_fills)
-            prev_realised = prev.realised_pnl
-            prev_fees = prev.fees_paid
-
-        inst_fills.append(fill)
-        self._fills.append(fill)
-
-        # Realised PnL / fees after the fill; the deltas fold into the aggregate.
-        now = Position.from_fills(inst_fills)
-        self._realised_pnl += now.realised_pnl - prev_realised
-        self._fees_paid += now.fees_paid - prev_fees
+        # The fill's contribution to the aggregate is the delta of its instrument's
+        # realised PnL / fees (one new equity point: v0 + total realised PnL).
+        self._realised_pnl += now.realised_pnl - prev.realised_pnl
+        self._fees_paid += now.fees_paid - prev.fees_paid
 
         # One new equity point: v0 + total realised PnL through this fill.
         self._equity.append(self._v0 + self._realised_pnl)
@@ -249,8 +239,9 @@ class PerformanceService:
     def position(self, instrument: Instrument) -> Position | None:
         """Return the net :class:`Position` for ``instrument``, or ``None``.
 
-        Computed via :meth:`~trading_bot.domain.position.Position.from_fills` over
-        exactly the fills seen for ``instrument``, in arrival order.
+        The running per-instrument position, advanced one fill at a time (it
+        equals :meth:`~trading_bot.domain.position.Position.from_fills` over every
+        fill seen for ``instrument``).
 
         Parameters
         ----------
@@ -264,10 +255,7 @@ class PerformanceService:
             been applied yet.
 
         """
-        fills = self._by_instrument.get(instrument)
-        if not fills:
-            return None
-        return Position.from_fills(fills)
+        return self._positions.get(instrument)
 
     def equity_curve(self) -> tuple[Money, ...]:
         """The account-value path: ``v0`` + cumulative realised PnL per fill.

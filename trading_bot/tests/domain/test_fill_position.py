@@ -307,3 +307,55 @@ class TestRealDataFlipSequence:
         # Exact-Decimal guarantee: no binary float contamination.
         assert isinstance(pos.realised_pnl, Decimal)
         assert pos.realised_pnl == Decimal("13938.4")
+
+
+class TestIncrementalFold:
+    """`Position.flat` + `with_fill` — the O(1)-per-fill incremental fold."""
+
+    def test_flat_is_zero_exposure(self) -> None:
+        """`flat` is a no-exposure position (the fold identity)."""
+        pos = Position.flat(BTCUSD)
+        assert pos.instrument == BTCUSD
+        assert pos.net_qty == money("0")
+        assert pos.avg_entry_price is None
+        assert pos.realised_pnl == money("0")
+        assert pos.fees_paid == money("0")
+        assert pos.is_flat
+
+    def test_with_fill_matches_from_fills_at_every_prefix(self) -> None:
+        """Folding `with_fill` from `flat` == `from_fills` over every prefix.
+
+        Drives a realistic BTC/USD sequence — open, increase (weighted avg),
+        partial close (realise PnL), full close, then a flip — and asserts the
+        running incremental position equals `Position.from_fills` over the same
+        prefix at *every* step. This is the exactness guarantee the tracker and
+        performance service rely on for their O(n) drain.
+        """
+        fills = [
+            make_fill(side=OrderSide.BUY, qty="2", price="30000", fee="1", fill_id="F1"),
+            make_fill(side=OrderSide.BUY, qty="1", price="33000", fee="1", fill_id="F2"),
+            make_fill(side=OrderSide.SELL, qty="1", price="35000", fee="1", fill_id="F3"),
+            make_fill(side=OrderSide.SELL, qty="2", price="31000", fee="1", fill_id="F4"),
+            make_fill(side=OrderSide.SELL, qty="2", price="29000", fee="1", fill_id="F5"),
+        ]
+        running = Position.flat(BTCUSD)
+        for i, fill in enumerate(fills, start=1):
+            running = running.with_fill(fill)
+            expected = Position.from_fills(fills[:i])
+            assert running.net_qty == expected.net_qty
+            assert running.avg_entry_price == expected.avg_entry_price
+            assert running.realised_pnl == expected.realised_pnl
+            assert running.fees_paid == expected.fees_paid
+
+    def test_with_fill_rejects_instrument_mismatch(self) -> None:
+        """`with_fill` of a different instrument raises `InstrumentMismatch`."""
+        pos = Position.from_fills(
+            [make_fill(side=OrderSide.BUY, qty="1", price="30000")]
+        )
+        with pytest.raises(InstrumentMismatch, match="BTC/USD"):
+            pos.with_fill(
+                make_fill(
+                    side=OrderSide.BUY, qty="1", price="2000", instrument=ETHUSD,
+                    fill_id="F2",
+                )
+            )

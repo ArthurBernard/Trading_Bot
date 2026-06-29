@@ -90,9 +90,8 @@ class PositionTracker:
     """
 
     def __init__(self, event_bus: EventBus | None = None) -> None:
-        # Ordered fills per instrument (arrival order == fold order) and the
-        # cached snapshot recomputed on each new fill.
-        self._fills: dict[Instrument, list[Fill]] = {}
+        # Running net position per instrument, advanced one fill at a time via
+        # Position.with_fill (O(1) per fill — no full-history refold).
         self._positions: dict[Instrument, Position] = {}
         # Fill ids already folded — guards against a venue re-emitting the same
         # execution (e.g. a private-WS snapshot replay after a reconnect), which
@@ -115,10 +114,11 @@ class PositionTracker:
     def apply(self, fill: Fill) -> Position:
         """Fold ``fill`` into its instrument's running net position.
 
-        Appends the fill to that instrument's ordered list and recomputes the
-        instrument's :class:`Position` via
-        :meth:`~trading_bot.domain.position.Position.from_fills` over the full
-        sequence seen so far (arrival order).
+        Advances the instrument's **running** :class:`Position` by exactly this
+        fill via :meth:`~trading_bot.domain.position.Position.with_fill` — O(1) per
+        fill, no full-history refold (the result is identical to
+        :meth:`~trading_bot.domain.position.Position.from_fills` over every fill
+        seen, which is how ``from_fills`` is itself defined).
 
         **Idempotent by ``fill_id``.** A fill whose ``fill_id`` was already folded
         is ignored (the standing position is returned unchanged) — so a venue
@@ -144,9 +144,8 @@ class PositionTracker:
             # seen (this id was folded into it), so its position is cached.
             return self._positions[instrument]
         self._seen_fill_ids.add(fill.fill_id)
-        fills = self._fills.setdefault(instrument, [])
-        fills.append(fill)
-        position = Position.from_fills(fills)
+        current = self._positions.get(instrument) or Position.flat(instrument)
+        position = current.with_fill(fill)
         self._positions[instrument] = position
         return position
 
@@ -175,7 +174,6 @@ class PositionTracker:
             empty, which clears the tracker to flat.
 
         """
-        self._fills = {}
         self._positions = {}
         self._seen_fill_ids = set()
         for fill in fills:
