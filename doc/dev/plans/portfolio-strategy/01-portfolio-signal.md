@@ -1,12 +1,12 @@
 ---
 plan: portfolio-strategy/01-portfolio-signal
 kind: leaf
-status: planned
+status: done
 complexity: medium
 depends: []
 parallel: false
 branch: feat/portfolio-signal
-pr: ""
+pr: "#63"
 ---
 
 # Portfolio signal contract + by-reference loader + sizing helper

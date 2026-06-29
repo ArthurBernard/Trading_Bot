@@ -62,7 +62,7 @@ shape. It is **0.3.0 work** (post the 0.2.0 release).
 
 ## Leaf checklist
 
-- [ ] 01 portfolio-signal — feat/portfolio-signal — medium (→ opus)
+- [x] 01 portfolio-signal — feat/portfolio-signal — medium (→ opus)
 - [ ] 02 portfolio-feed — feat/portfolio-feed — medium (→ opus) (depends on 01)
 - [ ] 03 portfolio-runner — feat/portfolio-runner — high (→ opus) (depends on 01)
 - [ ] 04 portfolio-config — feat/portfolio-config — medium (→ opus) (depends on 02, 03)

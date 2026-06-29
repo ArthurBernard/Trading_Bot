@@ -6,6 +6,32 @@ rejected approaches as tombstones.
 
 ---
 
+### 2026-06-28 Portfolio signal contract — weight vector + explicit-qty sizing (PR #63)
+
+**Decision.** The multi-asset strategy contract is a `PortfolioSignalFn`
+`(asof_ms, {Symbol: frame}) -> {Symbol: weight}` — a **weight vector**, weight =
+**signed fraction of capital**, returned for the whole universe in one shot
+(`application.portfolio`). Sizing is `qty = weight × capital / price`, emitted as
+an **explicit-quantity** `Signal.target_qty` (not a fractional
+`SignalMode.EXPOSURE`). The signal is loaded **by reference** (`module:function`,
+safe `importlib`+`getattr`, no loose-file exec), exactly like the single-instrument
+signal; there is no builtin portfolio registry. The engine **does not re-normalise**
+the vector (it trusts the signal's own `Σ|w|` cap); `gross_cap` is recorded,
+advisory.
+
+**Why.** LS1 (the first validated multi-asset strategy) is a *vector* of target
+weights over ~10 coins, gross-capped 2× — the single-instrument `(bars) -> Signal`
+can't express it, and per-coin weight can exceed 1 under leverage, which a bounded
+`[-1, 1]` exposure signal would reject. An explicit-qty signal carries its own
+scale, so `delta_to(position)` needs no `reference_qty` and the runner diffs
+directly against live positions. Keeping the loader by-reference keeps the engine
+**generic** — LS1 lives in config, not in `trading_bot`. **Rejected:** a fractional
+exposure vector (can't express `|w|>1`); the engine re-normalising the book (would
+silently override the strategy's risk sizing); a frame-coupled sizer (kept
+`weights_to_signals` pure by passing prices explicitly).
+
+---
+
 ### 2026-06-28 BinanceBroker — 2nd live venue; composite id, fills scoping, newClientOrderId, testnet (PR #61)
 
 **Decision.** `BinanceBroker` (spot REST) is the second adapter behind the
