@@ -60,6 +60,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Daily-loss circuit breaker is now wired.** `build_engine` feeds the `RiskManager`
+  the live signed realised PnL (`daily_pnl_provider=perf.realised_pnl`) — previously it
+  saw a constant zero, so `max_daily_loss` never engaged. Reaching the limit now refuses
+  every new order, and a `max_daily_loss` breach **escalates to the kill-switch** in the
+  `OrderRouter` (cancel resting orders + trip the halt), since the limit is the day's
+  *halt* threshold, not a one-order cap. (#72)
 - **Reconcile-on-startup is now wired** into the run loop. `run_app` calls
   `reconcile(broker, router, tracker)` right after `build_engine` (before any runner
   starts; opt-out `reconcile_on_start=False`), so a restart converges the engine's

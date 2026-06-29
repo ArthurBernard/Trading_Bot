@@ -6,6 +6,27 @@ rejected approaches as tombstones.
 
 ---
 
+### 2026-06-29 Daily-loss limit is wired to live PnL and escalates to the kill-switch (PR #72)  [accepted]
+
+**Choice.** `build_engine` passes `daily_pnl_provider=perf.realised_pnl` to the
+`RiskManager`, and the `OrderRouter` escalates a `max_daily_loss` breach to
+`RiskManager.kill(router=self)` — cancel resting orders + trip — before re-raising.
+
+**Why.** A pre-production audit found `max_daily_loss` was inert: the factory wired no
+provider, so the gate read a constant zero and never halted; and `kill()` / `trip()`
+had no production trigger. `max_daily_loss` is documented as the day's *halt* threshold
+("trading halts for the day"), so reaching it must stop the whole book, not merely
+refuse the one breaching order.
+
+**Rejected alternatives.** Tripping inside `RiskManager.check` (it is synchronous and
+holds no router/broker, so it cannot cancel resting orders — the async escalation
+belongs in the router, which owns the broker handle); a separate fill-stream monitor
+(more moving parts; the breach is already observed at the gate on the next order).
+"Daily" is the run session (the manager owns no clock); a multi-day reset wires
+`reset_day` / a perf reset to a scheduler — deferred.
+
+---
+
 ### 2026-06-29 Reconcile-on-startup is wired into `run_app` (PR #71)  [accepted]
 
 **Choice.** `run_app` calls `reconcile(broker, router, tracker, event_bus=…)`

@@ -195,7 +195,18 @@ def build_engine(
     # ratios are computed over a strictly-positive account value (the curve does
     # not sign-cross), making Sharpe/Sortino/Calmar over a real run meaningful.
     perf = PerformanceService(v0=config.starting_capital, event_bus=bus)
-    risk = RiskManager(config.risk, position_tracker=tracker)
+    # Wire the daily-loss circuit breaker to the live PnL: the risk manager reads
+    # the day's *signed realised PnL* (a loss is negative) straight off the
+    # performance service. Without this, ``max_daily_loss`` saw a constant zero and
+    # never engaged; with it, once the day's realised loss reaches the limit the
+    # gate refuses every new order (and the router escalates to the kill-switch —
+    # cancelling resting orders + halting — on that breach). "Daily" here is the run
+    # session (no clock); a multi-day reset wires ``reset_day`` to a scheduler.
+    risk = RiskManager(
+        config.risk,
+        position_tracker=tracker,
+        daily_pnl_provider=perf.realised_pnl,
+    )
     router = OrderRouter(broker, bus, risk_manager=risk)
 
     store: SqliteStore | None = None
