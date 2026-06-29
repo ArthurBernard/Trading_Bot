@@ -146,6 +146,7 @@ from trading_bot.application.performance_service import PerformanceService
 from trading_bot.application.portfolio import (
     PortfolioSignalFn,
     PortfolioStrategy,
+    as_portfolio_signal,
     load_portfolio_signal,
     weights_to_signals,
 )
@@ -214,6 +215,7 @@ __all__ = [
     "PortfolioSignalFn",
     "weights_to_signals",
     "load_portfolio_signal",
+    "as_portfolio_signal",
     "PortfolioFeed",
     # strategy runner
     "StrategyRunner",

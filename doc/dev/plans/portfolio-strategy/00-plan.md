@@ -1,7 +1,7 @@
 ---
 plan: portfolio-strategy
 kind: global
-status: planning
+status: done
 roadmap: "- [ ] **Multi-asset / portfolio strategy unit** (signalé par `fynance-research`). Today a `SignalFn` is `(bars) -> Signal` for **one** instrument; the first validated research strategy, **LS1**, is a **multi-asset long/short book** (a *vector* of target weights over ~10 Binance USDT coins, gross-capped 2×). Add a portfolio-strategy abstraction that consumes a weight vector in one shot (e.g. `fynance_research.strategies.ls1_live.target_weights()` → `{pair: weight}`, fraction of capital, Σ\\|w\\|≤2) and emits N venue-neutral `Signal`s + the per-coin order routing. **Interim**: deployable now as 10 single-instrument strategies each calling `ls1_live.coin_exposure(\"<PAIR>\")` (works, but recomputes the book 10×). Spec: `fynance-research/DEPLOY_LS1.md`. Daily rebalance; reads bars from the dccd Binance store."
 release_on_done: false
 ---
@@ -66,7 +66,7 @@ shape. It is **0.3.0 work** (post the 0.2.0 release).
 - [x] 02 portfolio-feed — feat/portfolio-feed — medium (→ opus) (depends on 01)
 - [x] 03 portfolio-runner — feat/portfolio-runner — high (→ opus) (depends on 01)
 - [x] 04 portfolio-config — feat/portfolio-config — medium (→ opus) (depends on 02, 03)
-- [ ] 05 ls1-e2e — feat/portfolio-ls1-e2e — high (→ opus) (depends on 04)
+- [x] 05 ls1-e2e — feat/portfolio-ls1-e2e — high (→ opus) (depends on 04)
 
 ## Dependencies
 

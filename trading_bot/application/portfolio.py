@@ -62,10 +62,14 @@ from __future__ import annotations
 import importlib
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from trading_bot.domain.errors import ConfigError, SignalError
-from trading_bot.domain.instrument import Instrument, Symbol
+from trading_bot.domain.instrument import (
+    Instrument,
+    Symbol,
+    parse_binance_symbol,
+)
 from trading_bot.domain.money import Money, money
 from trading_bot.domain.signal import Signal
 
@@ -77,6 +81,7 @@ __all__ = [
     "PortfolioStrategy",
     "weights_to_signals",
     "load_portfolio_signal",
+    "as_portfolio_signal",
 ]
 
 #: A multi-asset strategy's signal callable: ``(asof_ms, {Symbol: frame})`` →
@@ -271,3 +276,121 @@ def load_portfolio_signal(ref: str) -> PortfolioSignalFn:
             f"{type(fn).__name__}"
         )
     return fn  # type: ignore[no-any-return]
+
+
+def as_portfolio_signal(
+    weights_callable: Callable[[], Any],
+    *,
+    symbol_parse: Callable[[str], Symbol] = parse_binance_symbol,
+) -> PortfolioSignalFn:
+    """Adapt a store-reading ``() -> {pair: weight}`` callable to a :data:`PortfolioSignalFn`.
+
+    The generic bridge between a **research** weight oracle and this package's
+    :data:`PortfolioSignalFn` contract. A research signal like
+    ``fynance_research.strategies.ls1_live.target_weights`` is **argument-free**
+    (it reads its own data store) and returns a plain ``{pair-string: weight}``
+    mapping (e.g. ``{"BTC-USDT": +0.31, "ZEC-USDT": -0.18, ...}``) — sometimes
+    paired with an as-of timestamp as ``(weights, asof)``. The
+    :data:`PortfolioSignalFn` the runner speaks is, by contrast,
+    ``(asof_ms, frames) -> {Symbol: weight}``.
+
+    This adapter returns a :data:`PortfolioSignalFn` that, on each rebalance:
+
+    * **ignores** the passed ``asof_ms`` / ``frames`` (the underlying callable
+      reads its own store) — the frames still drive the runner's freshness gate
+      and the latest closes it prices each leg at, so the engine stays the
+      authority on *when* and *at what price* to trade;
+    * calls ``weights_callable()`` and accepts **either** a bare ``{pair: weight}``
+      mapping **or** a ``(mapping, asof)`` 2-tuple (the as-of is discarded — the
+      engine's own as-of governs), defensively;
+    * **normalises** each pair-string key to a canonical
+      :class:`~trading_bot.domain.instrument.Symbol` via ``symbol_parse`` (default
+      :func:`~trading_bot.domain.instrument.parse_binance_symbol`, so
+      ``"BTC-USDT"`` → ``Symbol("BTC", "USDT")``), and each weight to exact
+      :class:`~trading_bot.domain.money.Money` via ``money(str(...))`` — never
+      ``float``.
+
+    It is the **only** research-aware glue and it is fully generic: it hardcodes
+    no universe, no LS1 specifics, only key-normalisation and the return-shape
+    handling. To wire a concrete research signal by config, expose a parameter-free
+    module-level callable that returns ``as_portfolio_signal(target_weights)`` (or
+    the adapted signal directly) and point the config's ``signal.ref`` at it (see
+    ``examples/ls1_signal.py``).
+
+    Parameters
+    ----------
+    weights_callable : Callable[[], Any]
+        The argument-free weight oracle. Returns either a ``{pair: weight}``
+        mapping or a ``(mapping, asof)`` tuple. Called once per rebalance.
+    symbol_parse : Callable[[str], Symbol], optional
+        How a pair-string key is parsed to a canonical
+        :class:`~trading_bot.domain.instrument.Symbol`. Defaults to
+        :func:`~trading_bot.domain.instrument.parse_binance_symbol` (handles the
+        ``"BTC-USDT"`` hyphen form *and* the bare ``"BTCUSDT"`` form). A
+        :class:`Symbol` key is passed through unchanged (already canonical).
+
+    Returns
+    -------
+    PortfolioSignalFn
+        A ``(asof_ms, frames) -> {Symbol: Money}`` callable.
+
+    Raises
+    ------
+    SignalError
+        If ``weights_callable()`` returns neither a mapping nor a
+        ``(mapping, asof)`` tuple, or a key cannot be parsed to a
+        :class:`Symbol`.
+
+    """
+
+    def _signal(
+        asof_ms: int, frames: Mapping[Symbol, pl.DataFrame]
+    ) -> Mapping[Symbol, Money]:
+        raw = weights_callable()
+        weights = _unwrap_weights(raw)
+        return _normalise_weight_keys(weights, symbol_parse)
+
+    return _signal
+
+
+def _unwrap_weights(raw: Any) -> Mapping[Any, Any]:
+    """Accept a bare ``{pair: weight}`` mapping or a ``(mapping, asof)`` tuple.
+
+    The research oracle may return the weight vector alone or paired with its
+    as-of timestamp; either way the engine's own as-of governs, so the as-of
+    component (when present) is discarded and only the mapping is kept.
+    """
+    if isinstance(raw, Mapping):
+        return raw
+    if isinstance(raw, tuple) and len(raw) == 2 and isinstance(raw[0], Mapping):
+        return raw[0]
+    raise SignalError(
+        "weight oracle must return a {pair: weight} mapping or a "
+        f"(mapping, asof) tuple, got {type(raw).__name__}"
+    )
+
+
+def _normalise_weight_keys(
+    weights: Mapping[Any, Any],
+    symbol_parse: Callable[[str], Symbol],
+) -> dict[Symbol, Money]:
+    """Normalise pair-string keys → canonical :class:`Symbol`, weights → ``Money``.
+
+    A :class:`Symbol` key is passed through (already canonical); a string key is
+    parsed via ``symbol_parse``. Each weight is taken as exact
+    :class:`~trading_bot.domain.money.Money` through ``money(str(...))`` — never
+    ``float``.
+    """
+    out: dict[Symbol, Money] = {}
+    for key, weight in weights.items():
+        if isinstance(key, Symbol):
+            symbol = key
+        else:
+            try:
+                symbol = symbol_parse(str(key))
+            except ValueError as exc:
+                raise SignalError(
+                    f"weight oracle key {key!r} is not a parseable pair: {exc}"
+                ) from exc
+        out[symbol] = money(str(weight))
+    return out

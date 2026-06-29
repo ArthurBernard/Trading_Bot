@@ -27,8 +27,19 @@ venue** behind the `Broker` port (HMAC-SHA256 signing vs Binance's vector; compo
 venue-id for symbol-scoped cancel; `newClientOrderId` idempotency; **testnet-capable**
 with an opt-in real round-trip E2E on `testnet.binance.vision`). Public market data is
 key-free; the private path is mock+vector+testnet-E2E proven. This is the execution
-venue for the upcoming **multi-asset / LS1** epic (next). Mainnet real-key enablement
-stays deferred behind the opt-in.
+venue for the **multi-asset / LS1** epic. Mainnet real-key enablement stays deferred
+behind the opt-in.
+
+**Post-0.2.0 — multi-asset / portfolio-strategy unit shipped:** a native
+`PortfolioStrategy`/`PortfolioRunner` drives a whole universe from a **weight vector**
+(`PortfolioSignalFn` → `weights_to_signals` → N idempotent risk-gated maker-LIMIT legs),
+fed by a common-index, freshness-gated `PortfolioFeed` over the dccd Binance store
+(daily via the resample-on-read `ResamplingDccdClient`). **LS1 is runnable by config**
+(`configs/ls1.yaml` + `examples/ls1_signal.py`, `fynance_research` lazily imported) —
+delta-correctness verified on **real** dccd Binance bars; an opt-in Binance **testnet**
+rebalance round-trip is ready (gated on a testnet key). The engine stays generic (LS1 is
+config + a generic weight-oracle adapter). Two follow-ups are tracked in `07-roadmap.md`
+(engine O(n²) drain; a dccd `inventory()` API drift in two network tests).
 
 **Remaining (maintainer decisions, see `07-roadmap.md`):** the **final project name**
 (kept `trading_bot`), and **real-key live enablement** (validate Kraken private

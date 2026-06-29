@@ -6,6 +6,40 @@ rejected approaches as tombstones.
 
 ---
 
+### 2026-06-29 LS1 wired by config via a generic weight-oracle adapter (PR #67)
+
+**Decision.** LS1 runs end-to-end **without any LS1 code in the engine**. A generic
+`application.as_portfolio_signal(weights_callable)` bridges an *argument-free*
+research oracle (`() -> {pair: weight}`, optionally `(weights, asof)`) to the
+`PortfolioSignalFn` contract: it **ignores** the passed frames (the oracle reads its
+own store) — the frames still drive the runner's freshness gate and per-leg prices —
+and normalises pair-string keys → canonical `Symbol` (`parse_binance_symbol`,
+hyphen/concat both) and weights → exact `Decimal`. The LS1 glue is a thin
+`examples/ls1_signal.py:ls1_portfolio_signal` that binds
+`fynance_research.strategies.ls1_live:target_weights` through the adapter with a
+**lazy** import (config load + ref resolution need no research dep); `configs/ls1.yaml`
+(paper) points `signal.ref` at it. Real daily bars come from the
+`ResamplingDccdClient` (1m→1d). Real-data verification ran against the live dccd
+Binance store with a deterministic weight vector (asof 2026-06-27, 3-coin book):
+routed per-coin deltas == `wᵢ·capital/priceᵢ` on real closes, broker-confirmed.
+
+**Why.** The triptych split is research → signal, trading_bot → execution; keeping
+the only LS1-aware glue a *generic, parameter-free adapter* loaded by reference means
+the engine never imports the research repo and any future weight oracle plugs in the
+same way. Lazy-importing `fynance_research` keeps the engine installable and the
+offline suite green without it. **Rejected:** an LS1-specific runner/signal in
+`trading_bot` (couples the engine to one strategy); a hard `fynance-research` dep
+(forces the research repo on every install); passing the frames into the oracle (its
+API reads its own store — the frames' role is the gate + prices, not the weights).
+
+**Known follow-ups surfaced by this epic (tracked in `07-roadmap.md`):** (1) the
+PaperBroker/engine drain is **superlinear** (~O(n²)) over accumulated ticks, so a
+full multi-year daily backtest through `run_app` is slow — the real-data tests assert
+on a single latest-cross-section rebalance instead; (2) a **dccd API drift** breaks two
+`-m network` data-feed tests (`Client().inventory()` outside `async with`).
+
+---
+
 ### 2026-06-29 Portfolio config + run_app wiring; resample-on-read daily seam (PR #66)
 
 **Decision.** A portfolio is declarable via `PortfolioStrategyConfig` (universe +

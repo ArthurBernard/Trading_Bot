@@ -35,6 +35,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (reads the 1-minute store, aggregates OHLCV to daily via `group_by_dynamic`,
   causal: closed days only, partial last day dropped, OHLC carried exact). The live
   daily-bars seam for the portfolio path (dccd serves only 1m). (#66)
+- `application.as_portfolio_signal` — a generic adapter bridging an argument-free
+  research weight oracle (`() -> {pair: weight}`, e.g. `ls1_live.target_weights`) to
+  the `PortfolioSignalFn` contract (normalises pair keys → `Symbol`, weights → exact
+  `Decimal`). **LS1 runnable end-to-end by config**: `configs/ls1.yaml` (paper) wires
+  the 10-coin Binance USDT book via `examples/ls1_signal.py` (lazy `fynance_research`
+  import); delta-correctness verified on **real** dccd Binance bars (resampled 1m→1d),
+  with an opt-in Binance **testnet** rebalance round-trip. Completes the multi-asset
+  / portfolio-strategy epic. (#67)
 
 ### Changed
 
