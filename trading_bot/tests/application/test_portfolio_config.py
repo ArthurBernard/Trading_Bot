@@ -141,6 +141,7 @@ def _one_portfolio_config(
     *,
     universe: list[str] | None = None,
     capital: str = "100000",
+    store_key_format: str | None = None,
     extra_strategies: list[dict] | None = None,
     extra_portfolios: list[dict] | None = None,
 ) -> AppConfig:
@@ -152,6 +153,8 @@ def _one_portfolio_config(
         "capital": capital,
         "data": {"exchange": "binance", "span": 86400},
     }
+    if store_key_format is not None:
+        portfolio["store_key_format"] = store_key_format
     return AppConfig.model_validate(
         {
             "mode": "paper",
@@ -258,6 +261,62 @@ def test_gross_cap_carried_onto_strategy() -> None:
     client = _daily_client({"BTCUSDT": [50000.0], "ETHUSDT": [2500.0]})
     runners = build_portfolio_runners(cfg, engine, dccd_client=client)
     assert runners[0].strategy.gross_cap == money("1.5")
+
+
+# --- store-key format (dccd store-key convention) -------------------------- #
+
+
+def test_store_key_format_defaults_to_venue() -> None:
+    """``store_key_format`` defaults to ``"venue"`` (backward-compatible)."""
+    cfg = _one_portfolio_config()
+    assert cfg.portfolios[0].store_key_format == "venue"
+
+
+def test_store_key_format_accepts_known_values() -> None:
+    """``venue`` / ``hyphen`` / ``slash`` all validate."""
+    for fmt in ("venue", "hyphen", "slash"):
+        cfg = _one_portfolio_config(store_key_format=fmt)
+        assert cfg.portfolios[0].store_key_format == fmt
+
+
+def test_store_key_format_rejects_unknown_value() -> None:
+    """An unknown format is a config validation error (the Literal guards it)."""
+    with pytest.raises(ValidationError):
+        _one_portfolio_config(store_key_format="concat")
+
+
+async def test_portfolio_reads_hyphen_keyed_store_when_configured() -> None:
+    """``store_key_format='hyphen'`` reads a hyphen-keyed dccd store (``BTC-USDT``).
+
+    Verification on real data (offline): the dccd store is keyed ``BASE-QUOTE``
+    (not the venue's ``BTCUSDT``). With ``store_key_format: hyphen`` the portfolio
+    feed renders each pair to that convention, reads the right series, and the run
+    reaches the intended per-coin targets — proving the config field is threaded
+    through ``build_portfolio_runners`` into the feed's ``symbol_for``.
+    """
+    from trading_bot.application.orchestrator import Orchestrator
+
+    btc_price, eth_price = 50000.0, 2500.0
+    cfg = _one_portfolio_config(capital="100000", store_key_format="hyphen")
+    client = _daily_client(
+        {"BTC-USDT": [btc_price] * 4, "ETH-USDT": [eth_price] * 4}
+    )
+
+    engine = build_engine(cfg, db_path=None)
+    runners = build_portfolio_runners(cfg, engine, dccd_client=client)
+
+    orch = Orchestrator(event_bus=engine.bus)
+    orch.add_all(runners)  # type: ignore[arg-type]
+    await orch.run()
+
+    # The feed read the HYPHEN store keys — not the venue-native "BTCUSDT".
+    read_symbols = {sym for _exch, sym, _span in client.reads}
+    assert read_symbols == {"BTC-USDT", "ETH-USDT"}
+
+    # And the read actually fed sizing: BTC target = +0.5 * 100000 / 50000 = +1.
+    btc_pos = engine.tracker.position(BTC_USDT)
+    assert btc_pos is not None
+    assert btc_pos.net_qty == money("1")
 
 
 # --- backward compat ------------------------------------------------------- #

@@ -8,6 +8,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `PortfolioStrategyConfig.store_key_format` (`"venue"` \| `"hyphen"` \| `"slash"`,
+  default `"venue"`) — pins how each universe pair is rendered to the **dccd store
+  key** its bars are read under, threaded through `build_portfolio_runners` into the
+  `PortfolioFeed`'s `symbol_for`. A real `trading-bot run <portfolio>.yaml` against a
+  hyphen-keyed (`BTC-USDT`) or slash-keyed store is no longer locked to the venue's
+  native `BTCUSDT`/`XBTUSD` convention. (#76)
+
 - `BrokerConfig.testnet` — a per-venue **testnet** flag: `mode: live` + `testnet: true`
   (Binance only — Kraken has no public spot testnet) builds an adapter **hard-pinned**
   to the venue's sandbox URL (`testnet.binance.vision`), so it **cannot reach mainnet**

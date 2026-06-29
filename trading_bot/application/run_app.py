@@ -606,6 +606,9 @@ def build_portfolio_runners(
             start_ns=_portfolio_start_ns(data.start),
             data_type=data.data_type,
             data_path=config.storage.data_path,
+            symbol_for=_store_key_renderer(
+                portfolio_cfg.store_key_format, data.exchange
+            ),
         )
         capped: object = (
             feed if max_steps is None else _CappedPortfolioFeed(feed, max_steps)
@@ -620,6 +623,31 @@ def build_portfolio_runners(
         )
         runners.append(runner)
     return runners
+
+
+def _store_key_renderer(
+    store_key_format: str, exchange: str
+) -> Callable[[Symbol], str]:
+    """Build the ``Symbol -> dccd store key`` renderer for a portfolio feed.
+
+    Maps the config's ``store_key_format`` (see
+    :class:`~trading_bot.application.config.PortfolioStrategyConfig`) to the
+    callable a :class:`~trading_bot.application.portfolio_feed.PortfolioFeed` uses
+    to render each canonical pair to the key its bars are stored under, so a real
+    ``trading-bot run`` against a live dccd store is no longer locked to one
+    guessed convention:
+
+    * ``"venue"`` (default) — the venue's native code
+      (``Symbol.to_venue_symbol(exchange)``), matching the feed's own default;
+    * ``"hyphen"`` — ``BASE-QUOTE`` (e.g. ``BTC-USDT``);
+    * ``"slash"`` — ``BASE/QUOTE`` (e.g. ``BTC/USDT``).
+    """
+    if store_key_format == "hyphen":
+        return lambda sym: f"{sym.base}-{sym.quote}"
+    if store_key_format == "slash":
+        return lambda sym: f"{sym.base}/{sym.quote}"
+    # "venue" (default): the venue's native code, matching the feed's own default.
+    return lambda sym: sym.to_venue_symbol(exchange)
 
 
 def _portfolio_start_ns(start: str | int | None) -> int | None:
