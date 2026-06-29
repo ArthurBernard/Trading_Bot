@@ -114,8 +114,10 @@ __all__ = [
     "StrategyReport",
     "PortfolioReport",
     "PortfolioCoinReport",
+    "PreparedSystem",
     "build_runners",
     "build_portfolio_runners",
+    "prepare_system",
     "run_app",
 ]
 
@@ -697,6 +699,143 @@ def _portfolio_start_ns(start: str | int | None) -> int | None:
     return _resolve_start_ns(start)
 
 
+@dataclass(frozen=True, slots=True)
+class PreparedSystem:
+    """A built — but **not yet run** — declared system.
+
+    The output of :func:`prepare_system`: the wired
+    :class:`~trading_bot.application.service_factory.Engine`, an
+    :class:`~trading_bot.application.orchestrator.Orchestrator` already loaded with
+    every runner (and, for a live Kraken run, the fill streamer), and the runner
+    lists used to build the final report. :func:`run_app` runs the orchestrator and
+    reports; the ``run --serve`` path instead serves a dashboard over the **same**
+    ``engine`` while the orchestrator runs, so the dashboard observes the live run.
+
+    Attributes
+    ----------
+    engine : Engine
+        The wired engine (broker / router / tracker / perf / risk / bus / store).
+    orchestrator : Orchestrator
+        Loaded with the strategy + portfolio runners (and the live fill streamer).
+    runners : list of StrategyRunner
+        The single-instrument runners, in config order.
+    portfolio_runners : list of PortfolioRunner
+        The portfolio runners, in config order.
+
+    """
+
+    engine: Engine
+    orchestrator: Orchestrator
+    runners: list[StrategyRunner]
+    portfolio_runners: list[PortfolioRunner]
+
+
+async def prepare_system(
+    config: AppConfig,
+    *,
+    dccd_client: DccdClient | None = None,
+    max_steps: int | None = None,
+    reconcile_on_start: bool = True,
+) -> PreparedSystem:
+    """Build the declared system up to (but not running) the orchestrator.
+
+    Assembles the engine, **restores** the router's dedup map from the store (if
+    any), **reconciles** to the broker before the first order, rejects commingled
+    instruments, builds the runners, and loads them — plus the live fill streamer
+    for a real-money live Kraken run — into a fresh
+    :class:`~trading_bot.application.orchestrator.Orchestrator`. Shared by
+    :func:`run_app` (run + report) and the ``run --serve`` path (serve the
+    dashboard over the same engine while the orchestrator runs). See
+    :func:`run_app` for the parameter meanings.
+    """
+    engine = build_engine(config, db_path=config.storage.db_path)
+    # Recover idempotency state across a restart: seed the router's dedup map from
+    # the persisted store (the append-only order history) so a re-submit of any
+    # previously-recorded order id is de-duplicated — closing the crash-restart
+    # double-submit window for ids the in-memory map lost. Done *before* reconcile,
+    # which then converges to the venue's current truth.
+    if engine.store is not None:
+        engine.router.restore(engine.store.orders())
+    # Reconcile, don't assume: converge the fresh engine's empty maps to the
+    # broker's truth (open orders + fills) before the first order is placed.
+    if reconcile_on_start:
+        await reconcile(
+            engine.broker, engine.router, engine.tracker, event_bus=engine.bus
+        )
+    # Reject any instrument claimed by two runners up front — across both the
+    # single-instrument strategies and the portfolios (the shared per-instrument
+    # tracker has no attribution).
+    _reject_commingled(config)
+    runners = build_runners(
+        config, engine, dccd_client=dccd_client, max_steps=max_steps
+    )
+    portfolio_runners = build_portfolio_runners(
+        config, engine, dccd_client=dccd_client, max_steps=max_steps
+    )
+
+    orchestrator = Orchestrator(event_bus=engine.bus)
+    orchestrator.add_all(runners)
+    orchestrator.add_all(portfolio_runners)  # type: ignore[arg-type]
+    # A real-money live Kraken run also streams the venue's confirmed fills onto the
+    # bus (and reconciles on every WS (re)connect); paper/testnet add nothing here.
+    fill_streamer = _maybe_build_fill_streamer(config, engine)
+    if fill_streamer is not None:
+        orchestrator.add(fill_streamer)  # type: ignore[arg-type]
+    return PreparedSystem(
+        engine=engine,
+        orchestrator=orchestrator,
+        runners=runners,
+        portfolio_runners=portfolio_runners,
+    )
+
+
+def _build_report(
+    system: PreparedSystem, results: dict[StrategyRunner, int]
+) -> RunReport:
+    """Build the :class:`RunReport` from a finished system's per-runner counts."""
+    engine = system.engine
+    strategies: list[StrategyReport] = []
+    for runner in system.runners:
+        strat = runner.strategy
+        strategies.append(
+            StrategyReport(
+                name=strat.name,
+                instrument=strat.instrument,
+                orders_submitted=results.get(runner, 0),
+                position=engine.tracker.position(strat.instrument),
+            )
+        )
+
+    # The orchestrator keys its results by the runner objects it ran (both the
+    # StrategyRunners and the PortfolioRunners); its return type is annotated for the
+    # single-instrument runner, so view it as a plain object map for the portfolios.
+    results_by_runner = cast("dict[object, int]", results)
+    portfolios: list[PortfolioReport] = []
+    for prunner in system.portfolio_runners:
+        pstrat = prunner.strategy
+        coins = [
+            PortfolioCoinReport(
+                instrument=Instrument(symbol),
+                position=engine.tracker.position(Instrument(symbol)),
+            )
+            for symbol in pstrat.universe
+        ]
+        portfolios.append(
+            PortfolioReport(
+                name=pstrat.name,
+                orders_submitted=results_by_runner.get(prunner, 0),
+                coins=coins,
+            )
+        )
+
+    return RunReport(
+        strategies=strategies,
+        portfolios=portfolios,
+        realised_pnl=engine.perf.realised_pnl(),
+        fees_paid=engine.perf.fees_paid(),
+    )
+
+
 async def run_app(
     config: AppConfig,
     *,
@@ -741,9 +880,11 @@ async def run_app(
     restart even before reconcile runs — closing the crash-restart double-submit
     window for ids the in-memory map lost.
 
-    Reconciling **after a disconnect** (the WS-reconnect half of the invariant)
-    attaches to the private fill stream, which is not yet wired into this run
-    loop; that lands with live fill streaming (tracked in the roadmap).
+    Reconciling **after a disconnect** is also wired for a real-money live Kraken
+    run: the private fill stream (:class:`~trading_bot.application.live_fills.
+    LiveFillStreamer` over :class:`~trading_bot.brokers.kraken_ws.KrakenPrivateWS`)
+    re-runs :func:`~trading_bot.application.reconcile.reconcile` on every WS
+    (re)connect and streams the venue's confirmed fills onto the bus.
 
     Parameters
     ----------
@@ -783,83 +924,11 @@ async def run_app(
         refuses — never falling back to paper).
 
     """
-    engine = build_engine(config, db_path=config.storage.db_path)
-    # Recover idempotency state across a restart: seed the router's dedup map from
-    # the persisted store (the append-only order history) so a re-submit of any
-    # previously-recorded order id is de-duplicated — closing the crash-restart
-    # double-submit window for ids the in-memory map lost (the residual gap for a
-    # venue, like Kraken, with no venue-side idempotency token). No events emitted;
-    # done *before* reconcile, which then converges to the venue's current truth.
-    if engine.store is not None:
-        engine.router.restore(engine.store.orders())
-    # Reconcile, don't assume: converge the fresh engine's empty maps to the
-    # broker's truth (open orders + fills) before the first order is placed, so a
-    # restart never re-submits a venue-held order or trades a stale position. A
-    # no-op on a fresh PaperBroker; the safety backstop on a live/testnet venue.
-    if reconcile_on_start:
-        await reconcile(
-            engine.broker, engine.router, engine.tracker, event_bus=engine.bus
-        )
-    # Reject any instrument claimed by two runners up front — across both the
-    # single-instrument strategies and the portfolios (the shared per-instrument
-    # tracker has no attribution). build_runners also calls this for the
-    # strategy-only path; calling it here covers the cross-portfolio overlaps too.
-    _reject_commingled(config)
-    runners = build_runners(
-        config, engine, dccd_client=dccd_client, max_steps=max_steps
+    system = await prepare_system(
+        config,
+        dccd_client=dccd_client,
+        max_steps=max_steps,
+        reconcile_on_start=reconcile_on_start,
     )
-    portfolio_runners = build_portfolio_runners(
-        config, engine, dccd_client=dccd_client, max_steps=max_steps
-    )
-
-    orchestrator = Orchestrator(event_bus=engine.bus)
-    orchestrator.add_all(runners)
-    orchestrator.add_all(portfolio_runners)  # type: ignore[arg-type]
-    # A real-money live Kraken run also streams the venue's confirmed fills onto the
-    # bus (and reconciles on every WS (re)connect); paper/testnet add nothing here.
-    fill_streamer = _maybe_build_fill_streamer(config, engine)
-    if fill_streamer is not None:
-        orchestrator.add(fill_streamer)  # type: ignore[arg-type]
-    results = await orchestrator.run()
-
-    strategies: list[StrategyReport] = []
-    for runner in runners:
-        strat = runner.strategy
-        strategies.append(
-            StrategyReport(
-                name=strat.name,
-                instrument=strat.instrument,
-                orders_submitted=results.get(runner, 0),
-                position=engine.tracker.position(strat.instrument),
-            )
-        )
-
-    # The orchestrator keys its results by the runner objects it ran (both the
-    # StrategyRunners and the PortfolioRunners added via add_all); its return type
-    # is annotated for the single-instrument runner, so view it as a plain object
-    # map to look up the portfolio runners.
-    results_by_runner = cast("dict[object, int]", results)
-    portfolios: list[PortfolioReport] = []
-    for prunner in portfolio_runners:
-        pstrat = prunner.strategy
-        coins = [
-            PortfolioCoinReport(
-                instrument=Instrument(symbol),
-                position=engine.tracker.position(Instrument(symbol)),
-            )
-            for symbol in pstrat.universe
-        ]
-        portfolios.append(
-            PortfolioReport(
-                name=pstrat.name,
-                orders_submitted=results_by_runner.get(prunner, 0),
-                coins=coins,
-            )
-        )
-
-    return RunReport(
-        strategies=strategies,
-        portfolios=portfolios,
-        realised_pnl=engine.perf.realised_pnl(),
-        fees_paid=engine.perf.fees_paid(),
-    )
+    results = await system.orchestrator.run()
+    return _build_report(system, results)

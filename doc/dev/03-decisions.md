@@ -6,6 +6,32 @@ rejected approaches as tombstones.
 
 ---
 
+### 2026-06-29 Live monitoring via `run --serve` over the same engine (PR #89)  [accepted]
+
+**Choice.** A `--serve` flag on `trading-bot run` serves the read-only dashboard
+(`create_app(engine)`) under uvicorn **concurrently** with the orchestrator, over the
+**same** `Engine`. The build is factored into `prepare_system(config) -> PreparedSystem`
+(engine + an orchestrator loaded with runners), shared by `run_app` (run + report) and
+the serve path. uvicorn owns `SIGINT`: `await server.serve()` blocks until Ctrl-C, then a
+`finally` stops the orchestrator (set its stop event, then await/cancel). The dashboard
+keeps the existing read-only API + SSE — it never places an order.
+
+**Why.** The dashboard's pre-existing `serve` builds a *fresh* engine and reads the
+persisted store — it cannot show a *running* `run`'s live in-memory state, which is what
+"monitor the strategies in prod" needs. Sharing the one engine (and its bus, so SSE is
+live) is the smallest change that makes the dashboard reflect the running system in real
+time. Factoring `prepare_system` avoids duplicating the restore/reconcile/build sequence.
+
+**Rejected alternatives.** Two processes coordinating via the SQLite store (lossy,
+lagged, no live SSE — only persisted snapshots); a separate long-lived daemon exposing
+the engine over IPC (far heavier than a flag); cloning dccd's full multi-page UI
+(custom fonts/logo/auth) for a single read-only dashboard — disproportionate; the
+existing clean dark dashboard is kept, a visual restyle left as reviewable polish.
+uvicorn-owns-SIGINT over installing the orchestrator's own handlers (avoids two handlers
+racing for Ctrl-C).
+
+---
+
 ### 2026-06-29 Live fill streaming via a `LiveFillStreamer` hosted by the orchestrator (PR #87)  [accepted]
 
 **Choice.** A new `application.LiveFillStreamer` consumes a structural `FillSource`

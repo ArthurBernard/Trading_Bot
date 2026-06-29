@@ -45,6 +45,7 @@ out of the box.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import dataclasses
 import math
 import pathlib
@@ -263,6 +264,19 @@ def run(
         "--yes-i-understand",
         help="Explicit acknowledgement required to go --live.",
     ),
+    serve: bool = typer.Option(
+        False,
+        "--serve",
+        help="Also serve the read-only live dashboard over HTTP while the run "
+        "executes, so you can monitor positions / orders / PnL in real time "
+        "(Ctrl-C stops both). Read-only — the dashboard never places an order.",
+    ),
+    serve_host: str = typer.Option(
+        "127.0.0.1", "--serve-host", help="Dashboard bind interface (loopback)."
+    ),
+    serve_port: int = typer.Option(
+        8000, "--serve-port", help="Dashboard TCP port."
+    ),
 ) -> None:
     """Run the declared system (or a quick demo) and print a short summary.
 
@@ -297,6 +311,12 @@ def run(
 
     mode = _resolve_mode(config, live=live, yes_i_understand=yes_i_understand)
     config = config.model_copy(update={"mode": mode})
+
+    # --serve: run the declared system AND serve the read-only dashboard over the
+    # SAME engine, so the run can be monitored live. Handles 0+ strategies.
+    if serve:
+        _run_and_serve(config, host=serve_host, port=serve_port)
+        return
 
     # A config that declares strategies (with their own data + signal) runs the
     # whole declared system via the triptych entrypoint. A bare config (no
@@ -389,6 +409,55 @@ def _run_declared_system(config: AppConfig) -> None:
         if s.position is not None
     }
     _console.print(_render.positions_table(positions))
+
+
+def _run_and_serve(config: AppConfig, *, host: str, port: int) -> None:
+    """Run the declared system **and** serve the live dashboard over one engine.
+
+    Builds the system once (:func:`~trading_bot.application.run_app.prepare_system`),
+    serves the read-only FastAPI dashboard
+    (:func:`~trading_bot.interfaces.api.create_app`) over the **same** engine under
+    uvicorn, and runs the orchestrator concurrently — so the dashboard reflects the
+    live run in real time (positions / orders / PnL via the engine bus + SSE).
+    uvicorn owns ``SIGINT``: Ctrl-C ends ``serve``, and the ``finally`` then drains
+    the orchestrator. The dashboard is **read-only** — it can never place an order.
+    A finite (paper) run completes while the dashboard keeps serving the final state
+    until Ctrl-C; a live run streams until stopped. Build/config failures surface as
+    a clean non-zero exit with no order placed.
+    """
+    import uvicorn
+
+    from trading_bot.application.run_app import prepare_system
+    from trading_bot.interfaces.api import create_app
+
+    async def _serve() -> None:
+        system = await prepare_system(config)
+        api = create_app(system.engine)
+        server = uvicorn.Server(
+            uvicorn.Config(api, host=host, port=port, log_level="warning")
+        )
+        orch_task = asyncio.create_task(system.orchestrator.run())
+        _console.print(
+            f"[green]live dashboard[/green] (mode={config.mode}) on "
+            f"http://{host}:{port}  —  Ctrl-C to stop"
+        )
+        try:
+            await server.serve()  # blocks until SIGINT (uvicorn owns the signal)
+        finally:
+            system.orchestrator.stop_event.set()
+            if not orch_task.done():
+                with contextlib.suppress(Exception):
+                    await asyncio.wait_for(orch_task, timeout=5.0)
+            if not orch_task.done():
+                orch_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await orch_task
+
+    try:
+        asyncio.run(_serve())
+    except Exception as exc:  # noqa: BLE001 - surface any build/config failure
+        _console.print(f"[red]refusing to run:[/red] {exc}")
+        raise typer.Exit(code=1) from exc
 
 
 def _resolve_mode(
