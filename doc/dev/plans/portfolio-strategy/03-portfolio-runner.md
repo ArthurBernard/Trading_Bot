@@ -1,12 +1,12 @@
 ---
 plan: portfolio-strategy/03-portfolio-runner
 kind: leaf
-status: planned
+status: done
 complexity: high
 depends: [01]
 parallel: false
 branch: feat/portfolio-runner
-pr: ""
+pr: "#65"
 ---
 
 # Portfolio runner — weight vector → N idempotent risk-gated orders
