@@ -59,7 +59,7 @@ from trading_bot.application.performance_service import PerformanceService
 from trading_bot.application.position_tracker import PositionTracker
 from trading_bot.application.risk import RiskManager
 from trading_bot.brokers.base import Broker
-from trading_bot.brokers.binance import BinanceBroker
+from trading_bot.brokers.binance import TESTNET_API_BASE, BinanceBroker
 from trading_bot.brokers.kraken import KrakenBroker
 from trading_bot.brokers.paper import PaperBroker
 from trading_bot.domain.errors import BrokerError, LiveTradingNotEnabled
@@ -69,6 +69,9 @@ __all__ = ["Engine", "build_engine"]
 
 #: Venue keys recognised as live (non-simulated) adapters.
 _LIVE_VENUES = ("kraken", "binance")
+#: Venue keys that offer a testnet/sandbox (paper money on the real venue).
+#: Kraken has no public spot testnet, so it is deliberately absent.
+_TESTNET_VENUES = ("binance",)
 #: The venue key for the in-process simulator.
 _PAPER_VENUE = "paper"
 #: The go-live runbook the live-opt-in refusals point users at.
@@ -192,7 +195,18 @@ def build_engine(
     # ratios are computed over a strictly-positive account value (the curve does
     # not sign-cross), making Sharpe/Sortino/Calmar over a real run meaningful.
     perf = PerformanceService(v0=config.starting_capital, event_bus=bus)
-    risk = RiskManager(config.risk, position_tracker=tracker)
+    # Wire the daily-loss circuit breaker to the live PnL: the risk manager reads
+    # the day's *signed realised PnL* (a loss is negative) straight off the
+    # performance service. Without this, ``max_daily_loss`` saw a constant zero and
+    # never engaged; with it, once the day's realised loss reaches the limit the
+    # gate refuses every new order (and the router escalates to the kill-switch —
+    # cancelling resting orders + halting — on that breach). "Daily" here is the run
+    # session (no clock); a multi-day reset wires ``reset_day`` to a scheduler.
+    risk = RiskManager(
+        config.risk,
+        position_tracker=tracker,
+        daily_pnl_provider=perf.realised_pnl,
+    )
     router = OrderRouter(broker, bus, risk_manager=risk)
 
     store: SqliteStore | None = None
@@ -226,12 +240,35 @@ def _build_broker(config: AppConfig, bus: EventBus) -> Broker:
     real money). Refuses (raises
     :class:`~trading_bot.domain.errors.BrokerError`) rather than falling back to
     paper for a live venue that cannot trade.
+
+    **Testnet** is a third path between paper and live: a broker with
+    ``testnet: true`` (a venue that has a sandbox — Binance, not Kraken) builds an
+    adapter **hard-pinned** to the venue's testnet URL. Because it structurally
+    cannot reach mainnet (paper money), it is exempt from the ``live_enabled``
+    opt-in — but it still requires (testnet) credentials. Checked *before* the
+    ``live_enabled`` gate; ignored in paper mode (the simulator wins).
     """
     venue = _selected_venue(config)
 
     if config.mode == "paper" or venue == _PAPER_VENUE:
         # Paper-by-default: the simulator, wired to the bus so its fills fan out.
         return PaperBroker(event_bus=bus)
+
+    # Testnet path: a venue's sandbox (paper money on the real testnet venue). The
+    # adapter is **hard-pinned** to the testnet endpoint (it cannot reach mainnet),
+    # so it does NOT need the `live_enabled` opt-in — checked *before* that gate.
+    # It still requires (testnet) credentials. `testnet: true` on the selected
+    # broker is what opts in; a venue with no testnet raises.
+    first: BrokerConfig | None = config.brokers[0] if config.brokers else None
+    if first is not None and first.testnet:
+        broker = _build_testnet_venue(venue)
+        if not broker.has_credentials:
+            raise BrokerError(
+                f"testnet for venue {venue!r} requires credentials; set the "
+                "venue's (testnet) API key/secret in the environment "
+                "(refusing to trade without credentials)"
+            )
+        return broker
 
     # mode == "live" with a non-paper venue. Live is OFF by default: require the
     # explicit opt-in *before* even looking at credentials, so flipping `mode`
@@ -255,12 +292,47 @@ def _build_broker(config: AppConfig, bus: EventBus) -> Broker:
                 "set the venue's API key/secret in the environment "
                 "(refusing to trade live without credentials)"
             )
+        # Final live gate: a real-money engine must carry explicit risk limits — an
+        # all-None RiskConfig would trade with no size/exposure/daily-loss cap.
+        _require_live_risk_limits(config)
         return broker
 
     raise BrokerError(
         f"live mode: unknown venue {venue!r}; "
         f"known live venues are {sorted(_LIVE_VENUES)!r}"
     )
+
+
+def _require_live_risk_limits(config: AppConfig) -> None:
+    """Refuse a real-money live engine whose risk limits are not all set.
+
+    A :class:`~trading_bot.application.config.RiskConfig` leaves every limit
+    ``None`` (unconstrained) by default, so a live config with no ``risk:`` block
+    would place orders with **no** size, exposure or daily-loss cap — unacceptable
+    for real money. This gate requires ``max_order``, ``max_position`` **and**
+    ``max_daily_loss`` to be set before the live adapter is returned, naming any
+    that are missing. Reached **only** on the opted-in real-money path (``mode:
+    live`` + ``live_enabled`` + credentials); paper mode and testnet (paper money)
+    never get here, so they are exempt.
+    """
+    risk = config.risk
+    missing = [
+        name
+        for name, value in (
+            ("max_order", risk.max_order),
+            ("max_position", risk.max_position),
+            ("max_daily_loss", risk.max_daily_loss),
+        )
+        if value is None
+    ]
+    if missing:
+        raise BrokerError(
+            "live trading requires explicit risk limits, but "
+            f"{', '.join(missing)} {'is' if len(missing) == 1 else 'are'} unset "
+            "in RiskConfig (each None = unconstrained). Set max_order, "
+            "max_position and max_daily_loss before going live (see "
+            f"{_RUNBOOK}). No order placed."
+        )
 
 
 def _selected_venue(config: AppConfig) -> str:
@@ -294,3 +366,24 @@ def _build_live_venue(venue: str) -> _LiveBroker:
         return BinanceBroker()
     # Unreachable: callers gate on ``_LIVE_VENUES`` first. Defensive only.
     raise BrokerError(f"no live adapter for venue {venue!r}")
+
+
+def _build_testnet_venue(venue: str) -> _LiveBroker:
+    """Construct a venue's **testnet** adapter, hard-pinned to its sandbox URL.
+
+    Only venues in :data:`_TESTNET_VENUES` have a testnet. The base URL is forced
+    to the venue's testnet endpoint (passed explicitly, so any ``BINANCE_API_BASE``
+    env value is overridden) — the adapter can therefore never reach mainnet, which
+    is why the caller skips the ``live_enabled`` opt-in for it. Credentials are
+    still read from the environment (testnet keys). A venue with no testnet (e.g.
+    Kraken, which has no public spot sandbox) raises.
+    """
+    if venue == "binance":
+        # Hard-pin the testnet base URL (explicit arg overrides the env default),
+        # so this adapter is structurally incapable of hitting api.binance.com.
+        return BinanceBroker(base_url=TESTNET_API_BASE)
+    raise BrokerError(
+        f"venue {venue!r} has no testnet/sandbox; testnet is available for "
+        f"{sorted(_TESTNET_VENUES)!r} only (Kraken has no public spot testnet — "
+        "use paper, or real-money live behind the go-live runbook)"
+    )

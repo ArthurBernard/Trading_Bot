@@ -1,6 +1,6 @@
 # 06 — Status
 
-_Last updated: 2026-06-28_
+_Last updated: 2026-06-29_
 
 ## Where things stand
 
@@ -19,7 +19,7 @@ exposes the read-only dashboard. The money-safety invariants (reconcile converge
 idempotency, kill-switch) are **proven under fault injection** (`tests/hardening/`).
 **Live trading is off by default** behind an explicit `live_enabled` opt-in +
 credentials + the go-live runbook (`doc/dev/09-go-live.md`) — **no real order is ever
-sent from the repo**. ~617 tests green via the project `.venv`; ruff + mypy clean
+sent from the repo**. ~718 tests green via the project `.venv`; ruff + mypy clean
 across the whole package.
 
 **Post-0.2.0 — E11 (Binance) shipped:** `BinanceBroker` (spot REST) is the **2nd live
@@ -27,76 +27,77 @@ venue** behind the `Broker` port (HMAC-SHA256 signing vs Binance's vector; compo
 venue-id for symbol-scoped cancel; `newClientOrderId` idempotency; **testnet-capable**
 with an opt-in real round-trip E2E on `testnet.binance.vision`). Public market data is
 key-free; the private path is mock+vector+testnet-E2E proven. This is the execution
-venue for the upcoming **multi-asset / LS1** epic (next). Mainnet real-key enablement
-stays deferred behind the opt-in.
+venue for the **multi-asset / LS1** epic. Mainnet real-key enablement stays deferred
+behind the opt-in.
+
+**Post-0.2.0 — multi-asset / portfolio-strategy unit shipped:** a native
+`PortfolioStrategy`/`PortfolioRunner` drives a whole universe from a **weight vector**
+(`PortfolioSignalFn` → `weights_to_signals` → N idempotent risk-gated maker-LIMIT legs),
+fed by a common-index, freshness-gated `PortfolioFeed` over the dccd Binance store
+(daily via the resample-on-read `ResamplingDccdClient`). A **concrete strategy** is
+wired purely by reference (a signal wrapper + a config), via the generic
+`as_portfolio_signal` adapter — and **kept local-only** under the gitignored
+`strategies/` tree (never committed; the engine stays generic). On real dccd data the
+routed per-coin deltas equal `weightᵢ × capital / priceᵢ`; opt-in venue order tests run
+locally (Binance **testnet** with a key; Kraken public-data + PaperBroker, no real order).
+One follow-up is tracked in `07-roadmap.md` (engine O(n²) drain; a dccd `inventory()`
+API drift in two network tests).
+
+**Post-0.2.0 — pre-production safety hardening (audit):** a full pre-prod audit found
+the money-safety *machinery* existed and was hardening-tested but several pieces were
+not wired into the run loop. Now closed: **reconcile-on-startup** runs before the first
+order (`run_app`); the **daily-loss circuit breaker** is fed live PnL and a breach
+escalates to the kill-switch (cancel resting + halt); **real-money live requires explicit
+risk limits** (`max_order`/`max_position`/`max_daily_loss`, else a `BrokerError`); fills
+are **de-duplicated by `fill_id`**; order dedup **survives a restart** (the router is
+restored from the persisted store before the first order); and a portfolio's **dccd
+store-key convention is pinned** by config (`store_key_format`). Hygiene in the same pass:
+removed the dead `BrokerRegistry`, and the limit-at-close price is exact `Decimal` (no
+float). Remaining venue-side idempotency token is the real-key-sandbox prerequisite.
 
 **Remaining (maintainer decisions, see `07-roadmap.md`):** the **final project name**
 (kept `trading_bot`), and **real-key live enablement** (validate Kraken private
 endpoints + venue-level idempotency against a real-key sandbox, then flip
-`live_enabled`).
-
-### Bootstrap (Phase 0, historical)
-
-The dccd/fynance developer standard: `pyproject.toml`, ruff/mypy/pytest/interrogate,
-pre-commit, GitHub Actions CI (3.11–3.13), Git Flow (`develop`/`master`), `CLAUDE.md`,
-`.claude/` workflow + hooks, and this `doc/dev/` pack.
-
-**E1–E9 are complete — only go-live hardening (E10) remains.** Trading_Bot conducts
-the triptych: one `AppConfig` declares data (dccd) + strategies (fynance) + brokers +
-risk; `trading-bot run <config.yaml>` runs the whole declared multi-strategy system
-(paper by default) via `run_app` → one shared engine → a `StrategyRunner` per strategy
-through the `Orchestrator`; and `trading-bot serve` exposes a **read-only** web
-dashboard (FastAPI `/api/*` + SSE, Jinja2 UI as a pure HTTP client — money as Decimal
-strings, never trades). dccd is integrated by **library import** (`feed_for`). Layers:
-`domain/` (pure, mypy-strict), `transport/` (http/ws/ratelimit), `brokers/` (`Broker`
-port + `KrakenBroker` REST+WS + port-pure `PaperBroker`), `storage/` (`SqliteStore`,
-money as TEXT), `application/` (declarative `AppConfig`+`EventBus`, idempotent
-risk-gated `OrderRouter`, `PositionTracker`, `reconcile`, `Strategy`+safe loader,
-causal `DataFeed`+`feed_for`, `StrategyRunner`, `PerformanceService`, `RiskManager`+
-kill-switch, `Orchestrator`, `run_app`, `service_factory`), `interfaces/` (Typer
-`trading-bot` CLI + read-only FastAPI `api`/Jinja2 `ui`). The pre-2026 `legacy/` tree
-is deleted; the whole package is linted/typed/tested. **521 tests** green via the
-project `.venv`.
-
-Pending: **E10** — go-live hardening (prove reconciliation / kill-switch / idempotency
-under fault injection; resolve the venue-idempotency + KPI-v0 + same-instrument known
-gaps; explicit live enablement) and the **final project name**. Next is **E10**. See
-`07-roadmap.md` /
-`08-program-plan.md`.
+`live_enabled`). Engine layers, the triptych wiring (one `AppConfig` →
+`run_app` → one engine → runners via the `Orchestrator`; `trading-bot serve` for the
+read-only dashboard), and the Phase-0 dev standard (packaging, CI 3.11–3.13, Git Flow,
+`.claude/` workflow, this `doc/dev/` pack) are all in place — see the paragraphs above
+and `CHANGELOG.md` for what shipped.
 
 ## Done
 
-- Legacy implementation parked under `trading_bot/legacy/` (excluded from tooling).
+- The pre-2026 implementation is **deleted** (git history only; no in-tree `legacy/`).
 - Modern packaging + tooling + CI + Git Flow.
 - Claude Code workflow wired (`/pick-task` … `/release` resolve against this repo).
 - Developer brief (`doc/dev/`) and rewrite roadmap.
-- **E1 — Domain core**: `domain/` (money, instrument, errors, order, fill,
-  position, signal, performance) — pure, mypy-strict, tested.
+- **E1–E11 + the multi-asset/portfolio unit** shipped; the pre-production safety
+  hardening (audit) is wired in (see *Where things stand*). `CHANGELOG.md` + git log are
+  authoritative for what shipped per release.
 
 ## Pending
 
-Only **E10-03** (go-live runbook + an explicit, off-by-default live opt-in guard) — see
-[`07-roadmap.md`](07-roadmap.md). After that the rewrite is feature-complete; real live
-trading still needs a real-key sandbox validation, and the **final project name** stays
-deferred.
+The engine is feature-complete and the safety machinery is wired. What remains is **not**
+engine code: **real-key live enablement** (validate Kraken private endpoints +
+venue-level idempotency against a real-key sandbox, then flip `live_enabled`) and the
+**final project name** — both maintainer decisions in [`07-roadmap.md`](07-roadmap.md).
 
 ## Known gaps / deferred
 
 - **Final project name** — kept as `trading_bot` for now (deferred decision).
-- **Default paper-vs-live beyond MVP** — paper-first; live behind an explicit
-  off-by-default opt-in (E10-03).
 - ~~**KPI ratios need a positive starting capital**~~ — **resolved (E10)**:
-  `AppConfig.starting_capital` (default 100000) is wired into `PerformanceService(v0=)`,
-  so the ratios are meaningful; CLI `kpi --capital` overrides it.
+  `AppConfig.starting_capital` (default 100000) is wired into `PerformanceService(v0=)`.
 - ~~**Same-instrument strategies commingle in `run_app`**~~ — **resolved (E10)**:
-  `build_runners` now **rejects** two strategies on the same symbol (`ConfigError`,
-  alias-aware). A per-strategy book (to *allow* it) remains a future refinement.
-- ~~**dccd↔trading_bot orchestration depth**~~ — **resolved (E8)**: library import,
-  not a service (`feed_for` uses `dccd.Client.read`/`backfill` in-process). See ADR.
-- **`AddOrder` idempotency at the venue** — *transport guard added (E10)*:
-  `place_order` now sends `AddOrder` **at most once** (`post(retry=False)` → raises
-  `AmbiguousRequestError` so the caller reconciles before retrying), closing the
-  blind-retry double-submit window. Still **not fully closed**: there is no
-  *venue-side* dedup token, so a retry the engine *forgot* (e.g. a crash before the
-  reject was persisted) could still double-submit — that needs a real-key sandbox to
-  build/validate (the only live-trading prerequisite left).
+  `build_runners` **rejects** two strategies on the same symbol (`ConfigError`, alias-aware).
+- ~~**dccd↔trading_bot orchestration depth**~~ — **resolved (E8)**: library import
+  (`feed_for` uses `dccd.Client.read`/`backfill` in-process). See ADR.
+- ~~**Reconcile / kill-switch / daily-loss / fill-dedup were not wired**~~ — **resolved
+  (audit)**: reconcile-on-startup, the daily-loss circuit breaker, mandatory live risk
+  limits, `fill_id` dedup, and restart-safe order dedup are all wired (PRs #71–#75).
+- ~~**Portfolio store-key convention unpinned**~~ — **resolved (audit, #76)**:
+  `PortfolioStrategyConfig.store_key_format`.
+- **`AddOrder` idempotency at the venue** — *mostly closed*: `place_order` sends `AddOrder`
+  **at most once** (`post(retry=False)` → `AmbiguousRequestError`), and order dedup now
+  **survives a restart** (the router is restored from the persisted store before the first
+  order — #75). Still **not fully closed**: there is no *venue-side* dedup token, so an
+  order that filled in the crash gap *before any persist* could still double-submit — that
+  needs a real-key sandbox to build/validate (the only live-trading prerequisite left).

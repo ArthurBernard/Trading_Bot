@@ -15,17 +15,28 @@ The single source *index* of open work. Each unchecked item is a candidate for
 dashboard; paper-by-default, hardened under fault injection, live behind an explicit
 off-by-default opt-in. History in git + `CHANGELOG.md`; see `06-status.md`.
 
-## Active epics (post-0.2.0)
+**Post-0.2.0 shipped:** the **Binance adapter** (E11, 2nd live venue) and the
+**native multi-asset / portfolio-strategy unit** (strategies run by config via the
+generic `as_portfolio_signal` adapter; concrete strategies kept **local-only** under
+the gitignored `strategies/`, real dccd-data verified). History in `CHANGELOG.md`.
 
-- [ ] **Multi-asset / portfolio strategy unit** (signalé par `fynance-research`). Today a
-  `SignalFn` is `(bars) -> Signal` for **one** instrument; the first validated research
-  strategy, **LS1**, is a **multi-asset long/short book** (a *vector* of target weights over
-  ~10 Binance USDT coins, gross-capped 2×). Add a portfolio-strategy abstraction that consumes
-  a weight vector in one shot (e.g. `fynance_research.strategies.ls1_live.target_weights()` →
-  `{pair: weight}`, fraction of capital, Σ\|w\|≤2) and emits N venue-neutral `Signal`s + the
-  per-coin order routing. **Interim**: deployable now as 10 single-instrument strategies each
-  calling `ls1_live.coin_exposure("<PAIR>")` (works, but recomputes the book 10×). Spec:
-  `fynance-research/DEPLOY_LS1.md`. Daily rebalance; reads bars from the dccd Binance store.
+## Known issues / follow-ups
+
+- [ ] **Live fill streaming + post-disconnect reconcile.** Reconcile is now wired
+  **on startup** (`run_app` converges the engine to the venue before the first order),
+  but the **after-disconnect** half of *reconcile, don't assume* is not: the private
+  fill WS (`KrakenPrivateWS`) is not wired into the run loop, so there is no reconnect
+  to trigger a reconcile pass on, and live fills are not streamed onto the bus. Wire
+  the private fill WS into the engine and trigger `reconcile` on each reconnect (and
+  land fill-id dedup — see below — before that stream feeds the tracker).
+- [ ] **PaperBroker/engine drain is superlinear (~O(n²)) over accumulated ticks.** A
+  full multi-year daily run through `run_app` is slow (≈10 ticks 6.5s → 200 ticks 118s);
+  the LS1 real-data tests assert on a single latest-cross-section rebalance instead.
+  Profile the per-fill rebuild (tracker/perf/bus) and make the drain linear before any
+  long backtest/live-replay through the engine.
+- [ ] **dccd API drift breaks two `-m network` data-feed tests.** `dccd.Client().inventory()`
+  is now called outside an `async with` in `test_data_feed.py` / `test_data_provider.py`
+  (current dccd rejects it). Network-only (not in CI). Realign the dccd client usage.
 
 ## Open / deferred (maintainer decisions)
 

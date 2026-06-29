@@ -6,6 +6,408 @@ rejected approaches as tombstones.
 
 ---
 
+### 2026-06-29 Remove the unused `BrokerRegistry` (delete, don't wire) (PR #77)  [accepted]
+
+**Choice.** Delete `brokers/registry.py` (`BrokerRegistry`) rather than wire it into the
+factory.
+
+**Why.** The audit found it entirely bypassed: `service_factory.build_engine` selects
+venues with an explicit per-venue dispatch (paper / testnet / live + the credential and
+opt-in gates), and only the registry's own tests exercised the class. Dead infrastructure
+contradicts the repo's "no dead code" stance.
+
+**Rejected alternatives.** Wiring the factory through the registry (no benefit at two-to-
+three venues; the explicit dispatch is clearer and already carries the live/testnet/paper
+gating that a generic registry would not). If the venue count grows it can be reintroduced
+from git history.
+
+---
+
+### 2026-06-29 Portfolio store-key convention is pinned by config, not guessed (PR #76)  [accepted]
+
+**Choice.** `PortfolioStrategyConfig` gains `store_key_format`
+(`"venue"` | `"hyphen"` | `"slash"`, default `"venue"`); `build_portfolio_runners`
+maps it to a `Symbol -> str` renderer and threads it into the `PortfolioFeed`'s existing
+`symbol_for` hook. The universe stays written in canonical `BASE/QUOTE`; the field pins
+how those pairs render to the dccd store keys (`BTCUSDT` / `BTC-USDT` / `BTC/USDT`).
+
+**Why.** The audit's open follow-up: `PortfolioFeed` had a `symbol_for` hook but the
+config/`run_app` path never exposed it, so a real `trading-bot run <portfolio>.yaml` was
+locked to `to_venue_symbol` (`BTCUSDT`/`XBTUSD`) — which doesn't match a hyphen-keyed
+dccd store and is ambiguous to invert. LS1 runs were therefore only verified via the test
+harness, not raw `run_app`. A declared format removes the guess.
+
+**Rejected alternatives.** Auto-detecting the store key by existence-checking the dccd
+store (what a strategy's local test client does — convenient but implicit and untestable
+in the engine); putting the field on `DataSourceConfig` (single-instrument strategies
+read under the exact `symbol` string given, so they have no re-render ambiguity — the
+field is portfolio-specific); a free-form format string (a `Literal` catches typos at
+config time).
+
+---
+
+### 2026-06-29 Order dedup state is restored from the store on startup (PR #75)  [accepted]
+
+**Choice.** `OrderRouter.restore(orders)` seeds the in-memory dedup map (`_orders`)
+from the append-only `SqliteStore` on startup — emitting **no** events and never
+clobbering an id the router already tracks — and `run_app` calls it (when a store is
+configured) **before** the startup reconcile. A re-submit of any persisted
+`client_order_id` then dedups in `submit` (returns the recorded order, no broker call).
+
+**Why.** The audit's most dangerous interaction: Kraken issues no venue-side idempotency
+token, so dedup rests entirely on the in-memory map. A crash between `AddOrder` success
+and recording it loses that map; on restart a deterministic id (`{name}-{step}`) would
+re-submit and **duplicate the order at the venue**. Reconcile-on-startup (PR #71) only
+recovers orders the venue still reports **open**; the store recovers *every* recorded id
+(including filled/rejected) — together they close the common crash-restart window.
+
+**Rejected alternatives.** Reusing `ingest` to seed (it emits an `OrderEvent`, so a
+dashboard/store would see historical orders as fresh activity — `restore` is silent);
+deduping by object identity (a re-submit is a new `Order` with the same id). **Residual
+gap (unclosed):** an order that *filled during the crash gap, before any persist* leaves
+no local record and reconcile sees no open order — only a venue-side dedup token closes
+that, which Kraken lacks (the documented real-key-sandbox prerequisite).
+
+---
+
+### 2026-06-29 Fills are de-duplicated by `fill_id` in the read-side views (PR #74)  [accepted]
+
+**Choice.** `PositionTracker.apply` and `PerformanceService.apply` each keep a
+`set[str]` of folded `fill_id`s and ignore a fill whose id was already seen (the
+tracker returns the standing position; the service makes no PnL/fee/equity change).
+`PositionTracker.reset` clears the set so a reconcile rebuild from the broker's fills
+re-folds them.
+
+**Why.** The audit found both `apply` paths explicitly skipped dedup, trusting "the
+broker's fill stream is the de-duplicated source." That holds for the PaperBroker today,
+but a live **private fill WS** can re-emit an execution (Kraken v2 resends a snapshot on
+resubscribe after a reconnect). With no dedup, the tracker would double the position and
+the service's *incremental* running realised PnL would be silently corrupted with no
+detectable error. Dedup-by-id makes both views safe to feed from a live stream.
+
+**Rejected alternatives.** Relying on the upstream stream to never duplicate (fragile —
+exactly the reconnect case we must survive); deduping by object identity (a re-emit is a
+*new* `Fill` object with the same id); keying the set by `(instrument, fill_id)` (venue
+trade ids are unique per venue — a flat id set is enough and simpler). Not adding a perf
+`reset` (the service accumulates over the run session; the id set growing is bounded by
+fills seen and is fine).
+
+---
+
+### 2026-06-29 Real-money live requires all three risk limits (PR #73)  [accepted]
+
+**Choice.** On the real-money live path (`mode: live` + `live_enabled` + credentials),
+`build_engine` refuses to return the live adapter unless `RiskConfig` sets all of
+`max_order`, `max_position` and `max_daily_loss` (a `BrokerError` naming the gaps).
+The check sits **after** the credential gate, so the existing "no creds → BrokerError"
+ordering is unchanged; paper and testnet return earlier and are exempt.
+
+**Why.** A pre-production audit found `RiskConfig` defaults every limit to `None`
+(unconstrained), so a live config with no `risk:` block would place orders with no
+size, exposure or daily-loss cap. For real money the limits must be deliberate, not
+opt-in-by-omission.
+
+**Rejected alternatives.** A pydantic `model_validator` on `AppConfig` (fires at config
+construction, which would change the error surface of several broker-selection tests
+that build `live_enabled` configs without limits, and would couple config validity to a
+risk policy); requiring limits for testnet too (testnet is paper money — over-strict).
+`ConfigError` vs `BrokerError` — kept `BrokerError` to match the factory's existing
+"refusing to trade live without X" vocabulary.
+
+---
+
+### 2026-06-29 Daily-loss limit is wired to live PnL and escalates to the kill-switch (PR #72)  [accepted]
+
+**Choice.** `build_engine` passes `daily_pnl_provider=perf.realised_pnl` to the
+`RiskManager`, and the `OrderRouter` escalates a `max_daily_loss` breach to
+`RiskManager.kill(router=self)` — cancel resting orders + trip — before re-raising.
+
+**Why.** A pre-production audit found `max_daily_loss` was inert: the factory wired no
+provider, so the gate read a constant zero and never halted; and `kill()` / `trip()`
+had no production trigger. `max_daily_loss` is documented as the day's *halt* threshold
+("trading halts for the day"), so reaching it must stop the whole book, not merely
+refuse the one breaching order.
+
+**Rejected alternatives.** Tripping inside `RiskManager.check` (it is synchronous and
+holds no router/broker, so it cannot cancel resting orders — the async escalation
+belongs in the router, which owns the broker handle); a separate fill-stream monitor
+(more moving parts; the breach is already observed at the gate on the next order).
+"Daily" is the run session (the manager owns no clock); a multi-day reset wires
+`reset_day` / a perf reset to a scheduler — deferred.
+
+---
+
+### 2026-06-29 Reconcile-on-startup is wired into `run_app` (PR #71)  [accepted]
+
+**Choice.** `run_app` calls `reconcile(broker, router, tracker, event_bus=…)`
+immediately after `build_engine`, before any runner starts (new opt-out
+`reconcile_on_start: bool = True`). A freshly-built engine has **empty** local maps;
+the venue may already hold open orders + a fill history (a restart). Reconciling first
+ingests venue-open orders, closes orphans, and rebuilds positions from confirmed fills,
+so the engine never re-submits a venue-held order or trades a stale (zero) position.
+A no-op on a fresh `PaperBroker`; the safety backstop on a live/testnet venue.
+
+**Why.** A pre-production audit found the *reconcile, don't assume* invariant was fully
+implemented and hardening-tested but had **zero production callers** — it was inert.
+The single system entrypoint, before the orchestrator runs, is the lowest-risk wiring
+point and keeps every caller (CLI, daemon, tests) converging identically.
+
+**Rejected alternatives.** Reconcile inside `build_engine` (the factory is sync and
+does no I/O — keep it pure); reconcile per-runner (the engine/broker is shared, one
+pass suffices). The **post-disconnect** half of the invariant (reconcile on a WS
+reconnect) is **deferred**: the private fill WS is not wired into the run loop yet, so
+there is no reconnect to hook — it lands with live fill streaming (tracked in the
+roadmap).
+
+---
+
+### 2026-06-29 Strategies are local-only — never committed to the engine repo (PR #70)
+
+**Decision.** Concrete **strategies** — the signal wrapper, the strategy config(s),
+and the strategy's e2e tests — are **never committed** to `trading_bot`. They live
+**local-only** under a gitignored `strategies/` tree (`strategies/*` ignored, with the
+`example/` + `another_example/` templates and `README.md` negated/tracked). The engine
+ships only the **generic** machinery — the portfolio abstraction (`application/
+portfolio*.py`, `AppConfig.portfolios`, `ResamplingDccdClient`) and the generic
+`as_portfolio_signal` adapter — which runs any strategy **by reference**
+(`module:function` + a YAML config) without importing it. This corrects an earlier
+slip where the LS1 wrapper/configs/tests were pushed via PRs #67/#69; they were moved
+out (the engine-generic adapter tests were retained, moved into
+`test_portfolio_signal.py`). The `v0.2.0` tag was never affected (it predates LS1).
+
+**Why.** `trading_bot` is the **shareable execution engine** of the triptych; strategy
+logic/IP (and deployment specifics) belong with the research (`fynance-research`) /
+the operator's local setup, not in the engine repo. Keeping the engine free of any
+concrete strategy also keeps it genuinely generic and its test suite free of strategy
+data dependencies. Operationally: a request to *test a strategy locally* means run it
+and report — not commit/push/merge. **Rejected:** committing strategies "because the
+live test is useful" (leaks IP into the engine repo, couples the engine to one
+strategy); a history purge of the earlier slip (the content is only on `develop`, not
+in any tag — a tip-level removal + gitignore is enough; force-rewriting a shared
+branch's history is not warranted).
+
+---
+
+### 2026-06-29 LS1 multi-venue live tests; Kraken is public+PaperBroker (no testnet) (PR #69)
+
+**Decision.** LS1 is now wired for **both venues** by config — `ls1_kraken_signal`
+(calls the research oracle with `venue="kraken"`, USD pairs) alongside the Binance
+`ls1_portfolio_signal`, each a thin `examples/ls1_signal.py` wrapper over the generic
+`as_portfolio_signal` adapter; `configs/ls1_kraken.yaml` mirrors `configs/ls1.yaml`
+on the `-USD` universe + dccd Kraken store. The **live tests** differ by venue because
+the venues differ: **Binance** has a testnet, so its order round-trip is the opt-in
+`network` testnet test (real orders, paper money); **Kraken has no public spot
+testnet**, so its live test (`test_ls1_kraken_real_e2e`) runs the **real** LS1 Kraken
+signal over the **real** dccd Kraken store + a **live Kraken public-ticker** sanity
+check, but routes the rebalance through the **`PaperBroker`** — **no real order is ever
+placed** (the maintainer chose public+PaperBroker over a real-money Kraken order test).
+
+**Why.** A live test on Kraken that *places* orders is real money (no sandbox exists),
+which violates the project's "no real order by accident" posture; running the real
+signal + real data + live public prices through the simulator validates the whole
+chain (data → signal → sizing → delta → routing → risk) bar the venue's order
+acceptance, with zero financial risk. Real Kraken order placement stays the deliberate
+go-live opt-in (`doc/dev/09-go-live.md`). **Rejected:** a real-money Kraken order test
+(footgun — a stray `-m network` run with a real key trades for real); a Kraken testnet
+(does not exist).
+
+**Finding (tracked in `07-roadmap.md`): venue symbol renders are ambiguous to invert.**
+`to_venue_symbol("kraken")` yields `XBTUSD` (which `parse_binance_symbol` mis-reads as
+`XB/TUSD` — the `TUSD` quote) and `TRXUSD` (which `parse_kraken_pair` mis-reads as
+`TR/USD` — the trailing `X` looks like a legacy prefix); no single parser inverts both.
+The test's fake dccd client disambiguates by trying both parsers and picking the
+candidate dir that **exists** in the store — but this exposes that the **production**
+config → real-dccd path has no agreed store-key convention (the default `PortfolioFeed`
+render does not match a hyphen-keyed `BASE-QUOTE` store for either venue; only the test
+client normalises). A real `trading-bot run configs/ls1*.yaml` against a live dccd
+client needs that convention pinned.
+
+---
+
+### 2026-06-29 Testnet is a third broker path; it bypasses live_enabled by being mainnet-incapable (PR #68)
+
+**Decision.** A `BrokerConfig.testnet: true` selects a venue's **testnet/sandbox**
+(paper money on the real testnet venue) as a path distinct from both paper (the
+in-process simulator) and live (real mainnet). Under `mode: live`, a `testnet: true`
+broker builds the venue adapter **hard-pinned** to the testnet URL — the base URL is
+passed explicitly (`BinanceBroker(base_url=TESTNET_API_BASE)`), overriding any
+`BINANCE_API_BASE` env — so it is structurally incapable of reaching mainnet. Because
+it cannot touch real money, this path is **exempt from the `live_enabled` opt-in**
+(checked *before* that gate); it still requires (testnet) credentials. Only venues with
+a testnet qualify (`_TESTNET_VENUES = ("binance",)`); **Kraken raises** (no public spot
+sandbox). Paper mode still wins (testnet ignored). `BinanceBroker` gained `base_url`/
+`is_testnet` read-only introspection.
+
+**Why.** The maintainer wanted to live-test orders on the engine path *safely and
+without ceremony*. The previous route — `mode: live` + `live_enabled: true` + setting
+`BINANCE_API_BASE` to the testnet — overloaded the real-money opt-in for a paper-money
+sandbox and risked **mainnet by omission** (the base URL defaults to mainnet, so a
+forgotten env var trades for real). Pinning the URL from the flag makes "testnet
+cannot become mainnet" structural, which is precisely what justifies skipping
+`live_enabled` — the gate exists to prevent *real-money* accidents, and there are none
+here. **Rejected:** a separate `mode: "testnet"` (more surface; the venue, not the
+mode, is what has a sandbox); honouring `BINANCE_API_BASE` under the flag (re-opens the
+mainnet-by-omission hole); making testnet require `live_enabled` (the friction the
+request set out to remove). Kraken testnet was rejected because it does not exist.
+
+---
+
+### 2026-06-29 LS1 wired by config via a generic weight-oracle adapter (PR #67)
+
+**Decision.** LS1 runs end-to-end **without any LS1 code in the engine**. A generic
+`application.as_portfolio_signal(weights_callable)` bridges an *argument-free*
+research oracle (`() -> {pair: weight}`, optionally `(weights, asof)`) to the
+`PortfolioSignalFn` contract: it **ignores** the passed frames (the oracle reads its
+own store) — the frames still drive the runner's freshness gate and per-leg prices —
+and normalises pair-string keys → canonical `Symbol` (`parse_binance_symbol`,
+hyphen/concat both) and weights → exact `Decimal`. The LS1 glue is a thin
+`examples/ls1_signal.py:ls1_portfolio_signal` that binds
+`fynance_research.strategies.ls1_live:target_weights` through the adapter with a
+**lazy** import (config load + ref resolution need no research dep); `configs/ls1.yaml`
+(paper) points `signal.ref` at it. Real daily bars come from the
+`ResamplingDccdClient` (1m→1d). Real-data verification ran against the live dccd
+Binance store with a deterministic weight vector (asof 2026-06-27, 3-coin book):
+routed per-coin deltas == `wᵢ·capital/priceᵢ` on real closes, broker-confirmed.
+
+**Why.** The triptych split is research → signal, trading_bot → execution; keeping
+the only LS1-aware glue a *generic, parameter-free adapter* loaded by reference means
+the engine never imports the research repo and any future weight oracle plugs in the
+same way. Lazy-importing `fynance_research` keeps the engine installable and the
+offline suite green without it. **Rejected:** an LS1-specific runner/signal in
+`trading_bot` (couples the engine to one strategy); a hard `fynance-research` dep
+(forces the research repo on every install); passing the frames into the oracle (its
+API reads its own store — the frames' role is the gate + prices, not the weights).
+
+**Known follow-ups surfaced by this epic (tracked in `07-roadmap.md`):** (1) the
+PaperBroker/engine drain is **superlinear** (~O(n²)) over accumulated ticks, so a
+full multi-year daily backtest through `run_app` is slow — the real-data tests assert
+on a single latest-cross-section rebalance instead; (2) a **dccd API drift** breaks two
+`-m network` data-feed tests (`Client().inventory()` outside `async with`).
+
+---
+
+### 2026-06-29 Portfolio config + run_app wiring; resample-on-read daily seam (PR #66)
+
+**Decision.** A portfolio is declarable via `PortfolioStrategyConfig` (universe +
+`SignalRefConfig` + `capital` + daily `DataSourceConfig` + optional `gross_cap` +
+`venue`) on `AppConfig.portfolios`; `run_app`'s `build_portfolio_runners` resolves
+the signal by reference, builds a `PortfolioFeed` + `PortfolioRunner` on the **shared**
+engine, and reports per-coin. **Overlap detection** is widened: no instrument may be
+claimed by two runners — strategy↔strategy (existing), strategy↔portfolio, or
+portfolio↔portfolio — because the shared per-instrument tracker has no attribution. A
+portfolio is exempt from the *intra*-single-instrument `_reject_commingled` (it owns
+its whole universe) but its universe must not intersect any other runner's.
+
+The daily-bars seam: `ResamplingDccdClient` wraps a real dccd client, reads the
+**1-minute** store and aggregates OHLCV to daily (`open=first, high=max, low=min,
+close=last, volume=sum` via `group_by_dynamic(every="1d", closed="left",
+label="left")`), causal — closed days only, the still-forming last day dropped, OHLC
+carried **exact** (no float). It is **injectable, not auto-wrapped** by `run_app`:
+the caller wraps the real client when a daily portfolio reads a 1m store; offline
+tests inject a fake *daily* client directly. `fynance-research` is documented as an
+editable `[triptych]` extra (LS1's signals live there; the engine stays generic).
+
+**Why.** dccd serves only 1m (it does not resample — `read(span=86400)` → 0 rows), so
+a daily consumer must resample, mirroring `fynance_research/data.py`. Making the
+resampler an injectable client keeps `PortfolioFeed`/`run_app` agnostic and the
+offline tests resample-free; auto-wrapping was rejected because `run_app` can't tell
+the store's native span from the requested span without a new config signal — deferred
+until needed. Widened overlap detection prevents two runners silently fighting over
+one instrument's shared position. **Rejected:** resampling inside `PortfolioFeed`
+(couples it to the store's native span); auto-wrapping in `run_app` (needs a
+source-span config field — premature); a hard `fynance-research` dependency (would
+force the research repo on every install).
+
+---
+
+### 2026-06-29 PortfolioRunner — whole-universe targeting, per-leg failure isolation (PR #65)
+
+**Decision.** `application.PortfolioRunner` mirrors `StrategyRunner` for a whole
+universe: per tick it sizes the weight vector (`weights_to_signals`) and routes one
+leg per coin through the **shared** `OrderRouter`/`PositionTracker`/`EventBus`.
+Three choices: (1) **whole-universe targeting** — it iterates `strategy.universe`,
+not the weight keys, synthesising a **0-weight (flat)** target for any coin the
+signal omits, so a dropped name is closed rather than left stranded (the book always
+covers the full universe). (2) **Per-coin idempotency id** `f"{name}-{symbol}-{step}"`
+— a re-run/retry dedups per coin per rebalance at the router. (3) **Per-leg failure
+isolation** — a leg that raises `RiskLimitBreached`/`BrokerError` is caught, recorded
+as a `RebalanceFailure` on the `RebalanceResult`, and the **other legs still route**
+(not all-or-nothing). Maker-LIMIT legs priced at each coin's latest close (fee +
+self-contained paper fills). The optional gross guard stays **off** (trust the
+signal's cap, per [[the leaf-01 portfolio-signal ADR]]).
+
+**Why.** A cross-sectional book is only correct as a *set* — leaving an omitted coin
+at its old position silently changes the realised exposure, so omitted ⇒ flat. Per-leg
+isolation: aborting the whole rebalance because one coin breached a limit would leave
+the book half-rebalanced and let one bad name veto every good one; recording the
+failure and continuing keeps the rest of the book on target and surfaces the breach.
+Idempotency at the position level (delta vs the shared tracker) already makes a
+deterministic re-run a no-op *before* id-dedup matters; the namespaced id covers the
+retry-after-ambiguous case. **Rejected:** all-or-nothing rebalance (one bad leg
+freezes the book); iterating the weight keys (would strand omitted coins);
+re-implementing submission instead of reusing the risk-gated `OrderRouter`.
+
+---
+
+### 2026-06-29 PortfolioFeed — common-index inner-join, no forward-fill; dccd serves 1m only (PR #64)
+
+**Decision.** `application.PortfolioFeed` assembles the N-coin cross-section by an
+**inner-join on the bar timestamp**: a rebalance date is emitted only when **every**
+coin has that day's closed bar. A coin lagging the universe is **logged, never
+raised**, and its missing tail days are simply not emitted — a stale close is
+**never forward-filled** into the cross-section. It reuses the single-coin
+`DccdFeed` per coin (no new dccd read logic), stays causal (`frame[:t+1]` per coin,
+no lookahead), and is client-injectable (offline tests dccd-free). A `symbol_for`
+hook renders a canonical `Symbol` to the store's pair-key convention (the real
+Binance store is keyed `BTC-USDT`; `to_venue_symbol("binance")` yields `BTCUSDT`).
+
+**Finding (load-bearing downstream): dccd serves only 1-minute bars.** dccd's
+`read` is keyed by `span` and does **not** resample — `read(span=86400)` against the
+real Binance store returns 0 rows. Daily bars are a **consumer** responsibility
+(mirroring `fynance_research/data.py`, which resamples 1m→1d via polars
+`group_by_dynamic(every="1d")`). `PortfolioFeed` is kept **agnostic** — it consumes
+whatever daily bars the injected client returns — so the **live wiring (leaf 04)
+must inject a resample-on-read dccd client (1m→1d)**, and leaf 05's LS1 run must
+resample before feeding. The real-data verification ran against the live store with
+a resample-on-read client: 10 coins, 2011 daily dates (2020-08-18 → 2026-06-28),
+common index, causality verified.
+
+**Why.** A cross-sectional signal ranks each coin *relative to* the others *as of
+the same day*; a missing/stale bar on one coin silently shifts the ranking (today's
+BTC vs yesterday's ZEC) — a quiet corruption. Inner-join + no-forward-fill makes
+"all coins fresh, or the day is skipped" structural. **Rejected:** forward-filling a
+stale close (corrupts the cross-section); raising on a lagging coin (a single late
+sync would halt the whole book — degrade to the common-complete prefix instead);
+re-implementing the dccd read here (would duplicate/diverge from the single-coin path).
+
+---
+
+### 2026-06-28 Portfolio signal contract — weight vector + explicit-qty sizing (PR #63)
+
+**Decision.** The multi-asset strategy contract is a `PortfolioSignalFn`
+`(asof_ms, {Symbol: frame}) -> {Symbol: weight}` — a **weight vector**, weight =
+**signed fraction of capital**, returned for the whole universe in one shot
+(`application.portfolio`). Sizing is `qty = weight × capital / price`, emitted as
+an **explicit-quantity** `Signal.target_qty` (not a fractional
+`SignalMode.EXPOSURE`). The signal is loaded **by reference** (`module:function`,
+safe `importlib`+`getattr`, no loose-file exec), exactly like the single-instrument
+signal; there is no builtin portfolio registry. The engine **does not re-normalise**
+the vector (it trusts the signal's own `Σ|w|` cap); `gross_cap` is recorded,
+advisory.
+
+**Why.** LS1 (the first validated multi-asset strategy) is a *vector* of target
+weights over ~10 coins, gross-capped 2× — the single-instrument `(bars) -> Signal`
+can't express it, and per-coin weight can exceed 1 under leverage, which a bounded
+`[-1, 1]` exposure signal would reject. An explicit-qty signal carries its own
+scale, so `delta_to(position)` needs no `reference_qty` and the runner diffs
+directly against live positions. Keeping the loader by-reference keeps the engine
+**generic** — LS1 lives in config, not in `trading_bot`. **Rejected:** a fractional
+exposure vector (can't express `|w|>1`); the engine re-normalising the book (would
+silently override the strategy's risk sizing); a frame-coupled sizer (kept
+`weights_to_signals` pure by passing prices explicitly).
+
+---
+
 ### 2026-06-28 BinanceBroker — 2nd live venue; composite id, fills scoping, newClientOrderId, testnet (PR #61)
 
 **Decision.** `BinanceBroker` (spot REST) is the second adapter behind the

@@ -1,7 +1,7 @@
 # Trading_Bot
 
 **Execution & orchestration layer of a three-repo trading stack.** Hexagonal,
-async-first. *(Rewrite in progress — see status below.)*
+async-first. Paper-trading by default; live behind an explicit, off-by-default opt-in.
 
 ![License](https://img.shields.io/github/license/ArthurBernard/Trading_Bot)
 
@@ -19,15 +19,22 @@ fynance, and turns them into managed orders on real exchanges.
 ## Status
 
 The project has been rewritten from scratch as a clean hexagonal, async-first
-engine — harmonised with dccd. The MVP is in place: domain, transport, a Kraken
-broker behind a multi-exchange port, a paper-trading broker, the order router,
-strategy runner and a Typer CLI. (The pre-2026 implementation lives in git
-history only.) Track progress in
-[`doc/dev/07-roadmap.md`](doc/dev/07-roadmap.md).
+engine — harmonised with dccd. The full engine is in place and hardened: domain,
+transport, **Kraken** + **Binance** brokers behind a multi-exchange port, a
+paper-trading broker, the idempotent order router, single-instrument **and**
+native **multi-asset / portfolio** strategy runners, performance/risk services,
+SQLite persistence, a Typer CLI and a read-only FastAPI/Jinja2 dashboard. One
+`AppConfig` conducts the triptych (dccd data + fynance signals + brokers). The
+money-safety invariants are proven under fault injection (`tests/hardening/`) and
+the safety machinery is wired into the run loop (reconcile-on-startup, the
+daily-loss circuit breaker, restart-safe order dedup). (The pre-2026
+implementation lives in git history only.) Track open work in
+[`doc/dev/07-roadmap.md`](doc/dev/07-roadmap.md); going live is gated by the
+[go-live runbook](doc/dev/09-go-live.md).
 
-**Design stance:** multi-exchange from day one (Kraken implemented first);
-paper-trading by default, live behind an explicit opt-in; all money in `Decimal`;
-reconcile-don't-assume; risk limits + kill-switch on every order.
+**Design stance:** multi-exchange from day one (Kraken + Binance); paper-trading
+by default, live behind an explicit off-by-default opt-in; all money in
+`Decimal`; reconcile-don't-assume; risk limits + kill-switch on every order.
 
 ## Install
 
@@ -37,11 +44,12 @@ cd Trading_Bot
 pip install -e ".[dev]"
 ```
 
-Triptych integration (optional until the integration code lands):
+Triptych integration (optional — enables the data feed + research signals):
 
 ```bash
 pip install -e ".[dev,triptych]"                    # + fynance (PyPI)
 pip install -e ../Download_Crypto_Currencies_Data   # dccd (editable)
+pip install -e ../fynance-research                   # research signals (editable)
 ```
 
 ## Develop

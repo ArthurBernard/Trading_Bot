@@ -460,3 +460,253 @@ def test_run_app_empty_config_runs_no_strategies() -> None:
     assert report.strategies == []
     assert report.total_orders == 0
     assert report.realised_pnl == money("0")
+
+
+# --- reconcile-on-startup (the "reconcile, don't assume" invariant) -------- #
+
+
+async def test_run_app_reconciles_on_startup(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`run_app` reconciles the engine to the broker before running.
+
+    Spies the ``reconcile`` the entrypoint calls and asserts it is awaited exactly
+    once with the engine's own broker / router / tracker (the wired collaborators)
+    — so a restart converges to the venue's truth *before* the first order.
+    ``reconcile``'s actual convergence is proven in ``tests/hardening/``; this
+    asserts the wiring.
+    """
+    import importlib
+
+    run_app_mod = importlib.import_module("trading_bot.application.run_app")
+    from trading_bot.application.order_router import OrderRouter
+    from trading_bot.application.position_tracker import PositionTracker
+    from trading_bot.application.reconcile import ReconResult
+    from trading_bot.brokers.paper import PaperBroker
+
+    calls: list[tuple[object, object, object]] = []
+
+    async def _spy(broker, router, tracker, *, since_ms=None, event_bus=None):  # noqa: ANN001, ANN202
+        calls.append((broker, router, tracker))
+        return ReconResult(0, 0, 0, 0, 0)
+
+    monkeypatch.setattr(run_app_mod, "reconcile", _spy)
+
+    await run_app(AppConfig())  # paper, no strategies
+
+    assert len(calls) == 1
+    broker, router, tracker = calls[0]
+    assert isinstance(broker, PaperBroker)
+    assert isinstance(router, OrderRouter)
+    assert isinstance(tracker, PositionTracker)
+
+
+async def test_run_app_can_skip_reconcile(monkeypatch: pytest.MonkeyPatch) -> None:
+    """``reconcile_on_start=False`` skips the startup reconcile (opt-out honoured)."""
+    import importlib
+
+    run_app_mod = importlib.import_module("trading_bot.application.run_app")
+
+    calls: list[object] = []
+
+    async def _spy(*a: object, **k: object) -> None:
+        calls.append(a)
+
+    monkeypatch.setattr(run_app_mod, "reconcile", _spy)
+
+    await run_app(AppConfig(), reconcile_on_start=False)
+    assert calls == []
+
+
+async def test_run_app_startup_reconcile_converges_to_venue(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """End-to-end: a restart (empty engine, venue ahead) converges via ``run_app``.
+
+    Verification on real broker state: a :class:`PaperBroker` is left holding an
+    open, partially-filled order whose fill the freshly-built tracker never saw
+    (the order is placed **directly** on the broker, before the tracker subscribes
+    — modelling a restart where the engine maps are empty but the venue is ahead).
+    With the default ``reconcile_on_start=True``, ``run_app`` must ingest the
+    venue-open order into the router and rebuild the BTC position from the venue's
+    confirmed fill before the (strategy-less) run.
+    """
+    import importlib
+
+    run_app_mod = importlib.import_module("trading_bot.application.run_app")
+    from trading_bot.application.events import EventBus
+    from trading_bot.application.order_router import OrderRouter
+    from trading_bot.application.performance_service import PerformanceService
+    from trading_bot.application.position_tracker import PositionTracker
+    from trading_bot.application.risk import RiskManager
+    from trading_bot.application.service_factory import Engine
+    from trading_bot.brokers.paper import PaperBroker
+    from trading_bot.domain.order import Order, OrderSide, OrderType
+
+    bus = EventBus()
+    broker = PaperBroker(
+        prices={BTC_USD: money("30000")},
+        starting_balances={"USD": money("100000000")},
+        event_bus=bus,
+    )
+    # Leave an open, partially-filled order ON THE VENUE — placed directly on the
+    # broker so the not-yet-built engine tracker never sees its fill.
+    broker.arm_partial(money("0.5"))
+    await broker.place_order(
+        Order(
+            client_order_id="pre-existing",
+            instrument=BTC_USD,
+            side=OrderSide.BUY,
+            qty=money("4"),
+            type=OrderType.LIMIT,
+            limit_price=money("30000"),
+        )
+    )
+
+    # Now wire a FRESH (empty) engine over that same broker/bus — the restart: the
+    # tracker subscribes only now, after the fill above was already emitted.
+    config = AppConfig()
+    tracker = PositionTracker(event_bus=bus)
+    perf = PerformanceService(v0=config.starting_capital, event_bus=bus)
+    risk = RiskManager(config.risk, position_tracker=tracker)
+    router = OrderRouter(broker, bus, risk_manager=risk)
+    engine = Engine(
+        config=config,
+        bus=bus,
+        broker=broker,
+        router=router,
+        tracker=tracker,
+        perf=perf,
+        risk=risk,
+        store=None,
+    )
+    assert router.tracked_orders() == {}
+    assert tracker.all_positions() == {}
+
+    monkeypatch.setattr(
+        run_app_mod, "build_engine", lambda cfg, db_path=None: engine
+    )
+    await run_app(config)  # reconcile_on_start defaults True
+
+    # The venue-open order is now tracked (ingested), and the BTC position was
+    # rebuilt from the venue's confirmed fill — the engine converged to the venue.
+    assert router.get("pre-existing") is not None
+    assert BTC_USD in tracker.all_positions()
+
+
+# --- restore dedup state from the store across a restart ------------------- #
+
+
+async def test_run_app_restores_dedup_when_store_present(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    """`run_app` seeds the router's dedup map from the store when one is configured."""
+    from trading_bot.application.order_router import OrderRouter
+
+    calls: list[int] = []
+
+    def _spy(self: OrderRouter, orders: object) -> int:
+        calls.append(1)
+        return 0
+
+    monkeypatch.setattr(OrderRouter, "restore", _spy)
+
+    db = str(tmp_path / "engine.db")
+    cfg = AppConfig.model_validate({"mode": "paper", "storage": {"db_path": db}})
+    await run_app(cfg)
+
+    assert calls == [1]  # restore called exactly once (a store was configured)
+
+
+async def test_run_app_skips_restore_without_store(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """With no store (no db_path) there is nothing to restore from — restore unused."""
+    from trading_bot.application.order_router import OrderRouter
+
+    calls: list[int] = []
+    monkeypatch.setattr(
+        OrderRouter, "restore", lambda self, orders: calls.append(1) or 0
+    )
+
+    await run_app(AppConfig())  # no storage.db_path → engine.store is None
+    assert calls == []
+
+
+async def test_dedup_survives_restart_via_store(tmp_path) -> None:
+    """Real restart: an order persisted to SQLite is recovered into a fresh engine.
+
+    Verification on real persisted state: submit an order through engine #1 (its
+    attached SQLite store records it), then build engine #2 on the SAME db_path
+    (the restart — its router map is empty) and restore from the store. A re-submit
+    of the same id on engine #2 dedups against the recovered record — the (fresh)
+    broker is never asked again — closing the crash-restart double-submit window.
+    """
+    from trading_bot.application.service_factory import build_engine
+    from trading_bot.domain.order import Order, OrderSide, OrderType
+
+    db = str(tmp_path / "engine.db")
+    config = AppConfig.model_validate({"mode": "paper", "storage": {"db_path": db}})
+
+    def _order(cid: str) -> Order:
+        return Order(
+            client_order_id=cid,
+            instrument=BTC_USD,
+            side=OrderSide.BUY,
+            qty=money("1"),
+            type=OrderType.LIMIT,
+            limit_price=money("30000"),
+        )
+
+    # Engine #1: submit an order; the attached store persists it.
+    engine1 = build_engine(config, db_path=db)
+    await engine1.router.submit(_order("restart-1"))
+    assert engine1.store is not None
+    assert engine1.store.get_order("restart-1") is not None  # persisted
+    engine1.store.close()
+
+    # Engine #2 on the SAME db (a restart): the router map starts empty.
+    engine2 = build_engine(config, db_path=db)
+    assert engine2.store is not None
+    assert engine2.router.get("restart-1") is None
+    assert engine2.router.restore(engine2.store.orders()) >= 1
+    recovered = engine2.router.get("restart-1")
+    assert recovered is not None
+
+    # A re-submit of the same id dedups against the recovered record: it returns the
+    # restored order and the (fresh) broker is never asked → no fill created.
+    resubmitted = await engine2.router.submit(_order("restart-1"))
+    assert resubmitted is recovered
+    assert await engine2.broker.fills() == []  # the broker was never called
+    engine2.store.close()
+
+
+# --- the limit-at-close factory prices via Decimal, never through float ---- #
+
+
+def test_limit_at_close_prices_exactly_from_decimal_close_no_float() -> None:
+    """The limit-at-close factory prices via str->Decimal — exact, never via float.
+
+    A close stored as polars ``Decimal`` with more precision than a ``float`` can
+    hold is carried **exactly** into the order's limit price (the previous
+    ``from_float(float(...))`` would have truncated it), matching
+    ``PortfolioRunner``'s ``money(str(...))`` idiom.
+    """
+    from decimal import Decimal
+
+    from trading_bot.application.run_app import _limit_at_close_factory
+    from trading_bot.application.strategy import Strategy
+    from trading_bot.domain.money import from_float
+    from trading_bot.domain.signal import Signal
+
+    exact = Decimal("100.123456789012345678")  # 18 frac digits: a float can't hold it
+    bars = pl.DataFrame({"c": pl.Series("c", [exact], dtype=pl.Decimal(scale=18))})
+    strat = Strategy(
+        name="x",
+        instrument=BTC_USD,
+        signal_fn=lambda _bars: Signal.exposure(BTC_USD, money("0"), ts=0),
+    )
+
+    order = _limit_at_close_factory()(strat, money("1"), bars)
+
+    assert order.limit_price == money("100.123456789012345678")  # exact
+    # And strictly better than the old float round-trip, which loses the tail.
+    assert order.limit_price != from_float(float(exact))

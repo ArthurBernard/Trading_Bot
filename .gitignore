@@ -50,3 +50,12 @@ doc/dev/_archive/
 dev_test/
 old_scripts/
 deprecated*
+
+# Real strategies are LOCAL-ONLY — never pushed (strategy IP lives outside the
+# engine repo; the engine stays generic). Everything under strategies/ is
+# ignored EXCEPT the tracked generic example templates.
+strategies/*
+!strategies/__init__.py
+!strategies/README.md
+!strategies/example/
+!strategies/another_example/

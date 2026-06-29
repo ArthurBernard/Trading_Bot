@@ -41,8 +41,8 @@ class BrokerError(TradingBotError):
     The venue-neutral error every :class:`~trading_bot.brokers.base.Broker`
     adapter raises for a generic failure that is not better described by a more
     specific member of this hierarchy (e.g. a venue returning an error body, an
-    unknown venue looked up in the registry, an adapter that cannot satisfy a
-    request). It carries plain data only — adapters decode the venue payload and
+    unknown venue requested of the service factory, an adapter that cannot
+    satisfy a request). It carries plain data only — adapters decode the venue payload and
     pass a human-readable message; the error never reaches for a client or an
     I/O object.
 

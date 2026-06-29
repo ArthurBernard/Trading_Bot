@@ -233,7 +233,7 @@ class BinanceBroker(Broker):
     Attributes
     ----------
     name : str
-        The venue key, ``"binance"`` (the registry key for this adapter).
+        The venue key, ``"binance"`` (the factory selects this adapter on it).
 
     """
 
@@ -295,6 +295,20 @@ class BinanceBroker(Broker):
     def has_credentials(self) -> bool:
         """Whether both API key and secret are present (private calls possible)."""
         return bool(self._api_key) and bool(self._api_secret)
+
+    @property
+    def base_url(self) -> str:
+        """The REST base URL this adapter targets (mainnet or testnet).
+
+        Read-only introspection — useful to confirm a testnet-pinned adapter
+        (:data:`TESTNET_API_BASE`) can never reach mainnet.
+        """
+        return self._base_url
+
+    @property
+    def is_testnet(self) -> bool:
+        """Whether this adapter is pinned to Binance's spot **testnet**."""
+        return self._base_url == TESTNET_API_BASE
 
     def _require_credentials(self) -> None:
         """Raise :class:`BrokerError` if a private call lacks credentials."""

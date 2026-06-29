@@ -16,6 +16,113 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 
+## [0.3.0] - 2026-06-29
+
+### Added
+
+- `PortfolioStrategyConfig.store_key_format` (`"venue"` \| `"hyphen"` \| `"slash"`,
+  default `"venue"`) — pins how each universe pair is rendered to the **dccd store
+  key** its bars are read under, threaded through `build_portfolio_runners` into the
+  `PortfolioFeed`'s `symbol_for`. A real `trading-bot run <portfolio>.yaml` against a
+  hyphen-keyed (`BTC-USDT`) or slash-keyed store is no longer locked to the venue's
+  native `BTCUSDT`/`XBTUSD` convention. (#76)
+
+- `BrokerConfig.testnet` — a per-venue **testnet** flag: `mode: live` + `testnet: true`
+  (Binance only — Kraken has no public spot testnet) builds an adapter **hard-pinned**
+  to the venue's sandbox URL (`testnet.binance.vision`), so it **cannot reach mainnet**
+  and is therefore **exempt from the `live_enabled` opt-in** (still needs testnet
+  credentials). The safe, low-ceremony way to live-test orders on the engine path
+  without juggling `live_enabled`/`BINANCE_API_BASE`. Paper mode ignores it.
+  `BinanceBroker` gains `base_url` / `is_testnet` introspection. (#68)
+
+- `application.portfolio` — the multi-asset `PortfolioSignalFn` contract
+  (`(asof_ms, frames) -> {Symbol: weight}`, weight = signed fraction of capital),
+  a frozen `PortfolioStrategy` (universe + signal + capital + optional gross cap),
+  a pure `weights_to_signals` sizer (`qty = weight × capital / price` →
+  `Signal.target_qty`, exact `Decimal`), and a safe by-reference
+  `load_portfolio_signal` loader. Groundwork for native multi-asset strategies (LS1). (#63)
+- `application.PortfolioFeed` — a multi-instrument **causal** feed: replays N coins'
+  daily bars from the dccd store on a **common date index** (inner-join on bar time),
+  gated so a rebalance date is emitted only when **every** coin has that day's closed
+  bar (never forward-filling a stale close); reuses the single-coin `DccdFeed` read
+  path, injectable client, `asof_ms()` helper. Feeds the `PortfolioSignalFn`. (#64)
+- `application.PortfolioRunner` — the multi-asset rebalance loop: each tick calls the
+  `PortfolioSignalFn` for the whole book, sizes the weight vector to per-coin target
+  quantities, and routes **N** idempotent (`{name}-{symbol}-{step}`), risk-gated
+  **maker-LIMIT** legs through the shared `OrderRouter` (a coin omitted from the
+  weights is targeted **flat**). Per-leg failures (`RiskLimitBreached`/`BrokerError`)
+  are collected on a `RebalanceResult` and don't abort the book; cooperative
+  `run(stop_event=...)`. (#65)
+- `AppConfig.portfolios` + `PortfolioStrategyConfig` + `run_app` wiring — declare and
+  run a native multi-asset portfolio (universe + weight-vector signal by reference +
+  capital + daily dccd source) alongside single-instrument strategies on the shared
+  engine; per-coin `PortfolioReport`. Overlap detection now spans strategies **and**
+  portfolio universes (no instrument claimed twice). (#66)
+- `application.ResamplingDccdClient` — an injectable resample-on-read dccd client
+  (reads the 1-minute store, aggregates OHLCV to daily via `group_by_dynamic`,
+  causal: closed days only, partial last day dropped, OHLC carried exact). The live
+  daily-bars seam for the portfolio path (dccd serves only 1m). (#66)
+- `application.as_portfolio_signal` — a generic adapter bridging an argument-free
+  research weight oracle (`() -> {pair: weight}`) to the `PortfolioSignalFn` contract
+  (normalises pair keys → `Symbol`, weights → exact `Decimal`, handles a bare mapping
+  or `(mapping, asof)`). With it, a **concrete strategy** is wired purely by reference
+  (`module:function` + a YAML config) and the engine never imports it — completing the
+  generic multi-asset / portfolio-strategy support. **Concrete strategies (signal
+  wrappers, configs, their e2e tests) are kept local-only** under the gitignored
+  `strategies/` tree and are **never** committed to this engine repo. (#67)
+
+### Changed
+
+- **Real-money live now requires explicit risk limits.** `build_engine` refuses a
+  `mode: live` + `live_enabled` config (with credentials) whose `RiskConfig` leaves
+  any of `max_order` / `max_position` / `max_daily_loss` unset — a `BrokerError`
+  naming the gaps, checked **after** the credential gate. An all-`None` `RiskConfig`
+  is *unconstrained*; trading real money with no size/exposure/daily-loss cap is
+  refused. Paper and testnet (paper money) are exempt. (#73)
+- `[triptych]` extra documents `fynance-research` as an editable sibling install
+  (`pip install -e ../fynance-research`, like `dccd`) — the source of validated
+  portfolio signals (LS1); kept out of the hard deps. (#66)
+
+### Fixed
+
+- **Order idempotency now survives a restart.** `OrderRouter.restore(orders)` seeds the
+  dedup map from persisted orders (no events emitted), and `run_app` calls it on startup
+  from the configured store — so a re-submit of any previously-recorded `client_order_id`
+  is de-duplicated even after the in-memory map is lost, closing the crash-restart
+  double-submit window for a venue (like Kraken) that issues no venue-side idempotency
+  token. Runs before the startup reconcile. (#75)
+- **Fills are now de-duplicated by `fill_id`** in both the `PositionTracker` and the
+  `PerformanceService`: a re-applied execution (e.g. a private-WS snapshot replay after
+  a reconnect) is ignored instead of silently double-counting the position / corrupting
+  the running realised PnL. `PositionTracker.reset` clears the seen-id set so a reconcile
+  rebuild from the broker's fills still folds them. (#74)
+- **Daily-loss circuit breaker is now wired.** `build_engine` feeds the `RiskManager`
+  the live signed realised PnL (`daily_pnl_provider=perf.realised_pnl`) — previously it
+  saw a constant zero, so `max_daily_loss` never engaged. Reaching the limit now refuses
+  every new order, and a `max_daily_loss` breach **escalates to the kill-switch** in the
+  `OrderRouter` (cancel resting orders + trip the halt), since the limit is the day's
+  *halt* threshold, not a one-order cap. (#72)
+- **Reconcile-on-startup is now wired** into the run loop. `run_app` calls
+  `reconcile(broker, router, tracker)` right after `build_engine` (before any runner
+  starts; opt-out `reconcile_on_start=False`), so a restart converges the engine's
+  empty maps to the venue's truth — ingesting venue-open orders, closing orphans, and
+  rebuilding positions from confirmed fills — **before the first order**. The
+  *reconcile, don't assume* invariant was implemented + hardening-tested but had **no
+  production caller**; it is now enforced on every start (a no-op on a fresh
+  `PaperBroker`; the safety backstop on a live/testnet venue). (#71)
+- `run_app`'s limit-at-close order factory prices via `money(str(...))` instead of
+  `from_float(float(...))` — exact `Decimal`, never through `float` (matching
+  `PortfolioRunner`; carries full precision if the dccd close column is `Decimal`). (#78)
+
+### Deprecated
+
+### Removed
+
+- `brokers.BrokerRegistry` — removed as dead code. Venue selection is an explicit
+  per-venue dispatch in `service_factory.build_engine`, never a registry; the class was
+  unused by any non-test code (only its own tests exercised it). Adapter/port docstrings
+  updated to drop the registry references. (#77)
+
 ## [0.2.0] - 2026-06-28
 
 ### Added

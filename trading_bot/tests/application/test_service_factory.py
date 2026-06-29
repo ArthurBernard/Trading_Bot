@@ -26,9 +26,14 @@ from trading_bot.application.performance_service import PerformanceService
 from trading_bot.application.position_tracker import PositionTracker
 from trading_bot.application.risk import RiskManager
 from trading_bot.application.service_factory import Engine, build_engine
+from trading_bot.brokers.binance import TESTNET_API_BASE, BinanceBroker
 from trading_bot.brokers.kraken import KrakenBroker
 from trading_bot.brokers.paper import PaperBroker
-from trading_bot.domain.errors import BrokerError, LiveTradingNotEnabled
+from trading_bot.domain.errors import (
+    BrokerError,
+    LiveTradingNotEnabled,
+    RiskLimitBreached,
+)
 from trading_bot.domain.fill import Fill
 from trading_bot.domain.instrument import Instrument, Symbol
 from trading_bot.domain.money import money
@@ -242,12 +247,20 @@ def test_live_enabled_with_credentials_builds_live_broker_no_order(
     is the whole point of the off-by-default opt-in: enabling it constructs the
     adapter without trading.
     """
+    from trading_bot.application.config import RiskConfig
+
     monkeypatch.setenv("KRAKEN_API_KEY", "k")
     monkeypatch.setenv("KRAKEN_API_SECRET", "c2VjcmV0")  # base64("secret")
     cfg = AppConfig(
         mode="live",
         live_enabled=True,
         brokers=[BrokerConfig(name="kraken-main", exchange="kraken")],
+        # A real-money live config must carry explicit risk limits (see below).
+        risk=RiskConfig(
+            max_order=money("1"),
+            max_position=money("5"),
+            max_daily_loss=money("1000"),
+        ),
     )
 
     engine = build_engine(cfg)
@@ -255,6 +268,49 @@ def test_live_enabled_with_credentials_builds_live_broker_no_order(
     # so no order / no network call was ever made.
     assert isinstance(engine.broker, KrakenBroker)
     assert engine.broker.has_credentials
+
+
+def test_live_without_risk_limits_refuses(monkeypatch) -> None:
+    """A real-money live config with no risk limits refuses (BrokerError).
+
+    `RiskConfig` defaults every limit to None (unconstrained); going live with an
+    all-None config would trade with no size/exposure/daily-loss cap. With opt-in
+    + credentials present, `build_engine` refuses and names the missing limits —
+    *after* the credential gate (so this is the real-money completeness check).
+    """
+    monkeypatch.setenv("KRAKEN_API_KEY", "k")
+    monkeypatch.setenv("KRAKEN_API_SECRET", "c2VjcmV0")
+    cfg = AppConfig(
+        mode="live",
+        live_enabled=True,
+        brokers=[BrokerConfig(name="kraken-main", exchange="kraken")],
+    )  # no risk block → all limits None
+    with pytest.raises(BrokerError, match="risk limits") as exc:
+        build_engine(cfg)
+    msg = str(exc.value)
+    assert "max_order" in msg
+    assert "max_position" in msg
+    assert "max_daily_loss" in msg
+
+
+def test_live_with_partial_risk_limits_refuses_naming_the_gaps(monkeypatch) -> None:
+    """Partial limits still refuse, naming exactly the unset ones."""
+    from trading_bot.application.config import RiskConfig
+
+    monkeypatch.setenv("KRAKEN_API_KEY", "k")
+    monkeypatch.setenv("KRAKEN_API_SECRET", "c2VjcmV0")
+    cfg = AppConfig(
+        mode="live",
+        live_enabled=True,
+        brokers=[BrokerConfig(name="kraken-main", exchange="kraken")],
+        risk=RiskConfig(max_order=money("1")),  # the other two still None
+    )
+    with pytest.raises(BrokerError, match="risk limits") as exc:
+        build_engine(cfg)
+    msg = str(exc.value)
+    assert "max_position" in msg
+    assert "max_daily_loss" in msg
+    assert "max_order" not in msg.split("unset")[0]  # max_order is set, not listed
 
 
 def test_live_mode_unknown_venue_refuses() -> None:
@@ -318,3 +374,122 @@ async def test_engine_is_live_end_to_end() -> None:
     # And to the performance service: a fee was charged (realised PnL net of it).
     assert engine.perf.fees_paid() > money("0")
     assert len(engine.perf.equity_curve()) == 1
+
+
+# --- testnet path: a venue sandbox between paper and live -------------------- #
+
+
+def test_testnet_binance_builds_pinned_adapter_without_live_enabled(
+    monkeypatch,
+) -> None:
+    """``testnet: true`` builds the venue's testnet adapter — no ``live_enabled``.
+
+    Binance has a spot testnet. A broker with ``testnet: true`` + credentials
+    builds a :class:`BinanceBroker` **hard-pinned** to the testnet URL, *without*
+    requiring the ``live_enabled`` opt-in (it cannot reach mainnet — paper money).
+    Constructing the adapter sends no order.
+    """
+    monkeypatch.setenv("BINANCE_API_KEY", "tk")
+    monkeypatch.setenv("BINANCE_API_SECRET", "ts")
+    cfg = AppConfig(
+        mode="live",
+        live_enabled=False,  # NOT set — testnet does not need it
+        brokers=[BrokerConfig(name="bn", exchange="binance", testnet=True)],
+    )
+    engine = build_engine(cfg)
+    assert isinstance(engine.broker, BinanceBroker)
+    assert engine.broker.is_testnet
+    assert engine.broker.base_url == TESTNET_API_BASE
+
+
+def test_testnet_hard_pins_url_ignoring_mainnet_env(monkeypatch) -> None:
+    """``testnet: true`` forces the testnet URL even if env points at mainnet."""
+    monkeypatch.setenv("BINANCE_API_KEY", "tk")
+    monkeypatch.setenv("BINANCE_API_SECRET", "ts")
+    # A stray env var pointing at mainnet must NOT leak through the testnet flag.
+    monkeypatch.setenv("BINANCE_API_BASE", "https://api.binance.com")
+    cfg = AppConfig(
+        mode="live",
+        brokers=[BrokerConfig(name="bn", exchange="binance", testnet=True)],
+    )
+    engine = build_engine(cfg)
+    assert isinstance(engine.broker, BinanceBroker)
+    assert engine.broker.base_url == TESTNET_API_BASE  # env override ignored
+
+
+def test_testnet_without_credentials_refuses(monkeypatch) -> None:
+    """Testnet still needs (testnet) credentials → ``BrokerError`` without them."""
+    monkeypatch.delenv("BINANCE_API_KEY", raising=False)
+    monkeypatch.delenv("BINANCE_API_SECRET", raising=False)
+    cfg = AppConfig(
+        mode="live",
+        brokers=[BrokerConfig(name="bn", exchange="binance", testnet=True)],
+    )
+    with pytest.raises(BrokerError, match="credentials"):
+        build_engine(cfg)
+
+
+def test_testnet_kraken_refuses() -> None:
+    """Kraken has no public spot testnet → ``testnet: true`` raises clearly."""
+    cfg = AppConfig(
+        mode="live",
+        brokers=[BrokerConfig(name="kr", exchange="kraken", testnet=True)],
+    )
+    with pytest.raises(BrokerError, match="no testnet"):
+        build_engine(cfg)
+
+
+def test_paper_mode_ignores_testnet() -> None:
+    """Paper is the default and wins: ``testnet: true`` under paper → simulator."""
+    cfg = AppConfig(
+        mode="paper",
+        brokers=[BrokerConfig(name="bn", exchange="binance", testnet=True)],
+    )
+    engine = build_engine(cfg)
+    assert isinstance(engine.broker, PaperBroker)
+
+
+def test_brokerconfig_testnet_defaults_false() -> None:
+    """``testnet`` defaults to False (a plain broker is mainnet/live)."""
+    assert BrokerConfig(name="bn", exchange="binance").testnet is False
+
+
+# --- the daily-loss circuit breaker is wired to live PnL ------------------- #
+
+
+def test_build_engine_wires_daily_loss_provider_to_performance_service() -> None:
+    """``build_engine`` feeds the risk gate the day's realised PnL from ``perf``.
+
+    Verification on real engine state: with ``max_daily_loss`` set, a BUY then a
+    lower SELL are emitted as fills on the engine bus (realising a loss in the
+    shared :class:`PerformanceService`). The risk gate — which previously saw a
+    constant zero and never engaged — now reads that loss through the wired
+    provider and refuses the next order with ``max_daily_loss``.
+    """
+    from trading_bot.application.config import RiskConfig
+
+    config = AppConfig(risk=RiskConfig(max_daily_loss=money("5")))
+    engine = build_engine(config)
+
+    # Before any loss, the gate passes.
+    probe = Order(
+        client_order_id="probe-0",
+        instrument=_BTCUSD,
+        side=OrderSide.BUY,
+        qty=money("1"),
+        type=OrderType.LIMIT,
+        limit_price=money("100"),
+    )
+    engine.risk.check(probe)  # no raise — flat day
+
+    # Realise a loss of 10 (BUY 1 @ 100, SELL 1 @ 90) via fills on the bus, so the
+    # shared performance service reports realised_pnl == -10.
+    engine.bus.emit(_fill_event("F1", OrderSide.BUY, qty="1", price="100", fee="0"))
+    engine.bus.emit(_fill_event("F2", OrderSide.SELL, qty="1", price="90", fee="0"))
+    assert engine.perf.realised_pnl() == money("-10")
+
+    # The gate now reads that loss through the wired provider and halts.
+    with pytest.raises(RiskLimitBreached) as excinfo:
+        engine.risk.check(probe)
+    assert excinfo.value.limit == "max_daily_loss"
+    assert excinfo.value.value == money("10")  # the loss magnitude

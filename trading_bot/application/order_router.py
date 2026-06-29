@@ -63,10 +63,17 @@ from typing import TYPE_CHECKING
 
 from trading_bot.application.events import EventBus, OrderEvent
 from trading_bot.brokers.base import Broker, Capability, require
-from trading_bot.domain.errors import BrokerError, MissingOrder, OrderError
+from trading_bot.domain.errors import (
+    BrokerError,
+    MissingOrder,
+    OrderError,
+    RiskLimitBreached,
+)
 from trading_bot.domain.order import Order, OrderStatus
 
 if TYPE_CHECKING:
+    from collections.abc import Iterable
+
     from trading_bot.application.risk import RiskManager
 
 __all__ = ["OrderRouter"]
@@ -242,11 +249,32 @@ class OrderRouter:
         so it leaves no ``REJECTED`` record and the dedup map is unchanged (a
         subsequent submit of the same id is a fresh attempt, not a deduped
         replay).
+
+        One breach is escalated rather than merely refused: ``max_daily_loss`` is
+        the day's *halt* threshold (not a one-order cap), so when the gate raises
+        it the router first calls :meth:`~trading_bot.application.risk.RiskManager
+        .kill` (cancel every resting order + trip the switch) and *then* re-raises
+        — the whole book halts for the day, not just this order.
         """
         if self._risk is not None:
             # Pre-trade gate: raises RiskLimitBreached before the broker is ever
-            # touched. Left to propagate untracked (see the docstring).
-            self._risk.check(order)
+            # touched. Left to propagate untracked (see the docstring). A
+            # ``max_daily_loss`` breach is special: that limit is the day's *halt*
+            # threshold, not a one-order cap, so reaching it must stop trading for
+            # the day — the router escalates to the kill-switch (cancel resting
+            # orders + trip) before re-raising. Other breaches propagate unchanged.
+            try:
+                self._risk.check(order)
+            except RiskLimitBreached as breach:
+                if breach.limit == "max_daily_loss" and not self._risk.tripped:
+                    await self._risk.kill(
+                        router=self,
+                        reason=(
+                            f"max_daily_loss breached: daily loss {breach.value} "
+                            f">= {breach.threshold} — halting for the day"
+                        ),
+                    )
+                raise
         try:
             venue_id = await self._broker.place_order(order)
             order.submit()
@@ -399,3 +427,41 @@ class OrderRouter:
         if the id was not tracked (a no-op, so a second reconcile is clean).
         """
         return self._orders.pop(client_order_id, None)
+
+    def restore(self, orders: Iterable[Order]) -> int:
+        """Seed the dedup map from persisted orders after a restart — **no events**.
+
+        Recovers the router's idempotency state from the append-only store
+        (:meth:`~trading_bot.storage.sqlite_store.SqliteStore.orders`) on startup:
+        every persisted order's ``client_order_id`` is re-registered so a
+        re-submit of that id is de-duplicated (:meth:`submit` returns the recorded
+        order and never re-calls the broker). This closes the **crash-restart
+        double-submit window** for ids the in-memory map lost — the residual gap
+        for a venue like Kraken that issues no venue-side idempotency token.
+
+        Unlike :meth:`ingest`, this emits **no** :class:`~trading_bot.application.
+        events.OrderEvent` (these are *historical* records, not fresh order
+        activity, so a dashboard/store must not see them as new) and never
+        clobbers an id the router already tracks (the live object wins). Call it
+        **before** the startup reconcile, which then converges the recovered map
+        to the venue's *current* truth (ingest still-open orders, rebuild
+        positions from confirmed fills).
+
+        Parameters
+        ----------
+        orders : Iterable[Order]
+            The persisted orders to recover (their ``client_order_id`` is the
+            dedup key; their last-known status/venue id is carried as-is).
+
+        Returns
+        -------
+        int
+            How many ids were newly registered (already-tracked ids are skipped).
+
+        """
+        restored = 0
+        for order in orders:
+            if order.client_order_id not in self._orders:
+                self._orders[order.client_order_id] = order
+                restored += 1
+        return restored

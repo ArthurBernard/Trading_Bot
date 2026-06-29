@@ -69,12 +69,19 @@ own (the runners' router/broker and the feed's client do).
 from __future__ import annotations
 
 import itertools
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from trading_bot.application.data_provider import feed_for
 from trading_bot.application.orchestrator import Orchestrator
+from trading_bot.application.portfolio import (
+    PortfolioStrategy,
+    load_portfolio_signal,
+)
+from trading_bot.application.portfolio_feed import PortfolioFeed
+from trading_bot.application.portfolio_runner import PortfolioRunner
+from trading_bot.application.reconcile import reconcile
 from trading_bot.application.service_factory import Engine, build_engine
 from trading_bot.application.strategy import (
     SignalFn,
@@ -85,13 +92,16 @@ from trading_bot.application.strategy import (
 from trading_bot.application.strategy_runner import StrategyRunner
 from trading_bot.domain.errors import ConfigError
 from trading_bot.domain.instrument import Instrument, Symbol, parse_kraken_pair
-from trading_bot.domain.money import Money, from_float
+from trading_bot.domain.money import Money, from_float, money
 from trading_bot.domain.order import Order, OrderSide, OrderType
 
 if TYPE_CHECKING:
     import polars as pl
 
-    from trading_bot.application.config import AppConfig, StrategyConfig
+    from trading_bot.application.config import (
+        AppConfig,
+        StrategyConfig,
+    )
     from trading_bot.application.data_feed import DataFeed
     from trading_bot.application.data_provider import DccdClient
     from trading_bot.domain.position import Position
@@ -99,7 +109,10 @@ if TYPE_CHECKING:
 __all__ = [
     "RunReport",
     "StrategyReport",
+    "PortfolioReport",
+    "PortfolioCoinReport",
     "build_runners",
+    "build_portfolio_runners",
     "run_app",
 ]
 
@@ -137,6 +150,32 @@ class _CappedFeed:
         return self._inner.latest()
 
 
+class _CappedPortfolioFeed:
+    """A portfolio feed capped to ``max_steps`` causal cross-sections.
+
+    The multi-coin analogue of :class:`_CappedFeed`: wraps a
+    :class:`~trading_bot.application.portfolio_feed.PortfolioFeed` and yields at
+    most ``max_steps`` of its causal per-coin cross-sections, so :func:`run_app`'s
+    ``max_steps`` bounds a :class:`PortfolioRunner` uniformly while it still runs
+    through the orchestrator (which calls ``run`` without a per-runner cap). The
+    wrapped feed's causality is preserved — capping only shortens the prefix
+    sequence. ``asof_ms`` is delegated so the runner's timestamp resolution is
+    unchanged.
+    """
+
+    def __init__(self, inner: PortfolioFeed, max_steps: int) -> None:
+        self._inner = inner
+        self._max_steps = max_steps
+
+    def __iter__(self) -> Iterator[Mapping[Symbol, pl.DataFrame]]:
+        """Yield at most ``max_steps`` causal cross-sections from the wrapped feed."""
+        return itertools.islice(iter(self._inner), self._max_steps)
+
+    def asof_ms(self) -> int | None:
+        """Delegate to the wrapped feed (the latest common date's close, ms)."""
+        return self._inner.asof_ms()
+
+
 @dataclass(frozen=True, slots=True)
 class StrategyReport:
     """One strategy's outcome after a :func:`run_app` run.
@@ -162,34 +201,91 @@ class StrategyReport:
 
 
 @dataclass(frozen=True, slots=True)
+class PortfolioCoinReport:
+    """One coin's outcome within a portfolio after a :func:`run_app` run.
+
+    Attributes
+    ----------
+    instrument : Instrument
+        The coin's instrument (one of the portfolio's universe).
+    position : Position or None
+        The coin's final net position read from the **shared** tracker, or
+        ``None`` if it never filled (no fill for its instrument). The portfolio
+        owns this instrument exclusively (the overlap guard ensures no other
+        runner touches it), so the shared per-instrument position *is* this
+        portfolio coin's position.
+
+    """
+
+    instrument: Instrument
+    position: Position | None
+
+
+@dataclass(frozen=True, slots=True)
+class PortfolioReport:
+    """One portfolio strategy's outcome after a :func:`run_app` run.
+
+    The multi-asset analogue of :class:`StrategyReport`: where a strategy reports
+    one instrument's position, a portfolio reports a per-coin breakdown across its
+    whole universe plus the count of legs its
+    :class:`~trading_bot.application.portfolio_runner.PortfolioRunner` submitted.
+
+    Attributes
+    ----------
+    name : str
+        The portfolio's logical id (its config ``name``).
+    orders_submitted : int
+        Total legs the portfolio's runner submitted across every rebalance
+        (summed over ticks; on-target / refused legs are not counted).
+    coins : list of PortfolioCoinReport
+        One :class:`PortfolioCoinReport` per coin in the portfolio's universe, in
+        universe order — each coin's final position read from the shared tracker.
+
+    """
+
+    name: str
+    orders_submitted: int
+    coins: list[PortfolioCoinReport] = field(default_factory=list)
+
+
+@dataclass(frozen=True, slots=True)
 class RunReport:
     """The summary of a whole-system :func:`run_app` run.
 
     A small, presentation-agnostic record the CLI (or a test) reads to print a
-    per-strategy summary and the aggregate PnL. Money stays exact
+    per-strategy / per-portfolio summary and the aggregate PnL. Money stays exact
     :class:`~decimal.Decimal` (``realised_pnl`` / ``fees_paid``).
 
     Attributes
     ----------
     strategies : list of StrategyReport
-        One :class:`StrategyReport` per declared strategy, in config order.
+        One :class:`StrategyReport` per declared single-instrument strategy, in
+        config order.
+    portfolios : list of PortfolioReport
+        One :class:`PortfolioReport` per declared portfolio strategy, in config
+        order (each with its per-coin breakdown). Empty when no portfolio is
+        declared.
     realised_pnl : Money
-        Aggregate realised PnL across all strategies (net of fees), read from the
-        engine's :class:`~trading_bot.application.performance_service.
-        PerformanceService` — the fill-driven source of truth.
+        Aggregate realised PnL across all strategies *and* portfolios (net of
+        fees), read from the engine's
+        :class:`~trading_bot.application.performance_service.PerformanceService` —
+        the fill-driven source of truth.
     fees_paid : Money
-        Aggregate fees paid across all strategies.
+        Aggregate fees paid across all strategies and portfolios.
 
     """
 
     strategies: list[StrategyReport] = field(default_factory=list)
+    portfolios: list[PortfolioReport] = field(default_factory=list)
     realised_pnl: Money = field(default_factory=lambda: from_float(0.0))
     fees_paid: Money = field(default_factory=lambda: from_float(0.0))
 
     @property
     def total_orders(self) -> int:
-        """Total orders submitted across every strategy."""
-        return sum(s.orders_submitted for s in self.strategies)
+        """Total orders submitted across every strategy **and** portfolio."""
+        return sum(s.orders_submitted for s in self.strategies) + sum(
+            p.orders_submitted for p in self.portfolios
+        )
 
 
 def _resolve_signal_fn(
@@ -252,7 +348,9 @@ def _limit_at_close_factory(
     """
 
     def _factory(strategy: Strategy, delta: Money, bars: "pl.DataFrame") -> Order:
-        close = from_float(float(bars[close_col][-1]))
+        # Price exactly via str -> Decimal (never through float), matching
+        # PortfolioRunner._latest_closes; robust if the close column is Decimal.
+        close = money(str(bars[close_col][-1]))
         side = OrderSide.BUY if delta > 0 else OrderSide.SELL
         return Order(
             client_order_id="pending",  # overridden by the runner
@@ -289,20 +387,45 @@ def _reject_commingled(config: AppConfig) -> None:
     The real fix — a **per-strategy book** that attributes fills back to the
     strategy that originated them — is deferred future work; until it lands,
     one-instrument-per-strategy is the invariant this guard enforces.
+
+    Portfolios are folded into the **same** claim map (a portfolio *owns* its N
+    instruments): no instrument may be claimed by both a single-instrument
+    strategy and a portfolio, nor by two portfolios — the same shared
+    per-instrument tracker, the same attribution problem. See
+    :func:`_claimed_symbols`.
     """
     seen: dict[Symbol, str] = {}
-    for strategy_cfg in config.strategies:
-        symbol = parse_kraken_pair(strategy_cfg.symbol)
+    for symbol, owner in _claimed_symbols(config):
         previous = seen.get(symbol)
         if previous is not None:
             raise ConfigError(
-                f"strategies {previous!r} and {strategy_cfg.name!r} both trade "
-                f"the same instrument {strategy_cfg.symbol!r}: the shared "
-                "per-instrument tracker/performance view would commingle them "
-                "(no per-strategy attribution today). Give each strategy a "
-                "distinct instrument, or run them as separate systems."
+                f"{previous!r} and {owner} both claim the same instrument "
+                f"{symbol!s}: the shared per-instrument tracker/performance view "
+                "would commingle them (no per-strategy attribution today). Give "
+                "each a distinct instrument, or run them as separate systems."
             )
-        seen[symbol] = strategy_cfg.name
+        seen[symbol] = owner
+
+
+def _claimed_symbols(config: AppConfig) -> Iterator[tuple[Symbol, str]]:
+    """Yield ``(Symbol, owner-label)`` for every instrument the config claims.
+
+    Walks the single-instrument strategies (one symbol each) **and** the
+    portfolios (their whole universe), in config order, normalising each pair to
+    its canonical :class:`~trading_bot.domain.instrument.Symbol` (so two spellings
+    of the same pair collide). The owner label names the claimant for a clear
+    error — ``"strategy 'btc-ma'"`` or ``"portfolio 'ls1' (coin 'BTC/USDT')"`` —
+    so :func:`_reject_commingled` can report exactly who overlaps whom across the
+    whole system (strategy↔strategy, strategy↔portfolio, portfolio↔portfolio).
+    """
+    for strategy_cfg in config.strategies:
+        yield parse_kraken_pair(strategy_cfg.symbol), f"strategy {strategy_cfg.name!r}"
+    for portfolio_cfg in config.portfolios:
+        for raw in portfolio_cfg.universe:
+            yield (
+                parse_kraken_pair(raw),
+                f"portfolio {portfolio_cfg.name!r} (coin {raw!r})",
+            )
 
 
 def build_runners(
@@ -404,58 +527,261 @@ def build_runners(
     return runners
 
 
+def build_portfolio_runners(
+    config: AppConfig,
+    engine: Engine,
+    *,
+    dccd_client: DccdClient | None = None,
+    max_steps: int | None = None,
+) -> list[PortfolioRunner]:
+    """Build one :class:`PortfolioRunner` per declared portfolio, over ``engine``.
+
+    For each :class:`~trading_bot.application.config.PortfolioStrategyConfig` in
+    ``config.portfolios`` this resolves the weight-vector signal
+    (:func:`~trading_bot.application.portfolio.load_portfolio_signal` — a
+    ``"module:function"`` ref), builds a
+    :class:`~trading_bot.application.portfolio_feed.PortfolioFeed` over the
+    declared ``universe`` from the portfolio's ``data`` source, assembles a
+    :class:`~trading_bot.application.portfolio.PortfolioStrategy` (carrying the
+    config's ``capital`` / ``gross_cap``), and wraps it in a runner over the
+    engine's **shared** router / tracker / event bus.
+
+    The dccd ``client`` is threaded into every :class:`PortfolioFeed` so the build
+    is offline-testable. A daily portfolio reading a 1-minute store should inject
+    a :class:`~trading_bot.application.data_provider.ResamplingDccdClient` here
+    (the live daily-bars seam — dccd's store serves 1m, not daily); the offline
+    tests inject a fake *daily* client directly and need no resampling.
+
+    Parameters
+    ----------
+    config : AppConfig
+        The validated system configuration; its ``portfolios`` drive the build.
+    engine : Engine
+        The wired engine whose ``router`` / ``tracker`` / ``bus`` every runner
+        shares.
+    dccd_client : DccdClient or None, optional
+        The dccd client each :class:`PortfolioFeed` reads through. ``None``
+        (default) lets the feed lazily construct a real client; injecting a fake
+        (or a :class:`ResamplingDccdClient` wrapping one) keeps the build offline /
+        serves daily bars off a 1m store.
+    max_steps : int or None, optional
+        Cap each runner at this many rebalance ticks (passed to
+        :meth:`PortfolioRunner.run` by the orchestrating caller — recorded here so
+        the signature mirrors :func:`build_runners`; the cap is applied at run
+        time, not by wrapping the feed). ``None`` (default) drains every feed.
+
+    Returns
+    -------
+    list of PortfolioRunner
+        One runner per declared portfolio, in config order.
+
+    Raises
+    ------
+    ConfigError
+        If a portfolio's signal cannot be resolved (bad ``"module:function"``
+        ref), or — via :func:`_reject_commingled`, called by the system entrypoint
+        — if any instrument is claimed by two runners.
+
+    """
+    runners: list[PortfolioRunner] = []
+    for portfolio_cfg in config.portfolios:
+        signal_fn = load_portfolio_signal(portfolio_cfg.signal.ref)
+
+        universe = tuple(parse_kraken_pair(raw) for raw in portfolio_cfg.universe)
+        gross_cap = (
+            None if portfolio_cfg.gross_cap is None else money(portfolio_cfg.gross_cap)
+        )
+        strategy = PortfolioStrategy(
+            name=portfolio_cfg.name,
+            universe=universe,
+            signal_fn=signal_fn,
+            capital=money(portfolio_cfg.capital),
+            gross_cap=gross_cap,
+        )
+
+        data = portfolio_cfg.data
+        feed = PortfolioFeed(
+            universe,
+            exchange=data.exchange,
+            client=dccd_client,
+            span=data.span,
+            start_ns=_portfolio_start_ns(data.start),
+            data_type=data.data_type,
+            data_path=config.storage.data_path,
+            symbol_for=_store_key_renderer(
+                portfolio_cfg.store_key_format, data.exchange
+            ),
+        )
+        capped: object = (
+            feed if max_steps is None else _CappedPortfolioFeed(feed, max_steps)
+        )
+
+        runner = PortfolioRunner(
+            strategy,
+            capped,
+            engine.router,
+            engine.tracker,
+            event_bus=engine.bus,
+        )
+        runners.append(runner)
+    return runners
+
+
+def _store_key_renderer(
+    store_key_format: str, exchange: str
+) -> Callable[[Symbol], str]:
+    """Build the ``Symbol -> dccd store key`` renderer for a portfolio feed.
+
+    Maps the config's ``store_key_format`` (see
+    :class:`~trading_bot.application.config.PortfolioStrategyConfig`) to the
+    callable a :class:`~trading_bot.application.portfolio_feed.PortfolioFeed` uses
+    to render each canonical pair to the key its bars are stored under, so a real
+    ``trading-bot run`` against a live dccd store is no longer locked to one
+    guessed convention:
+
+    * ``"venue"`` (default) — the venue's native code
+      (``Symbol.to_venue_symbol(exchange)``), matching the feed's own default;
+    * ``"hyphen"`` — ``BASE-QUOTE`` (e.g. ``BTC-USDT``);
+    * ``"slash"`` — ``BASE/QUOTE`` (e.g. ``BTC/USDT``).
+    """
+    if store_key_format == "hyphen":
+        return lambda sym: f"{sym.base}-{sym.quote}"
+    if store_key_format == "slash":
+        return lambda sym: f"{sym.base}/{sym.quote}"
+    # "venue" (default): the venue's native code, matching the feed's own default.
+    return lambda sym: sym.to_venue_symbol(exchange)
+
+
+def _portfolio_start_ns(start: str | int | None) -> int | None:
+    """Map a portfolio data source ``start`` to an epoch-ns bound.
+
+    Reuses :func:`~trading_bot.application.data_provider._resolve_start_ns` (the
+    single, audited ``start`` → ``start_ns`` parser) so a portfolio's history
+    start is interpreted identically to a single-instrument strategy's.
+    """
+    from trading_bot.application.data_provider import _resolve_start_ns
+
+    return _resolve_start_ns(start)
+
+
 async def run_app(
     config: AppConfig,
     *,
     dccd_client: DccdClient | None = None,
     max_steps: int | None = None,
+    reconcile_on_start: bool = True,
 ) -> RunReport:
     """Run the whole declared system from one config and return a summary.
 
     The triptych entrypoint: assemble the engine
     (:func:`~trading_bot.application.service_factory.build_engine`,
-    paper-by-default — the factory enforces it), build a runner per declared
-    strategy (:func:`build_runners`), and run them all **concurrently** through a
-    fresh :class:`~trading_bot.application.orchestrator.Orchestrator`. After the
-    run, build a :class:`RunReport` from the per-runner order counts and the
-    engine's shared tracker / performance service (fills are the PnL source of
-    truth).
+    paper-by-default — the factory enforces it), **reconcile** the freshly-built
+    engine's local state to the broker's truth before any order is placed (the
+    *reconcile, don't assume* invariant — see below), build a runner per declared
+    single-instrument strategy (:func:`build_runners`) **and** per declared
+    portfolio (:func:`build_portfolio_runners`), reject any instrument claimed by
+    two runners (:func:`_reject_commingled`, spanning strategies *and*
+    portfolios), and run them all **concurrently** through a fresh
+    :class:`~trading_bot.application.orchestrator.Orchestrator`. After the run,
+    build a :class:`RunReport` from the per-runner order counts and the engine's
+    shared tracker / performance service (fills are the PnL source of truth).
+
+    Reconcile-on-startup (carried into the ADR)
+    -------------------------------------------
+    A freshly-built :class:`~trading_bot.application.service_factory.Engine` has
+    **empty** local maps (the router tracks no orders, the tracker holds no
+    positions), but the venue may already hold open orders and a fill history
+    from a previous session/restart. Running blind would risk re-submitting an
+    order the venue already has or trading against a stale (zero) position. So
+    before the first order, :func:`~trading_bot.application.reconcile.reconcile`
+    pulls the broker's open orders / balances / fills **once** and converges the
+    router + tracker to them (ingest unknown live orders, close orphans, rebuild
+    positions from confirmed fills). On a fresh
+    :class:`~trading_bot.brokers.paper.PaperBroker` this is a harmless no-op (no
+    open orders, no fills); on a live/testnet venue it is the safety backstop that
+    recovers state after a restart. The pass emits one
+    :class:`~trading_bot.application.events.LogEvent` on the engine bus.
+
+    When a store is configured, the router's dedup map is first **restored** from
+    the persisted order history (``engine.router.restore(engine.store.orders())``),
+    so a re-submit of any previously-recorded order id is de-duplicated after a
+    restart even before reconcile runs — closing the crash-restart double-submit
+    window for ids the in-memory map lost.
+
+    Reconciling **after a disconnect** (the WS-reconnect half of the invariant)
+    attaches to the private fill stream, which is not yet wired into this run
+    loop; that lands with live fill streaming (tracked in the roadmap).
 
     Parameters
     ----------
     config : AppConfig
-        The validated system configuration (mode, brokers, strategies, risk,
-        storage). The store is created at ``config.storage.db_path`` when set.
+        The validated system configuration (mode, brokers, strategies,
+        portfolios, risk, storage). The store is created at
+        ``config.storage.db_path`` when set.
     dccd_client : DccdClient or None, optional
-        The dccd client every strategy's feed reads through (injected for an
-        offline run). ``None`` (default) lets each feed construct a real client.
+        The dccd client every strategy's / portfolio's feed reads through
+        (injected for an offline run). ``None`` (default) lets each feed construct
+        a real client. A daily portfolio reading a 1-minute store should inject a
+        :class:`~trading_bot.application.data_provider.ResamplingDccdClient`.
     max_steps : int or None, optional
-        Cap each runner at this many feed windows (bounds an otherwise
-        feed-length run; useful for tests / live feeds). ``None`` (default)
-        drains every feed to exhaustion.
+        Cap each runner at this many feed windows / rebalance ticks (bounds an
+        otherwise feed-length run; useful for tests / live feeds). ``None``
+        (default) drains every feed to exhaustion.
+    reconcile_on_start : bool, optional
+        Whether to reconcile the engine to the broker before running (default
+        ``True``, enforcing the startup invariant). Pass ``False`` only to skip
+        the pass in a test/offline context where the broker reads are irrelevant.
 
     Returns
     -------
     RunReport
-        Per-strategy order counts + final positions, and the aggregate realised
-        PnL / fees from the engine's performance service.
+        Per-strategy order counts + final positions, per-portfolio per-coin
+        breakdowns, and the aggregate realised PnL / fees from the engine's
+        performance service.
 
     Raises
     ------
     ConfigError
-        If any strategy is misdeclared (no signal/data, unknown builtin, ...).
+        If any strategy/portfolio is misdeclared (no signal/data, unknown
+        builtin, unresolvable portfolio signal), or any instrument is claimed by
+        two runners (strategy↔strategy, strategy↔portfolio, portfolio↔portfolio).
     BrokerError
         In live mode if the configured venue lacks credentials (the factory
         refuses — never falling back to paper).
 
     """
     engine = build_engine(config, db_path=config.storage.db_path)
+    # Recover idempotency state across a restart: seed the router's dedup map from
+    # the persisted store (the append-only order history) so a re-submit of any
+    # previously-recorded order id is de-duplicated — closing the crash-restart
+    # double-submit window for ids the in-memory map lost (the residual gap for a
+    # venue, like Kraken, with no venue-side idempotency token). No events emitted;
+    # done *before* reconcile, which then converges to the venue's current truth.
+    if engine.store is not None:
+        engine.router.restore(engine.store.orders())
+    # Reconcile, don't assume: converge the fresh engine's empty maps to the
+    # broker's truth (open orders + fills) before the first order is placed, so a
+    # restart never re-submits a venue-held order or trades a stale position. A
+    # no-op on a fresh PaperBroker; the safety backstop on a live/testnet venue.
+    if reconcile_on_start:
+        await reconcile(
+            engine.broker, engine.router, engine.tracker, event_bus=engine.bus
+        )
+    # Reject any instrument claimed by two runners up front — across both the
+    # single-instrument strategies and the portfolios (the shared per-instrument
+    # tracker has no attribution). build_runners also calls this for the
+    # strategy-only path; calling it here covers the cross-portfolio overlaps too.
+    _reject_commingled(config)
     runners = build_runners(
+        config, engine, dccd_client=dccd_client, max_steps=max_steps
+    )
+    portfolio_runners = build_portfolio_runners(
         config, engine, dccd_client=dccd_client, max_steps=max_steps
     )
 
     orchestrator = Orchestrator(event_bus=engine.bus)
     orchestrator.add_all(runners)
+    orchestrator.add_all(portfolio_runners)  # type: ignore[arg-type]
     results = await orchestrator.run()
 
     strategies: list[StrategyReport] = []
@@ -470,8 +796,32 @@ async def run_app(
             )
         )
 
+    # The orchestrator keys its results by the runner objects it ran (both the
+    # StrategyRunners and the PortfolioRunners added via add_all); its return type
+    # is annotated for the single-instrument runner, so view it as a plain object
+    # map to look up the portfolio runners.
+    results_by_runner = cast("dict[object, int]", results)
+    portfolios: list[PortfolioReport] = []
+    for prunner in portfolio_runners:
+        pstrat = prunner.strategy
+        coins = [
+            PortfolioCoinReport(
+                instrument=Instrument(symbol),
+                position=engine.tracker.position(Instrument(symbol)),
+            )
+            for symbol in pstrat.universe
+        ]
+        portfolios.append(
+            PortfolioReport(
+                name=pstrat.name,
+                orders_submitted=results_by_runner.get(prunner, 0),
+                coins=coins,
+            )
+        )
+
     return RunReport(
         strategies=strategies,
+        portfolios=portfolios,
         realised_pnl=engine.perf.realised_pnl(),
         fees_paid=engine.perf.fees_paid(),
     )
