@@ -134,6 +134,7 @@ from trading_bot.application.portfolio import (
     load_portfolio_signal,
     weights_to_signals,
 )
+from trading_bot.application.portfolio_feed import PortfolioFeed
 from trading_bot.application.position_tracker import PositionTracker
 from trading_bot.application.reconcile import ReconResult, reconcile
 from trading_bot.application.risk import RiskManager
@@ -191,6 +192,7 @@ __all__ = [
     "PortfolioSignalFn",
     "weights_to_signals",
     "load_portfolio_signal",
+    "PortfolioFeed",
     # strategy runner
     "StrategyRunner",
     "OrderFactory",

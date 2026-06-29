@@ -1,12 +1,12 @@
 ---
 plan: portfolio-strategy/02-portfolio-feed
 kind: leaf
-status: planned
+status: done
 complexity: medium
 depends: [01]
 parallel: false
 branch: feat/portfolio-feed
-pr: ""
+pr: "#64"
 ---
 
 # Portfolio data feed — N-coin, common-index daily bars (freshness-gated)

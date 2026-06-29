@@ -14,6 +14,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a pure `weights_to_signals` sizer (`qty = weight × capital / price` →
   `Signal.target_qty`, exact `Decimal`), and a safe by-reference
   `load_portfolio_signal` loader. Groundwork for native multi-asset strategies (LS1). (#63)
+- `application.PortfolioFeed` — a multi-instrument **causal** feed: replays N coins'
+  daily bars from the dccd store on a **common date index** (inner-join on bar time),
+  gated so a rebalance date is emitted only when **every** coin has that day's closed
+  bar (never forward-filling a stale close); reuses the single-coin `DccdFeed` read
+  path, injectable client, `asof_ms()` helper. Feeds the `PortfolioSignalFn`. (#64)
 
 ### Changed
 
