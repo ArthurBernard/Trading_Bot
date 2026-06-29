@@ -1,0 +1,80 @@
+# LS1 — a runnable *paper* config for the validated long/short crypto book.
+#
+# LS1 is the research output of the triptych (see ../fynance-research/DEPLOY_LS1.md):
+# a daily long/short multi-asset book over a 10-coin Binance USDT universe, trend
+# core (BTC/ETH) + cross-sectional momentum overlay, hard-capped at 2x gross.
+# `trading_bot` *executes* it — this file wires the signal + data + sizing.
+#
+# Load + run it (paper) with:
+#     from trading_bot.application import AppConfig
+#     from trading_bot.application.run_app import run_app
+#     cfg = AppConfig.from_yaml("configs/ls1.yaml")
+#     report = await run_app(cfg, dccd_client=ResamplingDccdClient(real_client))
+#
+# Prerequisites to actually evaluate the signal:
+#   * the research package:        pip install -e ../fynance-research
+#   * dccd's Binance 1m store synced for the 10 *-USDT pairs (DEPLOY_LS1.md §3),
+#     read daily via a ResamplingDccdClient (dccd serves 1m, not daily).
+
+# Paper by default — this never trades real money. Going live is a deliberate,
+# multi-step opt-in (mode: live + live_enabled: true + credentials); see
+# doc/dev/09-go-live.md and the "Running LS1" note in doc/dev/09-go-live.md.
+mode: paper
+live_enabled: false
+
+# Anchors the KPI equity curve (equity = starting_capital + cumulative PnL).
+# Set this to LS1's intended capital base; it should match the portfolio capital.
+starting_capital: "100000"
+
+storage:
+  db_path: ./var/ls1.sqlite     # append-only order/fill history + engine state
+  data_path: ./var/dccd         # dccd on-disk OHLC data directory
+
+# The paper simulator sits behind the same Broker port as the live Binance adapter.
+brokers:
+  - name: paper-binance
+    exchange: paper
+
+# The LS1 portfolio: the 10-coin USDT universe, the weight-vector signal, the
+# capital base the weights are a fraction of, and the daily Binance data source.
+portfolios:
+  - name: ls1
+    venue: binance
+    # The validated 10-coin universe (all *-USDT). T1 trend trades BTC/ETH; the
+    # cross-sectional overlay trades all 10. Adding new listings is a fresh
+    # research+validation cycle, not a config flip (DEPLOY_LS1.md §7).
+    universe:
+      - BTC/USDT
+      - ETH/USDT
+      - BCH/USDT
+      - LTC/USDT
+      - XRP/USDT
+      - XLM/USDT
+      - DOGE/USDT
+      - DOT/USDT
+      - TRX/USDT
+      - ZEC/USDT
+    # The weight-vector signal: a "module:function" ref to the LS1 wrapper, which
+    # adapts fynance_research.strategies.ls1_live:target_weights to the
+    # PortfolioSignalFn contract (see examples/ls1_signal.py). Resolved at run
+    # time; fynance_research is imported lazily when the signal is *evaluated*.
+    signal:
+      ref: "examples.ls1_signal:ls1_portfolio_signal"
+    # The capital base each weight is a fraction of (weight w -> w * capital).
+    capital: "100000"
+    # The gross-leverage cap (Sigma|w| <= 2). Enforced inside the signal; carried
+    # here for reference (the engine does not re-normalise against it).
+    gross_cap: "2"
+    # Daily bars from dccd's Binance store. dccd serves the span it collected at
+    # (1m for this store); a daily portfolio reads through a ResamplingDccdClient
+    # (span 86400) so each day's minutes aggregate to one closed daily bar.
+    data:
+      exchange: binance
+      span: 86400               # daily bars (seconds) — the rebalance cadence
+      data_type: ohlc
+
+# Engine-wide risk limits (exact Decimals; null = unconstrained). LS1's gross cap
+# lives in the signal; add per-coin order/position caps and a daily-loss halt to
+# taste before going live (doc/dev/09-go-live.md).
+risk:
+  max_daily_loss: "5000"

@@ -122,6 +122,86 @@ for this repository's automated tests** (which never hit a real venue).
 
 ---
 
+## Running LS1 (the first real portfolio strategy)
+
+**LS1** is the validated long/short crypto book from the research repo — a daily
+multi-asset strategy over a 10-coin Binance USDT universe (trend core on BTC/ETH
++ a cross-sectional momentum overlay, hard-capped at 2× gross). Its full dossier
+— universe, fees, the exact signal recipe, sizing, rebalance and risk rules, and
+the live signal API — is **[`../fynance-research/DEPLOY_LS1.md`](../../../fynance-research/DEPLOY_LS1.md)**.
+Read it before running LS1. `trading_bot` *executes* LS1; it does not define it.
+
+### How LS1 is wired (config + a thin generic adapter — no engine code)
+
+LS1 lands as a **portfolio strategy** (`PortfolioStrategyConfig`), not as bespoke
+engine code:
+
+- **The config:** [`configs/ls1.yaml`](../../configs/ls1.yaml) — paper by default,
+  the 10-coin universe, `capital`, `gross_cap: 2`, and a daily Binance data source
+  (`exchange: binance`, `span: 86400`).
+- **The signal seam:** the config's `signal.ref` points at
+  `examples.ls1_signal:ls1_portfolio_signal`
+  ([`examples/ls1_signal.py`](../../examples/ls1_signal.py)) — a thin wrapper that
+  binds the research oracle `fynance_research.strategies.ls1_live:target_weights`
+  through the **generic** adapter
+  [`as_portfolio_signal`](../../trading_bot/application/portfolio.py). The adapter
+  bridges any argument-free `() -> {pair: weight}` oracle to the engine's
+  `PortfolioSignalFn` contract (`(asof_ms, frames) -> {Symbol: weight}`): it
+  normalises `"BTC-USDT"`-style keys to canonical `Symbol`s and weights to exact
+  `Decimal`, and handles the `{...}`-or-`({...}, asof)` return shapes. It hardcodes
+  no LS1 specifics — `trading_bot` stays generic.
+- **`fynance_research` is imported lazily** (inside the signal), so loading the
+  config and resolving the ref need no research package — only *evaluating* the
+  signal at run time does.
+
+### Data feed — dccd's Binance 1m store, resampled to daily
+
+dccd's Binance store holds **1-minute** bars and `read` does not resample, so a
+daily portfolio reads through a
+[`ResamplingDccdClient`](../../trading_bot/application/data_provider.py) (1m → 1d,
+OHLCV-correct, closed-day only — causal) wrapping the real `dccd.Client`. Sync the
+10 `*-USDT` pairs first (`DEPLOY_LS1.md` §3); they land at
+`~/data/arthurserver/binance/ohlc/<PAIR>/1m/`.
+
+### Prerequisites and how to run the LS1 tests
+
+The portfolio path is proven end-to-end on **real** dccd Binance bars (with a
+deterministic weight vector) in
+[`trading_bot/tests/application/test_ls1_e2e.py`](../../trading_bot/tests/application/test_ls1_e2e.py).
+The LS1-specific and Binance-testnet checks live in the same file, gated:
+
+```bash
+# Real-dccd portfolio e2e (runs whenever the Binance store is present):
+.venv/bin/python -m pytest trading_bot/tests/application/test_ls1_e2e.py -m network -v
+
+# LS1-real e2e — needs the research package:
+pip install -e ../fynance-research
+.venv/bin/python -m pytest \
+  trading_bot/tests/application/test_ls1_e2e.py::test_ls1_real_e2e -m network -v
+
+# Binance testnet rebalance — needs a *testnet* key + the testnet base URL
+# (in a gitignored .env; never a mainnet key):
+export BINANCE_API_KEY=...  BINANCE_API_SECRET=...
+export BINANCE_API_BASE=https://testnet.binance.vision
+.venv/bin/python -m pytest \
+  trading_bot/tests/application/test_ls1_e2e.py::test_binance_testnet_rebalance -m network -v
+```
+
+The testnet test places ONE rebalance with a tiny capital, reads the venue's
+`open_orders()`/`balances()` back, asserts the placed legs match the intended
+deltas, then **cancels** every leg — and refuses to run against mainnet.
+
+### Going live with LS1
+
+Live LS1 follows the **same** gates as any live run (above): `mode: live` +
+`live_enabled: true` + Binance credentials + the real-key sandbox step. LS1's
+`gross_cap` lives in the signal; add per-coin `max_order` / `max_position` and a
+`max_daily_loss` halt in `RiskConfig` before the first live order. Note LS1's
+documented net-long bias and unmodelled funding (`DEPLOY_LS1.md` §7) — budget for
+them separately.
+
+---
+
 ## Disclaimers
 
 - **Paper is the default.** Live is off by default and must be opted into
