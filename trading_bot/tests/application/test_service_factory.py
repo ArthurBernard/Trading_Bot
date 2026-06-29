@@ -26,6 +26,7 @@ from trading_bot.application.performance_service import PerformanceService
 from trading_bot.application.position_tracker import PositionTracker
 from trading_bot.application.risk import RiskManager
 from trading_bot.application.service_factory import Engine, build_engine
+from trading_bot.brokers.binance import TESTNET_API_BASE, BinanceBroker
 from trading_bot.brokers.kraken import KrakenBroker
 from trading_bot.brokers.paper import PaperBroker
 from trading_bot.domain.errors import BrokerError, LiveTradingNotEnabled
@@ -318,3 +319,81 @@ async def test_engine_is_live_end_to_end() -> None:
     # And to the performance service: a fee was charged (realised PnL net of it).
     assert engine.perf.fees_paid() > money("0")
     assert len(engine.perf.equity_curve()) == 1
+
+
+# --- testnet path: a venue sandbox between paper and live -------------------- #
+
+
+def test_testnet_binance_builds_pinned_adapter_without_live_enabled(
+    monkeypatch,
+) -> None:
+    """``testnet: true`` builds the venue's testnet adapter — no ``live_enabled``.
+
+    Binance has a spot testnet. A broker with ``testnet: true`` + credentials
+    builds a :class:`BinanceBroker` **hard-pinned** to the testnet URL, *without*
+    requiring the ``live_enabled`` opt-in (it cannot reach mainnet — paper money).
+    Constructing the adapter sends no order.
+    """
+    monkeypatch.setenv("BINANCE_API_KEY", "tk")
+    monkeypatch.setenv("BINANCE_API_SECRET", "ts")
+    cfg = AppConfig(
+        mode="live",
+        live_enabled=False,  # NOT set — testnet does not need it
+        brokers=[BrokerConfig(name="bn", exchange="binance", testnet=True)],
+    )
+    engine = build_engine(cfg)
+    assert isinstance(engine.broker, BinanceBroker)
+    assert engine.broker.is_testnet
+    assert engine.broker.base_url == TESTNET_API_BASE
+
+
+def test_testnet_hard_pins_url_ignoring_mainnet_env(monkeypatch) -> None:
+    """``testnet: true`` forces the testnet URL even if env points at mainnet."""
+    monkeypatch.setenv("BINANCE_API_KEY", "tk")
+    monkeypatch.setenv("BINANCE_API_SECRET", "ts")
+    # A stray env var pointing at mainnet must NOT leak through the testnet flag.
+    monkeypatch.setenv("BINANCE_API_BASE", "https://api.binance.com")
+    cfg = AppConfig(
+        mode="live",
+        brokers=[BrokerConfig(name="bn", exchange="binance", testnet=True)],
+    )
+    engine = build_engine(cfg)
+    assert isinstance(engine.broker, BinanceBroker)
+    assert engine.broker.base_url == TESTNET_API_BASE  # env override ignored
+
+
+def test_testnet_without_credentials_refuses(monkeypatch) -> None:
+    """Testnet still needs (testnet) credentials → ``BrokerError`` without them."""
+    monkeypatch.delenv("BINANCE_API_KEY", raising=False)
+    monkeypatch.delenv("BINANCE_API_SECRET", raising=False)
+    cfg = AppConfig(
+        mode="live",
+        brokers=[BrokerConfig(name="bn", exchange="binance", testnet=True)],
+    )
+    with pytest.raises(BrokerError, match="credentials"):
+        build_engine(cfg)
+
+
+def test_testnet_kraken_refuses() -> None:
+    """Kraken has no public spot testnet → ``testnet: true`` raises clearly."""
+    cfg = AppConfig(
+        mode="live",
+        brokers=[BrokerConfig(name="kr", exchange="kraken", testnet=True)],
+    )
+    with pytest.raises(BrokerError, match="no testnet"):
+        build_engine(cfg)
+
+
+def test_paper_mode_ignores_testnet() -> None:
+    """Paper is the default and wins: ``testnet: true`` under paper → simulator."""
+    cfg = AppConfig(
+        mode="paper",
+        brokers=[BrokerConfig(name="bn", exchange="binance", testnet=True)],
+    )
+    engine = build_engine(cfg)
+    assert isinstance(engine.broker, PaperBroker)
+
+
+def test_brokerconfig_testnet_defaults_false() -> None:
+    """``testnet`` defaults to False (a plain broker is mainnet/live)."""
+    assert BrokerConfig(name="bn", exchange="binance").testnet is False

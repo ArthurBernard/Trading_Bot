@@ -8,6 +8,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `BrokerConfig.testnet` — a per-venue **testnet** flag: `mode: live` + `testnet: true`
+  (Binance only — Kraken has no public spot testnet) builds an adapter **hard-pinned**
+  to the venue's sandbox URL (`testnet.binance.vision`), so it **cannot reach mainnet**
+  and is therefore **exempt from the `live_enabled` opt-in** (still needs testnet
+  credentials). The safe, low-ceremony way to live-test orders on the engine path
+  without juggling `live_enabled`/`BINANCE_API_BASE`. Paper mode ignores it.
+  `BinanceBroker` gains `base_url` / `is_testnet` introspection. (#68)
+
 - `application.portfolio` — the multi-asset `PortfolioSignalFn` contract
   (`(asof_ms, frames) -> {Symbol: weight}`, weight = signed fraction of capital),
   a frozen `PortfolioStrategy` (universe + signal + capital + optional gross cap),
