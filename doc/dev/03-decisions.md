@@ -6,6 +6,33 @@ rejected approaches as tombstones.
 
 ---
 
+### 2026-06-29 Strategies are local-only — never committed to the engine repo (PR #70)
+
+**Decision.** Concrete **strategies** — the signal wrapper, the strategy config(s),
+and the strategy's e2e tests — are **never committed** to `trading_bot`. They live
+**local-only** under a gitignored `strategies/` tree (`strategies/*` ignored, with the
+`example/` + `another_example/` templates and `README.md` negated/tracked). The engine
+ships only the **generic** machinery — the portfolio abstraction (`application/
+portfolio*.py`, `AppConfig.portfolios`, `ResamplingDccdClient`) and the generic
+`as_portfolio_signal` adapter — which runs any strategy **by reference**
+(`module:function` + a YAML config) without importing it. This corrects an earlier
+slip where the LS1 wrapper/configs/tests were pushed via PRs #67/#69; they were moved
+out (the engine-generic adapter tests were retained, moved into
+`test_portfolio_signal.py`). The `v0.2.0` tag was never affected (it predates LS1).
+
+**Why.** `trading_bot` is the **shareable execution engine** of the triptych; strategy
+logic/IP (and deployment specifics) belong with the research (`fynance-research`) /
+the operator's local setup, not in the engine repo. Keeping the engine free of any
+concrete strategy also keeps it genuinely generic and its test suite free of strategy
+data dependencies. Operationally: a request to *test a strategy locally* means run it
+and report — not commit/push/merge. **Rejected:** committing strategies "because the
+live test is useful" (leaks IP into the engine repo, couples the engine to one
+strategy); a history purge of the earlier slip (the content is only on `develop`, not
+in any tag — a tip-level removal + gitignore is enough; force-rewriting a shared
+branch's history is not warranted).
+
+---
+
 ### 2026-06-29 LS1 multi-venue live tests; Kraken is public+PaperBroker (no testnet) (PR #69)
 
 **Decision.** LS1 is now wired for **both venues** by config — `ls1_kraken_signal`

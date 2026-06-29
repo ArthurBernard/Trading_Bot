@@ -24,6 +24,7 @@ import pytest
 
 from trading_bot.application.portfolio import (
     PortfolioStrategy,
+    as_portfolio_signal,
     load_portfolio_signal,
     weights_to_signals,
 )
@@ -212,3 +213,64 @@ def test_fake_fixture_weights_round_trip_to_exact_quantities() -> None:
     assert by_sym[ETH].target == money("-10")
     assert all(s.mode is SignalMode.TARGET_QTY for s in signals)
     assert all(s.ts == 42 for s in signals)
+
+
+# --- as_portfolio_signal: the generic weight-oracle adapter ------------------ #
+# (generic engine code — these moved here when the LS1-specific e2e suite became
+#  local-only; they use fake oracles, no strategy / no real data.)
+
+
+def test_as_portfolio_signal_normalises_hyphen_keys() -> None:
+    """A ``{"BTC-USDT": w}`` oracle is normalised to canonical ``Symbol`` keys."""
+    signal = as_portfolio_signal(lambda: {"BTC-USDT": 0.3, "ZEC-USDT": -0.1})
+    out = signal(0, {})
+    assert out == {
+        Symbol("BTC", "USDT"): money("0.3"),
+        Symbol("ZEC", "USDT"): money("-0.1"),
+    }
+    assert all(isinstance(v, type(money("0"))) for v in out.values())
+
+
+def test_as_portfolio_signal_accepts_concatenated_keys() -> None:
+    """Separator-less ``BTCUSDT`` keys parse too (via ``parse_binance_symbol``)."""
+    out = as_portfolio_signal(lambda: {"BTCUSDT": 1})(0, {})
+    assert out == {Symbol("BTC", "USDT"): money("1")}
+
+
+def test_as_portfolio_signal_accepts_mapping_or_tuple_return() -> None:
+    """The oracle may return a bare mapping **or** a ``(mapping, asof)`` tuple."""
+    bare = as_portfolio_signal(lambda: {"ETH-USDT": 0.2})(0, {})
+    tupled = as_portfolio_signal(lambda: ({"ETH-USDT": 0.2}, "2026-06-29"))(0, {})
+    assert bare == tupled == {Symbol("ETH", "USDT"): money("0.2")}
+
+
+def test_as_portfolio_signal_passes_through_symbol_keys() -> None:
+    """An oracle that already returns ``Symbol`` keys is passed through."""
+    out = as_portfolio_signal(lambda: {Symbol("BTC", "USD"): 0.5})(0, {})
+    assert out == {Symbol("BTC", "USD"): money("0.5")}
+
+
+def test_as_portfolio_signal_ignores_frames_and_asof() -> None:
+    """The adapter calls the argument-free oracle, ignoring asof_ms / frames."""
+    calls: list[int] = []
+
+    def _oracle() -> dict[str, float]:
+        calls.append(1)
+        return {"BTC-USDT": 0.1}
+
+    signal = as_portfolio_signal(_oracle)
+    signal(123, {Symbol("BTC", "USDT"): object()})  # type: ignore[dict-item]
+    signal(456, {})
+    assert len(calls) == 2  # called once per evaluation, args unused
+
+
+def test_as_portfolio_signal_rejects_bad_return_shape() -> None:
+    """A non-mapping / non-(mapping, asof) oracle return raises ``SignalError``."""
+    with pytest.raises(SignalError):
+        as_portfolio_signal(lambda: [1, 2, 3])(0, {})
+
+
+def test_as_portfolio_signal_rejects_unparseable_key() -> None:
+    """An unparseable pair-string key raises (propagates the parse error)."""
+    with pytest.raises((SignalError, ValueError)):
+        as_portfolio_signal(lambda: {"ZZZZ": 0.1})(0, {})

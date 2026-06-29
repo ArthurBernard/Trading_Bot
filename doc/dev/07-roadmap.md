@@ -16,8 +16,9 @@ dashboard; paper-by-default, hardened under fault injection, live behind an expl
 off-by-default opt-in. History in git + `CHANGELOG.md`; see `06-status.md`.
 
 **Post-0.2.0 shipped:** the **Binance adapter** (E11, 2nd live venue) and the
-**native multi-asset / portfolio-strategy unit** (LS1 runnable by config —
-`configs/ls1.yaml`, real dccd-data verified). History in `CHANGELOG.md`.
+**native multi-asset / portfolio-strategy unit** (strategies run by config via the
+generic `as_portfolio_signal` adapter; concrete strategies kept **local-only** under
+the gitignored `strategies/`, real dccd-data verified). History in `CHANGELOG.md`.
 
 ## Known issues / follow-ups
 
@@ -25,8 +26,8 @@ off-by-default opt-in. History in git + `CHANGELOG.md`; see `06-status.md`.
   `PortfolioFeed` renders pairs via `to_venue_symbol(exchange)` (`BTCUSDT`; Kraken
   `XBTUSD`/`TRXUSD`), which (a) doesn't match a hyphen-keyed `BASE-QUOTE` dccd store and
   (b) is ambiguous to invert (`XBTUSD`→`XB/TUSD`, `TRXUSD`→`TR/USD` under the parsers).
-  The LS1 tests' fake dccd client normalises by existence-checking the store; a real
-  `trading-bot run configs/ls1*.yaml` against a live `dccd.Client` needs the convention
+  A strategy's local test client normalises by existence-checking the store; a real
+  `trading-bot run strategies/<name>/*.yaml` against a live `dccd.Client` needs the convention
   pinned (a `symbol_for`/store-key field on `PortfolioStrategyConfig`, or a canonical
   render). Until then LS1 runs are verified via the test harness, not raw `run_app`.
 - [ ] **PaperBroker/engine drain is superlinear (~O(n²)) over accumulated ticks.** A
