@@ -81,6 +81,7 @@ from trading_bot.application.portfolio import (
 )
 from trading_bot.application.portfolio_feed import PortfolioFeed
 from trading_bot.application.portfolio_runner import PortfolioRunner
+from trading_bot.application.reconcile import reconcile
 from trading_bot.application.service_factory import Engine, build_engine
 from trading_bot.application.strategy import (
     SignalFn,
@@ -638,12 +639,15 @@ async def run_app(
     *,
     dccd_client: DccdClient | None = None,
     max_steps: int | None = None,
+    reconcile_on_start: bool = True,
 ) -> RunReport:
     """Run the whole declared system from one config and return a summary.
 
     The triptych entrypoint: assemble the engine
     (:func:`~trading_bot.application.service_factory.build_engine`,
-    paper-by-default — the factory enforces it), build a runner per declared
+    paper-by-default — the factory enforces it), **reconcile** the freshly-built
+    engine's local state to the broker's truth before any order is placed (the
+    *reconcile, don't assume* invariant — see below), build a runner per declared
     single-instrument strategy (:func:`build_runners`) **and** per declared
     portfolio (:func:`build_portfolio_runners`), reject any instrument claimed by
     two runners (:func:`_reject_commingled`, spanning strategies *and*
@@ -651,6 +655,26 @@ async def run_app(
     :class:`~trading_bot.application.orchestrator.Orchestrator`. After the run,
     build a :class:`RunReport` from the per-runner order counts and the engine's
     shared tracker / performance service (fills are the PnL source of truth).
+
+    Reconcile-on-startup (carried into the ADR)
+    -------------------------------------------
+    A freshly-built :class:`~trading_bot.application.service_factory.Engine` has
+    **empty** local maps (the router tracks no orders, the tracker holds no
+    positions), but the venue may already hold open orders and a fill history
+    from a previous session/restart. Running blind would risk re-submitting an
+    order the venue already has or trading against a stale (zero) position. So
+    before the first order, :func:`~trading_bot.application.reconcile.reconcile`
+    pulls the broker's open orders / balances / fills **once** and converges the
+    router + tracker to them (ingest unknown live orders, close orphans, rebuild
+    positions from confirmed fills). On a fresh
+    :class:`~trading_bot.brokers.paper.PaperBroker` this is a harmless no-op (no
+    open orders, no fills); on a live/testnet venue it is the safety backstop that
+    recovers state after a restart. The pass emits one
+    :class:`~trading_bot.application.events.LogEvent` on the engine bus.
+
+    Reconciling **after a disconnect** (the WS-reconnect half of the invariant)
+    attaches to the private fill stream, which is not yet wired into this run
+    loop; that lands with live fill streaming (tracked in the roadmap).
 
     Parameters
     ----------
@@ -667,6 +691,10 @@ async def run_app(
         Cap each runner at this many feed windows / rebalance ticks (bounds an
         otherwise feed-length run; useful for tests / live feeds). ``None``
         (default) drains every feed to exhaustion.
+    reconcile_on_start : bool, optional
+        Whether to reconcile the engine to the broker before running (default
+        ``True``, enforcing the startup invariant). Pass ``False`` only to skip
+        the pass in a test/offline context where the broker reads are irrelevant.
 
     Returns
     -------
@@ -687,6 +715,14 @@ async def run_app(
 
     """
     engine = build_engine(config, db_path=config.storage.db_path)
+    # Reconcile, don't assume: converge the fresh engine's empty maps to the
+    # broker's truth (open orders + fills) before the first order is placed, so a
+    # restart never re-submits a venue-held order or trades a stale position. A
+    # no-op on a fresh PaperBroker; the safety backstop on a live/testnet venue.
+    if reconcile_on_start:
+        await reconcile(
+            engine.broker, engine.router, engine.tracker, event_bus=engine.bus
+        )
     # Reject any instrument claimed by two runners up front — across both the
     # single-instrument strategies and the portfolios (the shared per-instrument
     # tracker has no attribution). build_runners also calls this for the

@@ -22,6 +22,13 @@ the gitignored `strategies/`, real dccd-data verified). History in `CHANGELOG.md
 
 ## Known issues / follow-ups
 
+- [ ] **Live fill streaming + post-disconnect reconcile.** Reconcile is now wired
+  **on startup** (`run_app` converges the engine to the venue before the first order),
+  but the **after-disconnect** half of *reconcile, don't assume* is not: the private
+  fill WS (`KrakenPrivateWS`) is not wired into the run loop, so there is no reconnect
+  to trigger a reconcile pass on, and live fills are not streamed onto the bus. Wire
+  the private fill WS into the engine and trigger `reconcile` on each reconnect (and
+  land fill-id dedup — see below — before that stream feeds the tracker).
 - [ ] **Portfolio config → real-dccd store-key convention unpinned.** The default
   `PortfolioFeed` renders pairs via `to_venue_symbol(exchange)` (`BTCUSDT`; Kraken
   `XBTUSD`/`TRXUSD`), which (a) doesn't match a hyphen-keyed `BASE-QUOTE` dccd store and

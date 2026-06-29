@@ -60,6 +60,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Reconcile-on-startup is now wired** into the run loop. `run_app` calls
+  `reconcile(broker, router, tracker)` right after `build_engine` (before any runner
+  starts; opt-out `reconcile_on_start=False`), so a restart converges the engine's
+  empty maps to the venue's truth — ingesting venue-open orders, closing orphans, and
+  rebuilding positions from confirmed fills — **before the first order**. The
+  *reconcile, don't assume* invariant was implemented + hardening-tested but had **no
+  production caller**; it is now enforced on every start (a no-op on a fresh
+  `PaperBroker`; the safety backstop on a live/testnet venue). (#71)
+
 ### Deprecated
 
 ### Removed
