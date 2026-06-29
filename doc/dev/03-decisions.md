@@ -6,6 +6,30 @@ rejected approaches as tombstones.
 
 ---
 
+### 2026-06-29 Reconcile-on-startup is wired into `run_app` (PR #71)  [accepted]
+
+**Choice.** `run_app` calls `reconcile(broker, router, tracker, event_bus=…)`
+immediately after `build_engine`, before any runner starts (new opt-out
+`reconcile_on_start: bool = True`). A freshly-built engine has **empty** local maps;
+the venue may already hold open orders + a fill history (a restart). Reconciling first
+ingests venue-open orders, closes orphans, and rebuilds positions from confirmed fills,
+so the engine never re-submits a venue-held order or trades a stale (zero) position.
+A no-op on a fresh `PaperBroker`; the safety backstop on a live/testnet venue.
+
+**Why.** A pre-production audit found the *reconcile, don't assume* invariant was fully
+implemented and hardening-tested but had **zero production callers** — it was inert.
+The single system entrypoint, before the orchestrator runs, is the lowest-risk wiring
+point and keeps every caller (CLI, daemon, tests) converging identically.
+
+**Rejected alternatives.** Reconcile inside `build_engine` (the factory is sync and
+does no I/O — keep it pure); reconcile per-runner (the engine/broker is shared, one
+pass suffices). The **post-disconnect** half of the invariant (reconcile on a WS
+reconnect) is **deferred**: the private fill WS is not wired into the run loop yet, so
+there is no reconnect to hook — it lands with live fill streaming (tracked in the
+roadmap).
+
+---
+
 ### 2026-06-29 Strategies are local-only — never committed to the engine repo (PR #70)
 
 **Decision.** Concrete **strategies** — the signal wrapper, the strategy config(s),

@@ -460,3 +460,133 @@ def test_run_app_empty_config_runs_no_strategies() -> None:
     assert report.strategies == []
     assert report.total_orders == 0
     assert report.realised_pnl == money("0")
+
+
+# --- reconcile-on-startup (the "reconcile, don't assume" invariant) -------- #
+
+
+async def test_run_app_reconciles_on_startup(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`run_app` reconciles the engine to the broker before running.
+
+    Spies the ``reconcile`` the entrypoint calls and asserts it is awaited exactly
+    once with the engine's own broker / router / tracker (the wired collaborators)
+    — so a restart converges to the venue's truth *before* the first order.
+    ``reconcile``'s actual convergence is proven in ``tests/hardening/``; this
+    asserts the wiring.
+    """
+    import importlib
+
+    run_app_mod = importlib.import_module("trading_bot.application.run_app")
+    from trading_bot.application.order_router import OrderRouter
+    from trading_bot.application.position_tracker import PositionTracker
+    from trading_bot.application.reconcile import ReconResult
+    from trading_bot.brokers.paper import PaperBroker
+
+    calls: list[tuple[object, object, object]] = []
+
+    async def _spy(broker, router, tracker, *, since_ms=None, event_bus=None):  # noqa: ANN001, ANN202
+        calls.append((broker, router, tracker))
+        return ReconResult(0, 0, 0, 0, 0)
+
+    monkeypatch.setattr(run_app_mod, "reconcile", _spy)
+
+    await run_app(AppConfig())  # paper, no strategies
+
+    assert len(calls) == 1
+    broker, router, tracker = calls[0]
+    assert isinstance(broker, PaperBroker)
+    assert isinstance(router, OrderRouter)
+    assert isinstance(tracker, PositionTracker)
+
+
+async def test_run_app_can_skip_reconcile(monkeypatch: pytest.MonkeyPatch) -> None:
+    """``reconcile_on_start=False`` skips the startup reconcile (opt-out honoured)."""
+    import importlib
+
+    run_app_mod = importlib.import_module("trading_bot.application.run_app")
+
+    calls: list[object] = []
+
+    async def _spy(*a: object, **k: object) -> None:
+        calls.append(a)
+
+    monkeypatch.setattr(run_app_mod, "reconcile", _spy)
+
+    await run_app(AppConfig(), reconcile_on_start=False)
+    assert calls == []
+
+
+async def test_run_app_startup_reconcile_converges_to_venue(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """End-to-end: a restart (empty engine, venue ahead) converges via ``run_app``.
+
+    Verification on real broker state: a :class:`PaperBroker` is left holding an
+    open, partially-filled order whose fill the freshly-built tracker never saw
+    (the order is placed **directly** on the broker, before the tracker subscribes
+    — modelling a restart where the engine maps are empty but the venue is ahead).
+    With the default ``reconcile_on_start=True``, ``run_app`` must ingest the
+    venue-open order into the router and rebuild the BTC position from the venue's
+    confirmed fill before the (strategy-less) run.
+    """
+    import importlib
+
+    run_app_mod = importlib.import_module("trading_bot.application.run_app")
+    from trading_bot.application.events import EventBus
+    from trading_bot.application.order_router import OrderRouter
+    from trading_bot.application.performance_service import PerformanceService
+    from trading_bot.application.position_tracker import PositionTracker
+    from trading_bot.application.risk import RiskManager
+    from trading_bot.application.service_factory import Engine
+    from trading_bot.brokers.paper import PaperBroker
+    from trading_bot.domain.order import Order, OrderSide, OrderType
+
+    bus = EventBus()
+    broker = PaperBroker(
+        prices={BTC_USD: money("30000")},
+        starting_balances={"USD": money("100000000")},
+        event_bus=bus,
+    )
+    # Leave an open, partially-filled order ON THE VENUE — placed directly on the
+    # broker so the not-yet-built engine tracker never sees its fill.
+    broker.arm_partial(money("0.5"))
+    await broker.place_order(
+        Order(
+            client_order_id="pre-existing",
+            instrument=BTC_USD,
+            side=OrderSide.BUY,
+            qty=money("4"),
+            type=OrderType.LIMIT,
+            limit_price=money("30000"),
+        )
+    )
+
+    # Now wire a FRESH (empty) engine over that same broker/bus — the restart: the
+    # tracker subscribes only now, after the fill above was already emitted.
+    config = AppConfig()
+    tracker = PositionTracker(event_bus=bus)
+    perf = PerformanceService(v0=config.starting_capital, event_bus=bus)
+    risk = RiskManager(config.risk, position_tracker=tracker)
+    router = OrderRouter(broker, bus, risk_manager=risk)
+    engine = Engine(
+        config=config,
+        bus=bus,
+        broker=broker,
+        router=router,
+        tracker=tracker,
+        perf=perf,
+        risk=risk,
+        store=None,
+    )
+    assert router.tracked_orders() == {}
+    assert tracker.all_positions() == {}
+
+    monkeypatch.setattr(
+        run_app_mod, "build_engine", lambda cfg, db_path=None: engine
+    )
+    await run_app(config)  # reconcile_on_start defaults True
+
+    # The venue-open order is now tracked (ingested), and the BTC position was
+    # rebuilt from the venue's confirmed fill — the engine converged to the venue.
+    assert router.get("pre-existing") is not None
+    assert BTC_USD in tracker.all_positions()
