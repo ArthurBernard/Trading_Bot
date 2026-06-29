@@ -42,7 +42,13 @@ missing any one refuses with a non-zero exit / a raised
 3. **Credentials** — `KRAKEN_API_KEY` / `KRAKEN_API_SECRET` in the environment
    (via a gitignored `.env`, never committed). With `live_enabled: true` but no
    credentials the factory raises `BrokerError`.
-4. **CLI acknowledgement** — `trading-bot run --live` additionally requires
+4. **Risk limits set** — a real-money live engine requires **all three**
+   `RiskConfig` limits (`max_order`, `max_position`, `max_daily_loss`) to be
+   set. `build_engine` raises `BrokerError` (naming the missing ones) if any is
+   left `None` on the live path — an all-`None` config would trade with no
+   size/exposure/daily-loss cap. Checked **after** credentials; paper and testnet
+   (paper money) are exempt.
+5. **CLI acknowledgement** — `trading-bot run --live` additionally requires
    `--yes-i-understand` (or an interactive confirmation) *and* re-checks
    `live_enabled`. Missing either, the command refuses and points here.
 
@@ -90,12 +96,17 @@ Before the first live order, confirm every item:
 
 - [ ] **Risk limits set** in `RiskConfig`: `max_order` (largest single order),
       `max_position` (largest net exposure), `max_daily_loss` (the halt
-      threshold). An unset limit is *unconstrained* — set them deliberately.
+      threshold). All three are **now required on the live path** — `build_engine`
+      refuses (a `BrokerError` naming the gaps) if any is left `None`, since an
+      unset limit is *unconstrained*. The `max_daily_loss` breach is wired to halt
+      the book (refuse new orders + cancel resting orders via the kill-switch).
 - [ ] **Kill-switch tested** — confirm the `RiskManager` kill-switch cancels open
-      orders and halts new ones (covered offline by the hardening suite).
-- [ ] **Reconcile-on-startup** — on start and after any disconnect the engine
-      refetches open orders + balances + fills and reconciles local state;
-      confirm it converges (proven offline).
+      orders and halts new ones (covered offline by the hardening suite). It is
+      now auto-triggered on a `max_daily_loss` breach.
+- [ ] **Reconcile-on-startup** — on start the engine refetches open orders +
+      balances + fills and reconciles local state (now wired into `run_app`,
+      before the first order); confirm it converges (proven offline). Reconcile
+      *after a disconnect* is deferred to live fill streaming (roadmap).
 - [ ] **Strategy paper-validated** — the exact strategy you intend to run has
       been validated in `mode: paper` over representative data and behaves as
       expected.

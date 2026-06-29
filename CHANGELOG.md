@@ -58,6 +58,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`pip install -e ../fynance-research`, like `dccd`) — the source of validated
   portfolio signals (LS1); kept out of the hard deps. (#66)
 
+### Changed
+
+- **Real-money live now requires explicit risk limits.** `build_engine` refuses a
+  `mode: live` + `live_enabled` config (with credentials) whose `RiskConfig` leaves
+  any of `max_order` / `max_position` / `max_daily_loss` unset — a `BrokerError`
+  naming the gaps, checked **after** the credential gate. An all-`None` `RiskConfig`
+  is *unconstrained*; trading real money with no size/exposure/daily-loss cap is
+  refused. Paper and testnet (paper money) are exempt. (#73)
+
 ### Fixed
 
 - **Daily-loss circuit breaker is now wired.** `build_engine` feeds the `RiskManager`

@@ -292,12 +292,47 @@ def _build_broker(config: AppConfig, bus: EventBus) -> Broker:
                 "set the venue's API key/secret in the environment "
                 "(refusing to trade live without credentials)"
             )
+        # Final live gate: a real-money engine must carry explicit risk limits — an
+        # all-None RiskConfig would trade with no size/exposure/daily-loss cap.
+        _require_live_risk_limits(config)
         return broker
 
     raise BrokerError(
         f"live mode: unknown venue {venue!r}; "
         f"known live venues are {sorted(_LIVE_VENUES)!r}"
     )
+
+
+def _require_live_risk_limits(config: AppConfig) -> None:
+    """Refuse a real-money live engine whose risk limits are not all set.
+
+    A :class:`~trading_bot.application.config.RiskConfig` leaves every limit
+    ``None`` (unconstrained) by default, so a live config with no ``risk:`` block
+    would place orders with **no** size, exposure or daily-loss cap — unacceptable
+    for real money. This gate requires ``max_order``, ``max_position`` **and**
+    ``max_daily_loss`` to be set before the live adapter is returned, naming any
+    that are missing. Reached **only** on the opted-in real-money path (``mode:
+    live`` + ``live_enabled`` + credentials); paper mode and testnet (paper money)
+    never get here, so they are exempt.
+    """
+    risk = config.risk
+    missing = [
+        name
+        for name, value in (
+            ("max_order", risk.max_order),
+            ("max_position", risk.max_position),
+            ("max_daily_loss", risk.max_daily_loss),
+        )
+        if value is None
+    ]
+    if missing:
+        raise BrokerError(
+            "live trading requires explicit risk limits, but "
+            f"{', '.join(missing)} {'is' if len(missing) == 1 else 'are'} unset "
+            "in RiskConfig (each None = unconstrained). Set max_order, "
+            "max_position and max_daily_loss before going live (see "
+            f"{_RUNBOOK}). No order placed."
+        )
 
 
 def _selected_venue(config: AppConfig) -> str:

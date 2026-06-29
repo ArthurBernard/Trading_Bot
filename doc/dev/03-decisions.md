@@ -6,6 +6,28 @@ rejected approaches as tombstones.
 
 ---
 
+### 2026-06-29 Real-money live requires all three risk limits (PR #73)  [accepted]
+
+**Choice.** On the real-money live path (`mode: live` + `live_enabled` + credentials),
+`build_engine` refuses to return the live adapter unless `RiskConfig` sets all of
+`max_order`, `max_position` and `max_daily_loss` (a `BrokerError` naming the gaps).
+The check sits **after** the credential gate, so the existing "no creds → BrokerError"
+ordering is unchanged; paper and testnet return earlier and are exempt.
+
+**Why.** A pre-production audit found `RiskConfig` defaults every limit to `None`
+(unconstrained), so a live config with no `risk:` block would place orders with no
+size, exposure or daily-loss cap. For real money the limits must be deliberate, not
+opt-in-by-omission.
+
+**Rejected alternatives.** A pydantic `model_validator` on `AppConfig` (fires at config
+construction, which would change the error surface of several broker-selection tests
+that build `live_enabled` configs without limits, and would couple config validity to a
+risk policy); requiring limits for testnet too (testnet is paper money — over-strict).
+`ConfigError` vs `BrokerError` — kept `BrokerError` to match the factory's existing
+"refusing to trade live without X" vocabulary.
+
+---
+
 ### 2026-06-29 Daily-loss limit is wired to live PnL and escalates to the kill-switch (PR #72)  [accepted]
 
 **Choice.** `build_engine` passes `daily_pnl_provider=perf.realised_pnl` to the
