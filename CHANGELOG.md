@@ -8,6 +8,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `application.StrategySupervisor` — manages each declared strategy/portfolio as an
+  **independent unit** in its **own** engine (own broker/mode), so a strategy can be
+  started/stopped and switched between **paper / testnet / live independently**
+  (`start` / `stop` / `set_mode` / `step` / `status`). Restart-safe (restore + reconcile
+  per engine on start). **Real money is gated**: `set_mode(..., "live")` raises unless an
+  explicit `confirm_live=True` is passed (the control plane's deliberate acknowledgement);
+  paper ↔ testnet need none. The control-plane core behind the daemon + dashboard. (#94)
 - `StrategyRunner.step_latest()` / `PortfolioRunner.rebalance_latest()` — a single,
   idempotent re-evaluation over the feed's **latest** data (vs `run`, which drains the
   feed once). The primitive a scheduler-driven daemon calls each tick: a tick over

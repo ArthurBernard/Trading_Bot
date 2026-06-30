@@ -6,6 +6,35 @@ rejected approaches as tombstones.
 
 ---
 
+### 2026-06-30 Control plane: per-strategy engines + a gated `StrategySupervisor` (PR #94)  [accepted]
+
+**Choice.** The control plane (start/stop a strategy, switch its mode from the UI) is
+built on a `StrategySupervisor` that splits the config into one **unit per strategy/
+portfolio**, each running in its **own** `build_engine` (own broker / mode / tracker /
+PnL). `start` / `stop` / `set_mode` / `step` / `status` per unit; `step` calls
+`step_latest` / `rebalance_latest`. Real money is gated: `set_mode(..., "live")` raises
+`LiveTradingNotEnabled` unless `confirm_live=True` (the UI's typed acknowledgement);
+paper ↔ testnet are free. The factory's existing gates (credentials, mandatory risk
+limits) still fire when the live engine is actually built on `start`.
+
+**Why.** Per-strategy **mode** (one strategy in testnet, another in live) is impossible
+under the single shared engine (`run_app`), which has one broker for the whole system.
+A per-strategy engine is just `build_engine` over a one-strategy config slice — the
+factory already does the wiring — so the supervisor is a thin manager over N engines.
+Per-strategy engines also dissolve the commingling problem (each unit has its own
+tracker), so the single-engine `_reject_commingled` concern doesn't arise. Gating live
+at `set_mode` preserves the "no real order by accident" invariant now that a UI can flip
+modes — matching the chosen posture (paper/testnet free, prod a deliberate confirmation).
+
+**Rejected alternatives.** One engine with multiple brokers and per-strategy routing
+(the `OrderRouter` binds to one broker; per-strategy routing is effectively per-strategy
+engines anyway, with more coupling); letting the UI flip to real money with no
+confirmation (rejected by the maintainer — keep prod deliberate); a heavyweight
+process-per-strategy supervisor (in-process units are lighter and share the daemon's
+loop/scheduler — wired next).
+
+---
+
 ### 2026-06-29 Live monitoring via `run --serve` over the same engine (PR #89)  [accepted]
 
 **Choice.** A `--serve` flag on `trading-bot run` serves the read-only dashboard
