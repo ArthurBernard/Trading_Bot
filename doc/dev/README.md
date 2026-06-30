@@ -28,6 +28,10 @@ done. The authoritative working rules live in the repo-root `CLAUDE.md`.
 5. [`05-testing.md`](05-testing.md) — testing layers and the "test the chain on
    real data" discipline for an execution engine.
 6. [`06-status.md`](06-status.md) — what's done, what's pending, known gaps.
+7. [`09-go-live.md`](09-go-live.md) — the go-live runbook (opt-in gates, pre-trade
+   checklist, proven-vs-pending) — read before trading real money.
+8. [`10-deploy.md`](10-deploy.md) — running the daemon under systemd (pyenv) + the
+   control dashboard.
 
 ## Tools kept here
 

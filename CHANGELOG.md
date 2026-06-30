@@ -8,6 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **systemd deployment** — `deploy/trading-bot.service` (a unit modelled on dccd's,
+  `Restart=on-failure`, hardened, **pyenv**-based `ExecStart`, loopback control UI) plus
+  `doc/dev/10-deploy.md` (install recipe, SSH-tunnel to the dashboard, operational
+  notes). The daemon is restart-safe, so the supervisor recovers state on every restart.
+  Completes the control-plane daemon. (#97)
 - **Control plane — the daemon's dashboard can start/stop strategies and switch mode.**
   `interfaces.api.create_control_app(supervisor)` serves a **read+write** dashboard over
   the `StrategySupervisor`: `GET /api/strategies`, `POST /api/strategies/{name}/start`,
