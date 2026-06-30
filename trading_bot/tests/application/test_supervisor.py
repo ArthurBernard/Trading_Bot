@@ -145,3 +145,19 @@ async def test_unknown_strategy_is_a_config_error() -> None:
     sup = _supervisor()
     with pytest.raises(ConfigError, match="unknown strategy"):
         await sup.start("nope")
+
+
+async def test_start_all_step_all_shutdown() -> None:
+    """The daemon's boot/tick/teardown: start every unit, step the running ones, stop."""
+    pytest.importorskip("fynance")
+    sup = _supervisor()
+
+    await sup.start_all()
+    assert all(s.running for s in sup.status())
+
+    stepped = await sup.step_all()
+    assert stepped == 1  # the one running unit stepped once
+
+    await sup.shutdown()
+    assert not any(s.running for s in sup.status())
+    assert await sup.step_all() == 0  # nothing running → nothing stepped

@@ -271,6 +271,25 @@ class StrategySupervisor:
         assert isinstance(unit.runner, PortfolioRunner)
         return await unit.runner.rebalance_latest()
 
+    async def start_all(self) -> None:
+        """Start every managed unit (the daemon's boot — each in its config mode)."""
+        for name in list(self._units):
+            await self.start(name)
+
+    async def step_all(self) -> int:
+        """Step every **running** unit once — the daemon's per-tick action.
+
+        Returns the number of units stepped (running units; stopped units are
+        skipped). Each unit's :meth:`step` is idempotent over unchanged data, so a
+        tick that finds nothing to do trades nothing.
+        """
+        stepped = 0
+        for name in list(self._units):
+            if self._units[name].running:
+                await self.step(name)
+                stepped += 1
+        return stepped
+
     async def shutdown(self) -> None:
         """Stop every running unit (the daemon's graceful teardown)."""
         for name in list(self._units):

@@ -407,3 +407,28 @@ def _render_to_text(renderable: object) -> str:
     console = Console(width=200, record=True)
     console.print(renderable)
     return console.export_text()
+
+
+# --- daemon (`start`) smoke ------------------------------------------------- #
+
+
+async def test_daemon_starts_ticks_and_stops_cleanly() -> None:
+    """`_run_daemon` builds the supervisor, schedules ticks, and tears down on cancel.
+
+    Drives the daemon coroutine over an empty paper config (no strategies): it must
+    start the scheduler, tick (a no-op with zero units), and shut down cleanly when
+    cancelled — no exception leaks. Proves the daemon loop is wired without binding a
+    real signal/port.
+    """
+    import asyncio
+    import contextlib
+
+    from trading_bot.application.config import AppConfig
+    from trading_bot.interfaces.cli.main import _run_daemon
+
+    task = asyncio.create_task(_run_daemon(AppConfig(), interval=0.05, cron=None))
+    await asyncio.sleep(0.12)  # let it start + tick a couple of times
+    assert not task.done()  # the daemon stays up until stopped
+    task.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await task
