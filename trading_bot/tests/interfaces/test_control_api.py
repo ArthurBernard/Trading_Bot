@@ -122,6 +122,23 @@ def test_unknown_mode_is_400() -> None:
     assert r.status_code == 400
 
 
+def test_control_dashboard_renders() -> None:
+    """`GET /` returns the control dashboard shell (brand + table + live modal)."""
+    resp = _client().get("/")
+    assert resp.status_code == 200
+    html = resp.text
+    assert "trading_bot" in html
+    assert 'id="strategies-body"' in html  # the table control.js fills
+    assert 'id="live-modal"' in html  # the deliberate go-live confirmation
+
+
+def test_control_js_is_served() -> None:
+    """The control dashboard's script is served and carries the confirm phrase."""
+    resp = _client().get("/static/control.js")
+    assert resp.status_code == 200
+    assert "I UNDERSTAND" in resp.text
+
+
 def test_start_then_stop() -> None:
     """`POST start` runs the strategy in its own engine; `POST stop` tears it down."""
     pytest.importorskip("fynance")  # ma_crossover evaluates fynance.sma

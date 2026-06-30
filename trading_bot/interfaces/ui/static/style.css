@@ -114,3 +114,97 @@ footer a { color: var(--muted); }
   .topbar { padding: .55rem .8rem; }
   main { padding: .9rem .7rem; }
 }
+
+/* ===========================================================================
+   Control plane — summary, mode badges, buttons, the live-confirm modal.
+   (Aligned with dccd's palette + pill/badge language; fonts fall back to the
+   system stack, no shipped assets.)
+   =========================================================================== */
+
+:root {
+  --font-display: "Martian Mono", ui-monospace, "SF Mono", monospace;
+  --accent-soft: rgba(94, 162, 255, .12);
+  --warn-soft: rgba(214, 161, 50, .14);
+  --err-soft: rgba(248, 81, 73, .12);
+  --ok-soft: rgba(63, 185, 80, .14);
+}
+.brand { font-family: var(--font-display); }
+
+/* A small summary chip set in the header (N strategies · M running). */
+.summary { display: inline-flex; gap: .4rem; align-items: center; margin-right: auto; }
+.chip {
+  font-size: .76rem; color: var(--muted);
+  border: 1px solid var(--border); border-radius: 999px;
+  padding: .2rem .6rem; font-variant-numeric: tabular-nums;
+}
+.chip b { color: var(--fg); font-weight: 600; }
+
+/* Mode badge — paper (calm), testnet (amber), live (red, emphasised). */
+.badge {
+  display: inline-block; font-size: .68rem; font-weight: 700;
+  text-transform: uppercase; letter-spacing: .09em;
+  padding: .18rem .5rem; border-radius: 999px; border: 1px solid var(--border);
+}
+.badge-paper   { color: var(--accent); border-color: rgba(94,162,255,.4); background: var(--accent-soft); }
+.badge-testnet { color: var(--warn);   border-color: rgba(214,161,50,.45); background: var(--warn-soft); }
+.badge-live    { color: var(--err);    border-color: rgba(248,81,73,.5);   background: var(--err-soft); }
+
+/* Running / stopped pill with a status dot. */
+.run-pill { display: inline-flex; align-items: center; gap: .4rem; font-size: .8rem; }
+.run-pill .dot { width: .5rem; height: .5rem; border-radius: 50%; background: var(--muted); }
+.run-pill.is-running { color: var(--ok); }
+.run-pill.is-running .dot { background: var(--ok); box-shadow: 0 0 5px var(--ok); }
+.run-pill.is-stopped { color: var(--muted); }
+
+/* Buttons + the mode <select>. */
+button, .btn {
+  font: inherit; font-size: .82rem; cursor: pointer; color: var(--fg);
+  background: var(--card); border: 1px solid var(--border); border-radius: 7px;
+  padding: .32rem .8rem; transition: background .12s, border-color .12s, color .12s;
+}
+button:hover { background: var(--border); }
+button:disabled { opacity: .5; cursor: not-allowed; }
+button.btn-start { color: var(--ok); border-color: rgba(63,185,80,.45); }
+button.btn-start:hover { background: var(--ok-soft); }
+button.btn-stop { color: var(--err); border-color: rgba(248,81,73,.45); }
+button.btn-stop:hover { background: var(--err-soft); }
+button.btn-primary { color: #08110a; background: var(--ok); border-color: var(--ok); font-weight: 700; }
+button.btn-primary:hover { filter: brightness(1.08); background: var(--ok); }
+
+select.mode-select {
+  font: inherit; font-size: .8rem; color: var(--fg);
+  background: var(--bg); border: 1px solid var(--border); border-radius: 7px;
+  padding: .28rem 1.6rem .28rem .55rem; cursor: pointer;
+  appearance: none;
+  background-image:
+    linear-gradient(45deg, transparent 50%, var(--muted) 50%),
+    linear-gradient(135deg, var(--muted) 50%, transparent 50%);
+  background-position: right .85rem center, right .6rem center;
+  background-size: 5px 5px, 5px 5px; background-repeat: no-repeat;
+}
+select.mode-select:focus { outline: none; border-color: var(--accent); }
+
+/* Modal — the deliberate "go live" confirmation. */
+.modal {
+  position: fixed; inset: 0; display: none; z-index: 50;
+  align-items: center; justify-content: center;
+  background: rgba(4, 7, 12, .68); backdrop-filter: blur(2px);
+}
+.modal.open { display: flex; }
+.modal-card {
+  background: var(--card); border: 1px solid var(--border);
+  border-top: 3px solid var(--err);
+  border-radius: 12px; padding: 1.3rem 1.4rem; max-width: 420px; width: calc(100% - 2rem);
+  box-shadow: 0 18px 50px rgba(0, 0, 0, .55);
+}
+.modal-card h3 { margin: 0 0 .5rem; font-size: 1rem; }
+.modal-card h3 .warn-mark { color: var(--err); }
+.modal-card p { color: var(--muted); margin: .35rem 0 .9rem; }
+.modal-card code { color: var(--fg); background: var(--err-soft); padding: 0 .3rem; border-radius: 4px; }
+.modal-card input {
+  width: 100%; font: inherit; color: var(--fg);
+  background: var(--bg); border: 1px solid var(--border); border-radius: 7px;
+  padding: .5rem .6rem; margin-bottom: 1rem; font-family: ui-monospace, monospace;
+}
+.modal-card input:focus { outline: none; border-color: var(--err); }
+.modal-actions { display: flex; gap: .6rem; justify-content: flex-end; }
