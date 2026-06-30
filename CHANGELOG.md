@@ -34,6 +34,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **CI was red since the daemon landed** — `apscheduler` was in the `daemon` extra but
+  missing from `dev`, while the daemon test (`test_daemon_starts_ticks_and_stops_cleanly`)
+  drives `_run_daemon`, which imports it. CI installs `.[dev]`, so it hit
+  `ModuleNotFoundError: No module named 'apscheduler'` (masked locally by a dev env that
+  also had `[daemon]`). Added `apscheduler` to the `dev` extra, like the other daemon
+  runtime deps the suite already exercises. (#103)
+
 ### Deprecated
 
 ### Removed
