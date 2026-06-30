@@ -442,6 +442,7 @@ def _status_dict(status: StrategyStatus) -> dict[str, Any]:
     return {
         "name": status.name,
         "kind": status.kind,
+        "exchange": status.exchange,
         "mode": status.mode,
         "running": status.running,
         "realised_pnl": (

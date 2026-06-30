@@ -10,6 +10,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Control dashboard groups strategies by exchange**, and each strategy now uses the
+  **broker matching its own venue** on testnet/live (`StrategyStatus.exchange`; a
+  strategy's `data.exchange` / a portfolio's `venue`). Switching to testnet/live is
+  refused if no broker is configured for that exchange. (#101)
+
 - **Control dashboard visual pass** — mode **badges** (paper/testnet/live, colour-coded),
   a running/stopped status pill, start/stop buttons styled by action, a header summary
   (N strategies · M running), and a proper **typed-confirmation modal** for going live

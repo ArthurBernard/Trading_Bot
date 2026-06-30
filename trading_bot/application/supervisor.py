@@ -69,6 +69,10 @@ class StrategyStatus:
         The strategy/portfolio's logical id.
     kind : {"strategy", "portfolio"}
         Whether it is a single-instrument strategy or a multi-asset portfolio.
+    exchange : str
+        The venue this strategy is for (a single-instrument strategy's
+        ``data.exchange``; a portfolio's ``venue``) — the key the dashboard groups
+        by, and the broker the unit uses on testnet/live.
     mode : StrategyMode
         Its current deployment mode (``paper`` / ``testnet`` / ``live``).
     running : bool
@@ -83,6 +87,7 @@ class StrategyStatus:
 
     name: str
     kind: _KIND
+    exchange: str
     mode: StrategyMode
     running: bool
     realised_pnl: Money | None
@@ -95,6 +100,7 @@ class _Unit:
 
     name: str
     kind: _KIND
+    exchange: str
     mode: StrategyMode
     config: AppConfig
     engine: Engine | None = None
@@ -140,8 +146,11 @@ class StrategySupervisor:
                 f"duplicate strategy name {name!r}: each managed unit needs a "
                 "unique name across strategies and portfolios"
             )
-        config = self._slice_for(name, kind, mode)
-        self._units[name] = _Unit(name=name, kind=kind, mode=mode, config=config)
+        exchange = self._exchange_of(name, kind)
+        config = self._slice_for(name, kind, mode, exchange)
+        self._units[name] = _Unit(
+            name=name, kind=kind, exchange=exchange, mode=mode, config=config
+        )
 
     def names(self) -> list[str]:
         """The managed strategy names, in registration order."""
@@ -155,8 +164,24 @@ class StrategySupervisor:
 
     # --- config slicing + mode mapping ------------------------------------- #
 
-    def _slice_for(self, name: str, kind: _KIND, mode: StrategyMode) -> AppConfig:
-        """The single-unit ``AppConfig`` for ``name`` in ``mode``."""
+    def _exchange_of(self, name: str, kind: _KIND) -> str:
+        """The venue a unit is for — a strategy's ``data.exchange``, a portfolio's ``venue``.
+
+        Falls back to the first configured broker's exchange (then ``"paper"``) for
+        a single-instrument strategy that declares no data source.
+        """
+        if kind == "strategy":
+            cfg = next(s for s in self._base.strategies if s.name == name)
+            if cfg.data is not None:
+                return cfg.data.exchange
+            return self._base.brokers[0].exchange if self._base.brokers else "paper"
+        pf = next(p for p in self._base.portfolios if p.name == name)
+        return pf.venue
+
+    def _slice_for(
+        self, name: str, kind: _KIND, mode: StrategyMode, exchange: str
+    ) -> AppConfig:
+        """The single-unit ``AppConfig`` for ``name`` in ``mode`` on ``exchange``."""
         if kind == "strategy":
             only = [s for s in self._base.strategies if s.name == name]
             base_slice = self._base.model_copy(
@@ -167,7 +192,7 @@ class StrategySupervisor:
             base_slice = self._base.model_copy(
                 update={"strategies": [], "portfolios": only_p}
             )
-        return _config_for_mode(base_slice, mode)
+        return _config_for_mode(base_slice, mode, exchange)
 
     # --- lifecycle --------------------------------------------------------- #
 
@@ -245,7 +270,7 @@ class StrategySupervisor:
         if was_running:
             await self.stop(name)
         unit.mode = mode
-        unit.config = self._slice_for(name, unit.kind, mode)
+        unit.config = self._slice_for(name, unit.kind, mode, unit.exchange)
         if was_running:
             await self.start(name)
 
@@ -316,6 +341,7 @@ class StrategySupervisor:
         return StrategyStatus(
             name=unit.name,
             kind=unit.kind,
+            exchange=unit.exchange,
             mode=unit.mode,
             running=unit.running,
             realised_pnl=realised,
@@ -332,23 +358,31 @@ def _mode_of(config: AppConfig) -> StrategyMode:
     return "live"
 
 
-def _config_for_mode(base_slice: AppConfig, mode: StrategyMode) -> AppConfig:
-    """Rewrite a single-unit config for ``mode`` (paper / testnet / live).
+def _config_for_mode(
+    base_slice: AppConfig, mode: StrategyMode, exchange: str
+) -> AppConfig:
+    """Rewrite a single-unit config for ``mode`` (paper / testnet / live) + ``exchange``.
 
-    ``testnet`` and ``live`` require at least one configured broker (the venue);
-    a unit with no broker can only run ``paper``.
+    ``testnet`` and ``live`` select **only the broker whose exchange matches** the
+    unit's venue — so a strategy on Kraken uses the Kraken broker and one on Binance
+    the Binance broker (each unit has its own engine). A unit with no matching broker
+    can only run ``paper``.
     """
     if mode == "paper":
         return base_slice.model_copy(
             update={"mode": "paper", "live_enabled": False}
         )
-    if not base_slice.brokers:
+    matching = [
+        b for b in base_slice.brokers if b.exchange.lower() == exchange.lower()
+    ]
+    if not matching:
         raise ConfigError(
-            f"cannot run mode {mode!r} without a configured broker; add a "
-            "'brokers' entry (the venue) or keep the strategy on paper"
+            f"cannot run mode {mode!r} on exchange {exchange!r}: no matching broker "
+            f"configured (have {[b.exchange for b in base_slice.brokers]!r}); add a "
+            "'brokers' entry for that venue, or keep the strategy on paper"
         )
     testnet = mode == "testnet"
-    brokers = [b.model_copy(update={"testnet": testnet}) for b in base_slice.brokers]
+    brokers = [b.model_copy(update={"testnet": testnet}) for b in matching]
     return base_slice.model_copy(
         update={
             "mode": "live",
