@@ -583,3 +583,39 @@ async def test_order_factory_and_log_events() -> None:
     # The orders were LIMITs (from the factory), filled at the close.
     fills = await broker.fills()
     assert fills
+
+
+# --- step_latest: single re-evaluation over the latest data (daemon hook) --- #
+
+
+async def test_step_latest_evaluates_latest_window_and_is_idempotent() -> None:
+    """`step_latest` steps over `feed.latest()`; a repeat on unchanged data no-ops.
+
+    The scheduler-driven daemon hook: one re-evaluation over the freshest data
+    trades to the latest target, and calling it again over the same data submits
+    nothing (already on target) — idempotent under repetition.
+    """
+    pytest.importorskip("fynance")  # ma_crossover_signal evaluates fynance.sma
+    up = [float(100 + i) for i in range(20)]
+    down = [float(120 - i) for i in range(1, 21)]
+    frame = _bars(up + down)
+    strat = Strategy(
+        name="ma",
+        instrument=BTC_USD,
+        signal_fn=ma_crossover_signal(BTC_USD, fast=3, slow=6),
+        reference_qty=money("2"),
+        lookback=6,
+    )
+    runner, _broker, tracker, _bus = _wire(strat, frame, mark="100")
+
+    first = await runner.step_latest()  # from flat → trades to the latest target
+    assert first is not None
+    pos = tracker.position(BTC_USD)
+    assert pos is not None
+    assert pos.net_qty == Decimal("-2")  # latest signal is short on the down tail
+
+    second = await runner.step_latest()  # already on target → no order
+    assert second is None
+    again = tracker.position(BTC_USD)
+    assert again is not None
+    assert again.net_qty == Decimal("-2")  # unchanged

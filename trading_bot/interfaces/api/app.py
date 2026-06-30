@@ -70,6 +70,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from pydantic import BaseModel
 
 import trading_bot
 from trading_bot.application.events import (
@@ -82,11 +83,15 @@ from trading_bot.interfaces.ui import STATIC_DIR, TEMPLATES_DIR
 
 if TYPE_CHECKING:
     from trading_bot.application.service_factory import Engine
+    from trading_bot.application.supervisor import (
+        StrategyStatus,
+        StrategySupervisor,
+    )
     from trading_bot.domain.fill import Fill
     from trading_bot.domain.order import Order
     from trading_bot.domain.position import Position
 
-__all__ = ["create_app"]
+__all__ = ["create_app", "create_control_app"]
 
 
 # ---------------------------------------------------------------------------
@@ -408,5 +413,155 @@ def create_app(engine: Engine) -> FastAPI:
                 bus.remove_queue(queue)
 
         return StreamingResponse(_generator(), media_type="text/event-stream")
+
+    return app
+
+
+# ---------------------------------------------------------------------------
+# The control app — the daemon's read+write dashboard over a StrategySupervisor
+# ---------------------------------------------------------------------------
+
+
+#: Valid deployment modes the control API accepts.
+_CONTROL_MODES = ("paper", "testnet", "live")
+
+
+class _ModeBody(BaseModel):
+    """Request body for ``POST /api/strategies/{name}/mode``.
+
+    ``confirm`` must be ``true`` to switch to ``live`` (real money) — the
+    deliberate acknowledgement; the endpoint refuses live without it.
+    """
+
+    mode: str
+    confirm: bool = False
+
+
+def _status_dict(status: StrategyStatus) -> dict[str, Any]:
+    """Render a :class:`StrategyStatus` for JSON (money as exact Decimal string)."""
+    return {
+        "name": status.name,
+        "kind": status.kind,
+        "mode": status.mode,
+        "running": status.running,
+        "realised_pnl": (
+            str(status.realised_pnl) if status.realised_pnl is not None else None
+        ),
+        "open_orders": status.open_orders,
+    }
+
+
+def create_control_app(supervisor: StrategySupervisor) -> FastAPI:
+    """Build the daemon's **control** FastAPI over a :class:`StrategySupervisor`.
+
+    Unlike :func:`create_app` (a *read-only* view of one engine), this app is the
+    **control plane**: it lists the managed strategies and lets a client **start /
+    stop** them and **switch mode** (paper / testnet / live). It is meant to be
+    served **loopback-only** by the daemon, since it can change what trades.
+
+    **Real money is gated.** Switching a strategy to ``live`` requires
+    ``confirm: true`` in the request body — the deliberate acknowledgement the UI
+    obtains (a typed confirmation); otherwise the endpoint returns **403** and
+    nothing changes. The factory's credential + risk-limit gates still apply when a
+    live unit is actually started.
+
+    Parameters
+    ----------
+    supervisor : StrategySupervisor
+        The supervisor to expose, read+controlled through ``app.state.supervisor``.
+
+    Returns
+    -------
+    FastAPI
+        The control application (serve via uvicorn, or a ``TestClient``).
+
+    """
+    from fastapi import HTTPException
+
+    from trading_bot.domain.errors import (
+        BrokerError,
+        ConfigError,
+        LiveTradingNotEnabled,
+    )
+
+    app = FastAPI(
+        title="trading_bot control",
+        summary="Supervise + control the declared strategies (loopback-only).",
+        default_response_class=_DecimalJSONResponse,
+    )
+    app.state.supervisor = supervisor
+
+    def _sup(request: Request) -> StrategySupervisor:
+        return request.app.state.supervisor  # type: ignore[no-any-return]
+
+    if STATIC_DIR.is_dir():
+        app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+    templates = (
+        Jinja2Templates(directory=str(TEMPLATES_DIR))
+        if TEMPLATES_DIR.is_dir()
+        else None
+    )
+
+    if templates is not None:
+
+        @app.get("/", response_class=HTMLResponse)
+        async def control_dashboard(request: Request) -> Any:
+            """Render the control dashboard shell (data fetched client-side)."""
+            return templates.TemplateResponse(
+                request, "control.html", {"version": trading_bot.__version__}
+            )
+
+    @app.get("/api/health")
+    async def health(request: Request) -> dict[str, Any]:
+        names = _sup(request).names()
+        running = sum(1 for s in _sup(request).status() if s.running)
+        return {"status": "ok", "strategies": len(names), "running": running}
+
+    @app.get("/api/strategies")
+    async def strategies(request: Request) -> list[dict[str, Any]]:
+        """List every managed strategy with its mode / running / PnL."""
+        return [_status_dict(s) for s in _sup(request).status()]
+
+    @app.post("/api/strategies/{name}/start")
+    async def start_strategy(name: str, request: Request) -> dict[str, Any]:
+        try:
+            await _sup(request).start(name)
+        except ConfigError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except (BrokerError, LiveTradingNotEnabled) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"ok": True, "status": _status_dict(_sup(request).status(name)[0])}
+
+    @app.post("/api/strategies/{name}/stop")
+    async def stop_strategy(name: str, request: Request) -> dict[str, Any]:
+        try:
+            await _sup(request).stop(name)
+        except ConfigError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return {"ok": True, "status": _status_dict(_sup(request).status(name)[0])}
+
+    @app.post("/api/strategies/{name}/mode")
+    async def set_strategy_mode(
+        name: str, body: _ModeBody, request: Request
+    ) -> dict[str, Any]:
+        if body.mode not in _CONTROL_MODES:
+            raise HTTPException(
+                status_code=400,
+                detail=f"unknown mode {body.mode!r}; expected one of {_CONTROL_MODES}",
+            )
+        try:
+            await _sup(request).set_mode(
+                name,
+                body.mode,  # type: ignore[arg-type]
+                confirm_live=body.confirm,
+            )
+        except LiveTradingNotEnabled as exc:
+            # Real money without the deliberate confirmation — refuse, change nothing.
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
+        except ConfigError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except (BrokerError, LiveTradingNotEnabled) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"ok": True, "status": _status_dict(_sup(request).status(name)[0])}
 
     return app

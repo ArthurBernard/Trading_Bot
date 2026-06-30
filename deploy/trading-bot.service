@@ -1,0 +1,73 @@
+# systemd unit for the trading_bot daemon (supervisor + scheduler + control UI).
+#
+# Install (pyenv — the blessed path on this machine; adjust the version/paths):
+#
+#   # 1) a pyenv interpreter/venv with trading_bot installed:
+#   pyenv install -s 3.12.13
+#   pyenv virtualenv 3.12.13 trading-bot           # (optional) a named venv
+#   ~/.pyenv/versions/trading-bot/bin/pip install -e /home/arthur/dev/Trading_Bot[daemon]
+#   #   …or a plain version: ~/.pyenv/versions/3.12.13/bin/pip install -e .[daemon]
+#
+#   # 2) config + credentials (NEVER world-readable):
+#   sudo install -d -m 0750 /etc/trading-bot
+#   sudo cp your-config.yaml      /etc/trading-bot/config.yaml      # paper by default
+#   sudo install -m 0600 your.env /etc/trading-bot/trading-bot.env  # KRAKEN_/BINANCE_ keys
+#
+#   # 3) edit ExecStart below to YOUR pyenv path + User=, then:
+#   sudo cp deploy/trading-bot.service /etc/systemd/system/trading-bot.service
+#   sudo systemctl daemon-reload && sudo systemctl enable --now trading-bot
+#   journalctl -u trading-bot -f                                    # watch it
+#
+# The daemon boots every declared strategy in its configured mode (PAPER by
+# default — it never trades real money by merely starting). Switch a strategy to
+# testnet/live from the control dashboard (http://127.0.0.1:8000) — going live
+# needs the typed confirmation there. The control UI binds loopback; reach it over
+# an SSH tunnel (ssh -L 8000:127.0.0.1:8000 host), never expose it publicly.
+
+[Unit]
+Description=trading_bot — execution daemon (supervisor + scheduler + control UI)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Run as a real user whose pyenv holds the install (simplest with pyenv in $HOME);
+# or create a dedicated 'trading-bot' system user and point the paths at its home.
+User=arthur
+Group=arthur
+
+# Credentials (Kraken/Binance keys) — kept out of the unit, 0600, never logged.
+EnvironmentFile=/etc/trading-bot/trading-bot.env
+
+# The pyenv-managed console script — adjust the version/venv name to your install.
+ExecStart=%h/.pyenv/versions/trading-bot/bin/trading-bot start \
+    --config /etc/trading-bot/config.yaml \
+    --serve --serve-host 127.0.0.1 --serve-port 8000
+
+WorkingDirectory=%S/trading-bot
+Restart=on-failure
+RestartSec=5
+# Give the daemon time to drain (reconcile/shut down each engine) before SIGKILL.
+TimeoutStopSec=60
+
+# Logs go to the journal: `journalctl -u trading-bot [-f]`. The daemon writes no
+# log files of its own; journald handles rotation.
+
+# Resource limits — uncomment and tune for your host.
+#MemoryMax=1G
+#CPUQuota=150%
+#TasksMax=256
+
+# State dir: systemd creates/owns /var/lib/trading-bot (the engine's SqliteStore,
+# if storage.db_path points here).
+StateDirectory=trading-bot
+
+# Hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=true
+ReadWritePaths=%S/trading-bot
+
+[Install]
+WantedBy=multi-user.target

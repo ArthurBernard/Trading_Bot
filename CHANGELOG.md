@@ -16,6 +16,58 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 
+## [0.6.0] - 2026-06-30
+
+### Added
+
+- **systemd deployment** — `deploy/trading-bot.service` (a unit modelled on dccd's,
+  `Restart=on-failure`, hardened, **pyenv**-based `ExecStart`, loopback control UI) plus
+  `doc/dev/10-deploy.md` (install recipe, SSH-tunnel to the dashboard, operational
+  notes). The daemon is restart-safe, so the supervisor recovers state on every restart.
+  Completes the control-plane daemon. (#97)
+- **Control plane — the daemon's dashboard can start/stop strategies and switch mode.**
+  `interfaces.api.create_control_app(supervisor)` serves a **read+write** dashboard over
+  the `StrategySupervisor`: `GET /api/strategies`, `POST /api/strategies/{name}/start`,
+  `.../stop`, `.../mode`. `trading-bot start --serve` runs it (loopback by default — it
+  can change what trades) alongside the scheduler. The dashboard (`control.html` +
+  `control.js`) lists each strategy with a mode selector + start/stop buttons.
+  **Real money is gated**: switching to `live` requires a typed confirmation in the UI
+  and `confirm: true` on the endpoint — the server returns `403` otherwise, changing
+  nothing. (#96)
+- **`trading-bot start` — the trading daemon.** A long-running process (systemd's
+  `ExecStart`) that builds a `StrategySupervisor`, starts every declared strategy (in its
+  configured mode — **paper by default**), and re-evaluates them on an `--interval`
+  (idempotent ticks) or `--cron` schedule via `apscheduler`, until `SIGINT`/`SIGTERM`
+  (then shuts every unit down gracefully). Each strategy runs in its own engine, so they
+  can be switched paper/testnet/live independently from the control plane. Starting never
+  trades real money by itself (the live gates still apply). `StrategySupervisor` gains
+  `start_all` / `step_all` for the daemon's boot/tick. (#95)
+- `application.StrategySupervisor` — manages each declared strategy/portfolio as an
+  **independent unit** in its **own** engine (own broker/mode), so a strategy can be
+  started/stopped and switched between **paper / testnet / live independently**
+  (`start` / `stop` / `set_mode` / `step` / `status`). Restart-safe (restore + reconcile
+  per engine on start). **Real money is gated**: `set_mode(..., "live")` raises unless an
+  explicit `confirm_live=True` is passed (the control plane's deliberate acknowledgement);
+  paper ↔ testnet need none. The control-plane core behind the daemon + dashboard. (#94)
+- `StrategyRunner.step_latest()` / `PortfolioRunner.rebalance_latest()` — a single,
+  idempotent re-evaluation over the feed's **latest** data (vs `run`, which drains the
+  feed once). The primitive a scheduler-driven daemon calls each tick: a tick over
+  unchanged data trades nothing (already on target). Foundation for the control-plane
+  daemon. (#93)
+
+### Changed
+
+### Fixed
+
+- **`trading_bot.__version__` now reads from installed metadata** instead of a
+  hand-bumped constant that the release flow never updated — it had been stuck at
+  `"0.2.0"` across 0.3/0.4/0.5, so `trading-bot version` and the dashboard showed a
+  stale version. Now always matches `pyproject.toml` (the single release source). (#92)
+
+### Deprecated
+
+### Removed
+
 ## [0.5.0] - 2026-06-29
 
 ### Added

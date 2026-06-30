@@ -430,6 +430,32 @@ class PortfolioRunner:
 
         return RebalanceResult(submitted=submitted, failures=failures)
 
+    async def rebalance_latest(self) -> RebalanceResult | None:
+        """Rebalance the book over the feed's **latest** cross-section — for a daemon.
+
+        Reads the feed's most recent causal cross-section (the last one a fresh
+        iteration yields — a live :class:`~trading_bot.application.portfolio_feed
+        .PortfolioFeed` re-reads the dccd store each iteration) and runs **one**
+        :meth:`rebalance` over it. Where :meth:`run` *drains* the feed once
+        (replay/backtest), this is the single, on-demand rebalance a
+        **scheduler-driven daemon** calls each tick: per-coin deltas are computed
+        against the live tracker, so a tick over unchanged weights/data submits
+        nothing and only changed targets trade. Idempotent under repetition.
+
+        Returns
+        -------
+        RebalanceResult or None
+            The tick's result, or ``None`` if the feed currently yields no closed
+            cross-section (e.g. the universe has no common closed bar yet).
+
+        """
+        latest: Mapping[Symbol, pl.DataFrame] | None = None
+        for frames in self._feed:  # type: ignore[attr-defined]
+            latest = frames
+        if latest is None:
+            return None
+        return await self.rebalance(latest)
+
     def _build_order(
         self,
         symbol: Symbol,
