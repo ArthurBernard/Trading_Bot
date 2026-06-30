@@ -12,6 +12,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`trading_bot.__version__` now reads from installed metadata** instead of a
+  hand-bumped constant that the release flow never updated — it had been stuck at
+  `"0.2.0"` across 0.3/0.4/0.5, so `trading-bot version` and the dashboard showed a
+  stale version. Now always matches `pyproject.toml` (the single release source). (#92)
+
 ### Deprecated
 
 ### Removed
