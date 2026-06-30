@@ -8,6 +8,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `StrategyRunner.step_latest()` / `PortfolioRunner.rebalance_latest()` — a single,
+  idempotent re-evaluation over the feed's **latest** data (vs `run`, which drains the
+  feed once). The primitive a scheduler-driven daemon calls each tick: a tick over
+  unchanged data trades nothing (already on target). Foundation for the control-plane
+  daemon. (#93)
+
 ### Changed
 
 ### Fixed

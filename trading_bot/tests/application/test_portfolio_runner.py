@@ -471,3 +471,38 @@ async def test_money_read_off_frame_is_exact_decimal() -> None:
     assert btc_leg.limit_price == Decimal("50000.5")
     expected = money(str(money("0.5") * CAPITAL / money("50000.5")))
     assert btc_leg.qty == abs(expected)
+
+
+# --- rebalance_latest: single rebalance over the latest cross-section ------- #
+
+
+async def test_rebalance_latest_rebalances_over_the_feeds_latest_cross_section() -> None:
+    """`rebalance_latest` takes the feed's latest cross-section and rebalances once."""
+    weights = {BTC: money("0.5"), ETH: money("-0.25")}
+    router, tracker, bus, _broker = _engine()
+    runner = PortfolioRunner(
+        _strategy(_weights_signal(weights)),
+        _ListFeed([_frames()], asof=1_700),
+        router,
+        tracker,
+        event_bus=bus,
+    )
+
+    result = await runner.rebalance_latest()
+
+    assert result is not None
+    assert result.submitted == 2  # one leg per coin, from flat
+
+
+async def test_rebalance_latest_returns_none_on_empty_feed() -> None:
+    """`rebalance_latest` returns None when the feed yields no cross-section yet."""
+    router, tracker, bus, _broker = _engine()
+    runner = PortfolioRunner(
+        _strategy(_weights_signal({BTC: money("0.5")})),
+        _ListFeed([], asof=1_700),
+        router,
+        tracker,
+        event_bus=bus,
+    )
+
+    assert await runner.rebalance_latest() is None
