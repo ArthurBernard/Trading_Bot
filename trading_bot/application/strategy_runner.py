@@ -319,6 +319,28 @@ class StrategyRunner:
             )
         return submitted
 
+    async def step_latest(self) -> Order | None:
+        """Process **one** step over the feed's **latest** window — for a daemon.
+
+        Reads the feed's full known frame (:meth:`~trading_bot.application.data_feed
+        .DataFeed.latest`, which re-reads the dccd store for a live feed) and runs
+        one :meth:`step` over it. Where :meth:`run` *drains* the feed once
+        (replay/backtest), this is the single, on-demand re-evaluation a
+        **scheduler-driven daemon** calls each tick: the delta is computed against
+        the live tracker position, so a tick over unchanged data submits nothing
+        (already on target) and only a changed target trades. Idempotent under
+        repetition. The step index still advances (so a tick that *does* trade
+        carries a fresh, unique ``client_order_id``).
+
+        Returns
+        -------
+        Order or None
+            The submitted order, or ``None`` if the latest re-evaluation was on
+            target (``delta == 0``) or in warmup.
+
+        """
+        return await self.step(self._feed.latest())
+
     def _build_order(self, delta: Money, bars: pl.DataFrame, step: int) -> Order:
         """Build the step's order, stamping the deterministic per-step id.
 
