@@ -8,6 +8,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+### Changed
+
+### Fixed
+
+### Deprecated
+
+### Removed
+
+## [0.6.0] - 2026-06-30
+
+### Added
+
 - **systemd deployment** — `deploy/trading-bot.service` (a unit modelled on dccd's,
   `Restart=on-failure`, hardened, **pyenv**-based `ExecStart`, loopback control UI) plus
   `doc/dev/10-deploy.md` (install recipe, SSH-tunnel to the dashboard, operational
