@@ -60,12 +60,35 @@ to the venue), so a restart converges state rather than duplicating orders.
 
 ### Reaching the dashboard
 
-The control UI binds **loopback** (`127.0.0.1`) on purpose — it can change what
-trades. Reach it over an SSH tunnel, never expose it publicly:
+The control UI binds **loopback** (`127.0.0.1`) by default — it can change what
+trades. Two ways to reach it remotely:
+
+**1. SSH tunnel (simplest, most secure).** Keep it loopback, forward a port:
 
 ```bash
 ssh -L 8000:127.0.0.1:8000 your-host    # then open http://localhost:8000
 ```
+
+**2. Direct access with a token (like dccd).** Set a token and bind a reachable
+interface; the daemon then refuses to bind non-loopback **without** a token:
+
+```bash
+export TRADING_BOT_UI_TOKEN="$(openssl rand -hex 24)"   # a strong secret
+trading-bot start -c config.yaml --serve \
+    --serve-host 0.0.0.0 --serve-port 8000 --serve-token "$TRADING_BOT_UI_TOKEN"
+```
+
+With a token set, the dashboard requires a **login**: `/login` exchanges the token
+for an HttpOnly session cookie; every other route is gated (401 for `/api/*`,
+redirect to `/login` for pages), login attempts are rate-limited, and `/api/*` also
+accepts a `Bearer <token>` header or `?token=` query for scripts. In the systemd
+unit, put `TRADING_BOT_UI_TOKEN=…` in the `EnvironmentFile` (0600) and add
+`--serve-token "$TRADING_BOT_UI_TOKEN"` (or rely on the env var) to `ExecStart`.
+
+> **Put it behind HTTPS.** The token + session protect access, but run the daemon
+> behind a TLS reverse proxy (Caddy / nginx / a Tailscale serve) so credentials and
+> the session cookie are encrypted in transit. The cookie is marked `Secure`
+> automatically when the request arrives over HTTPS (incl. `X-Forwarded-Proto`).
 
 ### Operational notes
 

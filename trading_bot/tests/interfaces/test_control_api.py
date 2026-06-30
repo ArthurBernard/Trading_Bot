@@ -152,3 +152,75 @@ def test_start_then_stop() -> None:
     r = client.post("/api/strategies/btc-ma/stop")
     assert r.status_code == 200
     assert r.json()["status"]["running"] is False
+
+
+# --- auth (token login, for remote exposure) ------------------------------- #
+
+
+def _auth_client(token: str = "secret-token") -> tuple[TestClient, str]:
+    trend = [100.0 + i for i in range(20)] + [119.0 - i for i in range(1, 21)]
+    sup = StrategySupervisor(
+        _config(), dccd_client=_FakeDccdClient({"BTC/USD": _dccd_ohlc(trend)})
+    )
+    return TestClient(create_control_app(sup, auth_token=token)), token
+
+
+def test_no_token_means_no_auth() -> None:
+    """Default (no `auth_token`) — the app is open (loopback/tunnel use)."""
+    assert _client().get("/api/strategies").status_code == 200
+
+
+def test_auth_api_requires_a_token() -> None:
+    """With auth on, an unauthenticated `/api/*` call is 401."""
+    client, _ = _auth_client()
+    assert client.get("/api/strategies").status_code == 401
+
+
+def test_auth_bearer_and_query_token_work() -> None:
+    """`/api/*` accepts a Bearer header or `?token=` (non-browser clients)."""
+    client, token = _auth_client()
+    assert client.get(
+        "/api/strategies", headers={"Authorization": f"Bearer {token}"}
+    ).status_code == 200
+    assert client.get(f"/api/strategies?token={token}").status_code == 200
+
+
+def test_auth_page_redirects_to_login() -> None:
+    """An unauthenticated page request redirects to /login."""
+    client, _ = _auth_client()
+    r = client.get("/", follow_redirects=False)
+    assert r.status_code == 303
+    assert "/login" in r.headers["location"]
+
+
+def test_auth_login_flow_sets_session_cookie() -> None:
+    """A correct token at /login mints a session cookie that authenticates; logout clears it."""
+    client, token = _auth_client()
+    assert client.get("/login").status_code == 200  # the form is open
+
+    bad = client.post(
+        "/login", data={"token": "nope", "next": "/"}, follow_redirects=False
+    )
+    assert bad.status_code == 401
+    assert client.get("/api/strategies").status_code == 401  # still no session
+
+    ok = client.post(
+        "/login", data={"token": token, "next": "/"}, follow_redirects=False
+    )
+    assert ok.status_code == 303
+    assert client.get("/api/strategies").status_code == 200  # session cookie works
+
+    client.post("/logout", follow_redirects=False)
+    assert client.get("/api/strategies").status_code == 401  # cleared
+
+
+def test_auth_login_is_rate_limited() -> None:
+    """Repeated login attempts are throttled (429) — brute-force guard."""
+    client, _ = _auth_client()
+    statuses = [
+        client.post(
+            "/login", data={"token": "x", "next": "/"}, follow_redirects=False
+        ).status_code
+        for _ in range(20)
+    ]
+    assert 429 in statuses

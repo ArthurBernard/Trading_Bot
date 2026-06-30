@@ -8,6 +8,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Control dashboard authentication (for remote access).** `create_control_app(...,
+  auth_token=…)` gates the dashboard behind a **token login** (dccd-style): `/login`
+  exchanges the token for an HttpOnly, `Secure`-over-HTTPS session cookie; an auth-guard
+  middleware refuses unauthenticated requests (`401` for `/api/*`, redirect to `/login`
+  for pages); login is **rate-limited**; `/api/*` also accepts `Bearer <token>` / `?token=`
+  for scripts; constant-time token check; a **sign-out** in the header. `trading-bot start
+  --serve --serve-token …` (or `TRADING_BOT_UI_TOKEN`) enables it and **refuses a
+  non-loopback bind without a token**. With no token (default) the app stays open —
+  loopback / SSH-tunnel only. `doc/dev/10-deploy.md` covers the token + HTTPS reverse
+  proxy. (#102)
+
 ### Changed
 
 - **Control dashboard groups strategies by exchange**, and each strategy now uses the

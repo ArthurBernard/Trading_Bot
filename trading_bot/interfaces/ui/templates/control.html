@@ -21,6 +21,11 @@
     </span>
     <span class="mode-badge mode-paper">control</span>
     <span id="conn" class="conn"><span class="dot"></span>connecting…</span>
+    {% if auth %}
+    <form method="post" action="/logout" class="logout-form">
+      <button type="submit" class="logout-btn">sign out</button>
+    </form>
+    {% endif %}
   </header>
 
   <main>

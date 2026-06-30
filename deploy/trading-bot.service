@@ -22,7 +22,10 @@
 # default — it never trades real money by merely starting). Switch a strategy to
 # testnet/live from the control dashboard (http://127.0.0.1:8000) — going live
 # needs the typed confirmation there. The control UI binds loopback; reach it over
-# an SSH tunnel (ssh -L 8000:127.0.0.1:8000 host), never expose it publicly.
+# an SSH tunnel (ssh -L 8000:127.0.0.1:8000 host). To access it directly instead,
+# put TRADING_BOT_UI_TOKEN=… in the env file, change --serve-host to 0.0.0.0 below
+# (the daemon refuses a non-loopback bind WITHOUT a token), and run behind HTTPS.
+# See doc/dev/10-deploy.md.
 
 [Unit]
 Description=trading_bot — execution daemon (supervisor + scheduler + control UI)

@@ -6,6 +6,29 @@ rejected approaches as tombstones.
 
 ---
 
+### 2026-06-30 Control dashboard auth — token login + sessions (dccd-style) (PR #102)  [accepted]
+
+**Choice.** The control dashboard gains an **optional** token auth (off by default):
+`create_control_app(supervisor, auth_token=…)`. With a token set, `/login` exchanges it
+for an HttpOnly session cookie, an auth-guard middleware gates every route except the
+login flow + `/static` (`401` for `/api/*`, redirect to `/login` for pages), login is
+rate-limited (token bucket per client), and `/api/*` also accepts `Bearer`/`?token=`.
+Constant-time comparison; `Secure` cookie over HTTPS. The CLI refuses a **non-loopback**
+`--serve-host` **without** a token. Sessions are in-process (reset on restart).
+
+**Why.** The control plane can **trade** — exposing it remotely needs auth (more than
+dccd's read-mostly UI). This mirrors dccd's proven approach so deployment is familiar.
+Off-by-default keeps the common loopback/SSH-tunnel path zero-friction; the
+non-loopback-without-token refusal makes the unsafe configuration impossible by accident.
+
+**Rejected alternatives.** HTTP Basic auth (no logout/session, credentials on every
+request); a full user/password DB (overkill for a single-operator daemon — a shared
+token is enough, rotated via the env file); `request.form()` for the login POST (pulls in
+`python-multipart` — parsed the urlencoded body directly instead); binding non-loopback
+with no auth (refused). TLS is delegated to a reverse proxy (documented), not built in.
+
+---
+
 ### 2026-06-30 Control plane: per-strategy engines + a gated `StrategySupervisor` (PR #94)  [accepted]
 
 **Choice.** The control plane (start/stop a strategy, switch its mode from the UI) is
