@@ -723,6 +723,7 @@ async def _run_daemon(
     serve: bool = False,
     host: str = "127.0.0.1",
     port: int = 8000,
+    auth_token: str | None = None,
     dccd_client: object | None = None,
 ) -> None:
     """Supervise the declared strategies and step them on a schedule until stopped.
@@ -774,7 +775,16 @@ async def _run_daemon(
 
             from trading_bot.interfaces.api import create_control_app
 
-            api = create_control_app(supervisor)
+            if host not in ("127.0.0.1", "localhost", "::1") and not auth_token:
+                _console.print(
+                    "[red]refusing to bind a non-loopback control dashboard with no "
+                    "auth token[/red] — set --serve-token / TRADING_BOT_UI_TOKEN, or "
+                    "bind 127.0.0.1 and tunnel (the control plane can trade)."
+                )
+                raise typer.Exit(code=1)
+            api = create_control_app(supervisor, auth_token=auth_token)
+            if auth_token:
+                _console.print("[dim]control dashboard auth: token login enabled[/dim]")
             server = uvicorn.Server(
                 uvicorn.Config(api, host=host, port=port, log_level="warning")
             )
@@ -824,6 +834,13 @@ def start(
     serve_port: int = typer.Option(
         8000, "--serve-port", help="Control dashboard TCP port."
     ),
+    serve_token: str | None = typer.Option(
+        None,
+        "--serve-token",
+        envvar="TRADING_BOT_UI_TOKEN",
+        help="Require this token to log in to the control dashboard (enables auth). "
+        "Mandatory to bind a non-loopback --serve-host. Reads TRADING_BOT_UI_TOKEN.",
+    ),
 ) -> None:
     """Run the trading **daemon**: supervise the declared strategies, step on a schedule.
 
@@ -849,6 +866,7 @@ def start(
                 serve=serve,
                 host=serve_host,
                 port=serve_port,
+                auth_token=serve_token,
             )
         )
     except Exception as exc:  # noqa: BLE001 - surface any build/config failure cleanly
