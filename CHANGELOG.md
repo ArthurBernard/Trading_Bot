@@ -8,6 +8,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+### Changed
+
+### Fixed
+
+### Deprecated
+
+### Removed
+
+## [0.7.0] - 2026-06-30
+
+### Added
+
 - **Control dashboard authentication (for remote access).** `create_control_app(...,
   auth_token=…)` gates the dashboard behind a **token login** (dccd-style): `/login`
   exchanges the token for an HttpOnly, `Secure`-over-HTTPS session cookie; an auth-guard
