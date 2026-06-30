@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>trading_bot — control</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <!-- Control plane: lists the daemon's managed strategies and lets you start /
+       stop them and switch mode (paper / testnet / live). Switching to LIVE asks
+       for a typed confirmation; all state is fetched/changed via /api/strategies. -->
+  <header class="topbar">
+    <div class="brand-group">
+      <span class="brand">trading_bot</span>
+      <span class="ver">v{{ version }}</span>
+    </div>
+    <span class="mode-badge mode-paper">control</span>
+    <span id="conn" class="conn"><span class="dot"></span>connecting…</span>
+  </header>
+
+  <main>
+    <section class="card">
+      <h2>Strategies</h2>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Strategy</th>
+              <th>Kind</th>
+              <th>Mode</th>
+              <th>Status</th>
+              <th class="num">Realised PnL</th>
+              <th class="num">Open orders</th>
+              <th>Action</th>
+            </tr>
+          </thead>
+          <tbody id="strategies-body">
+            <tr class="empty"><td colspan="7">Loading…</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p id="msg" class="conn"></p>
+    </section>
+  </main>
+
+  <footer>
+    trading_bot v{{ version }} — control plane (loopback). Switching to <b>live</b>
+    trades real money and requires a typed confirmation.
+  </footer>
+
+  <script src="/static/control.js"></script>
+</body>
+</html>

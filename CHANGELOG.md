@@ -8,6 +8,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Control plane — the daemon's dashboard can start/stop strategies and switch mode.**
+  `interfaces.api.create_control_app(supervisor)` serves a **read+write** dashboard over
+  the `StrategySupervisor`: `GET /api/strategies`, `POST /api/strategies/{name}/start`,
+  `.../stop`, `.../mode`. `trading-bot start --serve` runs it (loopback by default — it
+  can change what trades) alongside the scheduler. The dashboard (`control.html` +
+  `control.js`) lists each strategy with a mode selector + start/stop buttons.
+  **Real money is gated**: switching to `live` requires a typed confirmation in the UI
+  and `confirm: true` on the endpoint — the server returns `403` otherwise, changing
+  nothing. (#96)
 - **`trading-bot start` — the trading daemon.** A long-running process (systemd's
   `ExecStart`) that builds a `StrategySupervisor`, starts every declared strategy (in its
   configured mode — **paper by default**), and re-evaluates them on an `--interval`
