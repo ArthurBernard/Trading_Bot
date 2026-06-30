@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "trading_bot"
-version = "0.6.0"
+version = "0.7.0"
 description = "Execution & orchestration layer of the trading triptych — live strategies, order routing, risk. Hexagonal, async-first."
 readme = "README.md"
 license = { text = "MIT" }
