@@ -10,6 +10,14 @@ package). See ``doc/dev/07-roadmap.md`` for the rewrite roadmap.
 """
 from __future__ import annotations
 
-__version__ = "0.2.0"
+from importlib import metadata
+
+try:
+    #: The installed package version — read from metadata so it always matches
+    #: ``pyproject.toml`` (the single release source) instead of a hand-bumped
+    #: string that silently goes stale across releases.
+    __version__ = metadata.version("trading_bot")
+except metadata.PackageNotFoundError:  # pragma: no cover - not installed (raw checkout)
+    __version__ = "0.0.0+unknown"
 
 __all__ = ["__version__"]
