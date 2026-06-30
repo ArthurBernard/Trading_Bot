@@ -176,6 +176,10 @@ from trading_bot.application.strategy import (
     ma_crossover_signal,
 )
 from trading_bot.application.strategy_runner import OrderFactory, StrategyRunner
+from trading_bot.application.supervisor import (
+    StrategyStatus,
+    StrategySupervisor,
+)
 
 __all__ = [
     # config
@@ -199,6 +203,8 @@ __all__ = [
     "RiskManager",
     "LiveFillStreamer",
     "FillSource",
+    "StrategySupervisor",
+    "StrategyStatus",
     "reconcile",
     "ReconResult",
     # data feed
