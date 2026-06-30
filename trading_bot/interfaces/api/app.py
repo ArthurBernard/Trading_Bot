@@ -425,6 +425,15 @@ def create_app(engine: Engine) -> FastAPI:
 #: Valid deployment modes the control API accepts.
 _CONTROL_MODES = ("paper", "testnet", "live")
 
+#: Browser session cookie set on a successful /login (opaque, HttpOnly).
+_SESSION_COOKIE = "tb_session"
+#: How long a control session stays valid (seconds).
+_SESSION_TTL_SECONDS = 12 * 3600
+#: Login attempts per minute per client (brute-force throttle).
+_LOGIN_RATE_PER_MIN = 10
+#: Path prefixes reachable without a session (the login flow + assets).
+_OPEN_PREFIXES = ("/login", "/logout", "/static")
+
 
 class _ModeBody(BaseModel):
     """Request body for ``POST /api/strategies/{name}/mode``.
@@ -442,6 +451,7 @@ def _status_dict(status: StrategyStatus) -> dict[str, Any]:
     return {
         "name": status.name,
         "kind": status.kind,
+        "exchange": status.exchange,
         "mode": status.mode,
         "running": status.running,
         "realised_pnl": (
@@ -451,13 +461,15 @@ def _status_dict(status: StrategyStatus) -> dict[str, Any]:
     }
 
 
-def create_control_app(supervisor: StrategySupervisor) -> FastAPI:
+def create_control_app(
+    supervisor: StrategySupervisor, *, auth_token: str | None = None
+) -> FastAPI:
     """Build the daemon's **control** FastAPI over a :class:`StrategySupervisor`.
 
     Unlike :func:`create_app` (a *read-only* view of one engine), this app is the
     **control plane**: it lists the managed strategies and lets a client **start /
-    stop** them and **switch mode** (paper / testnet / live). It is meant to be
-    served **loopback-only** by the daemon, since it can change what trades.
+    stop** them and **switch mode** (paper / testnet / live). It binds **loopback**
+    by default; to reach it remotely, either tunnel (SSH) or set ``auth_token``.
 
     **Real money is gated.** Switching a strategy to ``live`` requires
     ``confirm: true`` in the request body — the deliberate acknowledgement the UI
@@ -465,10 +477,21 @@ def create_control_app(supervisor: StrategySupervisor) -> FastAPI:
     nothing changes. The factory's credential + risk-limit gates still apply when a
     live unit is actually started.
 
+    **Authentication (for remote exposure).** With ``auth_token`` set, the app gates
+    every route behind a token login: ``/login`` exchanges the token for an
+    HttpOnly session cookie, an auth-guard middleware then refuses unauthenticated
+    requests (``401`` for ``/api/*``; redirect to ``/login`` for pages), and login
+    attempts are rate-limited. ``/api/*`` also accepts a ``Bearer <token>`` header
+    or ``?token=`` query (for non-browser clients). With ``auth_token`` ``None`` (the
+    default) there is **no** auth — only safe behind loopback / an SSH tunnel.
+
     Parameters
     ----------
     supervisor : StrategySupervisor
         The supervisor to expose, read+controlled through ``app.state.supervisor``.
+    auth_token : str or None, optional
+        When set, require this token to log in (enables the auth guard). ``None``
+        (default) leaves the app unauthenticated — loopback / tunnel only.
 
     Returns
     -------
@@ -486,10 +509,11 @@ def create_control_app(supervisor: StrategySupervisor) -> FastAPI:
 
     app = FastAPI(
         title="trading_bot control",
-        summary="Supervise + control the declared strategies (loopback-only).",
+        summary="Supervise + control the declared strategies.",
         default_response_class=_DecimalJSONResponse,
     )
     app.state.supervisor = supervisor
+    app.state.auth_enabled = bool(auth_token)
 
     def _sup(request: Request) -> StrategySupervisor:
         return request.app.state.supervisor  # type: ignore[no-any-return]
@@ -508,7 +532,12 @@ def create_control_app(supervisor: StrategySupervisor) -> FastAPI:
         async def control_dashboard(request: Request) -> Any:
             """Render the control dashboard shell (data fetched client-side)."""
             return templates.TemplateResponse(
-                request, "control.html", {"version": trading_bot.__version__}
+                request,
+                "control.html",
+                {
+                    "version": trading_bot.__version__,
+                    "auth": request.app.state.auth_enabled,
+                },
             )
 
     @app.get("/api/health")
@@ -564,4 +593,140 @@ def create_control_app(supervisor: StrategySupervisor) -> FastAPI:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return {"ok": True, "status": _status_dict(_sup(request).status(name)[0])}
 
+    if auth_token:
+        _install_control_auth(app, auth_token=auth_token, templates=templates)
+
     return app
+
+
+def _install_control_auth(
+    app: FastAPI, *, auth_token: str, templates: Jinja2Templates | None
+) -> None:
+    """Gate ``app`` behind a token login — for remote exposure (dccd-style).
+
+    Adds an in-memory session store, an auth-guard middleware (``401`` for
+    ``/api/*``, redirect to ``/login`` for pages — except the open prefixes), a
+    rate-limited ``/login`` (token → HttpOnly session cookie) and ``/logout``.
+    ``/api/*`` also accepts a ``Bearer <token>`` header or ``?token=`` query for
+    non-browser clients. Constant-time token comparison; ``Secure`` cookie behind
+    HTTPS. Sessions are in-process (reset on restart — fine for a single daemon).
+    """
+    import secrets
+    import time
+
+    from fastapi.responses import RedirectResponse
+
+    app.state.sessions = {}  # sid -> created_ns
+    app.state.login_buckets = {}  # client -> (tokens, last monotonic)
+
+    def _prune() -> None:
+        cutoff = time.time_ns() - _SESSION_TTL_SECONDS * 1_000_000_000
+        for sid in [s for s, ts in app.state.sessions.items() if ts < cutoff]:
+            app.state.sessions.pop(sid, None)
+
+    def _new_session() -> str:
+        sid = secrets.token_urlsafe(32)
+        app.state.sessions[sid] = time.time_ns()
+        return sid
+
+    def _valid_session(request: Request) -> bool:
+        sid = request.cookies.get(_SESSION_COOKIE)
+        if not sid:
+            return False
+        _prune()
+        return sid in app.state.sessions
+
+    def _is_https(request: Request) -> bool:
+        if request.url.scheme == "https":
+            return True
+        fwd = request.headers.get("x-forwarded-proto", "")
+        return fwd.split(",", 1)[0].strip() == "https"
+
+    def _safe_next(nxt: str | None) -> str:
+        if nxt and nxt.startswith("/") and not nxt.startswith("//") and "\\" not in nxt:
+            return nxt
+        return "/"
+
+    def _rate_allow(key: str) -> bool:
+        buckets = app.state.login_buckets
+        now = time.monotonic()
+        rate = _LOGIN_RATE_PER_MIN / 60.0
+        tokens, last = buckets.get(key, (float(_LOGIN_RATE_PER_MIN), now))
+        tokens = min(float(_LOGIN_RATE_PER_MIN), tokens + (now - last) * rate)
+        if tokens < 1.0:
+            buckets[key] = (tokens, now)
+            return False
+        buckets[key] = (tokens - 1.0, now)
+        return True
+
+    @app.middleware("http")
+    async def _auth_guard(request: Request, call_next: Any) -> Any:
+        path = request.url.path
+        if request.method == "OPTIONS" or path.startswith(_OPEN_PREFIXES):
+            return await call_next(request)
+        if path.startswith("/api/"):
+            bearer = request.headers.get("Authorization") == f"Bearer {auth_token}"
+            query = request.query_params.get("token") == auth_token
+            if not (bearer or query or _valid_session(request)):
+                return JSONResponse({"detail": "Unauthorized"}, status_code=401)
+        elif not _valid_session(request):
+            return RedirectResponse(f"/login?next={path}", status_code=303)
+        return await call_next(request)
+
+    def _login_page(request: Request, *, error: str = "", status: int = 200) -> Any:
+        nxt = _safe_next(request.query_params.get("next"))
+        if templates is not None:
+            return templates.TemplateResponse(
+                request,
+                "login.html",
+                {"version": trading_bot.__version__, "next": nxt, "error": error},
+                status_code=status,
+            )
+        return HTMLResponse(
+            '<form method="post" action="/login">'
+            f'<input type="hidden" name="next" value="{nxt}">'
+            '<input name="token" type="password" placeholder="token">'
+            "<button>Sign in</button></form>",
+            status_code=status,
+        )
+
+    @app.get("/login", response_class=HTMLResponse)
+    async def login_form(request: Request) -> Any:
+        return _login_page(request)
+
+    @app.post("/login")
+    async def login_submit(request: Request) -> Any:
+        client = request.client
+        if not _rate_allow(client.host if client else "unknown"):
+            return JSONResponse(
+                {"detail": "too many attempts"},
+                status_code=429,
+                headers={"Retry-After": "5"},
+            )
+        # Parse the urlencoded login form directly (no python-multipart dep).
+        from urllib.parse import parse_qs
+
+        form = parse_qs((await request.body()).decode("utf-8", "replace"))
+        token = (form.get("token") or [""])[0]
+        nxt = _safe_next((form.get("next") or ["/"])[0])
+        if not secrets.compare_digest(token, auth_token):
+            return _login_page(request, error="Invalid token.", status=401)
+        resp = RedirectResponse(nxt, status_code=303)
+        resp.set_cookie(
+            _SESSION_COOKIE,
+            _new_session(),
+            httponly=True,
+            samesite="lax",
+            secure=_is_https(request),
+            max_age=_SESSION_TTL_SECONDS,
+        )
+        return resp
+
+    @app.post("/logout")
+    async def logout(request: Request) -> Any:
+        sid = request.cookies.get(_SESSION_COOKIE)
+        if sid:
+            app.state.sessions.pop(sid, None)
+        resp = RedirectResponse("/login", status_code=303)
+        resp.delete_cookie(_SESSION_COOKIE)
+        return resp

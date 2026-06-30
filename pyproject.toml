@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "trading_bot"
-version = "0.6.0"
+version = "0.7.0"
 description = "Execution & orchestration layer of the trading triptych — live strategies, order routing, risk. Hexagonal, async-first."
 readme = "README.md"
 license = { text = "MIT" }
@@ -73,6 +73,9 @@ dev = [
     "uvicorn[standard]>=0.29",
     # The web UI templating so the unit suite / CI can render the dashboard shell.
     "jinja2>=3.1",
+    # The daemon scheduler so the unit suite / CI can exercise `trading-bot start`
+    # (the daemon test drives `_run_daemon`, which imports apscheduler).
+    "apscheduler>=3.10,<4",
 ]
 doc = [
     "sphinx>=7.0",

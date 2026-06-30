@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>trading_bot — sign in</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body class="login-body">
+  <form class="login-card card" method="post" action="/login" autocomplete="off">
+    <div class="brand-group" style="margin-bottom: 1rem;">
+      <span class="brand">trading_bot</span>
+      <span class="ver">v{{ version }}</span>
+    </div>
+    <h2>Control — sign in</h2>
+    <input type="hidden" name="next" value="{{ next }}">
+    <label for="token">Access token</label>
+    <input id="token" name="token" type="password" autocomplete="current-password" autofocus spellcheck="false">
+    <button class="btn-primary" type="submit" style="width: 100%; margin-top: .9rem;">Sign in</button>
+    {% if error %}<p class="login-err">{{ error }}</p>{% endif %}
+  </form>
+</body>
+</html>

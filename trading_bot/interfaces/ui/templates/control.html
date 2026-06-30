@@ -8,15 +8,24 @@
 </head>
 <body>
   <!-- Control plane: lists the daemon's managed strategies and lets you start /
-       stop them and switch mode (paper / testnet / live). Switching to LIVE asks
-       for a typed confirmation; all state is fetched/changed via /api/strategies. -->
+       stop them and switch mode (paper / testnet / live). Switching to LIVE opens
+       a typed confirmation; all state is fetched/changed via /api/strategies. -->
   <header class="topbar">
     <div class="brand-group">
       <span class="brand">trading_bot</span>
       <span class="ver">v{{ version }}</span>
     </div>
+    <span class="summary">
+      <span class="chip"><b id="sum-total">—</b> strategies</span>
+      <span class="chip"><b id="sum-running">—</b> running</span>
+    </span>
     <span class="mode-badge mode-paper">control</span>
     <span id="conn" class="conn"><span class="dot"></span>connecting…</span>
+    {% if auth %}
+    <form method="post" action="/logout" class="logout-form">
+      <button type="submit" class="logout-btn">sign out</button>
+    </form>
+    {% endif %}
   </header>
 
   <main>
@@ -48,6 +57,22 @@
     trading_bot v{{ version }} — control plane (loopback). Switching to <b>live</b>
     trades real money and requires a typed confirmation.
   </footer>
+
+  <!-- Live confirmation modal: the deliberate "go real money" acknowledgement. -->
+  <div id="live-modal" class="modal" role="dialog" aria-modal="true" aria-labelledby="live-modal-title">
+    <div class="modal-card">
+      <h3 id="live-modal-title"><span class="warn-mark">⚠</span> Switch to LIVE — real money</h3>
+      <p>
+        You are about to switch <b id="live-modal-name">—</b> to <b>live</b>. This
+        trades <b>real money</b> on the venue. Type <code>I UNDERSTAND</code> to confirm.
+      </p>
+      <input id="live-modal-input" type="text" placeholder="I UNDERSTAND" autocomplete="off" spellcheck="false">
+      <div class="modal-actions">
+        <button id="live-modal-cancel" type="button">Cancel</button>
+        <button id="live-modal-confirm" class="btn-primary" type="button" disabled>Go live</button>
+      </div>
+    </div>
+  </div>
 
   <script src="/static/control.js"></script>
 </body>

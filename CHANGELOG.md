@@ -16,6 +16,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 
+## [0.7.0] - 2026-06-30
+
+### Added
+
+- **Control dashboard authentication (for remote access).** `create_control_app(...,
+  auth_token=…)` gates the dashboard behind a **token login** (dccd-style): `/login`
+  exchanges the token for an HttpOnly, `Secure`-over-HTTPS session cookie; an auth-guard
+  middleware refuses unauthenticated requests (`401` for `/api/*`, redirect to `/login`
+  for pages); login is **rate-limited**; `/api/*` also accepts `Bearer <token>` / `?token=`
+  for scripts; constant-time token check; a **sign-out** in the header. `trading-bot start
+  --serve --serve-token …` (or `TRADING_BOT_UI_TOKEN`) enables it and **refuses a
+  non-loopback bind without a token**. With no token (default) the app stays open —
+  loopback / SSH-tunnel only. `doc/dev/10-deploy.md` covers the token + HTTPS reverse
+  proxy. (#102)
+
+### Changed
+
+- **Control dashboard groups strategies by exchange**, and each strategy now uses the
+  **broker matching its own venue** on testnet/live (`StrategyStatus.exchange`; a
+  strategy's `data.exchange` / a portfolio's `venue`). Switching to testnet/live is
+  refused if no broker is configured for that exchange. (#101)
+
+- **Control dashboard visual pass** — mode **badges** (paper/testnet/live, colour-coded),
+  a running/stopped status pill, start/stop buttons styled by action, a header summary
+  (N strategies · M running), and a proper **typed-confirmation modal** for going live
+  (replaces the browser `prompt`). Aligned with dccd's dark palette/pill language; no
+  shipped font assets. (#100)
+
+### Fixed
+
+- **CI was red since the daemon landed** — `apscheduler` was in the `daemon` extra but
+  missing from `dev`, while the daemon test (`test_daemon_starts_ticks_and_stops_cleanly`)
+  drives `_run_daemon`, which imports it. CI installs `.[dev]`, so it hit
+  `ModuleNotFoundError: No module named 'apscheduler'` (masked locally by a dev env that
+  also had `[daemon]`). Added `apscheduler` to the `dev` extra, like the other daemon
+  runtime deps the suite already exercises. (#103)
+
+### Deprecated
+
+### Removed
+
 ## [0.6.0] - 2026-06-30
 
 ### Added
