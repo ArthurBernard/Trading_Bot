@@ -136,7 +136,43 @@ async def test_testnet_without_a_broker_is_refused() -> None:
         _config(with_broker=False),
         dccd_client=_FakeDccdClient({"BTC/USD": _dccd_ohlc(_trend())}),
     )
-    with pytest.raises(ConfigError, match="without a configured broker"):
+    with pytest.raises(ConfigError, match="no matching broker"):
+        await sup.set_mode("btc-ma", "testnet")
+
+
+def test_status_includes_the_strategys_exchange() -> None:
+    """Each unit reports the exchange it's for (a strategy's ``data.exchange``)."""
+    sup = _supervisor()
+    assert sup.status("btc-ma")[0].exchange == "kraken"
+
+
+async def test_set_mode_refused_when_no_broker_for_that_exchange() -> None:
+    """testnet/live needs a broker **matching the unit's exchange**, not just any broker.
+
+    The strategy is on Kraken (`data.exchange`), but only a Binance broker is
+    configured — switching it to testnet must be refused (per-exchange routing).
+    """
+    cfg = AppConfig.model_validate(
+        {
+            "mode": "paper",
+            "brokers": [{"name": "bn", "exchange": "binance"}],  # no kraken broker
+            "strategies": [
+                {
+                    "name": "btc-ma",
+                    "symbol": "BTC/USD",
+                    "data": {"exchange": "kraken", "span": 60},
+                    "signal": {"ref": "ma_crossover", "params": {"fast": 3, "slow": 6}},
+                    "reference_qty": "2",
+                    "lookback": 6,
+                }
+            ],
+        }
+    )
+    sup = StrategySupervisor(
+        cfg, dccd_client=_FakeDccdClient({"BTC/USD": _dccd_ohlc(_trend())})
+    )
+    assert sup.status("btc-ma")[0].exchange == "kraken"
+    with pytest.raises(ConfigError, match="no matching broker"):
         await sup.set_mode("btc-ma", "testnet")
 
 

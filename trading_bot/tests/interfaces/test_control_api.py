@@ -78,6 +78,7 @@ def test_list_strategies() -> None:
     assert resp.status_code == 200
     [s] = resp.json()
     assert s["name"] == "btc-ma"
+    assert s["exchange"] == "kraken"  # grouped/displayed by exchange
     assert s["mode"] == "paper"
     assert s["running"] is False
     assert s["realised_pnl"] is None

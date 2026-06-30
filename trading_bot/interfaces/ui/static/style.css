@@ -139,6 +139,21 @@ footer a { color: var(--muted); }
 }
 .chip b { color: var(--fg); font-weight: 600; }
 
+/* Exchange group-header row in the strategies table. */
+tr.group td {
+  background: var(--accent-soft);
+  border-bottom: 1px solid var(--border);
+  padding: .4rem .6rem;
+}
+tr.group .group-name {
+  font-family: var(--font-display); font-weight: 700; font-size: .74rem;
+  text-transform: uppercase; letter-spacing: .1em; color: var(--accent);
+}
+tr.group .group-count {
+  margin-left: .5rem; color: var(--muted); font-size: .72rem;
+  font-variant-numeric: tabular-nums;
+}
+
 /* Mode badge — paper (calm), testnet (amber), live (red, emphasised). */
 .badge {
   display: inline-block; font-size: .68rem; font-weight: 700;

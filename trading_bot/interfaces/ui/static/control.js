@@ -72,15 +72,32 @@ function row(s) {
   </tr>`;
 }
 
+function groupHeader(exchange, count) {
+  return `<tr class="group"><td colspan="7">
+    <span class="group-name">${escapeHtml(exchange)}</span>
+    <span class="group-count">${count}</span>
+  </td></tr>`;
+}
+
 async function refresh() {
   try {
     const list = await api("/api/strategies");
     setConn(true);
     sumTotal.textContent = list.length;
     sumRunning.textContent = list.filter((s) => s.running).length;
-    body.innerHTML = list.length
-      ? list.map(row).join("")
-      : '<tr class="empty"><td colspan="7">No strategies declared.</td></tr>';
+    if (!list.length) {
+      body.innerHTML = '<tr class="empty"><td colspan="7">No strategies declared.</td></tr>';
+      return;
+    }
+    // Group strategies by exchange (alphabetical), each under a header row.
+    const byEx = {};
+    for (const s of list) (byEx[s.exchange] = byEx[s.exchange] || []).push(s);
+    let html = "";
+    for (const ex of Object.keys(byEx).sort()) {
+      html += groupHeader(ex, byEx[ex].length);
+      html += byEx[ex].map(row).join("");
+    }
+    body.innerHTML = html;
   } catch (e) {
     setConn(false);
   }
