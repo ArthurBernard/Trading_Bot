@@ -8,6 +8,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`trading-bot start` — the trading daemon.** A long-running process (systemd's
+  `ExecStart`) that builds a `StrategySupervisor`, starts every declared strategy (in its
+  configured mode — **paper by default**), and re-evaluates them on an `--interval`
+  (idempotent ticks) or `--cron` schedule via `apscheduler`, until `SIGINT`/`SIGTERM`
+  (then shuts every unit down gracefully). Each strategy runs in its own engine, so they
+  can be switched paper/testnet/live independently from the control plane. Starting never
+  trades real money by itself (the live gates still apply). `StrategySupervisor` gains
+  `start_all` / `step_all` for the daemon's boot/tick. (#95)
 - `application.StrategySupervisor` — manages each declared strategy/portfolio as an
   **independent unit** in its **own** engine (own broker/mode), so a strategy can be
   started/stopped and switched between **paper / testnet / live independently**

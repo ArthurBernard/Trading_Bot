@@ -49,6 +49,7 @@ import contextlib
 import dataclasses
 import math
 import pathlib
+import signal
 from collections.abc import Callable
 from decimal import Decimal
 from typing import TYPE_CHECKING
@@ -709,6 +710,107 @@ def serve(
         f"(mode={config.mode}) on http://{host}:{port}"
     )
     uvicorn.run(application, host=host, port=port)
+
+
+# --- start (daemon) -------------------------------------------------------- #
+
+
+async def _run_daemon(
+    config: AppConfig,
+    *,
+    interval: float,
+    cron: str | None,
+    dccd_client: object | None = None,
+) -> None:
+    """Supervise the declared strategies and step them on a schedule until stopped.
+
+    Builds a :class:`~trading_bot.application.supervisor.StrategySupervisor`, starts
+    every unit (each in its configured mode — paper by default), then steps the
+    running units on an **interval** (or **cron**) via an ``apscheduler``
+    ``AsyncIOScheduler``. Runs until ``SIGINT``/``SIGTERM`` (systemd's stop), then
+    shuts every unit down gracefully. Each step is idempotent over unchanged data,
+    so a tick that finds nothing to do trades nothing.
+    """
+    from apscheduler.schedulers.asyncio import AsyncIOScheduler
+    from apscheduler.triggers.cron import CronTrigger
+    from apscheduler.triggers.interval import IntervalTrigger
+
+    from trading_bot.application.supervisor import StrategySupervisor
+
+    supervisor = StrategySupervisor(config, dccd_client=dccd_client)  # type: ignore[arg-type]
+    await supervisor.start_all()
+
+    stop = asyncio.Event()
+    loop = asyncio.get_running_loop()
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        with contextlib.suppress(NotImplementedError, RuntimeError):
+            loop.add_signal_handler(sig, stop.set)
+
+    async def _tick() -> None:
+        try:
+            stepped = await supervisor.step_all()
+            if stepped:
+                _console.print(f"[dim]daemon tick: stepped {stepped} strategy(ies)[/dim]")
+        except Exception as exc:  # noqa: BLE001 - never let a tick kill the daemon
+            _console.print(f"[red]daemon tick error:[/red] {exc}")
+
+    trigger = (
+        CronTrigger.from_crontab(cron)
+        if cron is not None
+        else IntervalTrigger(seconds=interval)
+    )
+    scheduler = AsyncIOScheduler()
+    scheduler.add_job(_tick, trigger)
+    scheduler.start()
+    _console.print(
+        f"[green]daemon started[/green] (mode={config.mode}): "
+        f"{len(supervisor.names())} strateg(ies), "
+        f"tick={cron or f'every {interval:g}s'}  —  Ctrl-C / SIGTERM to stop"
+    )
+    try:
+        await stop.wait()
+    finally:
+        scheduler.shutdown(wait=False)
+        await supervisor.shutdown()
+        _console.print("[green]daemon stopped[/green] (all strategies shut down)")
+
+
+@app.command()
+def start(
+    config_path: pathlib.Path | None = typer.Option(
+        None, "--config", "-c", help="YAML AppConfig path. Defaults to a paper config."
+    ),
+    interval: float = typer.Option(
+        60.0,
+        "--interval",
+        help="Seconds between re-evaluations (idempotent ticks). Ignored if --cron.",
+    ),
+    cron: str | None = typer.Option(
+        None,
+        "--cron",
+        help="Crontab expression for re-evaluation (e.g. '5 0 * * *' = 00:05 daily).",
+    ),
+) -> None:
+    """Run the trading **daemon**: supervise the declared strategies, step on a schedule.
+
+    The long-running process (systemd's ``ExecStart``): it builds a per-strategy
+    supervisor, starts every declared strategy (in its configured mode — **paper by
+    default**), and re-evaluates them on an interval or cron until stopped. Each
+    strategy runs in its **own** engine, so they can later be switched between
+    paper / testnet / live independently from the control plane (the dashboard).
+    Going live still requires the explicit gates — the daemon never trades real
+    money by merely starting.
+    """
+    config = (
+        AppConfig.from_yaml(config_path)
+        if config_path is not None
+        else AppConfig()
+    )
+    try:
+        asyncio.run(_run_daemon(config, interval=interval, cron=cron))
+    except Exception as exc:  # noqa: BLE001 - surface any build/config failure cleanly
+        _console.print(f"[red]refusing to start daemon:[/red] {exc}")
+        raise typer.Exit(code=1) from exc
 
 
 if __name__ == "__main__":  # pragma: no cover - manual invocation only
