@@ -20,6 +20,14 @@ off-by-default opt-in. History in git + `CHANGELOG.md`; see `06-status.md`.
 generic `as_portfolio_signal` adapter; concrete strategies kept **local-only** under
 the gitignored `strategies/`, real dccd-data verified). History in `CHANGELOG.md`.
 
+## Active epics
+
+- [ ] **Unified dccd-style dashboard.** One FastAPI app (monitor + control), one
+  `dashboard` command (clean Ctrl-C + systemd), a shared `base.html` shell, SSE live,
+  **KPI per strategy/exchange/total**, groupable positions/orders, and a **per-strategy
+  PnL chart (uPlot, live vs testnet separate)** — replacing the split read-only/control
+  apps. Plan: `plans/unified-dashboard/` (6 leaves).
+
 ## Known issues / follow-ups
 
 - [ ] **Binance futures/margin testnet adapter (for a faithful long/short testnet
