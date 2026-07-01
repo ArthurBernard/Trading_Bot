@@ -123,7 +123,7 @@ Before the first live order, confirm every item:
 | Concern | Proven offline (`tests/hardening/`) | Pending — needs a real-key sandbox |
 |---|---|---|
 | Reconciliation | Reconcile converges local state to broker-reported open orders / balances / fills after a disconnect | — |
-| **Private reads (read-only live ✓)** | — | **Validated read-only against real Kraken**: `OpenOrders` + `TradesHistory` (`fills`) returned + parsed; the private executions **WS** streamed a real snapshot. `balances` needs the key's *Query Funds* permission. **No order was sent.** |
+| **Private reads (read-only live ✓✓)** | **Validated read-only on mainnet — both venues.** **Kraken**: `Balance` (37 assets), `OpenOrders`, `TradesHistory` (`fills`, parsed) + the private executions **WS** snapshot. **Binance**: `account` (`balances`), `openOrders`, `myTrades` (`fills`) with a mainnet read key; the testnet key validates the same trio on `testnet.binance.vision`. **No order was ever sent or cancelled** (only `ticker`/`balances`/`open_orders`/`fills` called). | — |
 | Idempotency | **Engine-side** idempotency: a retried submit with the same client-order-id never double-submits locally | **Venue-level** idempotency token: Kraken honouring the client-order-id so a retry never creates a duplicate *at the venue* |
 | Ambiguous failures | Ambiguous submit failures (timeout / unknown outcome) are surfaced, not silently assumed filled or failed | Real network-edge behaviour against the live API |
 | Kill-switch | Kill-switch cancels open orders + halts new ones | Real cancel against the venue |
