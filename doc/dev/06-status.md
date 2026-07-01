@@ -19,7 +19,7 @@ exposes the read-only dashboard. The money-safety invariants (reconcile converge
 idempotency, kill-switch) are **proven under fault injection** (`tests/hardening/`).
 **Live trading is off by default** behind an explicit `live_enabled` opt-in +
 credentials + the go-live runbook (`doc/dev/09-go-live.md`) — **no real order is ever
-sent from the repo**. ~718 tests green via the project `.venv`; ruff + mypy clean
+sent from the repo**. ~718 tests green under the `trading_bot_env` pyenv-virtualenv; ruff + mypy clean
 across the whole package.
 
 **Post-0.2.0 — E11 (Binance) shipped:** `BinanceBroker` (spot REST) is the **2nd live

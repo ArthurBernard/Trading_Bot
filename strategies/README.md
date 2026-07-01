@@ -32,7 +32,7 @@ strategies/<name>/
 Run a strategy's tests by path (they are outside the engine's `testpaths`):
 
 ```bash
-.venv/bin/python -m pytest strategies/<name>/test_e2e.py -m network -v
+python -m pytest strategies/<name>/test_e2e.py -m network -v
 ```
 
 See `doc/dev/09-go-live.md` ("How a strategy like LS1 is wired") for the wiring,
