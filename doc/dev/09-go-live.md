@@ -214,6 +214,15 @@ stray `BINANCE_API_BASE` pointing at mainnet is ignored) — it is structurally
 incapable of trading real money, which is why it is exempt from the `live_enabled`
 opt-in. Only Binance qualifies; `testnet: true` on Kraken raises (no public spot
 testnet). **Real mainnet** still requires `live_enabled: true` + a real key (above).
+Testnet credentials are read from `BINANCE_TESTNET_API_KEY` / `_SECRET` (falling
+back to `BINANCE_API_KEY` / `_SECRET`) — keep them distinct from the mainnet key,
+which the testnet endpoint rejects with `-2015`.
+
+> **Spot testnet is long-only.** `testnet.binance.vision` is a **spot** venue — it
+> cannot short. A **long/short** portfolio (e.g. ALLOC1, typically net-short) would
+> have every short leg refused there, so it can only be *paper*-tested faithfully; a
+> faithful testnet live-test of a long/short book needs a **USDT-M futures** testnet
+> adapter (`testnet.binancefuture.com`) — an open follow-up (`07-roadmap.md`).
 
 ### Going live with LS1
 

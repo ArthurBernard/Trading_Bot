@@ -22,8 +22,15 @@ the gitignored `strategies/`, real dccd-data verified). History in `CHANGELOG.md
 
 ## Known issues / follow-ups
 
-_None open — the engine-side roadmap is clear. Remaining work is the maintainer's
-real-key go-live step below._
+- [ ] **Binance futures/margin testnet adapter (for a faithful long/short testnet
+  live-test).** The `BinanceBroker` is **spot** (`/api/v3`), and the Binance testnet
+  it reaches (`testnet.binance.vision`) is spot-only — it **cannot short**.
+  Long/short portfolio strategies (e.g. ALLOC1, typically net-short) therefore can
+  only be *paper*-tested faithfully; a testnet "live test" would silently drop every
+  short leg. A USDT-M **futures** testnet adapter (`testnet.binancefuture.com`, which
+  supports shorts) is the prerequisite for a faithful testnet live-test of a
+  long/short book. Until then, long/short strategies stay **paper**; spot-only or
+  long-only strategies can use the spot testnet today.
 
 > **Live fill streaming — done.** The private `KrakenPrivateWS` is wired into the run
 > loop via `LiveFillStreamer` (real-money live Kraken only), reconcile fires on every
