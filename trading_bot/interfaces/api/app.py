@@ -88,6 +88,7 @@ if TYPE_CHECKING:
     )
     from trading_bot.application.service_factory import Engine
     from trading_bot.application.supervisor import (
+        FillRow,
         KpiRow,
         OrderRow,
         PositionRow,
@@ -306,7 +307,20 @@ def _order_row_dict(row: OrderRow) -> dict[str, Any]:
     return {
         "strategy": row.strategy,
         "exchange": row.exchange,
+        # The instrument's base asset — the crypto filter key (orders carry no base
+        # tag of their own; derive it from the instrument for the ?crypto= filter).
+        "base": str(row.order.instrument).split("/", 1)[0],
         **_order_dict(row.order),
+    }
+
+
+def _fill_row_dict(row: FillRow) -> dict[str, Any]:
+    """Render a supervisor :class:`FillRow` — the fill dict + strategy/venue/base tags."""
+    return {
+        "strategy": row.strategy,
+        "exchange": row.exchange,
+        "base": row.base,
+        **_fill_dict(row.fill),
     }
 
 
@@ -885,31 +899,32 @@ def _register_strategy_control(app: FastAPI, *, read_only: bool = False) -> None
 def create_control_app(
     supervisor: StrategySupervisor, *, auth_token: str | None = None
 ) -> FastAPI:
-    """Build the daemon's **control** FastAPI over a :class:`StrategySupervisor`.
+    """Build the daemon's control dashboard — now a thin alias of the unified one.
 
-    Unlike :func:`create_app` (a *read-only* view of one engine), this app is the
-    **control plane**: it lists the managed strategies and lets a client **start /
-    stop** them and **switch mode** (paper / testnet / live). It binds **loopback**
-    by default; to reach it remotely, either tunnel (SSH) or set ``auth_token``.
+    **Retired split (kept as a backward-compat wrapper).** The standalone control
+    app has been fully subsumed by :func:`create_dashboard_app`: the unified
+    dashboard is *also* the control plane (it lists the managed strategies and lets
+    a client start / stop them, switch mode, deploy / remove — all behind the same
+    safety gates). This factory now just delegates to
+    ``create_dashboard_app(supervisor, auth_token=auth_token)`` so existing
+    imports / callers (``start --serve``, tests) keep working while there is a
+    single implementation and one set of gates.
 
-    **Real money is gated.** Switching a strategy to ``live`` requires
-    ``confirm: true`` in the request body — the deliberate acknowledgement the UI
-    obtains (a typed confirmation); otherwise the endpoint returns **403** and
-    nothing changes. The factory's credential + risk-limit gates still apply when a
-    live unit is actually started.
+    **Real money is gated** (unchanged): switching a strategy to ``live`` requires
+    ``confirm: true`` in the request body; otherwise the endpoint returns **403**
+    and nothing changes. The factory's credential + risk-limit gates still apply
+    when a live unit is actually started.
 
-    **Authentication (for remote exposure).** With ``auth_token`` set, the app gates
-    every route behind a token login: ``/login`` exchanges the token for an
-    HttpOnly session cookie, an auth-guard middleware then refuses unauthenticated
-    requests (``401`` for ``/api/*``; redirect to ``/login`` for pages), and login
-    attempts are rate-limited. ``/api/*`` also accepts a ``Bearer <token>`` header
-    or ``?token=`` query (for non-browser clients). With ``auth_token`` ``None`` (the
-    default) there is **no** auth — only safe behind loopback / an SSH tunnel.
+    **Authentication (for remote exposure)** is the dashboard's token login: with
+    ``auth_token`` set, ``/login`` exchanges the token for an HttpOnly session
+    cookie, an auth-guard middleware refuses unauthenticated requests, and login is
+    rate-limited. With ``auth_token`` ``None`` (default) there is **no** auth — only
+    safe behind loopback / an SSH tunnel.
 
     Parameters
     ----------
     supervisor : StrategySupervisor
-        The supervisor to expose, read+controlled through ``app.state.supervisor``.
+        The supervisor to expose, read+controlled through the unified dashboard.
     auth_token : str or None, optional
         When set, require this token to log in (enables the auth guard). ``None``
         (default) leaves the app unauthenticated — loopback / tunnel only.
@@ -917,56 +932,10 @@ def create_control_app(
     Returns
     -------
     FastAPI
-        The control application (serve via uvicorn, or a ``TestClient``).
+        The unified dashboard application (serve via uvicorn, or a ``TestClient``).
 
     """
-    app = FastAPI(
-        title="trading_bot control",
-        summary="Supervise + control the declared strategies.",
-        default_response_class=_DecimalJSONResponse,
-    )
-    app.state.supervisor = supervisor
-    app.state.auth_enabled = bool(auth_token)
-
-    def _sup(request: Request) -> StrategySupervisor:
-        return request.app.state.supervisor  # type: ignore[no-any-return]
-
-    if STATIC_DIR.is_dir():
-        app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
-    templates = (
-        Jinja2Templates(directory=str(TEMPLATES_DIR))
-        if TEMPLATES_DIR.is_dir()
-        else None
-    )
-
-    if templates is not None:
-
-        @app.get("/", response_class=HTMLResponse)
-        async def control_dashboard(request: Request) -> Any:
-            """Render the control dashboard shell (data fetched client-side)."""
-            return templates.TemplateResponse(
-                request,
-                "control.html",
-                {
-                    "version": trading_bot.__version__,
-                    "auth": request.app.state.auth_enabled,
-                },
-            )
-
-    @app.get("/api/health")
-    async def health(request: Request) -> dict[str, Any]:
-        names = _sup(request).names()
-        running = sum(1 for s in _sup(request).status() if s.running)
-        return {"status": "ok", "strategies": len(names), "running": running}
-
-    # The strategy control surface (list + start/stop/mode) is shared with the
-    # unified dashboard — one implementation, one set of safety gates.
-    _register_strategy_control(app)
-
-    if auth_token:
-        _install_control_auth(app, auth_token=auth_token, templates=templates)
-
-    return app
+    return create_dashboard_app(supervisor, auth_token=auth_token)
 
 
 def _install_control_auth(
@@ -1123,6 +1092,10 @@ _DASHBOARD_PAGES: tuple[tuple[str, str], ...] = (
 #: these are the group-by keys the Overview's controls offer.
 _GROUP_BY_KEYS: tuple[str, ...] = ("crypto", "exchange", "strategy")
 
+#: The default cap on how many history rows ``/api/orders`` and ``/api/fills``
+#: return (most recent first). Keeps the Orders page responsive on a long history.
+_HISTORY_LIMIT_DEFAULT = 200
+
 #: The KPI aggregation levels ``/api/kpi`` accepts (see
 #: :meth:`~trading_bot.application.supervisor.StrategySupervisor.kpi`).
 _KPI_LEVELS: tuple[str, ...] = ("strategy", "exchange", "total")
@@ -1153,6 +1126,35 @@ def _grouped(rows: list[dict[str, Any]], group_by: str | None) -> Any:
             order.append(key)
         buckets[key].append(row)
     return [{"group": key, "rows": buckets[key]} for key in order]
+
+
+def _filtered(
+    rows: list[dict[str, Any]],
+    *,
+    crypto: str | None,
+    exchange: str | None,
+    strategy: str | None,
+) -> list[dict[str, Any]]:
+    """Keep only the rows matching every set ``crypto`` / ``exchange`` / ``strategy``.
+
+    The Orders/Fills page's server-side filter, mirroring the tags every serialized
+    row carries (``base`` for crypto, ``exchange``, ``strategy``). An unset filter
+    (``None``) matches everything; each set filter is an exact, case-insensitive
+    match against its column. A row must satisfy **all** set filters (AND) to pass.
+    """
+    wanted = (
+        ("base", crypto),
+        ("exchange", exchange),
+        ("strategy", strategy),
+    )
+    out: list[dict[str, Any]] = []
+    for row in rows:
+        if all(
+            value is None or str(row.get(field, "")).lower() == value.lower()
+            for field, value in wanted
+        ):
+            out.append(row)
+    return out
 
 
 def create_dashboard_app(
@@ -1288,21 +1290,79 @@ def create_dashboard_app(
         rows = [_position_row_dict(row) for row in _sup(request).positions()]
         return _grouped(rows, group_by)
 
-    # -- Orders (open, aggregated across the units, groupable) --------------- #
+    # -- Orders (open + history, aggregated, groupable + filterable) --------- #
 
     @app.get("/api/orders")
-    async def orders(request: Request, group_by: str | None = None) -> Any:
-        """Open (non-terminal) orders across every running unit, same grouping."""
+    async def orders(
+        request: Request,
+        group_by: str | None = None,
+        history: bool = False,
+        limit: int = _HISTORY_LIMIT_DEFAULT,
+        crypto: str | None = None,
+        exchange: str | None = None,
+        strategy: str | None = None,
+    ) -> Any:
+        """Orders across the units — open by default, **open + recent history** with
+        ``?history=true``.
+
+        The Overview's open-orders strip reads this flat (``?history=false``, the
+        default: non-terminal orders on running units). The Orders page reads
+        ``?history=true`` for the full order list (any status, running **and**
+        stopped units, each unit's most-recent ``?limit=`` capped), filtered by
+        ``?crypto=&exchange=&strategy=`` (the same tags ``/api/positions`` carries).
+        ``?group_by=crypto|exchange|strategy`` buckets the result. Money is exact
+        Decimal strings.
+        """
         if group_by is not None and group_by not in _GROUP_BY_KEYS:
             raise HTTPException(
                 status_code=422,
                 detail=f"unknown group_by {group_by!r}; expected one of {_GROUP_BY_KEYS}",
             )
-        rows = [_order_row_dict(row) for row in _sup(request).open_orders()]
-        # Orders carry no crypto tag; group-by-crypto folds them by base asset via
-        # the order dict's instrument. Add the base so `_grouped` can key on it.
-        for row in rows:
-            row["base"] = str(row.get("instrument", "")).split("/", 1)[0]
+        sup = _sup(request)
+        source = sup.order_history() if history else sup.open_orders()
+        rows = [_order_row_dict(row) for row in source]
+        rows = _filtered(
+            rows, crypto=crypto, exchange=exchange, strategy=strategy
+        )
+        # History is capped to the most recent `limit` (the source is oldest-first,
+        # so take the tail); the open-orders view is small and left uncapped.
+        if history and limit >= 0:
+            rows = rows[-limit:] if limit else []
+        return _grouped(rows, group_by)
+
+    # -- Fills (confirmed executions history, filterable) -------------------- #
+
+    @app.get("/api/fills")
+    async def fills(
+        request: Request,
+        group_by: str | None = None,
+        limit: int = _HISTORY_LIMIT_DEFAULT,
+        crypto: str | None = None,
+        exchange: str | None = None,
+        strategy: str | None = None,
+    ) -> Any:
+        """Confirmed fill history across every unit's store — the PnL source of truth.
+
+        The Orders/Fills page's fill table: every unit's persisted fills (running
+        **and** stopped), tagged with ``strategy`` / ``exchange`` / ``base`` crypto,
+        filtered by ``?crypto=&exchange=&strategy=`` (mirroring ``/api/positions``'s
+        tagging) and capped to the most recent ``?limit=`` (default
+        :data:`_HISTORY_LIMIT_DEFAULT`). ``?group_by=crypto|exchange|strategy``
+        buckets the result. Money is exact Decimal strings; a read (safe under
+        ``read_only``).
+        """
+        if group_by is not None and group_by not in _GROUP_BY_KEYS:
+            raise HTTPException(
+                status_code=422,
+                detail=f"unknown group_by {group_by!r}; expected one of {_GROUP_BY_KEYS}",
+            )
+        rows = [_fill_row_dict(row) for row in _sup(request).fills()]
+        rows = _filtered(
+            rows, crypto=crypto, exchange=exchange, strategy=strategy
+        )
+        # Most-recent-first cap (the source is oldest-first execution order).
+        if limit >= 0:
+            rows = rows[-limit:] if limit else []
         return _grouped(rows, group_by)
 
     # -- KPI (three levels: strategy / exchange / total) --------------------- #

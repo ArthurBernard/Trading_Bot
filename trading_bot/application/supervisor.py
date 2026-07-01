@@ -69,6 +69,7 @@ if TYPE_CHECKING:
     from trading_bot.storage.sqlite_store import StoredFill
 
 __all__ = [
+    "FillRow",
     "KpiLevel",
     "KpiRow",
     "OrderRow",
@@ -191,6 +192,39 @@ class OrderRow:
     strategy: str
     exchange: str
     order: Order
+
+
+@dataclass(frozen=True, slots=True)
+class FillRow:
+    """A confirmed fill of one unit, tagged with its strategy + venue + base crypto.
+
+    The supervisor-level view of a persisted :class:`~trading_bot.domain.fill.Fill`
+    (the PnL source of truth) read back from a unit's store, plus the ``strategy``,
+    ``exchange`` and ``base`` crypto tags the dashboard's Orders/Fills page filters
+    on. Unlike :meth:`positions` / :meth:`open_orders` (running units only), fills
+    are **history** — they are read from every unit's store (running or stopped), so
+    a stopped unit's past executions still surface.
+
+    Attributes
+    ----------
+    strategy : str
+        The managed unit that recorded the fill.
+    exchange : str
+        The venue the unit ran on when it executed (the store's ``venue`` tag when
+        set, else the unit's declared exchange).
+    base : str
+        The fill instrument's base asset (its group-by/filter-by-crypto key, e.g.
+        ``BTC``).
+    fill : Fill
+        The immutable execution record (money intact as :class:`~decimal.Decimal`);
+        the API renders it with money as strings.
+
+    """
+
+    strategy: str
+    exchange: str
+    base: str
+    fill: Fill
 
 
 @dataclass(frozen=True, slots=True)
@@ -754,6 +788,89 @@ class StrategySupervisor:
                         )
                     )
         return rows
+
+    def order_history(self) -> list[OrderRow]:
+        """Every unit's orders — **open and recent history** — tagged strategy + venue.
+
+        The Orders page's full order view: unlike :meth:`open_orders` (non-terminal
+        only, running units only), this returns **all** orders — working, partially
+        filled, filled, cancelled and rejected — across every unit. The **store** is
+        the source of truth for the history (its append-only ``orders`` table keeps
+        every order the unit ever recorded, whereas a running unit's live router map
+        only holds *currently-tracked* orders — the startup reconcile evicts a
+        restored historical order as an "orphan" the venue no longer reports). A
+        **running** unit's live router orders are **unioned** in on top (keyed by
+        ``client_order_id``, the live object winning) so a freshly-submitted,
+        not-yet-persisted order still surfaces. Money stays exact
+        :class:`~decimal.Decimal`.
+
+        Returns
+        -------
+        list of OrderRow
+            One row per order (any status), in unit then insertion order (stored
+            history first, then any live-only orders).
+
+        """
+        rows: list[OrderRow] = []
+        for unit in self._units.values():
+            by_cid: dict[str, Order] = {
+                order.client_order_id: order for order in self._stored_orders_of(unit)
+            }
+            if unit.running and unit.engine is not None:
+                # Union the live router's orders on top (a live object wins its cid,
+                # catching a just-submitted order not yet flushed to the store).
+                for order in unit.engine.router.tracked_orders().values():
+                    by_cid[order.client_order_id] = order
+            for order in by_cid.values():
+                rows.append(
+                    OrderRow(strategy=unit.name, exchange=unit.exchange, order=order)
+                )
+        return rows
+
+    def fills(self) -> list[FillRow]:
+        """Every unit's confirmed fills — the **fill history** — tagged for filtering.
+
+        The Orders/Fills page's data: folds every unit's persisted fills (running or
+        stopped — read from the live ``engine.store`` when running, else a store
+        opened at the unit's configured ``db_path``) into one flat list of
+        :class:`FillRow`, each carrying the owning ``strategy``, the ``exchange`` it
+        executed on (the store's ``venue`` tag when set, else the unit's declared
+        exchange) and the instrument's ``base`` crypto — the three dimensions the
+        page filters by. Fills are the PnL source of truth; money stays exact
+        :class:`~decimal.Decimal`. Empty when no unit has recorded a fill.
+
+        Returns
+        -------
+        list of FillRow
+            One row per confirmed fill, in unit then execution order.
+
+        """
+        rows: list[FillRow] = []
+        for unit in self._units.values():
+            for record in self._stored_fills_of(unit):
+                fill = record.fill
+                rows.append(
+                    FillRow(
+                        strategy=unit.name,
+                        exchange=record.venue or unit.exchange,
+                        base=fill.instrument.symbol.base,
+                        fill=fill,
+                    )
+                )
+        return rows
+
+    def _stored_orders_of(self, unit: _Unit) -> list[Order]:
+        """A stopped unit's persisted orders — from a store at its ``db_path``.
+
+        The order-history counterpart of :meth:`_stored_fills_of`: a stopped unit
+        has no live router, so its recent orders are read back from a store opened
+        at its configured ``db_path``. With no ``db_path`` there is nowhere to read
+        from, so the orders are empty.
+        """
+        db_path = unit.config.storage.db_path
+        if db_path is None:
+            return []
+        return SqliteStore(db_path).orders()
 
     def kpi(self, level: KpiLevel = "strategy") -> list[KpiRow]:
         """Realised PnL + fees (+ per-strategy ratios) at ``level``.

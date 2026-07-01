@@ -6,6 +6,25 @@ rejected approaches as tombstones.
 
 ---
 
+### 2026-07-01 Retire the split web apps onto one dashboard (PR #120)  [accepted]
+- **Choice**: `create_dashboard_app` is now the single web app (monitor + control +
+  manage + PnL). `create_control_app` becomes a thin wrapper over it; `trading-bot
+  serve` is an alias for the dashboard in `--read-only` posture and `start --serve`
+  serves the same app alongside the scheduler. `create_app(engine)` is kept as-is (it
+  serves the read-only view over a *single run engine* for `run --serve`, a different
+  shape than the supervisor-backed dashboard). Wrappers, not hard deletions, so no
+  import site breaks.
+- **Why**: three launch paths (`serve` / `run --serve` / `start --serve`) over two
+  apps was the maintainer's core UI complaint (monitor OR control, never one common
+  dashboard). Folding them onto `create_dashboard_app` gives one coherent surface and
+  one code path to maintain, while keeping the old command names working as aliases so
+  nothing (systemd units, muscle memory, tests) breaks abruptly.
+- **Rejected alternatives**: (a) hard-delete `create_control_app`/`create_app` — breaks
+  importers + the `run --serve` engine path with no transition; (b) keep the three
+  paths — the split UX we set out to remove; (c) fold `create_app` too — its
+  engine-not-supervisor shape doesn't map cleanly, so it stays the `run --serve` path.
+- **Note**: this closes the unified-dashboard epic (7 leaves).
+
 ### 2026-07-01 PnL time-series — derive from mode-tagged fills; live/testnet separate (PR #118)  [accepted]
 - **Choice**: a strategy's PnL/equity curve is **derived** by folding its stored fills
   in timestamp order (`equity = starting_capital + Σ realised PnL`), not stored as a

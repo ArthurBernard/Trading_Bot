@@ -18,17 +18,23 @@
 #   sudo systemctl daemon-reload && sudo systemctl enable --now trading-bot
 #   journalctl -u trading-bot -f                                    # watch it
 #
-# The daemon boots every declared strategy in its configured mode (PAPER by
-# default — it never trades real money by merely starting). Switch a strategy to
-# testnet/live from the control dashboard (http://127.0.0.1:8000) — going live
-# needs the typed confirmation there. The control UI binds loopback; reach it over
-# an SSH tunnel (ssh -L 8000:127.0.0.1:8000 host). To access it directly instead,
-# put TRADING_BOT_UI_TOKEN=… in the env file, change --serve-host to 0.0.0.0 below
-# (the daemon refuses a non-loopback bind WITHOUT a token), and run behind HTTPS.
-# See doc/dev/10-deploy.md.
+# This unit runs the unified DASHBOARD (`trading-bot dashboard`) — the single
+# Overview / Strategies / Orders / PnL / Logs UI that is also the control plane. It
+# boots every declared strategy in its configured mode (PAPER by default — it never
+# trades real money by merely starting), restores each paper unit's persisted book,
+# and serves them controllable. Switch a strategy to testnet/live from the dashboard
+# (http://127.0.0.1:8000) — going live needs the typed confirmation there. The UI
+# binds loopback; reach it over an SSH tunnel (ssh -L 8000:127.0.0.1:8000 host). To
+# access it directly instead, put TRADING_BOT_UI_TOKEN=… in the env file, change
+# --host to 0.0.0.0 below (the dashboard refuses a non-loopback bind WITHOUT a
+# token), and run behind HTTPS. See doc/dev/10-deploy.md.
+#
+# (`trading-bot start --serve` — the headless scheduler daemon that ALSO serves the
+# same dashboard, stepping strategies on an --interval/--cron — remains available if
+# you want scheduled re-evaluation; the dashboard alone just serves + controls.)
 
 [Unit]
-Description=trading_bot — execution daemon (supervisor + scheduler + control UI)
+Description=trading_bot — unified dashboard (monitoring + control over the supervisor)
 After=network-online.target
 Wants=network-online.target
 
@@ -43,9 +49,12 @@ Group=arthur
 EnvironmentFile=/etc/trading-bot/trading-bot.env
 
 # The pyenv-managed console script — adjust the version/venv name to your install.
-ExecStart=%h/.pyenv/versions/trading-bot/bin/trading-bot start \
+# `dashboard` serves the unified UI + control plane, loopback by default. (To bind a
+# reachable interface, add `--host 0.0.0.0 --token "$TRADING_BOT_UI_TOKEN"` and run
+# behind HTTPS; the dashboard refuses a non-loopback bind without a token.)
+ExecStart=%h/.pyenv/versions/trading-bot/bin/trading-bot dashboard \
     --config /etc/trading-bot/config.yaml \
-    --serve --serve-host 127.0.0.1 --serve-port 8000
+    --host 127.0.0.1 --port 8000
 
 WorkingDirectory=%S/trading-bot
 Restart=on-failure

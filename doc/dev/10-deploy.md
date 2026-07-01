@@ -1,34 +1,56 @@
-# Deploy — running the daemon under systemd
+# Deploy — running the dashboard under systemd
 
-How to keep `trading_bot` running as a supervised daemon (like dccd's `dccd start`
-+ `dccd.service`), with the control dashboard for start/stop + mode switching.
+How to keep `trading_bot` running as a supervised process (like dccd's `dccd start`
++ `dccd.service`), serving the **unified dashboard** — one UI across Overview /
+Strategies / Orders / PnL / Logs that is *also* the control plane (start/stop, mode
+switching, deploy/remove).
 
-> **Paper by default.** The daemon boots every declared strategy in its configured
+> **Paper by default.** The dashboard boots every declared strategy in its configured
 > mode — **paper** unless you say otherwise. It **never trades real money by merely
-> starting**: going live is a deliberate act from the control dashboard (a typed
+> starting**: going live is a deliberate act from the dashboard (a typed
 > confirmation) and still requires the `live_enabled` + credentials + risk-limit
 > gates (`09-go-live.md`).
 
-## What the daemon is
+## What runs — the single `dashboard` command
 
-`trading-bot start` is the long-running process:
+`trading-bot dashboard` is the long-running process the systemd unit runs:
 
 - builds a `StrategySupervisor` — **one engine per strategy** (own broker/mode), so
   strategies can be started/stopped and switched **paper / testnet / live**
   independently;
-- starts every declared strategy and **re-evaluates** them on a schedule
-  (`--interval SECONDS`, idempotent ticks, or `--cron "m h * * *"`);
-- with `--serve`, serves the **control dashboard** over HTTP (loopback by default).
+- **starts every declared strategy** (each comes online *restored* — a paper unit's
+  persisted book replayed into its engine — and immediately controllable);
+- serves the unified dashboard over HTTP (loopback by default), reading/rewriting a
+  **persistent manifest** (`configs/dashboard.yaml` by default, or `-c <file>`) so
+  deployments survive a restart.
 
 ```bash
-# foreground, for a quick look (paper):
-trading-bot start -c config.yaml --serve            # dashboard on http://127.0.0.1:8000
-trading-bot start -c config.yaml --cron "5 0 * * *" # re-evaluate daily at 00:05
+# the primary command (paper by default):
+trading-bot dashboard                       # dashboard on http://127.0.0.1:8000
+trading-bot dashboard -c config.yaml        # over an explicit manifest
+trading-bot dashboard --read-only           # observe only (control mutations → 403)
 ```
 
 The dashboard lists each strategy with a **mode selector** and **start/stop**
-buttons. Switching a strategy to **live** prompts for a typed `I UNDERSTAND` and
-sends `confirm: true`; the server refuses live without it (`403`).
+buttons, an **Orders/Fills** history page (filterable by crypto / exchange /
+strategy), a **PnL** chart and a live **Logs** activity feed. Switching a strategy
+to **live** prompts for a typed `I UNDERSTAND` and sends `confirm: true`; the server
+refuses live without it (`403`).
+
+### Related commands
+
+- **`trading-bot serve`** — a lightweight **read-only** alias of the dashboard
+  (`dashboard --read-only`): observe positions / orders / fills / PnL, no control. It
+  does not start strategies or rewrite a manifest.
+- **`trading-bot start [--serve]`** — the **headless scheduler daemon**: it steps the
+  running strategies on an `--interval SECONDS` (idempotent ticks) or `--cron
+  "m h * * *"`, and with `--serve` *also* serves the same unified dashboard. Use it
+  when you want scheduled re-evaluation on top of the dashboard.
+
+```bash
+trading-bot start -c config.yaml --cron "5 0 * * *"   # re-evaluate daily at 00:05
+trading-bot start -c config.yaml --serve              # + serve the dashboard
+```
 
 ## systemd (pyenv)
 
@@ -60,7 +82,7 @@ to the venue), so a restart converges state rather than duplicating orders.
 
 ### Reaching the dashboard
 
-The control UI binds **loopback** (`127.0.0.1`) by default — it can change what
+The dashboard binds **loopback** (`127.0.0.1`) by default — it can change what
 trades. Two ways to reach it remotely:
 
 **1. SSH tunnel (simplest, most secure).** Keep it loopback, forward a port:
@@ -70,12 +92,12 @@ ssh -L 8000:127.0.0.1:8000 your-host    # then open http://localhost:8000
 ```
 
 **2. Direct access with a token (like dccd).** Set a token and bind a reachable
-interface; the daemon then refuses to bind non-loopback **without** a token:
+interface; the dashboard then refuses to bind non-loopback **without** a token:
 
 ```bash
 export TRADING_BOT_UI_TOKEN="$(openssl rand -hex 24)"   # a strong secret
-trading-bot start -c config.yaml --serve \
-    --serve-host 0.0.0.0 --serve-port 8000 --serve-token "$TRADING_BOT_UI_TOKEN"
+trading-bot dashboard -c config.yaml \
+    --host 0.0.0.0 --port 8000 --token "$TRADING_BOT_UI_TOKEN"
 ```
 
 With a token set, the dashboard requires a **login**: `/login` exchanges the token
@@ -83,7 +105,10 @@ for an HttpOnly session cookie; every other route is gated (401 for `/api/*`,
 redirect to `/login` for pages), login attempts are rate-limited, and `/api/*` also
 accepts a `Bearer <token>` header or `?token=` query for scripts. In the systemd
 unit, put `TRADING_BOT_UI_TOKEN=…` in the `EnvironmentFile` (0600) and add
-`--serve-token "$TRADING_BOT_UI_TOKEN"` (or rely on the env var) to `ExecStart`.
+`--token "$TRADING_BOT_UI_TOKEN"` (or rely on the env var — `dashboard --token`
+reads `TRADING_BOT_UI_TOKEN`) to `ExecStart`. The `--host`/`--port`/`--token` flags
+mirror `start`'s `--serve-host`/`--serve-port`/`--serve-token` when you run the
+scheduler daemon instead.
 
 > **Put it behind HTTPS.** The token + session protect access, but run the daemon
 > behind a TLS reverse proxy (Caddy / nginx / a Tailscale serve) so credentials and

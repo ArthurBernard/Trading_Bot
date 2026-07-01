@@ -641,19 +641,22 @@ def _resolve_kpi_capital(
 
 
 def _build_serve_app(config: AppConfig) -> FastAPI:
-    """Build the read-only FastAPI dashboard app over a freshly-wired engine.
+    """Build the **read-only** unified dashboard app over a supervisor.
 
     The wiring seam :func:`serve` calls so the command is testable **without**
     launching uvicorn: the test patches :func:`uvicorn.run` and asserts the app
-    this helper returns is what ``serve`` hands it. Builds a paper-by-default
-    engine via :func:`~trading_bot.application.service_factory.build_engine`
-    (persisting to ``config.storage.db_path`` when set) and wraps it in
-    :func:`~trading_bot.interfaces.api.create_app`.
+    this helper returns is what ``serve`` hands it. ``serve`` is now an **alias**
+    of the unified dashboard in a read-only posture — it builds a
+    :class:`~trading_bot.application.supervisor.StrategySupervisor` from the config
+    and wraps it in :func:`~trading_bot.interfaces.api.create_dashboard_app` with
+    ``read_only=True`` (every mutation returns 403; no manifest is rewritten). The
+    single dashboard code path replaces the old one-engine read-only ``create_app``.
     """
-    from trading_bot.interfaces.api import create_app
+    from trading_bot.application.supervisor import StrategySupervisor
+    from trading_bot.interfaces.api import create_dashboard_app
 
-    engine = build_engine(config, db_path=config.storage.db_path)
-    return create_app(engine)
+    supervisor = StrategySupervisor(config)
+    return create_dashboard_app(supervisor, read_only=True)
 
 
 @app.command()
@@ -675,21 +678,21 @@ def serve(
         help="TCP port to listen on.",
     ),
 ) -> None:
-    """Serve the read-only web dashboard (positions / orders / PnL) over HTTP.
+    """Serve the unified dashboard **read-only** — an alias of ``dashboard --read-only``.
 
-    Builds a wired engine from ``--config`` (or a paper default), wraps it in the
-    read-only FastAPI app (:func:`~trading_bot.interfaces.api.create_app`) and
-    runs it under uvicorn. The dashboard is a **pure HTTP client** of the API and
-    is **read-only** — it can observe the engine but never place an order.
+    Kept for backward compatibility: ``serve`` now runs the single unified
+    dashboard (Overview / Strategies / Orders / PnL / Logs) in a **read-only**
+    posture. It builds a :class:`~trading_bot.application.supervisor.
+    StrategySupervisor` from ``--config`` (or a paper default), wraps it in
+    :func:`~trading_bot.interfaces.api.create_dashboard_app` with ``read_only=True``
+    and runs it under uvicorn — so it can *observe* positions / orders / fills /
+    PnL but every control mutation (start / stop / mode / deploy / remove) returns
+    ``403``. Prefer ``trading-bot dashboard --read-only`` directly; this alias
+    simply forwards to it.
 
-    MVP scope
-    ---------
-    ``serve`` exposes a **freshly-built** engine: it shows whatever state that
-    engine accumulates (e.g. the order/fill history persisted in the configured
-    ``storage.db_path``, replayed into the tracker/performance views), not a
-    separately-running live trading process. Attaching the dashboard to a
-    long-running live system (one ``run`` driving strategies while ``serve`` views
-    it) is future work; for now ``serve`` + a persisted store is the data path.
+    Unlike ``dashboard``, ``serve`` does **not** start the declared strategies or
+    rewrite a manifest — it is a lightweight read-only view. To bring strategies
+    online (restored + controllable) use ``trading-bot dashboard``.
     """
     import uvicorn
 
@@ -706,8 +709,8 @@ def serve(
         raise typer.Exit(code=1) from exc
 
     _console.print(
-        f"[green]serving dashboard[/green] "
-        f"(mode={config.mode}) on http://{host}:{port}"
+        f"[green]serving dashboard[/green] (read-only, mode={config.mode}) on "
+        f"http://{host}:{port}  —  use 'trading-bot dashboard' for the full control UI"
     )
     uvicorn.run(application, host=host, port=port)
 
@@ -773,7 +776,7 @@ async def _run_daemon(
         if serve:
             import uvicorn
 
-            from trading_bot.interfaces.api import create_control_app
+            from trading_bot.interfaces.api import create_dashboard_app
 
             if host not in ("127.0.0.1", "localhost", "::1") and not auth_token:
                 _console.print(
@@ -782,7 +785,11 @@ async def _run_daemon(
                     "bind 127.0.0.1 and tunnel (the control plane can trade)."
                 )
                 raise typer.Exit(code=1)
-            api = create_control_app(supervisor, auth_token=auth_token)
+            # The daemon's --serve dashboard is the single unified dashboard (the
+            # same one `trading-bot dashboard` serves) — one code path, one set of
+            # gates. The daemon owns the scheduler/lifecycle here, so no on_change
+            # manifest hook is wired (the daemon reads a static config).
+            api = create_dashboard_app(supervisor, auth_token=auth_token)
             if auth_token:
                 _console.print("[dim]control dashboard auth: token login enabled[/dim]")
             server = uvicorn.Server(

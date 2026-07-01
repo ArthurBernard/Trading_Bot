@@ -1,11 +1,241 @@
 {% extends "base.html" %}
 {% block title %}Orders{% endblock %}
 {% block content %}
-<h1>Orders</h1>
-<section class="card" id="orders-panel">
-  <h2>Orders</h2>
-  <div class="table-wrap"><table><tbody id="orders-body">
-    <tr class="empty"><td>Order data lands in a later leaf.</td></tr>
-  </tbody></table></div>
+<h1>Orders &amp; fills</h1>
+
+<!-- Filter controls — crypto / exchange / strategy, driving the ?crypto=&
+     exchange=&strategy= query on both /api/orders and /api/fills. The selects are
+     populated from the rows currently seen (so they only ever offer real values). -->
+<section class="card" id="filter-card">
+  <h2>Filter</h2>
+  <div class="row filters">
+    <label class="filter">
+      <span class="ctl-label">Crypto</span>
+      <select id="f-crypto" class="mode-select"><option value="">All</option></select>
+    </label>
+    <label class="filter">
+      <span class="ctl-label">Exchange</span>
+      <select id="f-exchange" class="mode-select"><option value="">All</option></select>
+    </label>
+    <label class="filter">
+      <span class="ctl-label">Strategy</span>
+      <select id="f-strategy" class="mode-select"><option value="">All</option></select>
+    </label>
+    <button type="button" class="btn" id="f-reset">Reset</button>
+  </div>
 </section>
+
+<!-- Orders — open + recent history (any status) across the units. -->
+<section class="card" id="orders-card">
+  <h2>Orders (open + recent)</h2>
+  <div class="table-wrap">
+    <table id="orders-table">
+      <thead>
+        <tr>
+          <th>Strategy</th>
+          <th>Exchange</th>
+          <th>Instrument</th>
+          <th>Side</th>
+          <th>Type</th>
+          <th class="num">Qty</th>
+          <th class="num">Filled</th>
+          <th class="num">Avg fill</th>
+          <th>Status</th>
+        </tr>
+      </thead>
+      <tbody id="orders-body">
+        <tr class="empty"><td colspan="9">Loading…</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<!-- Fills — the confirmed execution history (the PnL source of truth). -->
+<section class="card" id="fills-card">
+  <h2>Fills (history)</h2>
+  <div class="table-wrap">
+    <table id="fills-table">
+      <thead>
+        <tr>
+          <th>Time</th>
+          <th>Strategy</th>
+          <th>Exchange</th>
+          <th>Instrument</th>
+          <th>Side</th>
+          <th class="num">Qty</th>
+          <th class="num">Price</th>
+          <th class="num">Fee</th>
+        </tr>
+      </thead>
+      <tbody id="fills-body">
+        <tr class="empty"><td colspan="8">Loading…</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  // Orders/Fills page — the full order list (open + recent history) and the
+  // confirmed fill history across the supervisor's per-strategy engines, filterable
+  // by crypto / exchange / strategy. Dependency-free vanilla JS; reuses base.html's
+  // api()/fmtMoney()/fmtDate()/escapeHtml()/connect(). Money arrives as EXACT
+  // Decimal strings and is rendered verbatim (never parseFloat'd).
+
+  // Current filter selections ('' = all). Mirrored on the three selects.
+  var FILTERS = { crypto: '', exchange: '', strategy: '' };
+
+  // Build the ?crypto=&exchange=&strategy= query from the active filters.
+  function filterQuery(extra) {
+    var parts = [];
+    ['crypto', 'exchange', 'strategy'].forEach(function (k) {
+      if (FILTERS[k]) parts.push(k + '=' + encodeURIComponent(FILTERS[k]));
+    });
+    if (extra) parts.push(extra);
+    return parts.length ? ('?' + parts.join('&')) : '';
+  }
+
+  // A signed-money cell class: green gain, red loss.
+  function pnlClass(v) {
+    if (v == null) return '';
+    var n = Number(v);
+    return n > 0 ? 'ok' : (n < 0 ? 'err' : '');
+  }
+
+  // Repopulate a filter <select> with the union of a column's values seen across
+  // the loaded rows, preserving the current selection when it still exists.
+  function refreshOptions(selectId, values, current) {
+    var sel = document.getElementById(selectId);
+    var uniq = [];
+    values.forEach(function (v) {
+      if (v && uniq.indexOf(v) === -1) uniq.push(v);
+    });
+    uniq.sort();
+    var opts = ['<option value="">All</option>'].concat(uniq.map(function (v) {
+      return '<option value="' + escapeHtml(v) + '">' + escapeHtml(v) + '</option>';
+    }));
+    sel.innerHTML = opts.join('');
+    sel.value = (current && uniq.indexOf(current) !== -1) ? current : '';
+  }
+
+  // --- Orders (open + recent history) ------------------------------------ //
+  async function loadOrders() {
+    var rows;
+    try {
+      rows = await api('GET', '/api/orders' + filterQuery('history=true'));
+    } catch (e) {
+      document.getElementById('orders-body').innerHTML =
+        '<tr class="empty"><td colspan="9">' + escapeHtml(e.message) + '</td></tr>';
+      return [];
+    }
+    var body = document.getElementById('orders-body');
+    if (!rows.length) {
+      body.innerHTML = '<tr class="empty"><td colspan="9">No orders.</td></tr>';
+      return rows;
+    }
+    body.innerHTML = rows.map(function (o) {
+      var sideCls = o.side === 'buy' ? 'side-buy' : 'side-sell';
+      return '<tr>' +
+        '<td>' + escapeHtml(o.strategy) + '</td>' +
+        '<td>' + escapeHtml(o.exchange) + '</td>' +
+        '<td>' + escapeHtml(o.instrument) + '</td>' +
+        '<td class="' + sideCls + '">' + escapeHtml(o.side) + '</td>' +
+        '<td>' + escapeHtml(o.type) + '</td>' +
+        '<td class="num">' + fmtMoney(o.qty) + '</td>' +
+        '<td class="num">' + fmtMoney(o.filled_qty) + '</td>' +
+        '<td class="num">' + fmtMoney(o.avg_fill_price) + '</td>' +
+        '<td>' + escapeHtml(o.status) + '</td>' +
+        '</tr>';
+    }).join('');
+    return rows;
+  }
+
+  // --- Fills (confirmed execution history) ------------------------------- //
+  async function loadFills() {
+    var rows;
+    try {
+      rows = await api('GET', '/api/fills' + filterQuery());
+    } catch (e) {
+      document.getElementById('fills-body').innerHTML =
+        '<tr class="empty"><td colspan="8">' + escapeHtml(e.message) + '</td></tr>';
+      return [];
+    }
+    var body = document.getElementById('fills-body');
+    if (!rows.length) {
+      body.innerHTML = '<tr class="empty"><td colspan="8">No fills.</td></tr>';
+      return rows;
+    }
+    // Most recent first (the API returns oldest-first execution order).
+    var ordered = rows.slice().reverse();
+    body.innerHTML = ordered.map(function (f) {
+      var sideCls = f.side === 'buy' ? 'side-buy' : 'side-sell';
+      return '<tr>' +
+        '<td class="num">' + fmtDate(f.ts) + '</td>' +
+        '<td>' + escapeHtml(f.strategy) + '</td>' +
+        '<td>' + escapeHtml(f.exchange) + '</td>' +
+        '<td>' + escapeHtml(f.instrument) + '</td>' +
+        '<td class="' + sideCls + '">' + escapeHtml(f.side) + '</td>' +
+        '<td class="num">' + fmtMoney(f.qty) + '</td>' +
+        '<td class="num">' + fmtMoney(f.price) + '</td>' +
+        '<td class="num">' + fmtMoney(f.fee) + '</td>' +
+        '</tr>';
+    }).join('');
+    return rows;
+  }
+
+  // Rebuild the filter option lists from the union of orders + fills rows so the
+  // selects only ever offer values actually present.
+  function rebuildFilterOptions(orders, fills) {
+    var all = orders.concat(fills);
+    refreshOptions('f-crypto', all.map(function (r) { return r.base; }), FILTERS.crypto);
+    refreshOptions('f-exchange', all.map(function (r) { return r.exchange; }), FILTERS.exchange);
+    refreshOptions('f-strategy', all.map(function (r) { return r.strategy; }), FILTERS.strategy);
+  }
+
+  // Load both tables, then refresh the filter option lists from what came back.
+  // The option lists are always rebuilt from the UNFILTERED universe so narrowing
+  // one dimension never drops the others' choices — fetch a bare pass for options.
+  async function refreshAll() {
+    var orders = await loadOrders();
+    var fills = await loadFills();
+    // Fetch the unfiltered universe (a light extra read) purely to populate the
+    // selects with every value, not just the currently-filtered subset.
+    try {
+      var allOrders = await api('GET', '/api/orders?history=true');
+      var allFills = await api('GET', '/api/fills');
+      rebuildFilterOptions(allOrders, allFills);
+    } catch (e) {
+      rebuildFilterOptions(orders, fills);  // fall back to the filtered rows
+    }
+  }
+
+  document.addEventListener('DOMContentLoaded', function () {
+    ['crypto', 'exchange', 'strategy'].forEach(function (k) {
+      document.getElementById('f-' + k).addEventListener('change', function (ev) {
+        FILTERS[k] = ev.target.value;
+        refreshAll();
+      });
+    });
+    document.getElementById('f-reset').addEventListener('click', function () {
+      FILTERS = { crypto: '', exchange: '', strategy: '' };
+      refreshAll();
+    });
+
+    refreshAll();
+
+    // Live: an order/fill event means the history moved — refetch. connect()
+    // mirrors liveness on the connection dot.
+    connect('/api/events', function () { refreshAll(); });
+
+    // Polling fallback (proxies that buffer SSE, a stopped-then-started unit).
+    setInterval(refreshAll, 10000);
+  });
+</script>
+<style>
+  .filters { gap:1rem; align-items:flex-end; }
+  .filter { display:flex; flex-direction:column; gap:.3rem; }
+  .ctl-label { font-size:.78rem; color:var(--muted);
+          text-transform:uppercase; letter-spacing:.09em; }
+</style>
 {% endblock %}
