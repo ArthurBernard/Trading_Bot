@@ -6,6 +6,31 @@ rejected approaches as tombstones.
 
 ---
 
+### 2026-07-01 Dashboard KPI aggregation model — per-strategy ownership, exchange folding, ratios deferred (PR #114)  [accepted]
+- **Choice**: the supervisor exposes `positions()` / `open_orders()` / `kpi(level)`
+  aggregating over the **running** units' engines. Each strategy **owns** its
+  instruments (no commingling), so a position row is tagged (strategy, exchange,
+  crypto) and the API groups by any of them. `kpi(level)`: `strategy` = one row per
+  unit with that unit's realised PnL/fees **and** ratios (Sharpe/Sortino/Calmar/
+  maxDD); `exchange` folds units sharing a venue; `total` folds all — and at the
+  exchange/total levels the **ratios are `null`** (deferred).
+- **Why**: realised PnL/fees are exactly additive across engines, so folding them per
+  exchange / total is unambiguous. The **ratios are not additive** — Sharpe/Sortino/…
+  need a *combined equity curve over time*, which only exists once fills carry a
+  timestamp+mode (the PnL-time-series data model, leaf 04). Emitting a wrong aggregate
+  ratio would be worse than `null`; so aggregate ratios wait for the combined curve
+  (leaf 05) rather than being faked from per-strategy averages.
+- **Rejected alternatives**: (a) average the per-strategy ratios into an aggregate —
+  statistically meaningless; (b) block the whole KPI feature until the time-series
+  exists — the additive KPIs are useful now; (c) a merged position per instrument
+  across strategies — hides the per-strategy attribution the maintainer asked for.
+- **Known follow-up (→ leaf 03)**: `supervisor.start()` restores only the router
+  dedup map, not the tracker/perf from stored fills, and the `dashboard` command does
+  not `start_all()` — so a freshly launched dashboard shows an empty book until a unit
+  is started and its book restored. Starting a unit should **replay the store's fills
+  into the tracker/perf for paper** (reconcile stays the source of truth for live), and
+  the `dashboard` command should `start_all()` so declared strategies appear.
+
 ### 2026-07-01 Merge the two web apps into one dashboard + clean Ctrl-C (PR #113)  [accepted]
 - **Choice**: fold the read-only `create_app` and the control `create_control_app`
   into ONE `create_dashboard_app(supervisor, *, auth_token, read_only)`; read-only is

@@ -2,8 +2,274 @@
 {% block title %}Overview{% endblock %}
 {% block content %}
 <h1>Overview</h1>
-<section class="card" id="overview-summary">
-  <h2>System</h2>
-  <p class="muted">Live summary lands in a later leaf.</p>
+
+<!-- KPI strip — a level toggle (strategy / exchange / total) over the merged
+     PnL / fees / ratios. The buttons refetch /api/kpi?level=. -->
+<section class="card" id="kpi-card">
+  <div class="row" style="justify-content:space-between;">
+    <h2 style="margin:0;">Performance</h2>
+    <div class="row" id="kpi-levels" role="tablist" aria-label="KPI level">
+      <button type="button" class="btn kpi-level is-active" data-level="strategy">Strategy</button>
+      <button type="button" class="btn kpi-level" data-level="exchange">Exchange</button>
+      <button type="button" class="btn kpi-level" data-level="total">Total</button>
+    </div>
+  </div>
+  <div class="table-wrap">
+    <table id="kpi-table">
+      <thead>
+        <tr>
+          <th id="kpi-key-head">Strategy</th>
+          <th class="num">Realised PnL</th>
+          <th class="num">Fees</th>
+          <th class="num">Sharpe</th>
+          <th class="num">Sortino</th>
+          <th class="num">Calmar</th>
+          <th class="num">Max DD</th>
+        </tr>
+      </thead>
+      <tbody id="kpi-body">
+        <tr class="empty"><td colspan="7">Loading…</td></tr>
+      </tbody>
+    </table>
+  </div>
 </section>
+
+<!-- Positions — a group-by control (none / crypto / exchange). -->
+<section class="card" id="positions-card">
+  <div class="row" style="justify-content:space-between;">
+    <h2 style="margin:0;">Positions</h2>
+    <div class="row" id="pos-groups" role="tablist" aria-label="Group positions by">
+      <button type="button" class="btn pos-group is-active" data-group="">Flat</button>
+      <button type="button" class="btn pos-group" data-group="crypto">By crypto</button>
+      <button type="button" class="btn pos-group" data-group="exchange">By exchange</button>
+    </div>
+  </div>
+  <div class="table-wrap">
+    <table id="positions-table">
+      <thead>
+        <tr>
+          <th>Strategy</th>
+          <th>Exchange</th>
+          <th>Instrument</th>
+          <th class="num">Net qty</th>
+          <th class="num">Avg entry</th>
+          <th class="num">Realised PnL</th>
+          <th class="num">Fees</th>
+        </tr>
+      </thead>
+      <tbody id="positions-body">
+        <tr class="empty"><td colspan="7">Loading…</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<!-- Open orders — non-terminal orders across the units. -->
+<section class="card" id="orders-card">
+  <h2>Open orders</h2>
+  <div class="table-wrap">
+    <table id="orders-table">
+      <thead>
+        <tr>
+          <th>Strategy</th>
+          <th>Exchange</th>
+          <th>Instrument</th>
+          <th>Side</th>
+          <th>Type</th>
+          <th class="num">Qty</th>
+          <th class="num">Filled</th>
+          <th>Status</th>
+        </tr>
+      </thead>
+      <tbody id="orders-body">
+        <tr class="empty"><td colspan="8">Loading…</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  // Overview page — aggregates positions / open orders / KPI across the
+  // supervisor's per-strategy engines, live via SSE with a polling fallback.
+  // Dependency-free vanilla JS; reuses base.html's api()/fmtMoney()/connect().
+
+  // Current selections (mirrored on the toggle buttons).
+  let KPI_LEVEL = 'strategy';
+  let POS_GROUP = '';  // '' = flat, else 'crypto' | 'exchange'
+
+  // Render a ratio: a JSON number, or '—' for a null (undefined / aggregate).
+  function fmtRatio(v) {
+    if (v == null) return '—';
+    return Number(v).toLocaleString('en-US', { maximumFractionDigits: 3 });
+  }
+  // A signed-money cell class: green for a gain, red for a loss.
+  function pnlClass(v) {
+    if (v == null) return '';
+    const n = Number(v);
+    if (n > 0) return 'ok';
+    if (n < 0) return 'err';
+    return '';
+  }
+
+  // --- KPI strip --------------------------------------------------------- //
+  async function loadKpi() {
+    const head = document.getElementById('kpi-key-head');
+    head.textContent = KPI_LEVEL === 'strategy' ? 'Strategy'
+      : KPI_LEVEL === 'exchange' ? 'Exchange' : 'Total';
+    let rows;
+    try {
+      rows = await api('GET', '/api/kpi?level=' + encodeURIComponent(KPI_LEVEL));
+    } catch (e) {
+      document.getElementById('kpi-body').innerHTML =
+        '<tr class="empty"><td colspan="7">' + escapeHtml(e.message) + '</td></tr>';
+      return;
+    }
+    const body = document.getElementById('kpi-body');
+    if (!rows.length) {
+      body.innerHTML = '<tr class="empty"><td colspan="7">No running strategy.</td></tr>';
+      return;
+    }
+    body.innerHTML = rows.map(function (r) {
+      const label = r.strategy || r.exchange || 'Total';
+      return '<tr>' +
+        '<td>' + escapeHtml(label) + '</td>' +
+        '<td class="num ' + pnlClass(r.realised_pnl) + '">' + fmtMoney(r.realised_pnl) + '</td>' +
+        '<td class="num">' + fmtMoney(r.fees_paid) + '</td>' +
+        '<td class="num">' + fmtRatio(r.sharpe) + '</td>' +
+        '<td class="num">' + fmtRatio(r.sortino) + '</td>' +
+        '<td class="num">' + fmtRatio(r.calmar) + '</td>' +
+        '<td class="num">' + fmtRatio(r.max_drawdown) + '</td>' +
+        '</tr>';
+    }).join('');
+  }
+
+  // --- Positions --------------------------------------------------------- //
+  function positionRowHtml(r) {
+    return '<tr>' +
+      '<td>' + escapeHtml(r.strategy) + '</td>' +
+      '<td>' + escapeHtml(r.exchange) + '</td>' +
+      '<td>' + escapeHtml(r.instrument) + '</td>' +
+      '<td class="num">' + fmtMoney(r.net_qty) + '</td>' +
+      '<td class="num">' + fmtMoney(r.avg_entry_price) + '</td>' +
+      '<td class="num ' + pnlClass(r.realised_pnl) + '">' + fmtMoney(r.realised_pnl) + '</td>' +
+      '<td class="num">' + fmtMoney(r.fees_paid) + '</td>' +
+      '</tr>';
+  }
+  function groupHeaderHtml(name, count, colspan) {
+    return '<tr class="group"><td colspan="' + colspan + '">' +
+      '<span class="group-name">' + escapeHtml(name || '—') + '</span>' +
+      '<span class="group-count">' + count + '</span></td></tr>';
+  }
+  async function loadPositions() {
+    let data;
+    const url = POS_GROUP
+      ? '/api/positions?group_by=' + encodeURIComponent(POS_GROUP)
+      : '/api/positions';
+    try {
+      data = await api('GET', url);
+    } catch (e) {
+      document.getElementById('positions-body').innerHTML =
+        '<tr class="empty"><td colspan="7">' + escapeHtml(e.message) + '</td></tr>';
+      return;
+    }
+    const body = document.getElementById('positions-body');
+    let html = '';
+    if (POS_GROUP) {
+      // Grouped: [{group, rows}] — a header row per bucket.
+      if (!data.length) {
+        body.innerHTML = '<tr class="empty"><td colspan="7">No open positions.</td></tr>';
+        return;
+      }
+      data.forEach(function (g) {
+        html += groupHeaderHtml(g.group, g.rows.length, 7);
+        html += g.rows.map(positionRowHtml).join('');
+      });
+    } else {
+      if (!data.length) {
+        body.innerHTML = '<tr class="empty"><td colspan="7">No open positions.</td></tr>';
+        return;
+      }
+      html = data.map(positionRowHtml).join('');
+    }
+    body.innerHTML = html;
+  }
+
+  // --- Open orders ------------------------------------------------------- //
+  async function loadOrders() {
+    let rows;
+    try {
+      rows = await api('GET', '/api/orders');
+    } catch (e) {
+      document.getElementById('orders-body').innerHTML =
+        '<tr class="empty"><td colspan="8">' + escapeHtml(e.message) + '</td></tr>';
+      return;
+    }
+    const body = document.getElementById('orders-body');
+    if (!rows.length) {
+      body.innerHTML = '<tr class="empty"><td colspan="8">No open orders.</td></tr>';
+      return;
+    }
+    body.innerHTML = rows.map(function (o) {
+      const sideCls = o.side === 'buy' ? 'side-buy' : 'side-sell';
+      return '<tr>' +
+        '<td>' + escapeHtml(o.strategy) + '</td>' +
+        '<td>' + escapeHtml(o.exchange) + '</td>' +
+        '<td>' + escapeHtml(o.instrument) + '</td>' +
+        '<td class="' + sideCls + '">' + escapeHtml(o.side) + '</td>' +
+        '<td>' + escapeHtml(o.type) + '</td>' +
+        '<td class="num">' + fmtMoney(o.qty) + '</td>' +
+        '<td class="num">' + fmtMoney(o.filled_qty) + '</td>' +
+        '<td>' + escapeHtml(o.status) + '</td>' +
+        '</tr>';
+    }).join('');
+  }
+
+  function refreshAll() {
+    loadKpi();
+    loadPositions();
+    loadOrders();
+  }
+
+  document.addEventListener('DOMContentLoaded', function () {
+    // KPI level toggle.
+    document.querySelectorAll('.kpi-level').forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        document.querySelectorAll('.kpi-level').forEach(function (b) {
+          b.classList.remove('is-active');
+        });
+        btn.classList.add('is-active');
+        KPI_LEVEL = btn.dataset.level;
+        loadKpi();
+      });
+    });
+    // Positions group-by control.
+    document.querySelectorAll('.pos-group').forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        document.querySelectorAll('.pos-group').forEach(function (b) {
+          b.classList.remove('is-active');
+        });
+        btn.classList.add('is-active');
+        POS_GROUP = btn.dataset.group;
+        loadPositions();
+      });
+    });
+
+    refreshAll();
+
+    // Live: an event (order/fill/log) means the book may have moved — refetch the
+    // aggregates. connect() mirrors liveness on the connection dot.
+    connect('/api/events', function () { refreshAll(); });
+
+    // Polling fallback — refresh even if the SSE stream is down (proxies that
+    // buffer, a stopped-then-started unit picked up on the next poll).
+    setInterval(refreshAll, 10000);
+  });
+</script>
+<style>
+  /* Toggle button active state — reuses the nav's accent language. */
+  .btn.is-active { color:var(--accent); border-color:rgba(94,162,255,.45);
+          background:var(--accent-soft); font-weight:600; }
+</style>
 {% endblock %}

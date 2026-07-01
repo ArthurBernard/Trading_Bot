@@ -66,7 +66,7 @@ from collections.abc import Callable
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -84,6 +84,9 @@ from trading_bot.interfaces.ui import STATIC_DIR, TEMPLATES_DIR
 if TYPE_CHECKING:
     from trading_bot.application.service_factory import Engine
     from trading_bot.application.supervisor import (
+        KpiRow,
+        OrderRow,
+        PositionRow,
         StrategyStatus,
         StrategySupervisor,
     )
@@ -250,6 +253,93 @@ def _event_dict(event: Event) -> dict[str, Any]:
         return {"type": "log", "message": event.message, "level": event.level}
     # Defensive: an unknown event type still streams a typed, JSON-safe frame.
     return {"type": "unknown", "repr": repr(event)}
+
+
+def _event_key(event: Event) -> str | None:
+    """A dedup key for a bus event, or ``None`` when it carries no stable id.
+
+    The merged dashboard SSE (:func:`create_dashboard_app`'s ``/api/events``)
+    subscribes to several engines' buses; the same execution can, in principle,
+    surface on two of them, so events are de-duplicated by this key. A
+    :class:`~trading_bot.application.events.FillEvent` keys on its immutable
+    ``fill_id``, an :class:`~trading_bot.application.events.OrderEvent` on the
+    order's ``client_order_id`` + ``status`` (a lifecycle step is unique per
+    status). A :class:`~trading_bot.application.events.LogEvent` has no stable id,
+    so it returns ``None`` (never deduped — every log line is distinct).
+    """
+    if isinstance(event, FillEvent):
+        return f"fill:{event.fill.fill_id}"
+    if isinstance(event, OrderEvent):
+        return f"order:{event.order.client_order_id}:{event.order.status.value}"
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Serialization — supervisor aggregate rows -> JSON-ready dicts
+# ---------------------------------------------------------------------------
+
+def _position_row_dict(row: PositionRow) -> dict[str, Any]:
+    """Render a supervisor :class:`PositionRow` as a JSON-ready dict.
+
+    The per-instrument exposure of one running unit, tagged with its ``strategy``
+    and ``exchange`` (the dashboard's group-by keys) and its ``base`` asset (the
+    group-by-crypto key). Money fields are exact :class:`~decimal.Decimal` strings.
+    """
+    return {
+        "strategy": row.strategy,
+        "exchange": row.exchange,
+        "instrument": row.instrument,
+        "base": row.base,
+        "net_qty": _money_str(row.net_qty),
+        "avg_entry_price": _money_str(row.avg_entry_price),
+        "realised_pnl": _money_str(row.realised_pnl),
+        "fees_paid": _money_str(row.fees_paid),
+    }
+
+
+def _order_row_dict(row: OrderRow) -> dict[str, Any]:
+    """Render a supervisor :class:`OrderRow` — the order dict + strategy/venue tags."""
+    return {
+        "strategy": row.strategy,
+        "exchange": row.exchange,
+        **_order_dict(row.order),
+    }
+
+
+def _kpi_row_dict(row: KpiRow) -> dict[str, Any]:
+    """Render a supervisor :class:`KpiRow` as a JSON-ready dict.
+
+    Money (``realised_pnl`` / ``fees_paid``) as exact Decimal strings; the ratios
+    (``sharpe`` / ``sortino`` / ``calmar`` / ``max_drawdown``) as JSON numbers at
+    ``level="strategy"`` and JSON ``null`` at the aggregate levels (no combined
+    curve yet).
+    """
+    return {
+        "level": row.level,
+        "key": row.key,
+        "strategy": row.strategy,
+        "exchange": row.exchange,
+        "realised_pnl": _money_str(row.realised_pnl),
+        "fees_paid": _money_str(row.fees_paid),
+        "sharpe": _finite_or_none(row.sharpe),
+        "sortino": _finite_or_none(row.sortino),
+        "calmar": _finite_or_none(row.calmar),
+        "max_drawdown": _finite_or_none(row.max_drawdown),
+    }
+
+
+def _finite_or_none(value: float | None) -> float | None:
+    """Pass a finite float through; map ``None`` / non-finite to JSON ``null``.
+
+    The KPI ratios can be ``inf`` / ``nan`` on a degenerate curve (a monotonic
+    winner has zero drawdown → Calmar is ``inf``); a bare ``inf`` / ``nan`` is not
+    valid JSON. So a non-finite (or ``None``) ratio serializes as ``null`` — the
+    same "undefined estimator" convention :func:`_safe_ratio` uses for the
+    single-engine view, here surfaced as an explicit ``null`` rather than ``0.0``.
+    """
+    if value is None or not math.isfinite(value):
+        return None
+    return value
 
 
 # ---------------------------------------------------------------------------
@@ -748,6 +838,38 @@ _DASHBOARD_PAGES: tuple[tuple[str, str], ...] = (
     ("/logs", "logs.html"),
 )
 
+#: The dimensions ``/api/positions`` and ``/api/orders`` can be grouped by. A row
+#: carries a ``strategy``, ``exchange`` and (positions only) a ``base`` crypto tag;
+#: these are the group-by keys the Overview's controls offer.
+_GROUP_BY_KEYS: tuple[str, ...] = ("crypto", "exchange", "strategy")
+
+#: The KPI aggregation levels ``/api/kpi`` accepts (see
+#: :meth:`~trading_bot.application.supervisor.StrategySupervisor.kpi`).
+_KPI_LEVELS: tuple[str, ...] = ("strategy", "exchange", "total")
+
+
+def _grouped(rows: list[dict[str, Any]], group_by: str | None) -> Any:
+    """Group serialized rows by a tag, or return the flat list when ungrouped.
+
+    With ``group_by`` ``None`` (or absent) the flat list of row dicts passes
+    through unchanged. Otherwise the rows are bucketed by their ``group_by`` key
+    (``"crypto"`` groups on each row's ``base`` asset; ``"exchange"`` /
+    ``"strategy"`` on the eponymous tag) into ``[{"group": <key>, "rows": [...]}]``,
+    preserving first-seen group order so the view is deterministic.
+    """
+    if group_by is None:
+        return rows
+    field = "base" if group_by == "crypto" else group_by
+    buckets: dict[str, list[dict[str, Any]]] = {}
+    order: list[str] = []
+    for row in rows:
+        key = str(row.get(field, ""))
+        if key not in buckets:
+            buckets[key] = []
+            order.append(key)
+        buckets[key].append(row)
+    return [{"group": key, "rows": buckets[key]} for key in order]
+
 
 def create_dashboard_app(
     supervisor: StrategySupervisor,
@@ -854,6 +976,130 @@ def create_dashboard_app(
             "strategies": len(sup.names()),
             "read_only": request.app.state.read_only,
         }
+
+    # -- Positions (aggregated across the units, groupable) ------------------ #
+
+    @app.get("/api/positions")
+    async def positions(request: Request, group_by: str | None = None) -> Any:
+        """Net positions across every running unit, tagged strategy + exchange.
+
+        A read (safe under ``read_only``). With ``?group_by=crypto|exchange|
+        strategy`` the rows are bucketed into ``[{"group", "rows"}]``; ungrouped
+        otherwise. Money is rendered as exact Decimal strings.
+        """
+        if group_by is not None and group_by not in _GROUP_BY_KEYS:
+            raise HTTPException(
+                status_code=422,
+                detail=f"unknown group_by {group_by!r}; expected one of {_GROUP_BY_KEYS}",
+            )
+        rows = [_position_row_dict(row) for row in _sup(request).positions()]
+        return _grouped(rows, group_by)
+
+    # -- Orders (open, aggregated across the units, groupable) --------------- #
+
+    @app.get("/api/orders")
+    async def orders(request: Request, group_by: str | None = None) -> Any:
+        """Open (non-terminal) orders across every running unit, same grouping."""
+        if group_by is not None and group_by not in _GROUP_BY_KEYS:
+            raise HTTPException(
+                status_code=422,
+                detail=f"unknown group_by {group_by!r}; expected one of {_GROUP_BY_KEYS}",
+            )
+        rows = [_order_row_dict(row) for row in _sup(request).open_orders()]
+        # Orders carry no crypto tag; group-by-crypto folds them by base asset via
+        # the order dict's instrument. Add the base so `_grouped` can key on it.
+        for row in rows:
+            row["base"] = str(row.get("instrument", "")).split("/", 1)[0]
+        return _grouped(rows, group_by)
+
+    # -- KPI (three levels: strategy / exchange / total) --------------------- #
+
+    @app.get("/api/kpi")
+    async def kpi(request: Request, level: str = "strategy") -> list[dict[str, Any]]:
+        """Realised PnL + fees (+ per-strategy ratios) at ``level``.
+
+        ``?level=strategy|exchange|total`` (see
+        :meth:`~trading_bot.application.supervisor.StrategySupervisor.kpi`): money
+        as exact Decimal strings, per-strategy ratios as JSON numbers (``null`` at
+        the aggregate levels).
+        """
+        if level not in _KPI_LEVELS:
+            raise HTTPException(
+                status_code=422,
+                detail=f"unknown level {level!r}; expected one of {_KPI_LEVELS}",
+            )
+        return [
+            _kpi_row_dict(row)
+            for row in _sup(request).kpi(level)  # type: ignore[arg-type]
+        ]
+
+    # -- SSE events (merged across every unit's engine bus) ------------------ #
+
+    @app.get("/api/events")
+    async def events(request: Request) -> StreamingResponse:
+        """Server-Sent-Events fanning **every** running unit's bus onto one feed.
+
+        Registers a fresh queue on each running unit's engine
+        :class:`~trading_bot.application.events.EventBus` and multiplexes them onto
+        a single generator, yielding each event as a ``data: <json>\\n\\n`` frame
+        (money as Decimal strings, tagged with a ``type``). Order and fill events
+        are de-duplicated by their domain id so an execution seen on two buses is
+        emitted once. Every registered queue is unregistered in a ``finally`` on
+        disconnect. Read-only — subscribing observes; it never trades.
+        """
+        sup = _sup(request)
+        # Snapshot the running engines' buses now; the merged stream is over the
+        # set live at connect time (a unit started later is picked up on reconnect,
+        # like the single-engine SSE view).
+        buses = [
+            unit.engine.bus
+            for unit in sup._running_units()  # noqa: SLF001 — read the wired buses
+            if unit.engine is not None
+        ]
+        queues = [bus.add_queue() for bus in buses]
+
+        async def _generator() -> Any:
+            seen: set[str] = set()
+            try:
+                yield ": connected\n\n"
+                if not queues:
+                    # No running unit — keep the connection alive with heartbeats so
+                    # the client's EventSource stays open until a reconnect finds one.
+                    while not await request.is_disconnected():
+                        await asyncio.sleep(15.0)
+                        yield ": heartbeat\n\n"
+                    return
+                while True:
+                    if await request.is_disconnected():
+                        break
+                    # Wait on whichever queue produces first (bounded, so the loop
+                    # periodically re-checks disconnection and heartbeats).
+                    getters = [asyncio.ensure_future(q.get()) for q in queues]
+                    done, pending = await asyncio.wait(
+                        getters,
+                        timeout=15.0,
+                        return_when=asyncio.FIRST_COMPLETED,
+                    )
+                    for task in pending:
+                        task.cancel()
+                    if not done:
+                        yield ": heartbeat\n\n"
+                        continue
+                    for task in done:
+                        event = task.result()
+                        key = _event_key(event)
+                        if key is not None and key in seen:
+                            continue  # same execution on two buses — emit once.
+                        if key is not None:
+                            seen.add(key)
+                        yield (
+                            f"data: {json.dumps(_event_dict(event), default=_default)}\n\n"
+                        )
+            finally:
+                for bus, queue in zip(buses, queues, strict=True):
+                    bus.remove_queue(queue)
+
+        return StreamingResponse(_generator(), media_type="text/event-stream")
 
     if auth_token:
         _install_control_auth(app, auth_token=auth_token, templates=templates)

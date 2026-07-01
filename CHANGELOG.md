@@ -8,6 +8,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Dashboard Overview + KPI at 3 levels.** The dashboard app now serves aggregate
+  reads over the supervisor's per-strategy engines — `GET /api/positions` &
+  `/api/orders` (`?group_by=crypto|exchange|strategy`), `GET /api/kpi?level=strategy|
+  exchange|total` (realised PnL + fees at each level; Sharpe/Sortino/Calmar/maxDD per
+  strategy; aggregate ratios deferred), and a **merged `/api/events` SSE** fanning
+  every running unit's engine bus onto one feed (dedup by id). The Overview page
+  renders a KPI strip (level toggle), a positions table (group-by crypto/exchange) and
+  an open-orders table, live via SSE with a polling fallback. Verified against a real
+  paper alloc1 book: the accessors equal the engine's own realised PnL/fees exactly.
+  (#114)
+
 - **Unified dashboard skeleton** — one `create_dashboard_app` factory + a
   dccd-style **self-contained `base.html` shell** (nav Overview / Strategies /
   Orders / PnL / Logs; brand + version + health chip + connection dot; all shared

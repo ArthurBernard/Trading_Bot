@@ -35,6 +35,7 @@ through the engines it builds (reconcile on start; the runners' router/broker).
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal
 
@@ -42,6 +43,8 @@ from trading_bot.application.reconcile import reconcile
 from trading_bot.application.run_app import build_portfolio_runners, build_runners
 from trading_bot.application.service_factory import Engine, build_engine
 from trading_bot.domain.errors import ConfigError, LiveTradingNotEnabled
+from trading_bot.domain.money import money
+from trading_bot.domain.performance import PerformanceDependencyError
 
 if TYPE_CHECKING:
     from trading_bot.application.config import AppConfig
@@ -51,12 +54,25 @@ if TYPE_CHECKING:
     from trading_bot.domain.money import Money
     from trading_bot.domain.order import Order
 
-__all__ = ["StrategyMode", "StrategyStatus", "StrategySupervisor"]
+__all__ = [
+    "KpiLevel",
+    "KpiRow",
+    "OrderRow",
+    "PositionRow",
+    "StrategyMode",
+    "StrategyStatus",
+    "StrategySupervisor",
+]
 
 #: The deployment mode of a managed strategy.
 StrategyMode = Literal["paper", "testnet", "live"]
 
+#: The aggregation level a :meth:`StrategySupervisor.kpi` view folds to.
+KpiLevel = Literal["strategy", "exchange", "total"]
+
 _KIND = Literal["strategy", "portfolio"]
+
+_ZERO: Money = money("0")
 
 
 @dataclass(frozen=True, slots=True)
@@ -92,6 +108,121 @@ class StrategyStatus:
     running: bool
     realised_pnl: Money | None
     open_orders: int
+
+
+@dataclass(frozen=True, slots=True)
+class PositionRow:
+    """A net position of one running unit, tagged with its strategy + venue.
+
+    The supervisor-level view of a per-engine
+    :class:`~trading_bot.domain.position.Position`: the same money-exact exposure
+    the unit's :class:`~trading_bot.application.position_tracker.PositionTracker`
+    holds, plus the ``strategy`` and ``exchange`` tags the dashboard groups by
+    (by crypto — the instrument's base asset — and/or by exchange).
+
+    Attributes
+    ----------
+    strategy : str
+        The managed unit this exposure belongs to.
+    exchange : str
+        The venue the unit runs on (its group-by-exchange key).
+    instrument : str
+        The canonical instrument (``BASE/QUOTE``).
+    base : str
+        The instrument's base asset (its group-by-crypto key, e.g. ``BTC``).
+    net_qty : Money
+        Signed net quantity (exact :class:`~decimal.Decimal`): ``>0`` long,
+        ``<0`` short.
+    avg_entry_price : Money or None
+        Quantity-weighted average entry price of the open exposure (``None`` when
+        flat).
+    realised_pnl : Money
+        The position's realised PnL, net of fees (exact).
+    fees_paid : Money
+        The position's cumulative fees (exact).
+
+    """
+
+    strategy: str
+    exchange: str
+    instrument: str
+    base: str
+    net_qty: Money
+    avg_entry_price: Money | None
+    realised_pnl: Money
+    fees_paid: Money
+
+
+@dataclass(frozen=True, slots=True)
+class OrderRow:
+    """An open order of one running unit, tagged with its strategy + venue.
+
+    The supervisor-level view of a per-engine
+    :class:`~trading_bot.domain.order.Order` that is not yet terminal (still
+    working / partially filled), plus the ``strategy`` and ``exchange`` tags the
+    dashboard groups by.
+
+    Attributes
+    ----------
+    strategy : str
+        The managed unit that placed the order.
+    exchange : str
+        The venue the unit runs on.
+    order : Order
+        The live order aggregate (money fields intact as
+        :class:`~decimal.Decimal`); the API renders it with money as strings.
+
+    """
+
+    strategy: str
+    exchange: str
+    order: Order
+
+
+@dataclass(frozen=True, slots=True)
+class KpiRow:
+    """A realised-PnL / fees / ratios view at one aggregation level.
+
+    Produced by :meth:`StrategySupervisor.kpi`. At ``level="strategy"`` there is
+    one row per running unit and the ratios are that unit's
+    :class:`~trading_bot.application.performance_service.PerformanceService`
+    estimates. At ``level="exchange"`` the units sharing a venue are folded (PnL
+    and fees summed) and the ratios are ``None`` — an aggregate ratio needs a
+    combined equity curve, which a later leaf builds. At ``level="total"`` every
+    unit is folded (ratios ``None`` likewise).
+
+    Attributes
+    ----------
+    level : KpiLevel
+        The aggregation level this row belongs to.
+    key : str
+        The row's identity: the strategy name (``"strategy"``), the exchange
+        (``"exchange"``), or ``"total"`` (``"total"``).
+    strategy : str or None
+        The strategy name at ``level="strategy"``; ``None`` otherwise.
+    exchange : str or None
+        The venue at ``level`` in ``{"strategy", "exchange"}``; ``None`` for the
+        total row.
+    realised_pnl : Money
+        Realised PnL, net of fees, summed over the folded units (exact).
+    fees_paid : Money
+        Fees paid, summed over the folded units (exact).
+    sharpe, sortino, calmar, max_drawdown : float or None
+        The per-strategy risk ratios (``level="strategy"`` only); ``None`` at the
+        aggregate levels (a combined curve lands in a later leaf).
+
+    """
+
+    level: KpiLevel
+    key: str
+    strategy: str | None
+    exchange: str | None
+    realised_pnl: Money
+    fees_paid: Money
+    sharpe: float | None
+    sortino: float | None
+    calmar: float | None
+    max_drawdown: float | None
 
 
 @dataclass
@@ -356,6 +487,221 @@ class StrategySupervisor:
             realised_pnl=realised,
             open_orders=open_orders,
         )
+
+    # --- aggregate read accessors (for the dashboard Overview) ------------- #
+
+    def _running_units(self) -> list[_Unit]:
+        """Every running unit with a built engine (the aggregate reads' source)."""
+        return [
+            unit
+            for unit in self._units.values()
+            if unit.running and unit.engine is not None
+        ]
+
+    def positions(self) -> list[PositionRow]:
+        """Every unit's net positions, tagged with strategy + exchange.
+
+        Folds each **running** unit's
+        :class:`~trading_bot.application.position_tracker.PositionTracker`
+        (``all_positions()``) into one flat list of :class:`PositionRow`, each
+        carrying the owning ``strategy`` and its ``exchange`` so the dashboard can
+        group by crypto (the instrument's base asset) and/or by exchange. A pure
+        in-memory read (money exact :class:`~decimal.Decimal`); stopped units and
+        flat books contribute nothing. Empty when no unit is running.
+
+        Returns
+        -------
+        list of PositionRow
+            One row per (strategy, instrument) with live exposure, in unit then
+            instrument order.
+
+        """
+        rows: list[PositionRow] = []
+        for unit in self._running_units():
+            assert unit.engine is not None
+            positions = unit.engine.tracker.all_positions()
+            for position in positions.values():
+                rows.append(
+                    PositionRow(
+                        strategy=unit.name,
+                        exchange=unit.exchange,
+                        instrument=str(position.instrument),
+                        base=position.instrument.symbol.base,
+                        net_qty=position.net_qty,
+                        avg_entry_price=position.avg_entry_price,
+                        realised_pnl=position.realised_pnl,
+                        fees_paid=position.fees_paid,
+                    )
+                )
+        return rows
+
+    def open_orders(self) -> list[OrderRow]:
+        """Every unit's **open** (non-terminal) orders, tagged strategy + exchange.
+
+        Across every **running** unit's
+        :class:`~trading_bot.application.order_router.OrderRouter`, collects the
+        orders that are not terminal (still working / partially filled) into one
+        list of :class:`OrderRow`, each tagged with the owning ``strategy`` and its
+        ``exchange``. A pure in-memory read; empty when nothing is open.
+
+        Returns
+        -------
+        list of OrderRow
+            One row per open order, in unit then tracking order.
+
+        """
+        rows: list[OrderRow] = []
+        for unit in self._running_units():
+            assert unit.engine is not None
+            for order in unit.engine.router.tracked_orders().values():
+                if not order.is_terminal:
+                    rows.append(
+                        OrderRow(
+                            strategy=unit.name,
+                            exchange=unit.exchange,
+                            order=order,
+                        )
+                    )
+        return rows
+
+    def kpi(self, level: KpiLevel = "strategy") -> list[KpiRow]:
+        """Realised PnL + fees (+ per-strategy ratios) at ``level``.
+
+        Three aggregation levels over the **running** units' per-engine
+        :class:`~trading_bot.application.performance_service.PerformanceService`:
+
+        * ``"strategy"`` — one :class:`KpiRow` per running unit, carrying that
+          unit's realised PnL, fees and its Sharpe / Sortino / Calmar /
+          max-drawdown ratios (read straight off the unit's performance service).
+        * ``"exchange"`` — the units sharing a venue folded into one row per
+          exchange (PnL and fees **summed**, exact :class:`~decimal.Decimal`);
+          the ratios are ``None`` because an aggregate ratio needs a combined
+          equity curve, which a later leaf builds on top of this.
+        * ``"total"`` — every running unit folded into a single row (ratios
+          ``None`` likewise).
+
+        Money is kept exact end to end (never float); only the per-strategy ratios
+        are floats. Empty when no unit is running.
+
+        Parameters
+        ----------
+        level : {"strategy", "exchange", "total"}, optional
+            The aggregation level. Defaults to ``"strategy"``.
+
+        Returns
+        -------
+        list of KpiRow
+            The rows for ``level`` (see above).
+
+        Raises
+        ------
+        ValueError
+            If ``level`` is not one of the three recognised levels.
+
+        """
+        if level not in ("strategy", "exchange", "total"):
+            raise ValueError(
+                f"unknown KPI level {level!r}; expected one of "
+                "'strategy', 'exchange', 'total'"
+            )
+        units = self._running_units()
+        if level == "strategy":
+            return [self._strategy_kpi(unit) for unit in units]
+        if level == "exchange":
+            return self._exchange_kpi(units)
+        return self._total_kpi(units)
+
+    @staticmethod
+    def _strategy_kpi(unit: _Unit) -> KpiRow:
+        """One :class:`KpiRow` for a running unit — PnL/fees + its own ratios.
+
+        The ratio KPIs (Sharpe/Sortino/Calmar/maxDD) are computed via ``fynance``;
+        if the optional dependency is absent they degrade to ``None`` (the dashboard
+        still reports PnL/fees) rather than raising.
+        """
+        assert unit.engine is not None
+        perf = unit.engine.perf
+
+        def _ratio(fn: Callable[[], float]) -> float | None:
+            try:
+                return fn()
+            except PerformanceDependencyError:
+                return None
+
+        return KpiRow(
+            level="strategy",
+            key=unit.name,
+            strategy=unit.name,
+            exchange=unit.exchange,
+            realised_pnl=perf.realised_pnl(),
+            fees_paid=perf.fees_paid(),
+            sharpe=_ratio(perf.sharpe),
+            sortino=_ratio(perf.sortino),
+            calmar=_ratio(perf.calmar),
+            max_drawdown=_ratio(perf.max_drawdown),
+        )
+
+    @staticmethod
+    def _exchange_kpi(units: list[_Unit]) -> list[KpiRow]:
+        """Fold the units per venue: PnL/fees summed, ratios ``None``.
+
+        Preserves first-seen exchange order so the view is deterministic.
+        """
+        pnl: dict[str, Money] = {}
+        fees: dict[str, Money] = {}
+        order: list[str] = []
+        for unit in units:
+            assert unit.engine is not None
+            venue = unit.exchange
+            if venue not in pnl:
+                pnl[venue] = _ZERO
+                fees[venue] = _ZERO
+                order.append(venue)
+            pnl[venue] += unit.engine.perf.realised_pnl()
+            fees[venue] += unit.engine.perf.fees_paid()
+        return [
+            KpiRow(
+                level="exchange",
+                key=venue,
+                strategy=None,
+                exchange=venue,
+                realised_pnl=pnl[venue],
+                fees_paid=fees[venue],
+                sharpe=None,
+                sortino=None,
+                calmar=None,
+                max_drawdown=None,
+            )
+            for venue in order
+        ]
+
+    @staticmethod
+    def _total_kpi(units: list[_Unit]) -> list[KpiRow]:
+        """Fold every unit into a single total row (ratios ``None``).
+
+        Always one row (a zero-PnL total even when no unit is running), so the
+        dashboard's total strip has a value to paint.
+        """
+        total_pnl: Money = _ZERO
+        total_fees: Money = _ZERO
+        for unit in units:
+            assert unit.engine is not None
+            total_pnl += unit.engine.perf.realised_pnl()
+            total_fees += unit.engine.perf.fees_paid()
+        return [
+            KpiRow(
+                level="total",
+                key="total",
+                strategy=None,
+                exchange=None,
+                realised_pnl=total_pnl,
+                fees_paid=total_fees,
+                sharpe=None,
+                sortino=None,
+                calmar=None,
+                max_drawdown=None,
+            )
+        ]
 
 
 def _mode_of(config: AppConfig) -> StrategyMode:
