@@ -75,9 +75,9 @@ missing any one refuses with a non-zero exit / a raised
 4. **Run the hardening suite** and the full test suite — both must be green:
 
    ```bash
-   .venv/bin/python -m pytest -q
-   .venv/bin/ruff check trading_bot/
-   .venv/bin/mypy trading_bot/
+   python -m pytest -q
+   ruff check trading_bot/
+   mypy trading_bot/
    ```
 5. **Validate against a real-key sandbox.** This is the one remaining
    prerequisite and is **not done in-repo**: before any real order, exercise the
@@ -185,7 +185,7 @@ under the gitignored `strategies/` tree, so run them by path — e.g. for LS1:
 
 ```bash
 pip install -e ../fynance-research            # the research oracle (lazy-imported)
-.venv/bin/python -m pytest strategies/ls1/test_e2e.py -m network -v
+python -m pytest strategies/ls1/test_e2e.py -m network -v
 ```
 
 For a **Binance testnet** order round-trip, add a *testnet* key to a gitignored
