@@ -499,6 +499,178 @@ def test_orders_endpoint_present_and_empty() -> None:
     assert _client().get("/api/orders").json() == []
 
 
+# --- Orders history + fills history + filters (Orders page data) ----------- #
+
+
+def _fills_config_with_store(db_path: str) -> AppConfig:
+    """Two paper strategies on different venues, each persisting to its own store.
+
+    Both units read/write the SAME store file here (a single shared db) so the
+    supervisor's cross-unit `fills()` folds them together; the store's `venue` tag
+    (set per unit on start) is what distinguishes the exchanges in the rows.
+    """
+    return AppConfig.model_validate(
+        {
+            "mode": "paper",
+            "storage": {"db_path": db_path},
+            "brokers": [
+                {"name": "kraken", "exchange": "kraken"},
+                {"name": "binance", "exchange": "binance"},
+            ],
+            "strategies": [
+                {
+                    "name": "btc-kraken",
+                    "symbol": "BTC/USD",
+                    "data": {"exchange": "kraken", "span": 60},
+                    "signal": {"ref": "ma_crossover", "params": {"fast": 3, "slow": 6}},
+                    "reference_qty": "2",
+                    "lookback": 6,
+                },
+                {
+                    "name": "eth-binance",
+                    "symbol": "ETH/USDT",
+                    "data": {"exchange": "binance", "span": 60},
+                    "signal": {"ref": "ma_crossover", "params": {"fast": 3, "slow": 6}},
+                    "reference_qty": "2",
+                    "lookback": 6,
+                },
+            ],
+        }
+    )
+
+
+def _seed_store(db_path: str) -> None:
+    """Write two venues' fills into the shared store (tagged with mode + venue).
+
+    A BTC leg on kraken and an ETH leg on binance, so `/api/fills` has rows to
+    filter by crypto (BTC / ETH), exchange (kraken / binance) and strategy.
+    """
+    from trading_bot.storage.sqlite_store import SqliteStore
+
+    btc = Instrument(Symbol("BTC", "USD"))
+    eth = Instrument(Symbol("ETH", "USDT"))
+    store = SqliteStore(db_path)
+    store.set_context(mode="paper", venue="kraken")
+    store.record_fill(
+        Fill("KF1", "kc1", btc, OrderSide.BUY, money("1"), money("100"), money("1"), 1)
+    )
+    store.set_context(mode="paper", venue="binance")
+    store.record_fill(
+        Fill("BF1", "bc1", eth, OrderSide.SELL, money("2"), money("200"), money("2"), 2)
+    )
+
+
+def test_fills_endpoint_lists_tagged_fills(tmp_path) -> None:  # noqa: ANN001
+    """`GET /api/fills` returns the units' persisted fills, tagged strategy/exchange/base."""
+    db = str(tmp_path / "book.sqlite")
+    _seed_store(db)
+    # Units stopped → each reads the shared store at its configured db_path.
+    sup = StrategySupervisor(_fills_config_with_store(db), dccd_client=_two_venue_client())
+    client = TestClient(create_dashboard_app(sup))
+
+    rows = client.get("/api/fills").json()
+    # Both strategies read the same shared store, so each fill surfaces under BOTH
+    # units; the venue tag (from the store) is what pins the exchange. Assert the
+    # (exchange, base, side) tuples present, and that money is exact strings.
+    seen = {(r["exchange"], r["base"], r["side"], r["qty"]) for r in rows}
+    assert ("kraken", "BTC", "buy", "1") in seen
+    assert ("binance", "ETH", "sell", "2") in seen
+    # Money is an exact Decimal string, never a float.
+    a_row = next(r for r in rows if r["base"] == "ETH")
+    assert a_row["price"] == "200" and a_row["fee"] == "2"
+
+
+def test_fills_endpoint_filters(tmp_path) -> None:  # noqa: ANN001
+    """`/api/fills` narrows by ?crypto=, ?exchange= and ?strategy= (AND, exact)."""
+    db = str(tmp_path / "book.sqlite")
+    _seed_store(db)
+    sup = StrategySupervisor(_fills_config_with_store(db), dccd_client=_two_venue_client())
+    client = TestClient(create_dashboard_app(sup))
+
+    by_exchange = client.get("/api/fills?exchange=binance").json()
+    assert by_exchange and all(r["exchange"] == "binance" for r in by_exchange)
+    by_crypto = client.get("/api/fills?crypto=BTC").json()
+    assert by_crypto and all(r["base"] == "BTC" for r in by_crypto)
+    by_strategy = client.get("/api/fills?strategy=btc-kraken").json()
+    assert by_strategy and all(r["strategy"] == "btc-kraken" for r in by_strategy)
+    # A compound filter that matches nothing is an empty list (200).
+    none = client.get("/api/fills?crypto=BTC&exchange=binance").json()
+    assert none == []
+
+
+def test_fills_endpoint_limit_and_group_by(tmp_path) -> None:  # noqa: ANN001
+    """`/api/fills` honours ?limit= and ?group_by=."""
+    db = str(tmp_path / "book.sqlite")
+    _seed_store(db)
+    sup = StrategySupervisor(_fills_config_with_store(db), dccd_client=_two_venue_client())
+    client = TestClient(create_dashboard_app(sup))
+
+    all_rows = client.get("/api/fills").json()
+    capped = client.get("/api/fills?limit=1").json()
+    assert len(capped) == 1 and len(all_rows) > 1  # most-recent single row
+    grouped = client.get("/api/fills?group_by=exchange").json()
+    assert {g["group"] for g in grouped} == {"kraken", "binance"}
+
+
+def test_fills_endpoint_unknown_group_by_is_422() -> None:
+    """An unknown ``group_by`` on /api/fills is rejected (422)."""
+    assert _client().get("/api/fills?group_by=bogus").status_code == 422
+
+
+def test_orders_history_reads_stored_orders(tmp_path) -> None:  # noqa: ANN001
+    """`GET /api/orders?history=true` returns stored orders (any status), tagged."""
+    from trading_bot.domain.order import Order, OrderStatus, OrderType
+    from trading_bot.storage.sqlite_store import SqliteStore
+
+    db = str(tmp_path / "book.sqlite")
+    btc = Instrument(Symbol("BTC", "USD"))
+    store = SqliteStore(db)
+    # A terminal (filled) order — history includes it; the open-orders view excludes it.
+    order = Order("oc1", btc, OrderSide.BUY, money("1"), OrderType.LIMIT,
+                  limit_price=money("100"))
+    order.status = OrderStatus.FILLED
+    order.filled_qty = money("1")
+    store.upsert_order(order)
+
+    sup = StrategySupervisor(_fills_config_with_store(db), dccd_client=_two_venue_client())
+    client = TestClient(create_dashboard_app(sup))
+
+    # Default (open only) — no non-terminal orders on the stopped units.
+    assert client.get("/api/orders").json() == []
+    # History surfaces the filled order (both units share the store), tagged + based.
+    hist = client.get("/api/orders?history=true").json()
+    assert hist and all(o["status"] == "filled" for o in hist)
+    assert all(o["base"] == "BTC" for o in hist)
+    # Filter the history by exchange (the unit tag).
+    only_kraken = client.get("/api/orders?history=true&exchange=kraken").json()
+    assert only_kraken and all(o["exchange"] == "kraken" for o in only_kraken)
+
+
+# --- Orders + Logs page markup --------------------------------------------- #
+
+
+def test_orders_page_has_tables_and_filters() -> None:
+    """`GET /orders` carries the orders + fills tables and the filter controls."""
+    html = _client().get("/orders").text
+    assert 'id="orders-table"' in html
+    assert 'id="fills-table"' in html
+    # Filter controls (crypto / exchange / strategy).
+    assert 'id="f-crypto"' in html
+    assert 'id="f-exchange"' in html
+    assert 'id="f-strategy"' in html
+    # It fetches both history endpoints (orders history + fills).
+    assert "/api/orders" in html and "history=true" in html
+    assert "/api/fills" in html
+
+
+def test_logs_page_has_feed_and_subscribes_to_sse() -> None:
+    """`GET /logs` carries the activity feed container and subscribes to /api/events."""
+    html = _client().get("/logs").text
+    assert 'id="logs-feed"' in html  # the feed container
+    assert "/api/events" in html  # it subscribes to the merged SSE stream
+    assert "connect(" in html  # via the shared connect() helper
+
+
 # --- Overview page markup + live SSE --------------------------------------- #
 
 
@@ -1179,3 +1351,81 @@ def test_dashboard_tolerates_a_unit_that_fails_to_start(
     assert result.exit_code == 0, result.output
     assert served["ran"] is True  # the dashboard still served despite the failure
     assert "skipping strategy" in result.output
+
+
+# --- CLI: serve alias + start --serve fold onto the unified dashboard ------- #
+
+
+def test_serve_alias_is_the_read_only_dashboard(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`trading-bot serve` now brings up the unified dashboard **read-only** (an alias).
+
+    The retired split: `serve` folds onto `create_dashboard_app(read_only=True)` over
+    a supervisor. Patches `uvicorn.run`, asserts the built app is the unified shell
+    (Overview + Orders + Logs nav), health reports `read_only: true`, and a control
+    mutation is refused (403) — no separate read-only-over-one-engine app anymore.
+    """
+    import uvicorn
+
+    captured: dict[str, object] = {}
+    monkeypatch.setattr(uvicorn, "run", lambda app, **kw: captured.update(app=app))
+
+    result = runner.invoke(cli_app, ["serve", "--port", "9151"])
+    assert result.exit_code == 0, result.output
+
+    client = TestClient(captured["app"])
+    html = client.get("/").text
+    assert "Overview" in html and "Orders" in html and "Logs" in html
+    assert client.get("/api/health").json()["read_only"] is True
+    assert client.post("/api/strategies/x/start").status_code == 403
+
+
+def test_start_serve_folds_onto_create_dashboard_app(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`start --serve` serves the SINGLE unified dashboard (via `create_dashboard_app`).
+
+    Spies `create_dashboard_app` (the single code path) and stubs the serving loop so
+    `_run_daemon(serve=True)` returns promptly — proving the daemon's `--serve` builds
+    the unified dashboard over its supervisor, not a separate control app.
+    """
+    import asyncio
+
+    import trading_bot.interfaces.api as api_pkg
+
+    built: dict[str, object] = {}
+    real_factory = api_pkg.create_dashboard_app
+
+    def _spy(supervisor: object, **kwargs: object) -> object:
+        app = real_factory(supervisor, **kwargs)  # type: ignore[arg-type]
+        built["app"] = app
+        built["kwargs"] = kwargs
+        return app
+
+    # `_run_daemon` does `from trading_bot.interfaces.api import create_dashboard_app`
+    # (the package re-export), so patch the name on the package namespace.
+    monkeypatch.setattr(api_pkg, "create_dashboard_app", _spy)
+
+    class _FakeServer:
+        def __init__(self, config: object) -> None:
+            self.config = config
+
+        async def serve(self) -> None:
+            return None  # return immediately (no socket, no blocking)
+
+    import uvicorn
+
+    monkeypatch.setattr(uvicorn, "Server", _FakeServer)
+    monkeypatch.setattr(uvicorn, "Config", lambda *a, **k: object())
+
+    from trading_bot.interfaces.cli.main import _run_daemon
+
+    # An empty paper config (no units) so start_all/shutdown are trivial + dccd-free.
+    asyncio.run(
+        _run_daemon(AppConfig(), interval=0.05, cron=None, serve=True)
+    )
+
+    assert "app" in built  # the unified dashboard was built for --serve
+    client = TestClient(built["app"])
+    assert "Overview" in client.get("/").text  # the unified shell

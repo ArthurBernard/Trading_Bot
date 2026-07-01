@@ -18,8 +18,10 @@ What is verified
   client of the API, not a server-side data dump;
 * the served HTML is a **shell** — no engine money string is baked into it
   server-side (the data only arrives over ``/api/*``);
-* the ``serve`` command builds ``create_app(engine)`` and hands it to
-  ``uvicorn.run`` with the host/port — **patched** so no socket is opened;
+* the ``serve`` command now builds the **read-only unified dashboard**
+  (``create_dashboard_app(supervisor, read_only=True)`` — an alias of
+  ``dashboard --read-only``) and hands it to ``uvicorn.run`` with the host/port —
+  **patched** so no socket is opened;
 * read-only still holds — a ``POST`` to a plausible order path is rejected (405).
 """
 
@@ -226,11 +228,12 @@ def test_post_to_order_path_is_rejected(client: TestClient) -> None:
 def test_serve_builds_app_and_calls_uvicorn(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """``serve`` builds ``create_app(engine)`` and hands it to ``uvicorn.run``.
+    """``serve`` builds the read-only unified dashboard and hands it to ``uvicorn.run``.
 
     Patches :func:`uvicorn.run` so no socket opens, then asserts the command
     called it with a FastAPI app and the requested host/port — proving the wiring
-    without standing up a real server.
+    without standing up a real server. The built app is the read-only dashboard:
+    ``GET /`` serves the shell, and a control mutation returns ``403``.
     """
     import uvicorn
     from fastapi import FastAPI
@@ -254,9 +257,12 @@ def test_serve_builds_app_and_calls_uvicorn(
     assert kwargs["host"] == "0.0.0.0"
     assert kwargs["port"] == 9123
 
-    # The built app really is the read-only dashboard: GET / serves the shell.
+    # The built app really is the read-only unified dashboard: GET / serves the
+    # shell, health reports read_only, and a control POST is refused (403).
     test_client = TestClient(captured["app"])
     assert test_client.get("/").status_code == 200
+    assert test_client.get("/api/health").json()["read_only"] is True
+    assert test_client.post("/api/strategies/x/start").status_code == 403
 
 
 def test_serve_default_config_is_paper(monkeypatch: pytest.MonkeyPatch) -> None:

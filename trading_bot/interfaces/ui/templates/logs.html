@@ -1,9 +1,136 @@
 {% extends "base.html" %}
 {% block title %}Logs{% endblock %}
 {% block content %}
-<h1>Logs</h1>
+<h1>Activity</h1>
+
+<!-- A live activity feed over the merged SSE stream (/api/events): order, fill and
+     log events stream in as they happen. dccd's logs.html-style — a scrolling
+     newest-last feed with a bounded in-memory history buffer, an autoscroll toggle
+     and a clear button. -->
 <section class="card" id="logs-panel">
-  <h2>Logs</h2>
-  <pre id="logs-body" class="muted">Log stream lands in a later leaf.</pre>
+  <div class="row" style="justify-content:space-between; align-items:center;">
+    <h2 style="margin:0;">Event feed</h2>
+    <div class="row" style="gap:.5rem;">
+      <label class="autoscroll">
+        <input type="checkbox" id="autoscroll" checked> autoscroll
+      </label>
+      <button type="button" class="btn" id="clear-log">Clear</button>
+    </div>
+  </div>
+  <div id="logs-feed" class="logs-feed" role="log" aria-live="polite">
+    <div class="log-empty muted">Waiting for events…</div>
+  </div>
 </section>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  // Logs page — a live activity feed over the merged SSE stream (/api/events).
+  // Each order/fill/log event the dashboard fans in from every running unit's bus
+  // is appended as a compact, timestamped line, with a bounded recent-history
+  // buffer so the feed never grows unbounded. Dependency-free vanilla JS; reuses
+  // base.html's connect()/escapeHtml()/fmtMoney(). Money stays an EXACT Decimal
+  // string (rendered verbatim; never parseFloat'd).
+
+  // Cap the on-screen history so a long-running session cannot grow the DOM
+  // unbounded (dccd keeps a small rolling buffer likewise).
+  var MAX_LINES = 500;
+  var feed = null;
+  var seededEmpty = true;  // the "Waiting…" placeholder is still shown
+
+  // Render one bus event (the /api/events frame shape) to a feed line's HTML.
+  // The frame is {type: 'order'|'fill'|'log', ...} — see _event_dict server-side.
+  function eventLine(ev) {
+    var now = fmtDate(Date.now());
+    if (ev.type === 'fill') {
+      var f = ev.fill;
+      var sideCls = f.side === 'buy' ? 'side-buy' : 'side-sell';
+      return '<div class="log-line log-fill">' +
+        '<span class="log-ts">' + escapeHtml(now) + '</span>' +
+        '<span class="log-tag tag-fill">FILL</span>' +
+        '<span class="log-msg">' +
+          '<span class="' + sideCls + '">' + escapeHtml(f.side) + '</span> ' +
+          fmtMoney(f.qty) + ' ' + escapeHtml(f.instrument) +
+          ' @ ' + fmtMoney(f.price) +
+          ' <span class="muted">(fee ' + fmtMoney(f.fee) + ')</span>' +
+        '</span></div>';
+    }
+    if (ev.type === 'order') {
+      var o = ev.order;
+      var sc = o.side === 'buy' ? 'side-buy' : 'side-sell';
+      return '<div class="log-line log-order">' +
+        '<span class="log-ts">' + escapeHtml(now) + '</span>' +
+        '<span class="log-tag tag-order">ORDER</span>' +
+        '<span class="log-msg">' +
+          '<span class="' + sc + '">' + escapeHtml(o.side) + '</span> ' +
+          fmtMoney(o.qty) + ' ' + escapeHtml(o.instrument) +
+          ' <span class="muted">[' + escapeHtml(o.status) + ']</span>' +
+        '</span></div>';
+    }
+    if (ev.type === 'log') {
+      var lvl = (ev.level || 'info').toLowerCase();
+      return '<div class="log-line log-log level-' + escapeHtml(lvl) + '">' +
+        '<span class="log-ts">' + escapeHtml(now) + '</span>' +
+        '<span class="log-tag tag-log">' + escapeHtml(lvl.toUpperCase()) + '</span>' +
+        '<span class="log-msg">' + escapeHtml(ev.message || '') + '</span></div>';
+    }
+    // Defensive: an unknown frame type still renders a line.
+    return '<div class="log-line"><span class="log-ts">' + escapeHtml(now) +
+      '</span><span class="log-tag">EVENT</span>' +
+      '<span class="log-msg">' + escapeHtml(JSON.stringify(ev)) + '</span></div>';
+  }
+
+  function appendEvent(ev) {
+    if (seededEmpty) { feed.innerHTML = ''; seededEmpty = false; }
+    var wrap = document.createElement('div');
+    wrap.innerHTML = eventLine(ev);
+    var node = wrap.firstChild;
+    feed.appendChild(node);
+    // Trim the oldest lines beyond the buffer cap.
+    while (feed.childNodes.length > MAX_LINES) {
+      feed.removeChild(feed.firstChild);
+    }
+    if (document.getElementById('autoscroll').checked) {
+      feed.scrollTop = feed.scrollHeight;
+    }
+  }
+
+  function clearFeed() {
+    feed.innerHTML = '<div class="log-empty muted">Cleared. Waiting for events…</div>';
+    seededEmpty = true;
+  }
+
+  document.addEventListener('DOMContentLoaded', function () {
+    feed = document.getElementById('logs-feed');
+    document.getElementById('clear-log').addEventListener('click', clearFeed);
+
+    // Subscribe to the merged SSE stream. Each message is one JSON event frame;
+    // connect() also mirrors liveness on the connection dot.
+    connect('/api/events', function (msg) {
+      var ev;
+      try { ev = JSON.parse(msg.data); } catch (e) { return; }
+      appendEvent(ev);
+    });
+  });
+</script>
+<style>
+  /* The scrolling feed — a fixed-height, monospace, newest-last log view. */
+  .logs-feed { max-height:60vh; overflow-y:auto; font-family:var(--font-mono);
+          font-size:.82rem; line-height:1.5; margin-top:.6rem; }
+  .log-line { display:flex; gap:.6rem; align-items:baseline;
+          padding:.15rem 0; border-bottom:1px solid var(--border); }
+  .log-line:last-child { border-bottom:0; }
+  .log-ts { color:var(--muted); white-space:nowrap; }
+  .log-tag { font-weight:700; font-size:.7rem; letter-spacing:.06em;
+          border-radius:4px; padding:.05rem .4rem; white-space:nowrap; }
+  .tag-fill { color:var(--ok); background:var(--ok-soft); }
+  .tag-order { color:var(--accent); background:var(--accent-soft); }
+  .tag-log { color:var(--warn); background:var(--warn-soft); }
+  .log-msg { flex:1; word-break:break-word; }
+  .level-error .log-tag, .level-critical .log-tag {
+          color:var(--err); background:var(--err-soft); }
+  .log-empty { padding:.4rem 0; }
+  .autoscroll { font-size:.8rem; color:var(--muted); display:inline-flex;
+          align-items:center; gap:.35rem; cursor:pointer; }
+</style>
 {% endblock %}

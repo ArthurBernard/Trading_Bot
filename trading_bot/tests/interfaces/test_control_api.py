@@ -1,10 +1,14 @@
-"""Tests for the daemon's **control** API — start/stop/mode over a supervisor.
+"""Tests for the daemon's control API — now a thin alias of the unified dashboard.
 
 Drives :func:`~trading_bot.interfaces.api.create_control_app` with a
 :class:`fastapi.testclient.TestClient` (no real server) over a
 :class:`~trading_bot.application.supervisor.StrategySupervisor` built from a paper
-config + a fake dccd client. Proves the read+write control plane, and that **real
-money is gated** (live needs an explicit confirmation → ``403`` otherwise).
+config + a fake dccd client. ``create_control_app`` is now a **backward-compat
+wrapper** that delegates to :func:`~trading_bot.interfaces.api.create_dashboard_app`
+(``start --serve`` and any lingering imports go through it), so these tests prove
+the wrapper still exposes the read+write control plane and that **real money is
+gated** (live needs an explicit confirmation → ``403`` otherwise). The full control
+surface (deploy/remove, the page shells) is covered by ``test_dashboard.py``.
 """
 
 from __future__ import annotations
@@ -123,21 +127,33 @@ def test_unknown_mode_is_400() -> None:
     assert r.status_code == 400
 
 
-def test_control_dashboard_renders() -> None:
-    """`GET /` returns the control dashboard shell (brand + table + live modal)."""
+def test_control_wrapper_serves_the_unified_dashboard() -> None:
+    """`create_control_app` now serves the unified dashboard shell (Overview at `/`)."""
     resp = _client().get("/")
     assert resp.status_code == 200
     html = resp.text
     assert "trading_bot" in html
-    assert 'id="strategies-body"' in html  # the table control.js fills
+    # The unified shell's nav links every page — Strategies (control) among them.
+    assert "Overview" in html and "Strategies" in html and "Orders" in html
+
+
+def test_control_wrapper_strategies_page_has_the_control_surface() -> None:
+    """The Strategies page carries the control table + the deliberate go-live modal."""
+    html = _client().get("/strategies").text
+    assert 'id="strategies-body"' in html  # the table the page fills
     assert 'id="live-modal"' in html  # the deliberate go-live confirmation
+    assert "I UNDERSTAND" in html  # the typed-confirmation phrase
 
 
-def test_control_js_is_served() -> None:
-    """The control dashboard's script is served and carries the confirm phrase."""
-    resp = _client().get("/static/control.js")
-    assert resp.status_code == 200
-    assert "I UNDERSTAND" in resp.text
+def test_control_wrapper_health_is_the_dashboard_shape() -> None:
+    """The wrapper's `/api/health` is the unified dashboard's shape (mode + read_only)."""
+    body = _client().get("/api/health").json()
+    assert body == {
+        "status": "ok",
+        "mode": "paper",
+        "strategies": 1,
+        "read_only": False,
+    }
 
 
 def test_start_then_stop() -> None:

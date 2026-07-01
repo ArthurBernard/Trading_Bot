@@ -8,6 +8,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Dashboard Orders/Fills + Logs pages.** An **Orders/Fills** history page —
+  `GET /api/fills` (fill history across every unit's store) and `GET /api/orders?history=true`
+  (open + recent) with **crypto / exchange / strategy filters** + `limit` — and a
+  **Logs** page streaming the merged engine activity over `/api/events` (SSE) with a
+  recent-event buffer. Completes the unified dashboard's five pages. (#120)
+
 - **Dashboard PnL chart (uPlot, self-hosted).** The PnL page draws a per-strategy
   **equity-over-time chart** with **live and testnet as separate, colour-coded
   series** (fake vs real money never combined), fed by `/api/pnl` — a strategy
@@ -86,6 +92,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   BTC-USD Kraken data gap (Jan–May 2026) — ready to activate once backfilled (DEPLOY_ALLOC1.md §Kraken).
 
 ### Changed
+
+- **The split web apps are retired onto one `dashboard` command.** `trading-bot serve`
+  is now an alias that serves the unified dashboard **read-only**, and `trading-bot
+  start --serve` serves the same `create_dashboard_app` (single code path) alongside
+  the scheduler; `create_control_app` is a thin backward-compat wrapper over it. One
+  app, one primary command (`trading-bot dashboard`). `doc/dev/10-deploy.md` +
+  `deploy/trading-bot.service` now lead with `dashboard`. Completes the unified
+  dccd-style dashboard epic. (#120)
 
 - **Private read-only endpoints validated live on mainnet for both venues** — the
   go-live runbook's *Proven vs pending* now records that `balances` / `open_orders`
