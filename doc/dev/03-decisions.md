@@ -6,6 +6,27 @@ rejected approaches as tombstones.
 
 ---
 
+### 2026-07-01 Dashboard is a persistent control plane — deploy existing signals, not author code (PR #117)  [accepted]
+- **Choice**: the dashboard owns a persistent **manifest** (`configs/dashboard.yaml`,
+  the default when `trading-bot dashboard` gets no `-c`) that it rewrites on every
+  membership change; the UI **adds/removes strategies** by composing a *deployment*
+  (`POST /api/strategies` with a **signal ref** + venue/mode/capital/universe/risk),
+  never writing the signal's Python. Signal code stays in `strategies/<name>/signal.py`;
+  `GET /api/signals` discovers the builtins + those refs. `supervisor.add_unit` is
+  validated, atomic and **never auto-starts** (paper-safe). The manifest is gitignored
+  (deployment/strategy content is local-only) and holds no secrets (venue keys come
+  from the environment).
+- **Why**: a per-strategy YAML passed with `-c` conflated a strategy's *authoring
+  file* with the *deployment manifest*, so the dashboard looked tied to one strategy.
+  The control plane should be **one dashboard common to all strategies**, managed from
+  the UI and persisted — mirroring dccd, whose UI configures jobs, not the collector
+  code. Authoring signal *code* from a browser is out of scope (and unsafe); deploying
+  an existing, importable signal is the right UI surface.
+- **Rejected alternatives**: (a) a single hand-edited master manifest with no UI CRUD
+  — still YAML-by-hand, not "managed from the UI"; (b) let the UI author signal code —
+  arbitrary code execution + no review; (c) auto-start a unit on deploy — a deploy
+  should be paper-safe and explicit, so start stays a separate deliberate action.
+
 ### 2026-07-01 Paper unit start replays the store's fills; live/testnet reconcile (PR #115)  [accepted]
 - **Choice**: `StrategySupervisor.start()` replays the store's persisted fills into
   the engine's tracker + performance service **only when the unit is paper**, so a

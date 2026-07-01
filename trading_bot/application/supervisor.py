@@ -47,7 +47,11 @@ from trading_bot.domain.money import money
 from trading_bot.domain.performance import PerformanceDependencyError
 
 if TYPE_CHECKING:
-    from trading_bot.application.config import AppConfig
+    from trading_bot.application.config import (
+        AppConfig,
+        PortfolioStrategyConfig,
+        StrategyConfig,
+    )
     from trading_bot.application.data_provider import DccdClient
     from trading_bot.application.portfolio_runner import PortfolioRunner
     from trading_bot.application.strategy_runner import StrategyRunner
@@ -282,6 +286,125 @@ class StrategySupervisor:
         self._units[name] = _Unit(
             name=name, kind=kind, exchange=exchange, mode=mode, config=config
         )
+
+    def add_unit(self, entry: StrategyConfig | PortfolioStrategyConfig) -> str:
+        """Deploy a new **stopped** unit from a single config entry (paper-safe).
+
+        The dynamic-membership counterpart of ``__init__``'s config split: adds
+        ``entry`` (a single-instrument :class:`~trading_bot.application.config.
+        StrategyConfig` or a multi-asset :class:`~trading_bot.application.config.
+        PortfolioStrategyConfig`) to the base config and builds a **stopped**
+        :class:`_Unit` for it, exactly the way ``__init__`` builds the declared
+        units (same ``_exchange_of`` / ``_slice_for``, same seed mode). The unit
+        is **never auto-started** — deploying is paper-safe; a later ``start``
+        brings it online.
+
+        Validation is up front and atomic: the entry is folded into a new
+        :class:`~trading_bot.application.config.AppConfig` via
+        :meth:`~trading_bot.application.config.AppConfig.add_strategy` /
+        :meth:`~trading_bot.application.config.AppConfig.add_portfolio` (rejecting
+        a duplicate name / an invalid slice), and the unit is sliced for its mode
+        (so a testnet/live seed with no matching broker is rejected) **before**
+        anything is mutated — a bad entry adds nothing.
+
+        Parameters
+        ----------
+        entry : StrategyConfig or PortfolioStrategyConfig
+            The deployment to add — a signal ref + venue/mode/capital already
+            declared. The engine never authors the signal code; it only wires an
+            existing, importable signal.
+
+        Returns
+        -------
+        str
+            The name of the newly-added unit.
+
+        Raises
+        ------
+        ConfigError
+            If the name is already managed, or the entry cannot form a runnable
+            unit in the seed mode (e.g. no matching broker for a non-paper seed).
+
+        """
+        # Import here (not at module top) to avoid a circular import: config is a
+        # TYPE_CHECKING-only import above, and the concrete classes are needed at
+        # runtime only for this dispatch.
+        from trading_bot.application.config import (
+            PortfolioStrategyConfig,
+            StrategyConfig,
+        )
+
+        name = entry.name
+        if name in self._units:
+            raise ConfigError(
+                f"duplicate strategy name {name!r}: each managed unit needs a "
+                "unique name across strategies and portfolios"
+            )
+        # Fold the entry into a fresh, fully-validated base config first (a bad
+        # slice / duplicate name raises here, before any mutation).
+        try:
+            if isinstance(entry, StrategyConfig):
+                new_base = self._base.add_strategy(entry)
+                kind: _KIND = "strategy"
+            elif isinstance(entry, PortfolioStrategyConfig):
+                new_base = self._base.add_portfolio(entry)
+                kind = "portfolio"
+            else:  # pragma: no cover - guarded by the type signature
+                raise ConfigError(
+                    f"cannot add unit from {type(entry).__name__}; expected a "
+                    "StrategyConfig or PortfolioStrategyConfig"
+                )
+        except ValueError as exc:
+            raise ConfigError(str(exc)) from exc
+
+        # Swap in the extended base so `_exchange_of` / `_slice_for` see the new
+        # entry, then build the stopped unit exactly as `__init__` does. Restore
+        # the old base and re-raise if the mode slice is not runnable — nothing
+        # is left half-added.
+        old_base = self._base
+        self._base = new_base
+        try:
+            self._add_unit(name, kind, _mode_of(new_base))
+        except Exception:
+            self._base = old_base
+            raise
+        return name
+
+    def remove_unit(self, name: str) -> None:
+        """Stop (if running) and drop a managed unit, and forget its config.
+
+        The inverse of :meth:`add_unit`: tears the unit's engine down if it is
+        running (via :meth:`stop`), removes it from the registry, and drops its
+        entry from the base config so :meth:`manifest` no longer reports it.
+        Idempotent lookup — an unknown name raises a clear error.
+
+        Raises
+        ------
+        ConfigError
+            If ``name`` is not a managed unit.
+
+        """
+        unit = self._unit(name)
+        if unit.running:
+            # `stop` is async but only clears in-memory state (no awaited I/O);
+            # inline its effect so `remove_unit` stays a sync accessor mirroring
+            # the shape of the other registry helpers.
+            unit.running = False
+            unit.runner = None
+            unit.engine = None
+        del self._units[name]
+        self._base = self._base.remove_entry(name)
+
+    def manifest(self) -> AppConfig:
+        """Reconstruct the current :class:`AppConfig` from the live units.
+
+        The persistence source: the base config as it now stands after any
+        :meth:`add_unit` / :meth:`remove_unit`, so the dashboard can write it back
+        to disk and reload the same deployment on the next launch. Returns the
+        base config directly (an immutable pydantic model); its ``strategies`` /
+        ``portfolios`` are exactly the managed units.
+        """
+        return self._base
 
     def names(self) -> list[str]:
         """The managed strategy names, in registration order."""

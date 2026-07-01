@@ -12,7 +12,13 @@ from __future__ import annotations
 import polars as pl
 import pytest
 
-from trading_bot.application.config import AppConfig
+from trading_bot.application.config import (
+    AppConfig,
+    DataSourceConfig,
+    PortfolioStrategyConfig,
+    SignalRefConfig,
+    StrategyConfig,
+)
 from trading_bot.application.events import FillEvent
 from trading_bot.application.supervisor import StrategySupervisor
 from trading_bot.domain.errors import ConfigError, LiveTradingNotEnabled
@@ -382,6 +388,113 @@ def test_kpi_rejects_an_unknown_level() -> None:
     sup = StrategySupervisor(_two_venue_config(), dccd_client=_two_venue_client())
     with pytest.raises(ValueError, match="unknown KPI level"):
         sup.kpi("bogus")  # type: ignore[arg-type]
+
+
+# --- dynamic membership: add_unit / remove_unit / manifest ----------------- #
+
+
+def _portfolio_entry(name: str = "alloc1") -> PortfolioStrategyConfig:
+    """A deployable portfolio entry pointing at an existing signal ref."""
+    return PortfolioStrategyConfig(
+        name=name,
+        venue="binance",
+        universe=["BTC/USDT", "ETH/USDT"],
+        signal=SignalRefConfig(ref="strategies.alloc1.signal:alloc1_portfolio_signal"),
+        capital=money("100000"),
+        data=DataSourceConfig(exchange="binance", span=86400),
+    )
+
+
+def test_add_unit_appends_a_stopped_unit() -> None:
+    """`add_unit` deploys a new **stopped** unit reflected in status() + names()."""
+    sup = _supervisor()
+    name = sup.add_unit(_portfolio_entry())
+    assert name == "alloc1"
+    assert sup.names() == ["btc-ma", "alloc1"]
+    [st] = [s for s in sup.status() if s.name == "alloc1"]
+    assert st.kind == "portfolio"
+    assert st.exchange == "binance"
+    assert st.running is False  # never auto-started (paper-safe)
+
+
+def test_add_unit_rejects_a_duplicate_name() -> None:
+    """A name already managed is a ConfigError; nothing is added."""
+    sup = _supervisor()
+    with pytest.raises(ConfigError, match="duplicate"):
+        sup.add_unit(StrategyConfig(name="btc-ma", symbol="ETH/USD"))
+    assert sup.names() == ["btc-ma"]  # unchanged
+
+
+async def test_add_unit_bad_signal_ref_surfaces_on_start() -> None:
+    """A deployment with an unimportable signal ref adds (paper-safe) but fails to start.
+
+    Adding never resolves the signal (paper-safe, no import), so a bad
+    ``module:function`` ref lands as a stopped unit; the clear error surfaces when
+    it is *started* (where the runner resolves + imports the signal).
+    """
+    sup = _supervisor()
+    sup.add_unit(
+        PortfolioStrategyConfig(
+            name="pf",
+            venue="binance",
+            universe=["BTC/USDT", "ETH/USDT"],
+            signal=SignalRefConfig(ref="nonexistent.module:sig"),
+            capital=money("100000"),
+            data=DataSourceConfig(exchange="binance", span=86400),
+        )
+    )
+    assert "pf" in sup.names()  # added stopped (deploy is paper-safe)
+    with pytest.raises(ConfigError):
+        await sup.start("pf")  # the runner resolves the ref here → clear error
+
+
+def test_add_unit_non_paper_seed_needs_a_matching_broker() -> None:
+    """A non-paper seed with no matching broker for the venue is rejected atomically.
+
+    The base config is ``live`` with a Kraken broker only; deploying a Binance
+    portfolio (no matching broker) must raise and leave the supervisor untouched.
+    """
+    base = AppConfig.model_validate(
+        {
+            "mode": "live",
+            "live_enabled": True,
+            "brokers": [{"name": "k", "exchange": "kraken"}],
+        }
+    )
+    sup = StrategySupervisor(base)
+    with pytest.raises(ConfigError, match="no matching broker"):
+        sup.add_unit(_portfolio_entry())
+    assert sup.names() == []  # nothing added; base restored
+
+
+def test_manifest_reflects_the_current_units() -> None:
+    """`manifest()` returns the AppConfig reconstructed from the live units."""
+    sup = _supervisor()
+    sup.add_unit(_portfolio_entry())
+    man = sup.manifest()
+    assert [s.name for s in man.strategies] == ["btc-ma"]
+    assert [p.name for p in man.portfolios] == ["alloc1"]
+
+
+async def test_remove_unit_stops_and_drops() -> None:
+    """`remove_unit` stops a running unit, drops it, and forgets its config."""
+    pytest.importorskip("fynance")  # ma_crossover evaluates fynance.sma
+    sup = _supervisor()
+    await sup.start("btc-ma")
+    assert sup.status("btc-ma")[0].running is True
+    sup.remove_unit("btc-ma")
+    assert sup.names() == []
+    assert sup.manifest().strategies == []
+    # It is truly gone — operating on it is now an unknown-strategy error.
+    with pytest.raises(ConfigError, match="unknown strategy"):
+        await sup.start("btc-ma")
+
+
+def test_remove_unit_unknown_is_a_config_error() -> None:
+    """Removing an unmanaged name is a clear ConfigError."""
+    sup = _supervisor()
+    with pytest.raises(ConfigError, match="unknown strategy"):
+        sup.remove_unit("nope")
 
 
 # --- paper start-replay: a persisted book survives a restart --------------- #

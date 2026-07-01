@@ -877,6 +877,29 @@ def start(
 # --- dashboard (unified UI) ------------------------------------------------ #
 
 
+#: The default manifest the dashboard reads/rewrites when no ``--config`` is given
+#: — one persistent control plane common to every strategy it declares. Under the
+#: gitignored ``configs/`` tree (deployment content, LOCAL-only).
+_DEFAULT_MANIFEST = pathlib.Path("configs/dashboard.yaml")
+
+
+def _load_or_create_manifest(path: pathlib.Path) -> AppConfig:
+    """Load the manifest at ``path``, creating a fresh empty-paper one if absent.
+
+    The dashboard is a **persistent control plane**: it reads a manifest on
+    startup and rewrites it on every membership change. With no ``--config`` this
+    is the default ``configs/dashboard.yaml``; an explicit ``-c`` names its own
+    file. A missing manifest is created as a fresh empty-paper
+    :class:`~trading_bot.application.config.AppConfig` (written to ``path``), so a
+    first launch has a file to persist deployments into.
+    """
+    if path.exists():
+        return AppConfig.from_yaml(path)
+    config = AppConfig()  # paper by default, no strategies
+    config.to_yaml(path)
+    return config
+
+
 async def _start_dashboard_units(supervisor: object) -> None:
     """Start every declared unit before the dashboard serves — tolerant of failures.
 
@@ -960,11 +983,12 @@ def dashboard(
     from trading_bot.application.supervisor import StrategySupervisor
     from trading_bot.interfaces.api import create_dashboard_app
 
-    config = (
-        AppConfig.from_yaml(config_path)
-        if config_path is not None
-        else AppConfig()
-    )
+    # The manifest the dashboard reads on startup and rewrites on every change:
+    # an explicit --config, or the default configs/dashboard.yaml (created fresh
+    # empty-paper if absent) so one dashboard is common to all strategies it
+    # declares and persists across restarts.
+    manifest_path = config_path if config_path is not None else _DEFAULT_MANIFEST
+    config = _load_or_create_manifest(manifest_path)
 
     if host not in ("127.0.0.1", "localhost", "::1") and not token:
         _console.print(
@@ -989,8 +1013,17 @@ def dashboard(
     # the dashboard; the others still serve.
     asyncio.run(_start_dashboard_units(supervisor))
 
+    # Persist the manifest back to its path after any membership change (the
+    # dashboard owns the manifest). `manifest()` reconstructs the AppConfig from
+    # the live units; `to_yaml` round-trips it (money as exact Decimal strings).
+    def _persist_manifest() -> None:
+        supervisor.manifest().to_yaml(manifest_path)
+
     application = create_dashboard_app(
-        supervisor, auth_token=token, read_only=read_only
+        supervisor,
+        auth_token=token,
+        read_only=read_only,
+        on_change=None if read_only else _persist_manifest,
     )
     if token:
         _console.print("[dim]dashboard auth: token login enabled[/dim]")

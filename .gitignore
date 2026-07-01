@@ -33,6 +33,12 @@ _README.md
 var/
 *.sqlite
 
+# Deployment manifests — the dashboard's control-plane manifest (default
+# configs/dashboard.yaml) and any strategy-deployment config the UI writes.
+# These are deployment/strategy content (a signal ref + venue/mode/capital/
+# universe), LOCAL-ONLY like strategies/; never committed to the engine repo.
+configs/
+
 # Logs / data / notebooks
 *.log
 *.db

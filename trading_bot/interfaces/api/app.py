@@ -64,13 +64,13 @@ import json
 import math
 from collections.abc import Callable
 from decimal import Decimal
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 import trading_bot
 from trading_bot.application.events import (
@@ -82,6 +82,10 @@ from trading_bot.application.events import (
 from trading_bot.interfaces.ui import STATIC_DIR, TEMPLATES_DIR
 
 if TYPE_CHECKING:
+    from trading_bot.application.config import (
+        PortfolioStrategyConfig,
+        StrategyConfig,
+    )
     from trading_bot.application.service_factory import Engine
     from trading_bot.application.supervisor import (
         KpiRow,
@@ -536,6 +540,200 @@ class _ModeBody(BaseModel):
     confirm: bool = False
 
 
+class _CreateStrategyBody(BaseModel):
+    """Request body for ``POST /api/strategies`` — deploy an existing signal.
+
+    The UI **composes a deployment** from a signal that already exists *in code*
+    (a builtin name like ``ma_crossover``, or a ``"module:function"`` ref); it
+    never authors the signal's Python. This body carries only the deployment
+    parameters — venue / mode / capital / universe|symbol / risk — that the
+    supervisor turns into a config entry (a
+    :class:`~trading_bot.application.config.StrategyConfig` for ``kind ==
+    "strategy"`` or a :class:`~trading_bot.application.config.
+    PortfolioStrategyConfig` for ``kind == "portfolio"``).
+
+    Kept **module-level** (never a local class inside the factory): with ``from
+    __future__ import annotations`` in force, FastAPI can only resolve a body
+    model whose module globals are visible — a locally-defined model fails to
+    build (the same gotcha :class:`_ModeBody` is defined at module level for).
+
+    Attributes
+    ----------
+    name : str
+        The deployment's logical id (unique across managed units).
+    kind : {"strategy", "portfolio"}
+        A single-instrument strategy or a multi-asset portfolio.
+    venue : str
+        The venue key the bars are read under / the deployment runs on (e.g.
+        ``"binance"``, ``"kraken"``, or ``"paper"``).
+    mode : {"paper", "testnet", "live"}
+        The seed deployment mode. The unit is added **stopped**; going live still
+        needs the typed confirmation on ``.../mode`` and the go-live gates.
+    signal : str
+        The signal reference: a builtin name (``"ma_crossover"``) or a
+        ``"module:function"`` dotted ref to an importable callable.
+    symbol : str or None
+        The single pair for a ``"strategy"`` deployment (``BASE/QUOTE``).
+    universe : list of str or None
+        The pairs a ``"portfolio"`` deployment allocates across.
+    capital : Decimal or None
+        A portfolio's capital base (quote units). Required for a portfolio.
+    params : dict
+        Optional keyword params bound to a builtin signal (e.g. ``{"fast": 10}``).
+    reference_qty : Decimal or None
+        A single-instrument strategy's exposure scale (base units).
+    lookback : int
+        A single-instrument strategy's warmup (bars). Defaults to ``0``.
+    span : int
+        The bar width in seconds the deployment's dccd feed reads. Defaults to
+        ``86400`` (daily — the common portfolio rebalance cadence).
+    risk : dict or None
+        Optional engine-wide risk limits for the deployment (merged onto the
+        manifest's ``risk`` — max_position / max_order / max_daily_loss).
+
+    """
+
+    name: str
+    kind: Literal["strategy", "portfolio"]
+    venue: str
+    mode: Literal["paper", "testnet", "live"] = "paper"
+    signal: str
+    symbol: str | None = None
+    universe: list[str] | None = None
+    capital: Decimal | None = None
+    params: dict[str, Any] = Field(default_factory=dict)
+    reference_qty: Decimal | None = None
+    lookback: int = 0
+    span: int = 86_400
+    risk: dict[str, Any] | None = None
+
+
+def _entry_from_body(
+    body: _CreateStrategyBody,
+) -> StrategyConfig | PortfolioStrategyConfig:
+    """Build a config entry from a create-deployment body (raises on a bad shape).
+
+    Turns the UI's deployment parameters into the corresponding validated config
+    entry — a :class:`~trading_bot.application.config.StrategyConfig` (needs a
+    ``symbol``) or a :class:`~trading_bot.application.config.
+    PortfolioStrategyConfig` (needs a ``universe`` + ``capital``) — pointing at
+    the **already-existing** signal ``body.signal`` (a builtin name or a
+    ``"module:function"`` ref). The signal code is never authored here.
+
+    Raises
+    ------
+    HTTPException
+        ``422`` if the deployment shape is invalid for its ``kind`` (a strategy
+        without a symbol, a portfolio without a universe / capital), or the
+        underlying config validation rejects the entry (an unparseable pair,
+        a non-positive capital, ...).
+    """
+    from pydantic import ValidationError
+
+    from trading_bot.application.config import (
+        DataSourceConfig,
+        PortfolioStrategyConfig,
+        SignalRefConfig,
+        StrategyConfig,
+    )
+
+    signal_ref = SignalRefConfig(ref=body.signal, params=dict(body.params))
+    data = DataSourceConfig(exchange=body.venue, span=body.span)
+    try:
+        if body.kind == "strategy":
+            if not body.symbol:
+                raise HTTPException(
+                    status_code=422,
+                    detail="a 'strategy' deployment needs a 'symbol' (BASE/QUOTE)",
+                )
+            return StrategyConfig(
+                name=body.name,
+                symbol=body.symbol,
+                data=data,
+                signal=signal_ref,
+                reference_qty=body.reference_qty,
+                lookback=body.lookback,
+            )
+        # portfolio
+        if not body.universe:
+            raise HTTPException(
+                status_code=422,
+                detail="a 'portfolio' deployment needs a non-empty 'universe'",
+            )
+        if body.capital is None:
+            raise HTTPException(
+                status_code=422,
+                detail="a 'portfolio' deployment needs a 'capital' base",
+            )
+        return PortfolioStrategyConfig(
+            name=body.name,
+            venue=body.venue,
+            universe=body.universe,
+            signal=signal_ref,
+            capital=body.capital,
+            data=data,
+        )
+    except ValidationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+def _discover_signals() -> dict[str, list[str]]:
+    """List the deployable signal refs — builtins + a scan of ``strategies/``.
+
+    Best-effort discovery for the UI's deploy form:
+
+    * ``builtins`` — the single-instrument builtin names from
+      :data:`~trading_bot.application.run_app._BUILTIN_SIGNALS` (e.g.
+      ``ma_crossover``).
+    * ``discovered`` — every ``strategies/*/signal.py`` module scanned for
+      module-level callables whose name ends with ``_signal`` (the
+      portfolio-signal wrapper shape, e.g. ``alloc1_portfolio_signal`` /
+      ``ls1_kraken_signal``), returned as ``"module:function"`` refs (e.g.
+      ``"strategies.alloc1.signal:alloc1_portfolio_signal"``).
+
+    The scan is *tolerant*: a module that fails to import (a missing research
+    dependency, a syntax error) is skipped, so a broken local strategy never
+    breaks the endpoint. The engine ships no ``strategies/`` code of its own
+    (it is local-only), so ``discovered`` is empty when none are present.
+    """
+    import importlib
+    import pathlib
+
+    from trading_bot.application.run_app import _BUILTIN_SIGNALS
+
+    builtins = sorted(_BUILTIN_SIGNALS)
+
+    discovered: list[str] = []
+    # `strategies/` sits at the repo root, a sibling of the installed package.
+    repo_root = pathlib.Path(__file__).resolve().parents[3]
+    strategies_dir = repo_root / "strategies"
+    if not strategies_dir.is_dir():
+        return {"builtins": builtins, "discovered": discovered}
+
+    for signal_file in sorted(strategies_dir.glob("*/signal.py")):
+        pkg = signal_file.parent.name
+        module_name = f"strategies.{pkg}.signal"
+        try:
+            module = importlib.import_module(module_name)
+        except Exception:  # noqa: BLE001 - a broken local strategy must not 500
+            continue
+        for attr in sorted(vars(module)):
+            # A deployable signal is a public, module-level callable whose name
+            # ends with `_signal` and that is *defined in this module* (so a
+            # re-exported helper like `as_portfolio_signal` — imported from the
+            # application layer — is skipped by the __module__ check).
+            if attr.startswith("_") or not attr.endswith("_signal"):
+                continue
+            obj = getattr(module, attr)
+            if not callable(obj):
+                continue
+            if getattr(obj, "__module__", None) != module_name:
+                continue
+            discovered.append(f"{module_name}:{attr}")
+
+    return {"builtins": builtins, "discovered": discovered}
+
+
 def _status_dict(status: StrategyStatus) -> dict[str, Any]:
     """Render a :class:`StrategyStatus` for JSON (money as exact Decimal string)."""
     return {
@@ -919,6 +1117,7 @@ def create_dashboard_app(
     *,
     auth_token: str | None = None,
     read_only: bool = False,
+    on_change: Callable[[], None] | None = None,
 ) -> FastAPI:
     """Build the **unified dashboard** FastAPI over a :class:`StrategySupervisor`.
 
@@ -951,7 +1150,14 @@ def create_dashboard_app(
     read_only : bool, optional
         When ``True``, the shell advertises a read-only stance (surfaced to the
         templates + ``app.state.read_only`` + the health payload) so later leaves
-        hide/disable control affordances. Defaults to ``False``.
+        hide/disable control affordances, **and** every mutation (create / delete
+        / start / stop / mode) returns ``403``. Defaults to ``False``.
+    on_change : Callable[[], None] or None, optional
+        A persistence hook the mutation endpoints call **after** a successful
+        membership change (create / delete), so the dashboard can rewrite its
+        manifest to disk (the control plane owns the manifest). ``None`` (default)
+        skips persistence — the in-memory supervisor still mutates, nothing is
+        written. Typically ``lambda: supervisor.manifest().to_yaml(path)``.
 
     Returns
     -------
@@ -968,6 +1174,7 @@ def create_dashboard_app(
     app.state.supervisor = supervisor
     app.state.read_only = read_only
     app.state.auth_enabled = bool(auth_token)
+    app.state.on_change = on_change
 
     def _sup(request: Request) -> StrategySupervisor:
         """Read the wired supervisor off ``app.state`` (explicit, testable access)."""
@@ -1143,6 +1350,73 @@ def create_dashboard_app(
                     bus.remove_queue(queue)
 
         return StreamingResponse(_generator(), media_type="text/event-stream")
+
+    # -- Signal discovery (deployable refs for the create form) -------------- #
+
+    @app.get("/api/signals")
+    async def signals(request: Request) -> dict[str, list[str]]:
+        """Deployable signal refs — builtins + a scan of ``strategies/*/signal.py``.
+
+        A read (safe under ``read_only``): ``{builtins: [...], discovered:
+        ["strategies.alloc1.signal:alloc1_portfolio_signal", ...]}``. The UI picks
+        one of these to compose a deployment — it never authors signal code.
+        """
+        return _discover_signals()
+
+    # -- Deployment CRUD: add / remove a strategy, persist the manifest ------ #
+
+    def _persist(request: Request) -> None:
+        """Rewrite the manifest after a membership change (no-op without a hook)."""
+        hook = request.app.state.on_change
+        if hook is not None:
+            hook()
+
+    @app.post("/api/strategies")
+    async def create_strategy(
+        body: _CreateStrategyBody, request: Request
+    ) -> dict[str, Any]:
+        """Deploy an existing signal as a new **stopped** unit, then persist.
+
+        Composes a config entry from the deployment body (venue / mode / capital /
+        universe|symbol / signal ref), adds it to the supervisor (validated the
+        same way ``__init__`` splits config → units — a bad signal ref / no
+        matching broker for a non-paper mode is rejected, nothing added), and
+        **persists the manifest** so the deployment survives a restart. The unit
+        is added stopped — deploying never auto-trades (paper-safe).
+        """
+        from trading_bot.domain.errors import ConfigError
+
+        if request.app.state.read_only:
+            raise HTTPException(
+                status_code=403,
+                detail="dashboard is read-only; strategy deployment is disabled",
+            )
+        sup = _sup(request)
+        entry = _entry_from_body(body)
+        try:
+            name = sup.add_unit(entry)
+        except ConfigError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        _persist(request)
+        return {"ok": True, "status": _status_dict(sup.status(name)[0])}
+
+    @app.delete("/api/strategies/{name}")
+    async def delete_strategy(name: str, request: Request) -> dict[str, Any]:
+        """Stop (if running) and remove a managed unit, then persist the manifest."""
+        from trading_bot.domain.errors import ConfigError
+
+        if request.app.state.read_only:
+            raise HTTPException(
+                status_code=403,
+                detail="dashboard is read-only; strategy removal is disabled",
+            )
+        sup = _sup(request)
+        try:
+            sup.remove_unit(name)
+        except ConfigError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        _persist(request)
+        return {"ok": True, "removed": name}
 
     # The strategy control surface (list + start/stop/mode) — shared with the
     # control app. Under `read_only`, the write routes return 403 (the reads stay).
