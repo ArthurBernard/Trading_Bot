@@ -156,6 +156,15 @@ class StrategySupervisor:
         """The managed strategy names, in registration order."""
         return list(self._units)
 
+    @property
+    def mode(self) -> str:
+        """The base config's deployment mode (``"paper"`` / ``"live"``).
+
+        The system-level mode the dashboard's health chip reports — the seed each
+        unit's own mode starts from (units can then be switched independently).
+        """
+        return self._base.mode
+
     def _unit(self, name: str) -> _Unit:
         try:
             return self._units[name]
