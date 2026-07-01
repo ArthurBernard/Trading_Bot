@@ -1,9 +1,9 @@
 ---
-plan: unified-dashboard/05-pnl-chart
+plan: unified-dashboard/06-pnl-chart
 kind: leaf
 status: planned
 complexity: medium
-depends: [04]
+depends: [05]
 parallel: false
 branch: feat/dashboard-pnl-chart
 pr: ""
@@ -14,10 +14,10 @@ pr: ""
 ## Goal
 
 The PnL page (and a per-strategy panel): an interactive **equity/PnL chart over time**,
-drawing **live and testnet as separate series** (colour-coded), fed by leaf-04's
+drawing **live and testnet as separate series** (colour-coded), fed by leaf-05's
 `GET /api/pnl`. Uses **uPlot**, self-hosted (decision in `00-plan.md`) — no build step.
 Also wires the **aggregate ratio KPIs** (Sharpe/Sortino/Calmar/maxDD at exchange/total)
-on the combined curve leaf 04 exposes, filling the `null`s left by leaf 02.
+on the combined curve leaf 05 exposes, filling the `null`s left by leaf 02.
 
 ## Files to change
 
@@ -39,7 +39,7 @@ on the combined curve leaf 04 exposes, filling the `null`s left by leaf 02.
 
 ## Steps
 
-1. Read `/api/pnl` (leaf 04) and uPlot's data/series API (from its docs / the vendored
+1. Read `/api/pnl` (leaf 05) and uPlot's data/series API (from its docs / the vendored
    dist). Read `overview.html`'s KPI strip (leaf 02) to slot the now-non-null aggregate
    ratios.
 2. Vendor `uplot.min.js` + `.css` into `static/`; note the version in `static/VENDOR.md`.
@@ -60,7 +60,7 @@ on the combined curve leaf 04 exposes, filling the `null`s left by leaf 02.
 
 ## Verification on real data
 
-With mode-tagged fills present (from leaf-04's verification: paper + testnet), open
+With mode-tagged fills present (from leaf-05's verification: paper + testnet), open
 `http://127.0.0.1:8000/pnl`, select **alloc1**: the chart shows **two distinct series**
 (live/testnet — here testnet + paper) tracking equity over time, matching the final
 values `/api/pnl` reports; toggling a series hides it; the Overview KPI strip shows
@@ -72,4 +72,4 @@ non-null Sharpe/… at total. Paper/testnet only; **no real order**.
   equity/PnL over time, **live vs testnet as separate series**; aggregate ratio KPIs on
   the combined curve."
 - ADR only if a non-trivial choice arises (e.g. vendoring policy for uPlot).
-- Do NOT remove the roadmap line (deferred to leaf 06).
+- Do NOT remove the roadmap line (deferred to leaf 07).

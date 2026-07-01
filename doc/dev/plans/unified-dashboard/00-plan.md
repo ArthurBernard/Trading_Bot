@@ -59,15 +59,22 @@ dccd `../Download_Crypto_Currencies_Data/dccd/interfaces/{api/app.py, ui/templat
    per-strategy engines; Overview page with **KPI cards at per-strategy / per-exchange
    / total**, a positions table groupable by crypto/exchange, live via merged SSE.
 3. **03 — Strategies page**: start/stop/mode (live or test), grouped by exchange, the
-   typed live-confirm modal, token auth (login/logout) — in the shell.
-4. **04 — PnL time-series data model**: **tag fills with mode + venue** in the store;
+   typed live-confirm modal, token auth (login/logout) — in the shell. (+ a paper unit
+   restores its book from the store on start; the command `start_all()`s.)
+4. **04 — Manage strategies from the UI**: the dashboard owns a **persistent manifest**
+   (`configs/dashboard.yaml`, the default for `trading-bot dashboard`); `POST
+   /api/strategies` (create) / `DELETE /api/strategies/{name}` / `GET /api/signals`;
+   dynamic `supervisor.add_unit`/`remove_unit`; the UI **deploys existing signals**
+   (never authors signal code). One dashboard common to all strategies it declares,
+   persisted across restarts.
+5. **05 — PnL time-series data model**: **tag fills with mode + venue** in the store;
    derive a per-strategy, per-mode realised-PnL/equity curve; `GET /api/pnl` returning
    the live + testnet series (+ current unrealised point). Backend for the chart and
    for aggregate ratio KPIs.
-5. **05 — PnL chart (uPlot)**: vendor uPlot into `static/`; a PnL/equity chart on the
+6. **06 — PnL chart (uPlot)**: vendor uPlot into `static/`; a PnL/equity chart on the
    PnL page (and a per-strategy panel) drawing **live vs testnet as separate series**,
    fed by `/api/pnl`; wire the aggregate ratio KPIs on the combined curve.
-6. **06 — Orders/Fills filtering + Logs + retire the split**: orders/positions filters
+7. **07 — Orders/Fills filtering + Logs + retire the split**: orders/positions filters
    (crypto / exchange / strategy), a fills-history + Logs (SSE) page; retire
    `serve` / `start --serve` onto `dashboard`; update deploy docs. Last leaf.
 
@@ -76,15 +83,17 @@ dccd `../Download_Crypto_Currencies_Data/dccd/interfaces/{api/app.py, ui/templat
 - [x] 01 shell-and-command — feat/dashboard-shell — high
 - [x] 02 overview-kpi — feat/dashboard-overview — high
 - [x] 03 strategies-page — feat/dashboard-strategies — medium
-- [ ] 04 pnl-data-model — feat/dashboard-pnl-data — high
-- [ ] 05 pnl-chart — feat/dashboard-pnl-chart — medium
-- [ ] 06 orders-logs-cleanup — feat/dashboard-orders-logs — medium
+- [ ] 04 strategy-management — feat/dashboard-strategy-mgmt — high
+- [ ] 05 pnl-data-model — feat/dashboard-pnl-data — high
+- [ ] 06 pnl-chart — feat/dashboard-pnl-chart — medium
+- [ ] 07 orders-logs-cleanup — feat/dashboard-orders-logs — medium
 
 ## Dependencies
 
-- 01 is the foundation; **02, 03, 04 depend on [01]**; **05 depends on [04]**;
-  **06 depends on [01,02,03,04,05]** (last — retires the split once every page exists).
-- Run **serially** (02/03/04 share `base.html` nav + the app factory + the
+- 01 is the foundation. **04 depends on [03]** (extends the Strategies page + the
+  supervisor). **05 depends on [01]**; **06 depends on [05]**; **07 depends on
+  [01..06]** (last — retires the split once every page exists).
+- Run **serially** (leaves share `base.html` nav + the app factory + the
   supervisor/store — safer than parallel worktrees).
 
 ## Done criteria

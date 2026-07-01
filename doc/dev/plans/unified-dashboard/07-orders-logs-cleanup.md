@@ -1,9 +1,9 @@
 ---
-plan: unified-dashboard/06-orders-logs-cleanup
+plan: unified-dashboard/07-orders-logs-cleanup
 kind: leaf
 status: planned
 complexity: medium
-depends: [01, 02, 03, 04, 05]
+depends: [01, 02, 03, 04, 05, 06]
 parallel: false
 branch: feat/dashboard-orders-logs
 pr: ""

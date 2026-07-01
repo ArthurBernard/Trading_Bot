@@ -1,5 +1,5 @@
 ---
-plan: unified-dashboard/04-pnl-data-model
+plan: unified-dashboard/05-pnl-data-model
 kind: leaf
 status: planned
 complexity: high
@@ -34,7 +34,7 @@ market) point from live prices. Continuous mark-to-market history is out of scop
 - `trading_bot/application/supervisor.py` — `pnl_series(name)` → `{mode: [(ts, pnl,
   equity)]}` for a strategy (folding its store's mode-tagged fills), plus the current
   unrealised end point (from the tracker's open positions × latest prices, when
-  available). A `combined` helper for aggregate ratio KPIs (used by leaf 05).
+  available). A `combined` helper for aggregate ratio KPIs (used by leaf 06).
 - `trading_bot/interfaces/api/app.py` — `GET /api/pnl?strategy=<name>&mode=<live|testnet|paper|all>`
   returning the series (one array per mode) + metadata (v0, current equity, unrealised).
 - `trading_bot/tests/storage/test_sqlite_store.py`, `.../application/test_supervisor.py`,
@@ -79,4 +79,4 @@ truth. Paper/testnet only; **no real order**.
   per-mode realised-PnL/equity curve (`GET /api/pnl`), live vs testnet separate."
 - ADR: record the **derive-from-mode-tagged-fills** model (vs periodic equity
   snapshots vs full continuous mark-to-market) and why testnet/live stay separate.
-- Do NOT remove the roadmap line (deferred to leaf 06).
+- Do NOT remove the roadmap line (deferred to leaf 07).
