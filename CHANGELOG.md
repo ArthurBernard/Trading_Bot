@@ -10,6 +10,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Private read-only endpoints validated live on mainnet for both venues** — the
+  go-live runbook's *Proven vs pending* now records that `balances` / `open_orders`
+  / `fills` were exercised read-only against **real Kraken** (37 assets, 50 trades
+  parsed) and **real Binance** (mainnet read key + testnet), with **no order ever
+  sent or cancelled**. Supersedes the earlier "`balances` needs Query Funds" caveat.
+  (#106)
+
 ### Fixed
 
 ### Deprecated
