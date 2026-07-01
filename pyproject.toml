@@ -97,10 +97,10 @@ Changelog = "https://github.com/ArthurBernard/Trading_Bot/blob/master/CHANGELOG.
 include = ["trading_bot*"]
 
 [tool.setuptools.package-data]
-# Ship the web-UI assets in the wheel so `trading-bot serve` works installed
-# (not just from a source checkout). `static/*` matches only the top level —
-# nested asset dirs would need their own line (mirrors dccd).
-"trading_bot.interfaces.ui" = ["templates/*.html", "static/*"]
+# Ship the web-UI assets in the wheel so `trading-bot dashboard` works installed
+# (not just from a source checkout). `static/*` matches only the top level, so the
+# nested self-hosted fonts need their own glob (mirrors dccd).
+"trading_bot.interfaces.ui" = ["templates/*.html", "static/*", "static/fonts/*.woff2"]
 
 [tool.pytest.ini_options]
 addopts = "--exitfirst -vv --cov=trading_bot --cov-report=term-missing -m 'not network'"
