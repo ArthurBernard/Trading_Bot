@@ -362,6 +362,92 @@ def test_pnl_endpoint_unknown_mode_is_422() -> None:
     assert _client().get("/api/pnl?strategy=btc-ma&mode=bogus").status_code == 422
 
 
+# --- PnL page markup + vendored uPlot assets ------------------------------- #
+
+
+def test_pnl_page_has_chart_container_and_selector() -> None:
+    """`GET /pnl` carries the chart container, strategy selector + uPlot reference."""
+    html = _client().get("/pnl").text
+    assert 'id="pnl-chart"' in html  # the uPlot mount
+    assert 'id="pnl-strategy"' in html  # the strategy selector
+    assert "/static/uplot.min.js" in html  # the vendored chart library
+    assert "/static/uplot.min.css" in html  # its stylesheet
+    assert "/api/pnl" in html  # it fetches the per-mode series
+    assert "/api/strategies" in html  # it populates the selector
+
+
+def test_vendored_uplot_assets_are_served() -> None:
+    """The static mount serves the real vendored uPlot bundle + stylesheet (200)."""
+    client = _client()
+    js = client.get("/static/uplot.min.js")
+    assert js.status_code == 200
+    assert "uPlot" in js.text  # the IIFE bundle's global
+    css = client.get("/static/uplot.min.css")
+    assert css.status_code == 200
+    assert ".uplot" in css.text
+
+
+# --- aggregate ratio KPIs surface non-null via /api/kpi -------------------- #
+
+
+def _kpi_ratio_config(db_path: str) -> AppConfig:
+    """A paper BTC/USD strategy persisting to ``db_path`` (a store to read fills)."""
+    return AppConfig.model_validate(
+        {
+            "mode": "paper",
+            "storage": {"db_path": db_path},
+            "brokers": [{"name": "kraken", "exchange": "kraken"}],
+            "strategies": [
+                {
+                    "name": "btc-ma",
+                    "symbol": "BTC/USD",
+                    "data": {"exchange": "kraken", "span": 60},
+                    "signal": {"ref": "ma_crossover", "params": {"fast": 3, "slow": 6}},
+                    "reference_qty": "2",
+                    "lookback": 6,
+                }
+            ],
+        }
+    )
+
+
+def test_api_kpi_total_ratios_non_null_on_a_combined_curve(tmp_path) -> None:  # noqa: ANN001
+    """`GET /api/kpi?level=total` surfaces non-null ratios once a curve exists."""
+    pytest.importorskip("fynance")  # the aggregate ratios need the research dep
+    import asyncio
+    from decimal import Decimal
+
+    from trading_bot.storage.sqlite_store import SqliteStore
+
+    db = str(tmp_path / "book.sqlite")
+    inst = Instrument(Symbol("BTC", "USD"))
+    store = SqliteStore(db, mode="paper", venue="kraken")
+    # A varied round-trip book so the equity curve has dispersion (a ratio exists).
+    prices = [(100, 108), (108, 104), (104, 112), (112, 106), (106, 115)]
+    for i, (buy_px, sell_px) in enumerate(prices):
+        store.record_fill(
+            Fill(f"B{i}", f"cB{i}", inst, OrderSide.BUY,
+                 money("1"), money(str(buy_px)), money("0"), 2 * i + 1)
+        )
+        store.record_fill(
+            Fill(f"S{i}", f"cS{i}", inst, OrderSide.SELL,
+                 money("1"), money(str(sell_px)), money("0"), 2 * i + 2)
+        )
+
+    sup = StrategySupervisor(_kpi_ratio_config(db), dccd_client=_FakeStartClient())
+    asyncio.run(sup.start("btc-ma"))
+    client = TestClient(create_dashboard_app(sup))
+
+    [total] = client.get("/api/kpi?level=total").json()
+    # The ratios are real JSON numbers now (not null), computed on the combined curve.
+    assert isinstance(total["sharpe"], (int, float))
+    assert isinstance(total["sortino"], (int, float))
+    assert isinstance(total["calmar"], (int, float))
+    assert isinstance(total["max_drawdown"], (int, float))
+    # Money stays an exact Decimal string alongside the float ratios.
+    assert Decimal(total["realised_pnl"]) == Decimal("15")
+
+
 async def test_positions_group_by_exchange() -> None:
     """`GET /api/positions?group_by=exchange` buckets rows per venue."""
     sup = StrategySupervisor(_two_venue_config(), dccd_client=_two_venue_client())
