@@ -56,6 +56,7 @@ from __future__ import annotations
 import pathlib
 import sqlite3
 from contextlib import contextmanager
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Generator
 
 from trading_bot.domain.fill import Fill
@@ -71,7 +72,12 @@ from trading_bot.domain.order import (
 if TYPE_CHECKING:
     from trading_bot.application.events import Event, EventBus
 
-__all__ = ["SqliteStore"]
+__all__ = ["StoredFill", "SqliteStore"]
+
+#: The mode stamped on a fill whose deployment mode is unknown (a pre-migration
+#: row, or a store written with no mode context). ``"paper"`` is the safe default
+#: — a fill with no venue could only have been the simulator's.
+_DEFAULT_MODE = "paper"
 
 _SCHEMA = """
 PRAGMA journal_mode=WAL;
@@ -100,7 +106,9 @@ CREATE TABLE IF NOT EXISTS fills (
     qty             TEXT NOT NULL,
     price           TEXT NOT NULL,
     fee             TEXT NOT NULL,
-    ts              INTEGER NOT NULL
+    ts              INTEGER NOT NULL,
+    mode            TEXT NOT NULL DEFAULT 'paper',
+    venue           TEXT NOT NULL DEFAULT ''
 );
 
 CREATE INDEX IF NOT EXISTS idx_fills_ts ON fills(ts);
@@ -111,6 +119,36 @@ CREATE TABLE IF NOT EXISTS state (
     value TEXT
 );
 """
+
+
+@dataclass(frozen=True, slots=True)
+class StoredFill:
+    """A persisted :class:`Fill` plus its storage-level deployment tags.
+
+    The store's read-side record for :meth:`SqliteStore.stored_fills`: the exact
+    domain :class:`~trading_bot.domain.fill.Fill` (money intact), tagged with the
+    ``mode`` (``"paper"`` / ``"testnet"`` / ``"live"``) and ``venue`` the unit's
+    engine was in when the execution was recorded. The tags are a **storage /
+    deployment** concern — they live on the store row, never on the pure domain
+    :class:`Fill` — so a per-mode PnL curve can keep live and testnet (fake money)
+    as separate series without polluting the domain type.
+
+    Attributes
+    ----------
+    fill : Fill
+        The immutable execution record (the PnL source of truth), money exact.
+    mode : str
+        The deployment mode active when the fill was recorded (``"paper"`` for a
+        pre-migration row).
+    venue : str
+        The venue the unit ran on (``""`` when unknown — e.g. a pre-migration row
+        or a paper unit with no venue).
+
+    """
+
+    fill: Fill
+    mode: str
+    venue: str
 
 
 def _instrument_to_text(instrument: Instrument) -> str:
@@ -162,12 +200,43 @@ class SqliteStore:
 
     """
 
-    def __init__(self, db_path: str | pathlib.Path) -> None:
+    def __init__(
+        self,
+        db_path: str | pathlib.Path,
+        *,
+        mode: str = _DEFAULT_MODE,
+        venue: str = "",
+    ) -> None:
         self._path = pathlib.Path(db_path)
+        # The deployment tags a fresh fill is stamped with (the unit's engine mode
+        # + venue). A storage/deployment concern, kept off the pure domain Fill.
+        self._mode = mode
+        self._venue = venue
         if str(self._path) != ":memory:":
             self._path.parent.mkdir(parents=True, exist_ok=True)
         with self._conn() as conn:
             conn.executescript(_SCHEMA)
+            _migrate_fills_tags(conn)
+
+    def set_context(self, *, mode: str, venue: str) -> None:
+        """Set the ``mode`` / ``venue`` stamped on subsequently-recorded fills.
+
+        The seam the supervisor uses to tag a unit's fills with the deployment
+        mode (``paper`` / ``testnet`` / ``live``) and venue its engine is running
+        under, so a per-mode PnL curve can keep live and testnet (fake money) as
+        separate series. Affects only fills recorded **after** the call; already
+        persisted rows keep their stamp (fills are append-only, immutable facts).
+
+        Parameters
+        ----------
+        mode : str
+            The deployment mode to stamp (``"paper"`` / ``"testnet"`` / ``"live"``).
+        venue : str
+            The venue the unit runs on (``""`` for a paper unit with no venue).
+
+        """
+        self._mode = mode
+        self._venue = venue
 
     @contextmanager
     def _conn(self) -> Generator[sqlite3.Connection, None, None]:
@@ -248,6 +317,11 @@ class SqliteStore:
         immutable facts; they never mutate and never duplicate. Money/qty/fee
         are stored as ``str(Decimal)`` TEXT.
 
+        The row is tagged with the store's current ``mode`` / ``venue`` (see
+        :meth:`set_context`) — a **storage / deployment** concern kept off the
+        pure domain :class:`Fill`, so a per-mode PnL curve can keep live and
+        testnet (fake money) as separate series.
+
         Parameters
         ----------
         fill : Fill
@@ -259,8 +333,8 @@ class SqliteStore:
                 """
                 INSERT OR IGNORE INTO fills (
                     fill_id, client_order_id, instrument, side, qty, price,
-                    fee, ts
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    fee, ts, mode, venue
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     fill.fill_id,
@@ -271,6 +345,8 @@ class SqliteStore:
                     str(fill.price),
                     str(fill.fee),
                     fill.ts,
+                    self._mode,
+                    self._venue,
                 ),
             )
 
@@ -355,6 +431,42 @@ class SqliteStore:
                     (since_ms,),
                 ).fetchall()
         return [_row_to_fill(r) for r in rows]
+
+    def stored_fills(self, since_ms: int | None = None) -> list[StoredFill]:
+        """Return stored fills with their ``mode`` / ``venue`` deployment tags.
+
+        The tagged counterpart of :meth:`fills`: each :class:`StoredFill` carries
+        the exact domain :class:`Fill` (money intact) plus the ``mode``
+        (``paper`` / ``testnet`` / ``live``) and ``venue`` the unit's engine was
+        in when the execution was recorded. This is what a per-mode PnL curve
+        folds — live and testnet (fake money) are kept as separate series. A
+        pre-migration row reads back as ``mode="paper"`` / ``venue=""`` (the
+        column defaults).
+
+        Parameters
+        ----------
+        since_ms : int, optional
+            Lower time bound as **milliseconds since the Unix epoch (UTC)**,
+            inclusive. ``None`` (default) returns every stored fill.
+
+        Returns
+        -------
+        list of StoredFill
+            The matching fills with their tags, in insertion (execution) order.
+            Money exact.
+
+        """
+        with self._conn() as conn:
+            if since_ms is None:
+                rows = conn.execute(
+                    "SELECT * FROM fills ORDER BY rowid"
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    "SELECT * FROM fills WHERE ts >= ? ORDER BY rowid",
+                    (since_ms,),
+                ).fetchall()
+        return [_row_to_stored_fill(r) for r in rows]
 
     def get_state(self, key: str) -> str | None:
         """Return the stored value for ``key``, or ``None`` if the key is unknown."""
@@ -454,3 +566,41 @@ def _row_to_fill(row: sqlite3.Row) -> Fill:
         fee=money(str(row["fee"])),
         ts=int(row["ts"]),
     )
+
+
+def _row_to_stored_fill(row: sqlite3.Row) -> StoredFill:
+    """Rebuild a :class:`StoredFill` (fill + mode/venue tags) from a stored row.
+
+    A pre-migration row has no ``mode`` / ``venue`` column value; the migration's
+    ``ADD COLUMN ... DEFAULT`` backfills every existing row, so the read always
+    finds a value (``"paper"`` / ``""`` for the backfilled rows).
+    """
+    mode = row["mode"]
+    venue = row["venue"]
+    return StoredFill(
+        fill=_row_to_fill(row),
+        mode=_DEFAULT_MODE if mode is None else str(mode),
+        venue="" if venue is None else str(venue),
+    )
+
+
+def _migrate_fills_tags(conn: sqlite3.Connection) -> None:
+    """Add the ``mode`` / ``venue`` columns to a pre-existing ``fills`` table.
+
+    A lightweight, idempotent forward migration: ``CREATE TABLE IF NOT EXISTS``
+    (in :data:`_SCHEMA`) already gives a *fresh* database the tagged columns, but
+    a database created before this leaf has the old ``fills`` shape. This inspects
+    the live columns and ``ALTER TABLE ... ADD COLUMN`` for whichever tag is
+    missing — SQLite backfills every existing row with the column ``DEFAULT``
+    (``mode="paper"`` / ``venue=""``), so no row is lost or corrupted and the
+    money columns are untouched. A no-op once both columns exist (a fresh DB, or a
+    second open of a migrated one).
+    """
+    columns = {row["name"] for row in conn.execute("PRAGMA table_info(fills)")}
+    if "mode" not in columns:
+        conn.execute(
+            f"ALTER TABLE fills ADD COLUMN mode TEXT NOT NULL "
+            f"DEFAULT '{_DEFAULT_MODE}'"
+        )
+    if "venue" not in columns:
+        conn.execute("ALTER TABLE fills ADD COLUMN venue TEXT NOT NULL DEFAULT ''")

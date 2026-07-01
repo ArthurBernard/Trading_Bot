@@ -255,6 +255,113 @@ def test_kpi_unknown_level_is_422() -> None:
     assert _client().get("/api/kpi?level=bogus").status_code == 422
 
 
+# --- PnL series endpoint (/api/pnl) ---------------------------------------- #
+
+
+def _pnl_config_with_store(db_path: str) -> AppConfig:
+    """A paper BTC/USD strategy whose engine persists to (restores from) ``db_path``."""
+    return AppConfig.model_validate(
+        {
+            "mode": "paper",
+            "storage": {"db_path": db_path},
+            "brokers": [{"name": "kraken", "exchange": "kraken"}],
+            "strategies": [
+                {
+                    "name": "btc-ma",
+                    "symbol": "BTC/USD",
+                    "data": {"exchange": "kraken", "span": 60},
+                    "signal": {"ref": "ma_crossover", "params": {"fast": 3, "slow": 6}},
+                    "reference_qty": "2",
+                    "lookback": 6,
+                }
+            ],
+        }
+    )
+
+
+def test_pnl_endpoint_returns_the_paper_series(tmp_path) -> None:  # noqa: ANN001
+    """`GET /api/pnl?strategy=btc-ma` returns the paper series with exact money.
+
+    Seeds a paper round trip (+8 realised) to the store, starts the unit, and
+    asserts the endpoint's final equity matches `v0 + realised PnL` as an exact
+    Decimal string (not a float), timestamps as integer ms.
+    """
+    from trading_bot.storage.sqlite_store import SqliteStore
+
+    db = str(tmp_path / "book.sqlite")
+    inst = Instrument(Symbol("BTC", "USD"))
+    store = SqliteStore(db)
+    store.record_fill(
+        Fill("SF1", "sc1", inst, OrderSide.BUY, money("1"), money("100"), money("1"), 1)
+    )
+    store.record_fill(
+        Fill("SF2", "sc2", inst, OrderSide.SELL, money("1"), money("110"), money("1"), 2)
+    )
+
+    sup = StrategySupervisor(_pnl_config_with_store(db), dccd_client=_FakeStartClient())
+
+    import asyncio
+
+    asyncio.run(sup.start("btc-ma"))
+    client = TestClient(create_dashboard_app(sup))
+
+    body = client.get("/api/pnl?strategy=btc-ma").json()
+    assert body["strategy"] == "btc-ma"
+    assert "paper" in body["series"]
+    series = body["series"]["paper"]
+    assert series  # non-empty
+    # ts is integer ms; money is an exact string.
+    assert all(isinstance(row[0], int) for row in series)
+    v0 = body["v0"]  # exact Decimal string
+    # Final equity == v0 + 8 (the round trip's realised PnL), as a Decimal string.
+    from decimal import Decimal
+
+    assert Decimal(series[-1][2]) == Decimal(v0) + Decimal("8")
+    assert body["current"]["paper"]["equity"] == series[-1][2]
+
+
+def test_pnl_endpoint_mode_filter(tmp_path) -> None:  # noqa: ANN001
+    """`?mode=testnet` returns only the testnet series (live/testnet stay separate)."""
+    from trading_bot.storage.sqlite_store import SqliteStore
+
+    db = str(tmp_path / "book.sqlite")
+    inst = Instrument(Symbol("BTC", "USD"))
+    store = SqliteStore(db)
+    store.set_context(mode="paper", venue="")
+    store.record_fill(
+        Fill("PF1", "pc1", inst, OrderSide.BUY, money("1"), money("100"), money("1"), 1)
+    )
+    store.set_context(mode="testnet", venue="binance")
+    store.record_fill(
+        Fill("TF1", "tc1", inst, OrderSide.BUY, money("1"), money("100"), money("1"), 2)
+    )
+
+    sup = StrategySupervisor(_pnl_config_with_store(db), dccd_client=_FakeStartClient())
+    client = TestClient(create_dashboard_app(sup))  # unit stopped → reads the db
+
+    body = client.get("/api/pnl?strategy=btc-ma&mode=testnet").json()
+    assert set(body["series"]) == {"testnet"}
+    all_modes = client.get("/api/pnl?strategy=btc-ma").json()
+    assert set(all_modes["series"]) == {"paper", "testnet"}
+
+
+def test_pnl_endpoint_unknown_strategy_is_404() -> None:
+    """An unknown ``strategy`` is a 404."""
+    assert _client().get("/api/pnl?strategy=nope").status_code == 404
+
+
+def test_pnl_endpoint_no_fills_is_empty_200() -> None:
+    """A strategy with no persisted fills is an empty series (200, not an error)."""
+    resp = _client().get("/api/pnl?strategy=btc-ma")
+    assert resp.status_code == 200
+    assert resp.json()["series"] == {}
+
+
+def test_pnl_endpoint_unknown_mode_is_422() -> None:
+    """An unknown ``mode`` filter is rejected (422)."""
+    assert _client().get("/api/pnl?strategy=btc-ma&mode=bogus").status_code == 422
+
+
 async def test_positions_group_by_exchange() -> None:
     """`GET /api/positions?group_by=exchange` buckets rows per venue."""
     sup = StrategySupervisor(_two_venue_config(), dccd_client=_two_venue_client())

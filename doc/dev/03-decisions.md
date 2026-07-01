@@ -6,6 +6,27 @@ rejected approaches as tombstones.
 
 ---
 
+### 2026-07-01 PnL time-series — derive from mode-tagged fills; live/testnet separate (PR #118)  [accepted]
+- **Choice**: a strategy's PnL/equity curve is **derived** by folding its stored fills
+  in timestamp order (`equity = starting_capital + Σ realised PnL`), not stored as a
+  separate time-series. Each **fill row carries a `mode`+`venue` storage tag**, so the
+  curve is split **per mode** — live and testnet are **separate series** and never
+  combined. The domain `Fill` is unchanged (the tag is a storage/deployment fact, not
+  a domain property). Continuous mark-to-market history is out of scope; only a current
+  unrealised end point is offered when a live price is on hand.
+- **Why**: fills are the source of truth for PnL, so folding them is the honest curve
+  and needs no extra persistence to keep consistent. Testnet money is fake and live is
+  real — mixing them on one curve is meaningless, so the mode tag keeps them apart. A
+  storage tag (not a domain field) keeps the domain pure and lets old DBs migrate with
+  a default. Deriving avoids a snapshot table that could drift from the fills.
+- **Rejected alternatives**: (a) periodic equity snapshots — a second source that can
+  disagree with the fills; (b) full continuous mark-to-market history — needs a price
+  pipeline (out of scope v1); (c) one combined curve across modes — mixes fake and real
+  money; (d) a `mode` field on the domain `Fill` — pollutes the pure domain with a
+  deployment concern.
+- **Consequence**: tagging fills by mode also **fixed a latent commingling bug** — the
+  paper-book replay had folded all fills regardless of mode; it now replays paper-only.
+
 ### 2026-07-01 Dashboard is a persistent control plane — deploy existing signals, not author code (PR #117)  [accepted]
 - **Choice**: the dashboard owns a persistent **manifest** (`configs/dashboard.yaml`,
   the default when `trading-bot dashboard` gets no `-c`) that it rewrites on every

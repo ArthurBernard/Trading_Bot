@@ -39,12 +39,14 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal
 
+from trading_bot.application.pnl_series import by_mode, equity_series
 from trading_bot.application.reconcile import reconcile
 from trading_bot.application.run_app import build_portfolio_runners, build_runners
 from trading_bot.application.service_factory import Engine, build_engine
 from trading_bot.domain.errors import ConfigError, LiveTradingNotEnabled
 from trading_bot.domain.money import money
 from trading_bot.domain.performance import PerformanceDependencyError
+from trading_bot.storage.sqlite_store import SqliteStore
 
 if TYPE_CHECKING:
     from trading_bot.application.config import (
@@ -55,8 +57,10 @@ if TYPE_CHECKING:
     from trading_bot.application.data_provider import DccdClient
     from trading_bot.application.portfolio_runner import PortfolioRunner
     from trading_bot.application.strategy_runner import StrategyRunner
+    from trading_bot.domain.fill import Fill
     from trading_bot.domain.money import Money
     from trading_bot.domain.order import Order
+    from trading_bot.storage.sqlite_store import StoredFill
 
 __all__ = [
     "KpiLevel",
@@ -480,6 +484,11 @@ class StrategySupervisor:
             return
         engine = build_engine(unit.config, db_path=unit.config.storage.db_path)
         if engine.store is not None:
+            # Tag every fill this unit records with its deployment mode + venue so
+            # a per-mode PnL curve keeps live and testnet (fake money) as separate
+            # series. The tag is a storage/deployment concern (it never touches the
+            # pure domain Fill); set it before any fill flows onto the bus.
+            engine.store.set_context(mode=unit.mode, venue=unit.exchange)
             engine.router.restore(engine.store.orders())
         await reconcile(
             engine.broker, engine.router, engine.tracker, event_bus=engine.bus
@@ -514,13 +523,20 @@ class StrategySupervisor:
 
         The paper simulator holds no venue state, so the startup ``reconcile``
         leaves the freshly-built engine's tracker / performance service empty even
-        when the store holds a book. This replays the store's confirmed fills — the
-        PnL source of truth — into both, exactly as the ``status`` / ``kpi`` CLI
-        commands rebuild a view from ``store.fills()``. Idempotent: both
+        when the store holds a book. This replays the store's confirmed **paper**
+        fills — the PnL source of truth — into both. Idempotent: both
         :meth:`~trading_bot.application.position_tracker.PositionTracker.apply` and
         :meth:`~trading_bot.application.performance_service.PerformanceService.apply`
         dedup by ``fill_id``, so a re-run never double-counts. Money stays exact
         :class:`~decimal.Decimal`. A no-op when the engine has no store.
+
+        **Only the paper-tagged fills are replayed.** A store can hold fills from
+        several deployment modes (a strategy that ran testnet or live, then switched
+        back to paper), and testnet/live are *different money* — folding them into
+        the paper book would commingle fake / real money into the simulator's PnL
+        (and, when a testnet round trip lands on the same instrument as a large open
+        paper position, realise a spurious close against the wrong entry price).
+        Filtering on the storage ``mode`` tag keeps the paper book pure.
 
         **Paper only** (the caller gates on ``unit.mode == "paper"``): on
         live/testnet the venue's :func:`~trading_bot.application.reconcile.reconcile`
@@ -529,9 +545,11 @@ class StrategySupervisor:
         """
         if engine.store is None:
             return
-        for fill in engine.store.fills():
-            engine.tracker.apply(fill)
-            engine.perf.apply(fill)
+        for record in engine.store.stored_fills():
+            if record.mode != "paper":
+                continue
+            engine.tracker.apply(record.fill)
+            engine.perf.apply(record.fill)
 
     async def stop(self, name: str) -> None:
         """Tear down the unit's engine — it is no longer stepped. Idempotent."""
@@ -866,6 +884,174 @@ class StrategySupervisor:
                 max_drawdown=None,
             )
         ]
+
+    # --- PnL series (per-mode realised-PnL / equity curve over time) -------- #
+
+    def pnl_series(self, name: str) -> dict[str, object]:
+        """The per-mode realised-PnL / equity curve for one strategy, over time.
+
+        The data foundation for the dashboard's PnL chart. Reads the strategy's
+        confirmed fills — tagged with the mode + venue they executed under — and
+        **derives** an equity curve per mode by folding them in timestamp order
+        (``equity(t) = v0 + Σ realised_pnl(fills ≤ t)`` via the pure
+        :func:`~trading_bot.application.pnl_series.equity_series`). **Live and
+        testnet are kept as separate series** — testnet is fake money and is never
+        combined with real-money live. Plus a current mark-to-market end point per
+        mode (the running engine's open positions × the last-known fill price),
+        left ``None`` when no mark is available (continuous MTM history is out of
+        scope for v1).
+
+        Fills are read from the **running** unit's ``engine.store``; if the unit
+        is stopped they are read from a store opened at its configured
+        ``db_path`` (``None`` when the unit persists nothing — then the series are
+        empty). The curve reconciles to the running engine's
+        :meth:`~trading_bot.application.performance_service.PerformanceService.
+        realised_pnl` to the cent (same fold, same ``v0``).
+
+        Parameters
+        ----------
+        name : str
+            The managed strategy to read.
+
+        Returns
+        -------
+        dict
+            ``{"strategy", "v0", "series": {mode: [[ts_ms, pnl, equity], ...]},
+            "current": {mode: {"equity", "unrealised"}}}`` — money as exact
+            :class:`~decimal.Decimal` (the API stringifies it), timestamps integer
+            ms.
+
+        Raises
+        ------
+        ConfigError
+            If ``name`` is not a managed unit.
+
+        """
+        unit = self._unit(name)
+        v0 = self._v0_of(unit)
+        stored = self._stored_fills_of(unit)
+        buckets = by_mode(stored)
+
+        series: dict[str, list[list[object]]] = {}
+        current: dict[str, dict[str, Money | None]] = {}
+        for mode, fills in buckets.items():
+            points = equity_series(fills, v0=v0)
+            series[mode] = [
+                [p.ts_ms, p.realised_pnl, p.equity] for p in points
+            ]
+            end_equity = points[-1].equity if points else v0
+            current[mode] = {
+                "equity": end_equity,
+                "unrealised": self._unrealised_of(unit, mode, fills),
+            }
+        return {
+            "strategy": unit.name,
+            "v0": v0,
+            "series": series,
+            "current": current,
+        }
+
+    def combined_equity_series(
+        self, names: list[str] | None = None, *, mode: StrategyMode = "paper"
+    ) -> list[list[object]]:
+        """Combine several strategies' equity series for ``mode``, aligned by ts.
+
+        The seam the aggregate ratio KPIs (a later leaf) fold over: it takes each
+        named strategy's per-mode fills, merges them into **one** timestamp-ordered
+        stream, and folds that stream into a single combined equity curve anchored
+        at the **sum** of the strategies' ``v0`` (each contributes its own
+        starting capital). Only the ``mode`` slice is combined — live and testnet
+        (fake money) are never mixed. A pure fold over the confirmed fills; money
+        stays exact.
+
+        Parameters
+        ----------
+        names : list of str or None, optional
+            The strategies to combine. ``None`` (default) combines every managed
+            unit.
+        mode : StrategyMode, optional
+            The deployment mode slice to combine (default ``"paper"``).
+
+        Returns
+        -------
+        list of list
+            ``[[ts_ms, realised_pnl, equity], ...]`` — the combined curve, one
+            point per fill, ascending ts. Empty when no fill matches.
+
+        """
+        wanted = names if names is not None else list(self._units)
+        combined_fills: list[Fill] = []
+        combined_v0: Money = _ZERO
+        for name in wanted:
+            unit = self._unit(name)
+            combined_v0 += self._v0_of(unit)
+            buckets = by_mode(self._stored_fills_of(unit))
+            combined_fills.extend(buckets.get(mode, []))
+        points = equity_series(combined_fills, v0=combined_v0)
+        return [[p.ts_ms, p.realised_pnl, p.equity] for p in points]
+
+    # --- PnL series helpers ------------------------------------------------- #
+
+    @staticmethod
+    def _v0_of(unit: _Unit) -> Money:
+        """The unit's equity-curve anchor — its config ``starting_capital``.
+
+        The same ``v0`` :func:`~trading_bot.application.service_factory.build_engine`
+        seeds the unit's performance service with, so a derived
+        :meth:`pnl_series` curve reconciles to the running engine's
+        ``perf.realised_pnl()`` exactly (``final equity == v0 + realised PnL``).
+        """
+        return unit.config.starting_capital
+
+    def _stored_fills_of(self, unit: _Unit) -> list[StoredFill]:
+        """The unit's tagged fills — from the running engine's store, else its db.
+
+        A running unit reads straight off its live ``engine.store``. A stopped
+        unit (no live engine) reads a store opened at its configured ``db_path``;
+        with no ``db_path`` there is nowhere to read from, so the fills are empty.
+        """
+        if unit.running and unit.engine is not None and unit.engine.store is not None:
+            return unit.engine.store.stored_fills()
+        db_path = unit.config.storage.db_path
+        if db_path is None:
+            return []
+        return SqliteStore(db_path).stored_fills()
+
+    @staticmethod
+    def _unrealised_of(
+        unit: _Unit, mode: str, fills: list[Fill]
+    ) -> Money | None:
+        """Best-effort mark-to-market of the running unit's open book, in ``mode``.
+
+        The running engine's tracker holds the net open positions; each is marked
+        against the **last-known fill price** for its instrument in ``mode``'s
+        stream (``(mark - avg_entry) * net_qty``) — a fully in-memory,
+        non-network last-known mark (continuous MTM history is out of scope). The
+        book is meaningful only for the unit's **current** mode (the tracker was
+        built for it), so a non-current mode marks to ``None``. ``None`` too when
+        the unit is stopped, flat, or has no priced instrument.
+        """
+        if (
+            not unit.running
+            or unit.engine is None
+            or mode != unit.mode
+            or not fills
+        ):
+            return None
+        last_price: dict[object, Money] = {}
+        for fill in fills:
+            last_price[fill.instrument] = fill.price
+        unrealised: Money = _ZERO
+        marked = False
+        for position in unit.engine.tracker.all_positions().values():
+            if position.is_flat or position.avg_entry_price is None:
+                continue
+            mark = last_price.get(position.instrument)
+            if mark is None:
+                continue
+            unrealised += (mark - position.avg_entry_price) * position.net_qty
+            marked = True
+        return unrealised if marked else None
 
 
 def _mode_of(config: AppConfig) -> StrategyMode:
