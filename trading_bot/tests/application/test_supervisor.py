@@ -859,3 +859,162 @@ async def test_kpi_aggregate_ratios_degrade_without_fynance(  # noqa: ANN001
     # PnL/fees still surface (the fold is money-exact, dependency-free).
     # Round trips: (108-100)+(104-108)+(112-104)+(106-112)+(115-106) = 15, no fees.
     assert total.realised_pnl == money("15")
+
+
+# --- per-strategy store isolation: two portfolios, two stores --------------- #
+
+
+def _fake_portfolio_signal(asof_ms, frames):  # noqa: ANN001, ANN201, ARG001
+    """A no-op portfolio signal (offline, CI-safe — never evaluated in these tests).
+
+    Referenced by ``_two_portfolio_config`` so ``start()`` can resolve a portfolio
+    signal **without** importing the gitignored ``strategies/`` (absent in CI). The
+    units are never stepped, so the empty target is never used — fills are seeded
+    onto the engine bus directly.
+    """
+    return {}
+
+
+def _two_portfolio_config(db_a: str, db_b: str) -> AppConfig:
+    """A manifest with two portfolios, each declaring its OWN ``db_path``.
+
+    Reproduces the deploy-two-portfolios-in-one-manifest shape (alloc1-binance +
+    alloc1-kraken): both paper, disjoint universes/venues, each with a per-strategy
+    store path so their books never commingle. The signal is a local no-op ref (so it
+    resolves offline, no ``strategies/`` import); the units are never stepped.
+    """
+    ref = "trading_bot.tests.application.test_supervisor:_fake_portfolio_signal"
+    return AppConfig.model_validate(
+        {
+            "mode": "paper",
+            "storage": {"db_path": "./var/should-not-be-used.sqlite"},
+            "portfolios": [
+                {
+                    "name": "pf-a",
+                    "venue": "binance",
+                    "universe": ["BTC/USDT"],
+                    "capital": "100000",
+                    "signal": {"ref": ref},
+                    "data": {"exchange": "binance", "span": 86400},
+                    "db_path": db_a,
+                },
+                {
+                    "name": "pf-b",
+                    "venue": "kraken",
+                    "universe": ["BTC/USD"],
+                    "capital": "100000",
+                    "signal": {"ref": ref},
+                    "data": {"exchange": "kraken", "span": 86400},
+                    "db_path": db_b,
+                },
+            ],
+        }
+    )
+
+
+def _two_portfolio_client() -> _FakeDccdClient:
+    """Offline dccd client for the two-portfolio config (so ``start`` needs no dccd)."""
+    return _FakeDccdClient(
+        {"BTC/USDT": _dccd_ohlc(_trend()), "BTC/USD": _dccd_ohlc(_trend())}
+    )
+
+
+def _seed_portfolio_fills(
+    sup: StrategySupervisor, name: str, symbol: Symbol, *, exit_price: str
+) -> None:
+    """Emit a buy@100 → sell@``exit_price`` round trip on ``name``'s engine bus."""
+    inst = Instrument(symbol)
+    bus = sup._units[name].engine.bus  # noqa: SLF001 — seed the wired bus
+    bus.emit(
+        FillEvent(
+            Fill(f"{name}-F1", f"{name}-c1", inst, OrderSide.BUY,
+                 money("1"), money("100"), money("1"), 1)
+        )
+    )
+    bus.emit(
+        FillEvent(
+            Fill(f"{name}-F2", f"{name}-c2", inst, OrderSide.SELL,
+                 money("1"), money(exit_price), money("1"), 2)
+        )
+    )
+
+
+async def test_per_strategy_db_path_isolates_the_slice(tmp_path) -> None:  # noqa: ANN001
+    """Each portfolio's sliced config points at its OWN ``db_path`` (not the global)."""
+    db_a = str(tmp_path / "a.sqlite")
+    db_b = str(tmp_path / "b.sqlite")
+    sup = StrategySupervisor(
+        _two_portfolio_config(db_a, db_b), dccd_client=_two_portfolio_client()
+    )
+    # The per-strategy db_path overrode the global storage.db_path on each slice.
+    assert sup._units["pf-a"].config.storage.db_path == db_a  # noqa: SLF001
+    assert sup._units["pf-b"].config.storage.db_path == db_b  # noqa: SLF001
+
+
+async def test_per_strategy_stores_do_not_commingle_fills(tmp_path) -> None:  # noqa: ANN001
+    """Two portfolios with their own db_path keep pnl_series disjoint (no commingling).
+
+    The whole point of the isolation fix: seed a disjoint paper round trip onto each
+    unit's engine bus (each writes to its OWN store), then assert each unit's
+    ``pnl_series`` folds only its own fills — pf-a's +8 never leaks into pf-b's +18.
+    """
+    db_a = str(tmp_path / "a.sqlite")
+    db_b = str(tmp_path / "b.sqlite")
+    sup = StrategySupervisor(
+        _two_portfolio_config(db_a, db_b), dccd_client=_two_portfolio_client()
+    )
+    await sup.start("pf-a")
+    await sup.start("pf-b")
+    # Disjoint books: pf-a on BTC/USDT (+8), pf-b on BTC/USD (+18).
+    _seed_portfolio_fills(sup, "pf-a", Symbol("BTC", "USDT"), exit_price="110")
+    _seed_portfolio_fills(sup, "pf-b", Symbol("BTC", "USD"), exit_price="120")
+
+    pa = sup.pnl_series("pf-a")
+    pb = sup.pnl_series("pf-b")
+    v0 = money("100000")
+    # Each series folds ONLY its own fills — no cross-contamination.
+    assert pa["series"]["paper"][-1][2] == v0 + money("8")
+    assert pb["series"]["paper"][-1][2] == v0 + money("18")
+    # And each unit's live engine holds only its own instrument.
+    a_insts = {
+        str(i.symbol)
+        for i in sup._units["pf-a"].engine.tracker.all_positions()  # noqa: SLF001
+    }
+    b_insts = {
+        str(i.symbol)
+        for i in sup._units["pf-b"].engine.tracker.all_positions()  # noqa: SLF001
+    }
+    assert a_insts == {"BTC/USDT"}
+    assert b_insts == {"BTC/USD"}
+
+
+async def test_per_strategy_replay_on_restart_stays_isolated(tmp_path) -> None:  # noqa: ANN001
+    """After a stop→start (which replays each store), every unit's book is its own only.
+
+    The restart path is where commingling used to bite: ``_replay_paper_book`` folds
+    the store's fills back into a fresh engine. With per-strategy stores each unit
+    replays only its own persisted fills, so pf-a's restored book is BTC/USDT +8 and
+    pf-b's is BTC/USD +18 — never each other's.
+    """
+    db_a = str(tmp_path / "a.sqlite")
+    db_b = str(tmp_path / "b.sqlite")
+    sup = StrategySupervisor(
+        _two_portfolio_config(db_a, db_b), dccd_client=_two_portfolio_client()
+    )
+    await sup.start("pf-a")
+    await sup.start("pf-b")
+    _seed_portfolio_fills(sup, "pf-a", Symbol("BTC", "USDT"), exit_price="110")
+    _seed_portfolio_fills(sup, "pf-b", Symbol("BTC", "USD"), exit_price="120")
+
+    # Restart both — each engine is rebuilt and replays its OWN store's fills.
+    await sup.stop("pf-a")
+    await sup.stop("pf-b")
+    await sup.start("pf-a")
+    await sup.start("pf-b")
+
+    ea = sup._units["pf-a"].engine  # noqa: SLF001
+    eb = sup._units["pf-b"].engine  # noqa: SLF001
+    assert {str(i.symbol) for i in ea.tracker.all_positions()} == {"BTC/USDT"}
+    assert {str(i.symbol) for i in eb.tracker.all_positions()} == {"BTC/USD"}
+    assert ea.perf.realised_pnl() == money("8")
+    assert eb.perf.realised_pnl() == money("18")

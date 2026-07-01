@@ -1016,6 +1016,51 @@ def test_create_strategy_adds_a_stopped_unit_and_persists(tmp_path) -> None:  # 
     assert reloaded.portfolios[0].capital == money("100000")
 
 
+def test_create_strategy_auto_assigns_an_isolated_db_path(tmp_path) -> None:  # noqa: ANN001
+    """`POST /api/strategies` with no db_path auto-assigns a distinct, isolated store.
+
+    A UI-deployed strategy is isolated by default: with no ``db_path`` in the body
+    the endpoint derives one under ``<manifest-storage-dir>/dashboard/<name>.sqlite``,
+    and it round-trips into the persisted manifest (so a restart keeps the isolation).
+    Two deployments get two distinct stores.
+    """
+    manifest = tmp_path / "dashboard.yaml"
+    # A manifest whose global store lives under a known dir; the auto-assigned path
+    # is derived from that dir (../dashboard/<name>.sqlite).
+    base = AppConfig.model_validate(
+        {"mode": "paper", "storage": {"db_path": str(tmp_path / "global.sqlite")}}
+    )
+    sup = StrategySupervisor(base)
+    client = TestClient(
+        create_dashboard_app(sup, on_change=lambda: sup.manifest().to_yaml(manifest))
+    )
+
+    r1 = client.post("/api/strategies", json=_portfolio_deploy_body("alloc1-binance"))
+    r2 = client.post("/api/strategies", json=_portfolio_deploy_body("alloc1-kraken"))
+    assert r1.status_code == 200, r1.text
+    assert r2.status_code == 200, r2.text
+
+    reloaded = AppConfig.from_yaml(manifest)
+    by_name = {p.name: p for p in reloaded.portfolios}
+    # Each got its own, distinct, non-null store path under dashboard/.
+    a = by_name["alloc1-binance"].db_path
+    b = by_name["alloc1-kraken"].db_path
+    assert a is not None and b is not None and a != b
+    assert a.endswith("dashboard/alloc1-binance.sqlite"), a
+    assert b.endswith("dashboard/alloc1-kraken.sqlite"), b
+
+
+def test_create_strategy_honours_an_explicit_db_path() -> None:
+    """`POST /api/strategies` with an explicit ``db_path`` uses it verbatim (no auto-assign)."""
+    sup = StrategySupervisor(AppConfig())
+    client = TestClient(create_dashboard_app(sup))
+    body = {**_portfolio_deploy_body("pf"), "db_path": "./var/custom/pf.sqlite"}
+    r = client.post("/api/strategies", json=body)
+    assert r.status_code == 200, r.text
+    [p] = sup.manifest().portfolios
+    assert p.db_path == "./var/custom/pf.sqlite"
+
+
 def test_create_then_delete_persists_the_removal(tmp_path) -> None:  # noqa: ANN001
     """`DELETE /api/strategies/{name}` removes the unit and rewrites the manifest."""
     manifest = tmp_path / "dashboard.yaml"

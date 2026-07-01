@@ -8,6 +8,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Per-strategy store isolation** — a `StrategyConfig` / `PortfolioStrategyConfig`
+  may set its own `db_path`, so several strategies in **one** dashboard manifest each
+  keep their **own** SQLite store (isolated book, fills and PnL — no commingling). The
+  supervisor applies the override when slicing a unit; the dashboard's `POST
+  /api/strategies` **auto-assigns** `…/dashboard/<name>.sqlite` when none is given, so
+  UI-deployed strategies are isolated by default. Absent → the global store (backward
+  compatible). Needed for one dashboard running multiple strategies. (#123)
+
 - **Dashboard Orders/Fills + Logs pages.** An **Orders/Fills** history page —
   `GET /api/fills` (fill history across every unit's store) and `GET /api/orders?history=true`
   (open + recent) with **crypto / exchange / strategy filters** + `limit` — and a

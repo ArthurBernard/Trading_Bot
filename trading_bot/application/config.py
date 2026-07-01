@@ -206,6 +206,11 @@ class StrategyConfig(BaseModel):
     lookback : int, optional
         Warmup: minimum number of bars before the signal is meaningful. Must be
         ``>= 0``. Default ``0`` (no warmup).
+    db_path : str or None, optional
+        Per-strategy SQLite store path; overrides the global ``storage.db_path``
+        for this strategy so its book/PnL are isolated. ``None`` → use the global
+        store. Absent → the current (shared-store) behaviour, fully
+        backward-compatible.
 
     """
 
@@ -215,6 +220,7 @@ class StrategyConfig(BaseModel):
     signal: SignalRefConfig | None = None
     reference_qty: Decimal | None = None
     lookback: int = 0
+    db_path: str | None = None
 
     @field_validator("name", "symbol")
     @classmethod
@@ -305,6 +311,11 @@ class PortfolioStrategyConfig(BaseModel):
 
         Single-instrument strategies need no equivalent: they read under the exact
         ``symbol`` string the config gives, so there is nothing to re-render.
+    db_path : str or None, optional
+        Per-strategy SQLite store path; overrides the global ``storage.db_path``
+        for this strategy so its book/PnL are isolated. ``None`` → use the global
+        store. Absent → the current (shared-store) behaviour, fully
+        backward-compatible.
 
     """
 
@@ -316,6 +327,7 @@ class PortfolioStrategyConfig(BaseModel):
     gross_cap: Decimal | None = None
     venue: str = "binance"
     store_key_format: Literal["venue", "hyphen", "slash"] = "venue"
+    db_path: str | None = None
 
     @field_validator("name", "venue")
     @classmethod

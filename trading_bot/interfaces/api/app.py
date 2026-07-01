@@ -643,6 +643,12 @@ class _CreateStrategyBody(BaseModel):
     risk : dict or None
         Optional engine-wide risk limits for the deployment (merged onto the
         manifest's ``risk`` — max_position / max_order / max_daily_loss).
+    db_path : str or None
+        An explicit per-strategy SQLite store path isolating this deployment's
+        book/PnL from the global store. ``None`` (default) → the deploy endpoint
+        **auto-assigns** one under ``<manifest-storage-dir>/dashboard/<name>.sqlite``
+        so a UI-deployed strategy is isolated by default (no commingling with
+        another deployment in the same manifest).
 
     """
 
@@ -659,10 +665,11 @@ class _CreateStrategyBody(BaseModel):
     lookback: int = 0
     span: int = 86_400
     risk: dict[str, Any] | None = None
+    db_path: str | None = None
 
 
 def _entry_from_body(
-    body: _CreateStrategyBody,
+    body: _CreateStrategyBody, *, db_path: str | None = None
 ) -> StrategyConfig | PortfolioStrategyConfig:
     """Build a config entry from a create-deployment body (raises on a bad shape).
 
@@ -672,6 +679,16 @@ def _entry_from_body(
     PortfolioStrategyConfig` (needs a ``universe`` + ``capital``) — pointing at
     the **already-existing** signal ``body.signal`` (a builtin name or a
     ``"module:function"`` ref). The signal code is never authored here.
+
+    Parameters
+    ----------
+    body : _CreateStrategyBody
+        The deployment parameters.
+    db_path : str or None, optional
+        The per-strategy store path to stamp onto the entry so its book/PnL are
+        isolated from the global store (the endpoint resolves ``body.db_path`` or
+        an auto-assigned default before calling in). ``None`` leaves the entry on
+        the global store.
 
     Raises
     ------
@@ -706,6 +723,7 @@ def _entry_from_body(
                 signal=signal_ref,
                 reference_qty=body.reference_qty,
                 lookback=body.lookback,
+                db_path=db_path,
             )
         # portfolio
         if not body.universe:
@@ -725,9 +743,37 @@ def _entry_from_body(
             signal=signal_ref,
             capital=body.capital,
             data=data,
+            db_path=db_path,
         )
     except ValidationError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+def _auto_db_path(name: str, *, global_db_path: str | None) -> str:
+    """Derive an isolated per-strategy store path for a UI-deployed strategy.
+
+    Places the store under a ``dashboard/`` subdirectory of the manifest's storage
+    directory, keyed by a filename-sanitised ``name``:
+
+    * a global ``storage.db_path`` of ``<dir>/<file>.sqlite`` →
+      ``<dir>/dashboard/<name>.sqlite``;
+    * a ``None`` global store → ``dashboard/<name>.sqlite`` (relative to the
+      process cwd, matching the manifest's own relative paths).
+
+    So a strategy deployed without an explicit ``db_path`` gets its own store by
+    default — two deployments in one manifest never commingle their fills. The
+    ``name`` is sanitised to a safe filename stem (only alphanumerics, ``-``, ``_``
+    and ``.`` survive; anything else becomes ``_``).
+    """
+    import pathlib
+
+    safe = "".join(c if (c.isalnum() or c in "-_.") else "_" for c in name) or "unit"
+    base_dir = (
+        pathlib.PurePosixPath(global_db_path).parent
+        if global_db_path is not None
+        else pathlib.PurePosixPath(".")
+    )
+    return str(base_dir / "dashboard" / f"{safe}.sqlite")
 
 
 def _discover_signals() -> dict[str, list[str]]:
@@ -1526,7 +1572,14 @@ def create_dashboard_app(
                 detail="dashboard is read-only; strategy deployment is disabled",
             )
         sup = _sup(request)
-        entry = _entry_from_body(body)
+        # Isolate this deployment's store by default: use an explicit body.db_path
+        # if given, else auto-assign one under the manifest's storage dir keyed by
+        # name (so two UI-deployed strategies never commingle their fills). The
+        # assigned path round-trips into the persisted manifest via the entry.
+        db_path = body.db_path or _auto_db_path(
+            body.name, global_db_path=sup.manifest().storage.db_path
+        )
+        entry = _entry_from_body(body, db_path=db_path)
         try:
             name = sup.add_unit(entry)
         except ConfigError as exc:
