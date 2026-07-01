@@ -401,6 +401,18 @@ def test_branding_assets_are_served() -> None:
     assert "/static/logo.svg" in html
 
 
+def test_self_hosted_fonts_are_served() -> None:
+    """The nested self-hosted fonts are served (dccd-matching interface, no CDN)."""
+    client = _client()
+    for font in ("spline-sans-400.woff2", "martian-mono-700.woff2"):
+        r = client.get(f"/static/fonts/{font}")
+        assert r.status_code == 200, font
+    # the shell declares them via @font-face + uses Spline Sans / Martian Mono.
+    html = client.get("/").text
+    assert "/static/fonts/spline-sans-400.woff2" in html
+    assert "Martian Mono" in html and "Spline Sans" in html
+
+
 # --- aggregate ratio KPIs surface non-null via /api/kpi -------------------- #
 
 

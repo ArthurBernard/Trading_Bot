@@ -6,26 +6,40 @@
   <title>{% block title %}trading_bot{% endblock %} — trading_bot</title>
   <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
   <style>
-    /* The unified dashboard shell — a small, legible dark theme, ported from
-       dccd's base.html and the retiring static/style.css. All shared CSS lives
-       here (badges, run-pill, buttons, modal, table, login) so the shell is
-       self-contained; static/ carries assets only (favicon). Money/figures use
-       tabular-nums so columns line up across rows. */
+    /* The unified dashboard shell — dccd's dark theme ported verbatim (self-hosted
+       fonts + palette) so the interface matches dccd. All shared CSS lives here
+       (badges, run-pill, buttons, modal, table, login) so the shell is
+       self-contained; static/ carries assets (logo, favicon, fonts). Money/figures
+       use tabular-nums so columns line up across rows. */
+    /* Self-hosted fonts (woff2, latin) — served from /static, no font CDN: display
+       = Martian Mono (wordmark + headings, tabular); body = Spline Sans. */
+    @font-face { font-family:'Martian Mono'; font-style:normal; font-weight:600;
+      font-display:swap; src:url('/static/fonts/martian-mono-600.woff2') format('woff2'); }
+    @font-face { font-family:'Martian Mono'; font-style:normal; font-weight:700;
+      font-display:swap; src:url('/static/fonts/martian-mono-700.woff2') format('woff2'); }
+    @font-face { font-family:'Spline Sans'; font-style:normal; font-weight:400;
+      font-display:swap; src:url('/static/fonts/spline-sans-400.woff2') format('woff2'); }
+    @font-face { font-family:'Spline Sans'; font-style:normal; font-weight:500;
+      font-display:swap; src:url('/static/fonts/spline-sans-500.woff2') format('woff2'); }
+    @font-face { font-family:'Spline Sans'; font-style:normal; font-weight:600;
+      font-display:swap; src:url('/static/fonts/spline-sans-600.woff2') format('woff2'); }
+    @font-face { font-family:'Spline Sans'; font-style:normal; font-weight:700;
+      font-display:swap; src:url('/static/fonts/spline-sans-700.woff2') format('woff2'); }
     :root {
-      --bg:#0b0f16; --fg:#e6e9ef; --muted:#8b97a7; --accent:#5ea2ff;
-      --border:#1f2733; --card:#121823; --ok:#3fb950; --err:#f85149;
+      --bg:#0a0d13; --fg:#e8eaed; --muted:#8a96a3; --accent:#5ea2ff;
+      --border:#222a33; --card:#131922; --ok:#3fb950; --err:#f85149;
       --warn:#d6a132;
       --panel-hi:rgba(255,255,255,.045);
       --accent-soft:rgba(94,162,255,.12); --warn-soft:rgba(214,161,50,.14);
       --err-soft:rgba(248,81,73,.12); --ok-soft:rgba(63,185,80,.14);
-      --font-body:system-ui, -apple-system, "Segoe UI", sans-serif;
-      --font-display:"Martian Mono", ui-monospace, "SF Mono", monospace;
-      --font-mono:ui-monospace, "SF Mono", monospace;
+      --font-body:'Spline Sans', system-ui, -apple-system, sans-serif;
+      --font-display:'Martian Mono', ui-monospace, "SF Mono", monospace;
+      --font-mono:'Martian Mono', ui-monospace, monospace;
     }
     * { box-sizing:border-box; }
     body { margin:0; font:14px/1.55 var(--font-body); color:var(--fg);
            background:
-             radial-gradient(900px 420px at 50% -10%, rgba(94,162,255,.06), transparent 60%),
+             radial-gradient(1100px 520px at 50% -8%, rgba(94,162,255,.06), transparent 62%),
              var(--bg);
            background-attachment:fixed; -webkit-font-smoothing:antialiased; }
     table, .chip, .conn { font-variant-numeric:tabular-nums; }
@@ -34,11 +48,12 @@
           padding:.5rem 1.2rem; background:var(--card);
           border-bottom:1px solid var(--border);
           position:sticky; top:0; z-index:5; }
-    nav .brand-group { display:flex; align-items:center; gap:.45rem;
+    nav .brand-group { display:flex; align-items:center; gap:.5rem;
             margin-right:.5rem; text-decoration:none; }
-    nav .brand-group .brand-logo { width:1.25rem; height:1.25rem; display:block; }
+    nav .brand-group .brand-logo { height:28px; width:auto; display:block; }
     nav .brand-group .brand { font-family:var(--font-display); font-weight:700;
-            font-size:1.05rem; letter-spacing:.04em; color:var(--fg); }
+            font-size:1rem; letter-spacing:.18em; text-transform:uppercase;
+            color:var(--fg); }
     nav .brand-group .ver { color:var(--muted); font-size:.8rem;
             font-family:var(--font-mono); }
     nav a.tab { color:var(--muted); text-decoration:none; padding:.4rem .8rem;
