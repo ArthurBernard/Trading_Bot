@@ -88,8 +88,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `PortfolioSignalFn` contract (research imported lazily) for both venues; the paper configs
   declare the 14-coin Binance USDT and 13-coin Kraken USD (no BNB) portfolios; the wiring tests
   prove both validate + their signal refs resolve offline. Paper-only; no engine code changed.
-  **Binance is fully validated; the Kraken config is paper and blocked for live/2026** on a dccd
-  BTC-USD Kraken data gap (Jan–May 2026) — ready to activate once backfilled (DEPLOY_ALLOC1.md §Kraken).
+  **Binance is fully validated** (full Sharpe 1.63). **Kraken** is the **secondary** venue — its
+  BTC-USD Kraken data gap has since been backfilled, so it is forward-valid (survives the −34%
+  H1-2026 crash at −1%, 2025 +60%) but **weaker** (full Sharpe 0.93 — the 0.26% fee + gap-free data;
+  DEPLOY_ALLOC1.md §Kraken). Both configs stay paper by default (Kraken has no public testnet).
 
 ### Changed
 
