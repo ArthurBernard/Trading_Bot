@@ -243,6 +243,129 @@ def test_fills_filter_since_ms(tmp_path) -> None:
     assert [f.fill_id for f in store.fills(since_ms=301)] == []
 
 
+# --- fills: mode / venue deployment tags ----------------------------------- #
+
+
+def test_stored_fill_defaults_to_paper_untagged(tmp_path) -> None:
+    """A fill recorded with no context reads back tagged mode='paper', venue=''."""
+    store = _store(tmp_path)
+    store.record_fill(_fill(fill_id="T1"))
+    [rec] = store.stored_fills()
+    _assert_fills_equal(rec.fill, _fill(fill_id="T1"))
+    assert rec.mode == "paper"
+    assert rec.venue == ""
+
+
+def test_set_context_tags_subsequent_fills(tmp_path) -> None:
+    """`set_context` stamps the mode + venue on fills recorded after it."""
+    store = _store(tmp_path)
+    store.record_fill(_fill(fill_id="P1"))  # default paper / ''
+    store.set_context(mode="testnet", venue="binance")
+    store.record_fill(_fill(fill_id="T1"))
+    store.set_context(mode="live", venue="kraken")
+    store.record_fill(_fill(fill_id="L1"))
+
+    by_id = {r.fill.fill_id: r for r in store.stored_fills()}
+    assert (by_id["P1"].mode, by_id["P1"].venue) == ("paper", "")
+    assert (by_id["T1"].mode, by_id["T1"].venue) == ("testnet", "binance")
+    assert (by_id["L1"].mode, by_id["L1"].venue) == ("live", "kraken")
+
+
+def test_store_constructor_seeds_the_context(tmp_path) -> None:
+    """Constructing the store with mode/venue stamps fills without a set_context call."""
+    store = SqliteStore(tmp_path / "engine.db", mode="testnet", venue="binance")
+    store.record_fill(_fill(fill_id="T1"))
+    [rec] = store.stored_fills()
+    assert (rec.mode, rec.venue) == ("testnet", "binance")
+
+
+def test_stored_fills_filter_since_ms(tmp_path) -> None:
+    """stored_fills(since_ms=...) filters by ts like fills() and carries the tags."""
+    store = SqliteStore(tmp_path / "engine.db", mode="paper", venue="kraken")
+    store.record_fill(_fill(fill_id="T1", ts=100))
+    store.record_fill(_fill(fill_id="T2", ts=200))
+    assert [r.fill.fill_id for r in store.stored_fills(since_ms=200)] == ["T2"]
+
+
+def test_plain_fills_unaffected_by_tags(tmp_path) -> None:
+    """`fills()` still returns bare domain Fills (the tags live on stored_fills)."""
+    store = SqliteStore(tmp_path / "engine.db", mode="live", venue="kraken")
+    store.record_fill(_fill(fill_id="T1"))
+    [fill] = store.fills()
+    _assert_fills_equal(fill, _fill(fill_id="T1"))
+
+
+# --- fills: schema migration (add mode/venue to a pre-existing table) ------- #
+
+
+def test_migration_adds_columns_and_backfills_existing_rows(tmp_path) -> None:
+    """A pre-migration fills table gains mode/venue; existing rows default paper/''.
+
+    Simulates a database written before this leaf: a `fills` table WITHOUT the
+    `mode`/`venue` columns, holding a row. Opening it through `SqliteStore` must
+    `ALTER TABLE ... ADD COLUMN` (not lose or corrupt the row), and the existing
+    row must read back tagged `mode='paper'`, `venue=''` (the column defaults),
+    with its money intact.
+    """
+    db = tmp_path / "legacy.db"
+    legacy = sqlite3.connect(str(db))
+    try:
+        legacy.executescript(
+            """
+            CREATE TABLE fills (
+                fill_id         TEXT PRIMARY KEY,
+                client_order_id TEXT NOT NULL,
+                instrument      TEXT NOT NULL,
+                side            TEXT NOT NULL,
+                qty             TEXT NOT NULL,
+                price           TEXT NOT NULL,
+                fee             TEXT NOT NULL,
+                ts              INTEGER NOT NULL
+            );
+            """
+        )
+        legacy.execute(
+            "INSERT INTO fills VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            ("OLD1", "c1", "BTC/USD", "buy", "0.5", "30000.5", "1.25", 1_700),
+        )
+        legacy.commit()
+    finally:
+        legacy.close()
+
+    # Opening through the store runs the migration.
+    store = SqliteStore(db)
+    [rec] = store.stored_fills()
+    assert rec.fill.fill_id == "OLD1"
+    assert rec.fill.qty == money("0.5")  # money survived, exact
+    assert rec.fill.price == money("30000.5")
+    assert rec.mode == "paper"  # backfilled default
+    assert rec.venue == ""
+
+    # The columns really exist on the table now (idempotent second open is fine).
+    reopened = SqliteStore(db)
+    cols = {
+        row[1]
+        for row in sqlite3.connect(str(db)).execute("PRAGMA table_info(fills)")
+    }
+    assert {"mode", "venue"} <= cols
+    # New fills on the migrated store are tagged normally.
+    reopened.set_context(mode="testnet", venue="binance")
+    reopened.record_fill(_fill(fill_id="NEW1"))
+    by_id = {r.fill.fill_id: r for r in reopened.stored_fills()}
+    assert by_id["OLD1"].mode == "paper"
+    assert (by_id["NEW1"].mode, by_id["NEW1"].venue) == ("testnet", "binance")
+
+
+def test_migration_is_idempotent_and_preserves_new_schema(tmp_path) -> None:
+    """A fresh (already-tagged) store re-opens cleanly — the migration is a no-op."""
+    db = tmp_path / "engine.db"
+    store = SqliteStore(db, mode="paper", venue="kraken")
+    store.record_fill(_fill(fill_id="T1"))
+    reopened = SqliteStore(db)  # second open: migration finds both columns present
+    [rec] = reopened.stored_fills()
+    assert (rec.mode, rec.venue) == ("paper", "kraken")
+
+
 # --- state ----------------------------------------------------------------- #
 
 

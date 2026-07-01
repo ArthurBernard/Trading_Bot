@@ -8,6 +8,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **PnL time-series (per strategy, per mode).** Persisted fills now carry a **mode +
+  venue** storage tag (idempotent migration; existing rows default to `paper`; the
+  domain `Fill` stays pure), and a new `application/pnl_series.py` folds a strategy's
+  fills in timestamp order into an equity curve (`equity(t) = starting_capital + Σ
+  realised PnL`, via the domain `Position` fold). `supervisor.pnl_series(name)` +
+  `GET /api/pnl?strategy=&mode=live|testnet|paper|all` return **live and testnet as
+  separate series** (fake vs real money never combined) with v0 / current equity /
+  unrealised. The data foundation for the dashboard PnL chart. Verified: the derived
+  final equity equals the engine's own realised PnL exactly. (#118)
+
 - **Manage strategies from the dashboard (persistent control plane).** The dashboard
   now owns a **manifest** (`configs/dashboard.yaml`, the default for `trading-bot
   dashboard` when no `-c` — gitignored, local-only) that it reads on startup and
@@ -76,6 +86,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (#106)
 
 ### Fixed
+
+- **A paper unit's book no longer commingles testnet/live fills.** `start()`'s
+  paper-book replay folded **all** stored fills into the paper simulator; once a store
+  held fills from a different deployment mode (a strategy run testnet/live, then
+  switched back to paper), that mixed **fake and real money** into the paper PnL — and
+  a testnet round trip landing on the same instrument as a large open paper position
+  realised a spurious close against the wrong entry price. The replay now filters on
+  the storage `mode` tag (paper-only). Surfaced by the PnL-time-series real-data run.
+  (#118)
 
 - **`StrategySupervisor.set_mode` no longer leaves a unit on the wrong mode when a
   switch is refused.** It mutated `unit.mode` *before* validating the target slice, so

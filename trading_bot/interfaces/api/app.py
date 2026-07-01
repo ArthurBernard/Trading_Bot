@@ -332,6 +332,45 @@ def _kpi_row_dict(row: KpiRow) -> dict[str, Any]:
     }
 
 
+def _pnl_series_dict(
+    result: dict[str, Any], *, only_mode: str | None = None
+) -> dict[str, Any]:
+    """Render a supervisor :meth:`pnl_series` result as a JSON-ready dict.
+
+    The per-mode realised-PnL / equity curve: ``v0`` and every money field in the
+    series points (``[ts_ms, pnl, equity]``) and the ``current`` end points
+    (``equity`` / ``unrealised``) are exact :class:`~decimal.Decimal` strings;
+    ``ts_ms`` stays the integer ms it already is. With ``only_mode`` set, only
+    that mode's series + current are kept (the ``?mode=`` filter) — an absent mode
+    yields empty ``series`` / ``current`` (200, not an error).
+    """
+    series_in: dict[str, Any] = result["series"]
+    current_in: dict[str, Any] = result["current"]
+    modes = (
+        list(series_in)
+        if only_mode is None
+        else [m for m in series_in if m == only_mode]
+    )
+    series_out = {
+        mode: [[pt[0], _money_str(pt[1]), _money_str(pt[2])] for pt in series_in[mode]]
+        for mode in modes
+    }
+    current_out = {
+        mode: {
+            "equity": _money_str(current_in[mode]["equity"]),
+            "unrealised": _money_str(current_in[mode]["unrealised"]),
+        }
+        for mode in modes
+        if mode in current_in
+    }
+    return {
+        "strategy": result["strategy"],
+        "v0": _money_str(result["v0"]),
+        "series": series_out,
+        "current": current_out,
+    }
+
+
 def _finite_or_none(value: float | None) -> float | None:
     """Pass a finite float through; map ``None`` / non-finite to JSON ``null``.
 
@@ -1088,6 +1127,10 @@ _GROUP_BY_KEYS: tuple[str, ...] = ("crypto", "exchange", "strategy")
 #: :meth:`~trading_bot.application.supervisor.StrategySupervisor.kpi`).
 _KPI_LEVELS: tuple[str, ...] = ("strategy", "exchange", "total")
 
+#: The ``?mode=`` filters ``/api/pnl`` accepts — the three deployment modes plus
+#: ``"all"`` (every mode present). Live / testnet stay separate series.
+_PNL_MODES: tuple[str, ...] = ("all", "paper", "testnet", "live")
+
 
 def _grouped(rows: list[dict[str, Any]], group_by: str | None) -> Any:
     """Group serialized rows by a tag, or return the flat list when ungrouped.
@@ -1282,6 +1325,37 @@ def create_dashboard_app(
             _kpi_row_dict(row)
             for row in _sup(request).kpi(level)  # type: ignore[arg-type]
         ]
+
+    # -- PnL series (per-mode realised-PnL / equity curve over time) --------- #
+
+    @app.get("/api/pnl")
+    async def pnl(
+        request: Request, strategy: str, mode: str = "all"
+    ) -> dict[str, Any]:
+        """Per-mode realised-PnL / equity curve for one strategy, over time.
+
+        ``?strategy=<name>`` (required) — the derived equity curve per mode
+        (``{mode: [[ts_ms, pnl, equity], ...]}``) folded from the strategy's
+        confirmed fills, plus ``v0`` and a current end point per mode
+        (``{equity, unrealised}``). **Live and testnet stay separate series**
+        (testnet is fake money — never combined). ``?mode=live|testnet|paper|all``
+        (default ``all``) filters to a single mode. Money as exact Decimal
+        strings; ``ts_ms`` integer. An unknown ``strategy`` is a 404; a strategy
+        with no fills is an empty series (200, not an error).
+        """
+        from trading_bot.domain.errors import ConfigError
+
+        if mode not in _PNL_MODES:
+            raise HTTPException(
+                status_code=422,
+                detail=f"unknown mode {mode!r}; expected one of {_PNL_MODES}",
+            )
+        try:
+            result = _sup(request).pnl_series(strategy)
+        except ConfigError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        only = None if mode == "all" else mode
+        return _pnl_series_dict(result, only_mode=only)
 
     # -- SSE events (merged across every unit's engine bus) ------------------ #
 

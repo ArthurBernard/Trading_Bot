@@ -580,3 +580,188 @@ async def test_paper_start_replay_does_not_double_count_on_restart(tmp_path) -> 
     engine = sup._units["btc-ma"].engine  # noqa: SLF001
     assert engine.perf.realised_pnl() == money("8")  # not 16
     assert engine.perf.fees_paid() == money("2")  # not 4
+
+
+async def test_paper_start_replays_only_paper_tagged_fills(tmp_path) -> None:  # noqa: ANN001
+    """A store with mixed-mode fills replays ONLY its paper fills into a paper engine.
+
+    Fake / real money must never commingle into the paper simulator's book: a
+    testnet round trip on the same instrument as a large open paper position would
+    otherwise realise a spurious close against the wrong entry. The paper unit's
+    replay filters on the storage `mode` tag, so its realised PnL is the paper
+    fold alone.
+    """
+    from trading_bot.storage.sqlite_store import SqliteStore
+
+    db = str(tmp_path / "book.sqlite")
+    inst = Instrument(Symbol("BTC", "USD"))
+    store = SqliteStore(db)
+    # A paper round trip: +8 realised.
+    store.set_context(mode="paper", venue="")
+    store.record_fill(
+        Fill("PF1", "pc1", inst, OrderSide.BUY, money("1"), money("100"), money("1"), 1)
+    )
+    store.record_fill(
+        Fill("PF2", "pc2", inst, OrderSide.SELL, money("1"), money("110"), money("1"), 2)
+    )
+    # A testnet round trip on the SAME instrument (fake money — must be ignored by
+    # the paper replay): would otherwise add +18.
+    store.set_context(mode="testnet", venue="binance")
+    store.record_fill(
+        Fill("TF1", "tc1", inst, OrderSide.BUY, money("1"), money("100"), money("1"), 3)
+    )
+    store.record_fill(
+        Fill("TF2", "tc2", inst, OrderSide.SELL, money("1"), money("120"), money("1"), 4)
+    )
+
+    sup = StrategySupervisor(
+        _config_with_store(db),
+        dccd_client=_FakeDccdClient({"BTC/USD": _dccd_ohlc(_trend())}),
+    )
+    await sup.start("btc-ma")
+    engine = sup._units["btc-ma"].engine  # noqa: SLF001
+    # Only the paper fold — the testnet fills were not commingled.
+    assert engine.perf.realised_pnl() == money("8")  # not 26
+    assert engine.perf.fees_paid() == money("2")  # not 4
+
+
+# --- pnl_series: per-mode realised-PnL / equity curve over time ------------- #
+
+
+async def test_pnl_series_paper_matches_engine_truth(tmp_path) -> None:  # noqa: ANN001
+    """A running paper unit's pnl_series folds its store's fills to the engine's truth.
+
+    The load-bearing reconciliation: the derived curve's final equity equals
+    `v0 + engine.perf.realised_pnl()` exactly (same fold, same v0), is non-empty,
+    and monotonic in ts.
+    """
+    db = str(tmp_path / "book.sqlite")
+    _seed_store(db)  # a buy→sell round trip: +8 realised
+    sup = StrategySupervisor(
+        _config_with_store(db),
+        dccd_client=_FakeDccdClient({"BTC/USD": _dccd_ohlc(_trend())}),
+    )
+    await sup.start("btc-ma")
+
+    result = sup.pnl_series("btc-ma")
+    v0 = result["v0"]
+    series = result["series"]
+    assert "paper" in series
+    paper = series["paper"]
+    assert paper  # non-empty
+    # Monotonic in ts (ascending, time-ordered).
+    ts_list = [row[0] for row in paper]
+    assert ts_list == sorted(ts_list)
+    # The final equity reconciles to the running engine's realised PnL exactly.
+    engine = sup._units["btc-ma"].engine  # noqa: SLF001
+    final_equity = paper[-1][2]
+    assert final_equity == v0 + engine.perf.realised_pnl()
+    # And v0 is the unit's configured starting capital.
+    assert v0 == sup._units["btc-ma"].config.starting_capital  # noqa: SLF001
+
+
+async def test_pnl_series_splits_live_and_testnet(tmp_path) -> None:  # noqa: ANN001
+    """Fills tagged under two modes yield two separate series, each anchored at v0.
+
+    Directly stores fills under two modes (paper→testnet is free; both fake
+    money) so no venue/network is needed, then asserts pnl_series returns a
+    per-mode split — testnet is never combined into the paper series.
+    """
+    from trading_bot.storage.sqlite_store import SqliteStore
+
+    db = str(tmp_path / "book.sqlite")
+    inst = Instrument(Symbol("BTC", "USD"))
+    store = SqliteStore(db)
+    # Paper round trip: +8 realised.
+    store.set_context(mode="paper", venue="")
+    store.record_fill(
+        Fill("PF1", "pc1", inst, OrderSide.BUY, money("1"), money("100"), money("1"), 1)
+    )
+    store.record_fill(
+        Fill("PF2", "pc2", inst, OrderSide.SELL, money("1"), money("110"), money("1"), 2)
+    )
+    # Testnet round trip on the same book (fake money, separate series): +18.
+    store.set_context(mode="testnet", venue="binance")
+    store.record_fill(
+        Fill("TF1", "tc1", inst, OrderSide.BUY, money("1"), money("100"), money("1"), 3)
+    )
+    store.record_fill(
+        Fill("TF2", "tc2", inst, OrderSide.SELL, money("1"), money("120"), money("1"), 4)
+    )
+
+    # Read via a stopped unit (reads the configured db_path store).
+    sup = StrategySupervisor(
+        _config_with_store(db),
+        dccd_client=_FakeDccdClient({"BTC/USD": _dccd_ohlc(_trend())}),
+    )
+    result = sup.pnl_series("btc-ma")
+    v0 = result["v0"]
+    series = result["series"]
+    assert set(series) == {"paper", "testnet"}
+    # Each mode folds from the SAME v0, independently.
+    assert series["paper"][-1][2] == v0 + money("8")
+    assert series["testnet"][-1][2] == v0 + money("18")
+    # The current end points reflect each mode's equity.
+    assert result["current"]["paper"]["equity"] == v0 + money("8")
+    assert result["current"]["testnet"]["equity"] == v0 + money("18")
+
+
+def test_pnl_series_unknown_strategy_raises() -> None:
+    """pnl_series on an unmanaged name is a clear ConfigError (the API maps to 404)."""
+    sup = _supervisor()
+    with pytest.raises(ConfigError, match="unknown strategy"):
+        sup.pnl_series("nope")
+
+
+def test_pnl_series_no_fills_is_empty() -> None:
+    """A unit that persists nothing (no db_path) has empty series (not an error)."""
+    sup = _supervisor()  # the default config has no storage.db_path
+    result = sup.pnl_series("btc-ma")
+    assert result["series"] == {}
+    assert result["current"] == {}
+    assert result["v0"] == sup._units["btc-ma"].config.starting_capital  # noqa: SLF001
+
+
+async def test_combined_equity_series_sums_v0_and_merges_fills(tmp_path) -> None:  # noqa: ANN001
+    """combined_equity_series merges two strategies' paper fills, summing their v0."""
+    from trading_bot.storage.sqlite_store import SqliteStore
+
+    inst = Instrument(Symbol("BTC", "USD"))
+    db_a = str(tmp_path / "a.sqlite")
+    db_b = str(tmp_path / "b.sqlite")
+    for db in (db_a, db_b):
+        store = SqliteStore(db, mode="paper", venue="kraken")
+        store.record_fill(
+            Fill(f"{db}-F1", f"{db}-c1", inst, OrderSide.BUY,
+                 money("1"), money("100"), money("0"), 1)
+        )
+        store.record_fill(
+            Fill(f"{db}-F2", f"{db}-c2", inst, OrderSide.SELL,
+                 money("1"), money("110"), money("0"), 2)
+        )
+    cfg = AppConfig.model_validate(
+        {
+            "mode": "paper",
+            "brokers": [{"name": "kraken", "exchange": "kraken"}],
+            "strategies": [
+                {
+                    "name": "a",
+                    "symbol": "BTC/USD",
+                    "storage": {"db_path": db_a},  # ignored here — set per-unit below
+                    "data": {"exchange": "kraken", "span": 60},
+                    "signal": {"ref": "ma_crossover", "params": {"fast": 3, "slow": 6}},
+                    "reference_qty": "2",
+                    "lookback": 6,
+                },
+            ],
+            "storage": {"db_path": db_a},
+        }
+    )
+    sup = StrategySupervisor(
+        cfg, dccd_client=_FakeDccdClient({"BTC/USD": _dccd_ohlc(_trend())})
+    )
+    combined = sup.combined_equity_series(["a"], mode="paper")
+    assert combined  # non-empty
+    # Single strategy 'a': +10 gross (no fees) from its v0.
+    v0 = sup._units["a"].config.starting_capital  # noqa: SLF001
+    assert combined[-1][2] == v0 + money("10")
