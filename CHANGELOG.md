@@ -8,15 +8,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **ALLOC1 portfolio config (Binance)** — wires the research allocator ALLOC1
-  (`../fynance-research/DEPLOY_ALLOC1.md`: a dynamic regime-aware blend of LS2 / MN1 /
-  BEAR1 over a 14-coin Binance USDT universe) by config + a thin generic adapter, exactly
-  like LS1. Adds `strategies/alloc1/{binance.yaml, signal.py, test_e2e.py}`: the signal
-  wrapper adapts `fynance_research.strategies.alloc1_live.target_weights("binance")` to the
-  `PortfolioSignalFn` contract (research imported lazily), the paper config declares the
-  14-coin portfolio, and the wiring test proves the config validates + the signal ref
-  resolves offline. Paper-only; no engine code changed. Kraken is deliberately omitted (an
-  open research+data task — MN1 needs SOL/ADA/LINK-USD on Kraken + a 0.26% re-validation).
+- **ALLOC1 portfolio config (Binance + Kraken)** — wires the research allocator ALLOC1
+  (`../fynance-research/DEPLOY_ALLOC1.md`: a dynamic regime-aware blend of LS2 / MN1 / BEAR1)
+  by config + a thin generic adapter, exactly like LS1. Adds
+  `strategies/alloc1/{binance.yaml, kraken.yaml, signal.py, test_e2e.py}`: the signal wrapper
+  adapts `fynance_research.strategies.alloc1_live.target_weights(venue)` to the
+  `PortfolioSignalFn` contract (research imported lazily) for both venues; the paper configs
+  declare the 14-coin Binance USDT and 13-coin Kraken USD (no BNB) portfolios; the wiring tests
+  prove both validate + their signal refs resolve offline. Paper-only; no engine code changed.
+  **Binance is fully validated; the Kraken config is paper and blocked for live/2026** on a dccd
+  BTC-USD Kraken data gap (Jan–May 2026) — ready to activate once backfilled (DEPLOY_ALLOC1.md §Kraken).
 
 ### Changed
 
