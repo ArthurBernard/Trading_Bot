@@ -19,6 +19,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Binance testnet now authenticates with testnet credentials.** The engine's
+  testnet path (`testnet: true` on a Binance broker) hard-pinned the testnet URL
+  but still read the default `BINANCE_API_KEY` / `BINANCE_API_SECRET` — which, once
+  separate mainnet + testnet keys coexist in `.env`, is the **mainnet** key and is
+  rejected by `testnet.binance.vision` (`-2015`). It now reads
+  `BINANCE_TESTNET_API_KEY` / `BINANCE_TESTNET_API_SECRET` (falling back to the
+  generic pair for the older single-key setup). Verified read-only against real
+  Binance testnet via `build_engine` (balances). (#108)
+
 ### Deprecated
 
 ### Removed

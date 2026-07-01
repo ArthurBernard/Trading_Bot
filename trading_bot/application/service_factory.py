@@ -48,6 +48,7 @@ name the simulator explicitly.
 
 from __future__ import annotations
 
+import os
 import pathlib
 from dataclasses import dataclass
 from typing import Protocol, runtime_checkable
@@ -368,20 +369,45 @@ def _build_live_venue(venue: str) -> _LiveBroker:
     raise BrokerError(f"no live adapter for venue {venue!r}")
 
 
+def _binance_testnet_credentials() -> tuple[str, str]:
+    """The Binance **testnet** key/secret, from the environment.
+
+    Testnet and mainnet are distinct credentials (a mainnet key is rejected by
+    ``testnet.binance.vision`` with ``-2015``), so the testnet adapter reads the
+    **testnet-specific** ``BINANCE_TESTNET_API_KEY`` / ``BINANCE_TESTNET_API_SECRET``
+    first, falling back to the generic ``BINANCE_API_KEY`` / ``BINANCE_API_SECRET``
+    for the older single-key setup where the only Binance key *was* the testnet one.
+    Returns ``("", "")`` when absent (the caller's ``has_credentials`` gate refuses).
+    """
+    key = os.environ.get("BINANCE_TESTNET_API_KEY") or os.environ.get(
+        "BINANCE_API_KEY", ""
+    )
+    secret = os.environ.get("BINANCE_TESTNET_API_SECRET") or os.environ.get(
+        "BINANCE_API_SECRET", ""
+    )
+    return key, secret
+
+
 def _build_testnet_venue(venue: str) -> _LiveBroker:
     """Construct a venue's **testnet** adapter, hard-pinned to its sandbox URL.
 
     Only venues in :data:`_TESTNET_VENUES` have a testnet. The base URL is forced
     to the venue's testnet endpoint (passed explicitly, so any ``BINANCE_API_BASE``
     env value is overridden) — the adapter can therefore never reach mainnet, which
-    is why the caller skips the ``live_enabled`` opt-in for it. Credentials are
-    still read from the environment (testnet keys). A venue with no testnet (e.g.
-    Kraken, which has no public spot sandbox) raises.
+    is why the caller skips the ``live_enabled`` opt-in for it. Credentials are the
+    venue's **testnet** keys (``BINANCE_TESTNET_*``, falling back to ``BINANCE_*``);
+    see :func:`_binance_testnet_credentials`. A venue with no testnet (e.g. Kraken,
+    which has no public spot sandbox) raises.
     """
     if venue == "binance":
         # Hard-pin the testnet base URL (explicit arg overrides the env default),
-        # so this adapter is structurally incapable of hitting api.binance.com.
-        return BinanceBroker(base_url=TESTNET_API_BASE)
+        # so this adapter is structurally incapable of hitting api.binance.com, and
+        # feed it the *testnet* credentials (not the mainnet key, which testnet
+        # rejects with -2015).
+        key, secret = _binance_testnet_credentials()
+        return BinanceBroker(
+            api_key=key, api_secret=secret, base_url=TESTNET_API_BASE
+        )
     raise BrokerError(
         f"venue {venue!r} has no testnet/sandbox; testnet is available for "
         f"{sorted(_TESTNET_VENUES)!r} only (Kraken has no public spot testnet — "
