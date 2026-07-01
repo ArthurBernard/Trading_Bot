@@ -581,3 +581,73 @@ def test_example_config_loads_and_validates() -> None:
     assert isinstance(strat.reference_qty, Decimal)
     assert strat.reference_qty == Decimal("0.5")
     assert strat.lookback == 30
+
+
+# --- per-strategy store isolation: the optional db_path override ------------- #
+
+
+def test_strategy_db_path_defaults_to_none() -> None:
+    """A strategy with no ``db_path`` defaults to ``None`` (the global store)."""
+    cfg = AppConfig.model_validate(
+        {"strategies": [{"name": "s", "symbol": "BTC/USD"}]}
+    )
+    assert cfg.strategies[0].db_path is None
+
+
+def test_portfolio_db_path_defaults_to_none() -> None:
+    """A portfolio with no ``db_path`` defaults to ``None`` (the global store)."""
+    cfg = AppConfig.model_validate(
+        {
+            "portfolios": [
+                {
+                    "name": "pf",
+                    "venue": "binance",
+                    "universe": ["BTC/USDT"],
+                    "capital": "100000",
+                    "signal": {"ref": "m:f"},
+                    "data": {"exchange": "binance", "span": 86400},
+                }
+            ]
+        }
+    )
+    assert cfg.portfolios[0].db_path is None
+
+
+def test_strategy_db_path_round_trips_through_yaml(tmp_path) -> None:  # noqa: ANN001
+    """A strategy's per-strategy ``db_path`` survives a ``to_yaml``/``from_yaml`` round-trip."""
+    cfg = AppConfig.model_validate(
+        {
+            "strategies": [
+                {"name": "s", "symbol": "BTC/USD", "db_path": "./var/dashboard/s.sqlite"}
+            ]
+        }
+    )
+    assert cfg.strategies[0].db_path == "./var/dashboard/s.sqlite"
+    path = tmp_path / "cfg.yaml"
+    cfg.to_yaml(path)
+    reloaded = AppConfig.from_yaml(path)
+    assert reloaded.strategies[0].db_path == "./var/dashboard/s.sqlite"
+
+
+def test_portfolio_db_path_round_trips_through_yaml(tmp_path) -> None:  # noqa: ANN001
+    """A portfolio's per-strategy ``db_path`` survives a ``to_yaml``/``from_yaml`` round-trip."""
+    cfg = AppConfig.model_validate(
+        {
+            "portfolios": [
+                {
+                    "name": "pf",
+                    "venue": "binance",
+                    "universe": ["BTC/USDT"],
+                    "capital": "100000",
+                    "signal": {"ref": "m:f"},
+                    "data": {"exchange": "binance", "span": 86400},
+                    "db_path": "./var/dashboard/pf.sqlite",
+                }
+            ]
+        }
+    )
+    assert cfg.portfolios[0].db_path == "./var/dashboard/pf.sqlite"
+    path = tmp_path / "cfg.yaml"
+    cfg.to_yaml(path)
+    reloaded = AppConfig.from_yaml(path)
+    assert reloaded.portfolios[0].db_path == "./var/dashboard/pf.sqlite"

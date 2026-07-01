@@ -491,18 +491,41 @@ class StrategySupervisor:
     def _slice_for(
         self, name: str, kind: _KIND, mode: StrategyMode, exchange: str
     ) -> AppConfig:
-        """The single-unit ``AppConfig`` for ``name`` in ``mode`` on ``exchange``."""
+        """The single-unit ``AppConfig`` for ``name`` in ``mode`` on ``exchange``.
+
+        Resolves the unit's store path last: if the strategy/portfolio entry
+        declares its own ``db_path``, the sliced config's ``storage.db_path`` is
+        overridden with it, so this unit's :func:`~trading_bot.application.
+        service_factory.build_engine` (and every store-backed read —
+        :meth:`_stored_fills_of`, :meth:`pnl_series`, :meth:`_replay_paper_book`,
+        :meth:`order_history`) reads an **isolated** store. Absent → the global
+        ``storage.db_path`` is kept (fully backward-compatible).
+        """
         if kind == "strategy":
             only = [s for s in self._base.strategies if s.name == name]
             base_slice = self._base.model_copy(
                 update={"strategies": only, "portfolios": []}
             )
+            entry_db_path = only[0].db_path if only else None
         else:
             only_p = [p for p in self._base.portfolios if p.name == name]
             base_slice = self._base.model_copy(
                 update={"strategies": [], "portfolios": only_p}
             )
-        return _config_for_mode(base_slice, mode, exchange)
+            entry_db_path = only_p[0].db_path if only_p else None
+        sliced = _config_for_mode(base_slice, mode, exchange)
+        if entry_db_path is not None:
+            # A per-strategy store path isolates this unit's book/PnL from the
+            # global store (so two strategies in one manifest never commingle their
+            # fills). Override the sliced config's storage.db_path with it.
+            sliced = sliced.model_copy(
+                update={
+                    "storage": sliced.storage.model_copy(
+                        update={"db_path": entry_db_path}
+                    )
+                }
+            )
+        return sliced
 
     # --- lifecycle --------------------------------------------------------- #
 
