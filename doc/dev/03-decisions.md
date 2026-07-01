@@ -6,6 +6,25 @@ rejected approaches as tombstones.
 
 ---
 
+### 2026-07-01 Merge the two web apps into one dashboard + clean Ctrl-C (PR #113)  [accepted]
+- **Choice**: fold the read-only `create_app` and the control `create_control_app`
+  into ONE `create_dashboard_app(supervisor, *, auth_token, read_only)`; read-only is
+  a **runtime posture** (`--read-only` / no supervisor), not a second app. Serve it
+  from a single `trading-bot dashboard` command that runs `uvicorn.run` inside a
+  `try/finally` and lets **uvicorn own SIGINT** — the supervisor is drained in the
+  `finally`. Explicitly do **not** register a competing
+  `loop.add_signal_handler(SIGINT, …)`.
+- **Why**: two apps + two launch commands (`serve` vs `start --serve`) meant you
+  could monitor OR control, never both in one coherent dashboard (the maintainer's
+  core UI complaint). And the old `start --serve` registered its own SIGINT handler
+  **over** uvicorn's, so Ctrl-C never reached uvicorn's shutdown — the process felt
+  unquittable and, on a detached terminal, orphaned. Letting uvicorn own SIGINT makes
+  the first Ctrl-C return cleanly (verified ~0.3s).
+- **Rejected alternatives**: (a) keep two apps and just polish — leaves the split
+  UX; (b) a home-grown async daemon coordinating uvicorn + a stop event by hand — the
+  exact source of the signal conflict; (c) `install_signal_handlers=False` + manual
+  handling — more surface for the same bug than simply deferring to uvicorn.
+
 ### 2026-07-01 Binance testnet reads `BINANCE_TESTNET_*` credentials (PR #108)  [accepted]
 - **Choice**: the testnet adapter built by `_build_testnet_venue("binance")` now
   reads `BINANCE_TESTNET_API_KEY` / `BINANCE_TESTNET_API_SECRET`, falling back to

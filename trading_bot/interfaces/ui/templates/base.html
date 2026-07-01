@@ -1,0 +1,346 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}trading_bot{% endblock %} — trading_bot</title>
+  <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
+  <style>
+    /* The unified dashboard shell — a small, legible dark theme, ported from
+       dccd's base.html and the retiring static/style.css. All shared CSS lives
+       here (badges, run-pill, buttons, modal, table, login) so the shell is
+       self-contained; static/ carries assets only (favicon). Money/figures use
+       tabular-nums so columns line up across rows. */
+    :root {
+      --bg:#0b0f16; --fg:#e6e9ef; --muted:#8b97a7; --accent:#5ea2ff;
+      --border:#1f2733; --card:#121823; --ok:#3fb950; --err:#f85149;
+      --warn:#d6a132;
+      --panel-hi:rgba(255,255,255,.045);
+      --accent-soft:rgba(94,162,255,.12); --warn-soft:rgba(214,161,50,.14);
+      --err-soft:rgba(248,81,73,.12); --ok-soft:rgba(63,185,80,.14);
+      --font-body:system-ui, -apple-system, "Segoe UI", sans-serif;
+      --font-display:"Martian Mono", ui-monospace, "SF Mono", monospace;
+      --font-mono:ui-monospace, "SF Mono", monospace;
+    }
+    * { box-sizing:border-box; }
+    body { margin:0; font:14px/1.55 var(--font-body); color:var(--fg);
+           background:
+             radial-gradient(900px 420px at 50% -10%, rgba(94,162,255,.06), transparent 60%),
+             var(--bg);
+           background-attachment:fixed; -webkit-font-smoothing:antialiased; }
+    table, .chip, .conn { font-variant-numeric:tabular-nums; }
+    /* Top nav — brand + version + tabs + health chip + connection dot. */
+    nav { display:flex; gap:.25rem; align-items:center; flex-wrap:wrap;
+          padding:.5rem 1.2rem; background:var(--card);
+          border-bottom:1px solid var(--border);
+          position:sticky; top:0; z-index:5; }
+    nav .brand-group { display:flex; align-items:baseline; gap:.5rem;
+            margin-right:.5rem; text-decoration:none; }
+    nav .brand-group .brand { font-family:var(--font-display); font-weight:700;
+            font-size:1.05rem; letter-spacing:.04em; color:var(--fg); }
+    nav .brand-group .ver { color:var(--muted); font-size:.8rem;
+            font-family:var(--font-mono); }
+    nav a.tab { color:var(--muted); text-decoration:none; padding:.4rem .8rem;
+            border-radius:6px; }
+    nav a.tab:hover { background:var(--border); color:var(--fg); }
+    nav a.tab.active { color:var(--accent); background:var(--accent-soft);
+            font-weight:600; }
+    /* Health chip + connection dot sit at the right end of the nav. */
+    nav .nav-right { margin-left:auto; display:inline-flex; align-items:center;
+            gap:.6rem; }
+    .chip { font-size:.76rem; color:var(--muted);
+            border:1px solid var(--border); border-radius:999px;
+            padding:.2rem .6rem; }
+    .chip b { color:var(--fg); font-weight:600; }
+    .chip.health-ok { color:var(--ok); border-color:rgba(63,185,80,.4);
+            background:var(--ok-soft); }
+    .chip.health-down { color:var(--err); border-color:rgba(248,81,73,.45);
+            background:var(--err-soft); }
+    .conn { font-size:.8rem; color:var(--muted); display:inline-flex;
+            align-items:center; }
+    .conn .dot { width:.55rem; height:.55rem; border-radius:50%;
+            background:var(--warn); margin-right:.4rem; display:inline-block; }
+    .conn.ok .dot { background:var(--ok); box-shadow:0 0 5px var(--ok); }
+    .conn.down .dot { background:var(--err); }
+    .logout-form { margin:0; }
+    .logout-btn { font-size:.76rem; color:var(--muted); background:transparent;
+            border:1px solid var(--border); border-radius:7px;
+            padding:.28rem .65rem; cursor:pointer; font:inherit; }
+    .logout-btn:hover { color:var(--err); border-color:rgba(248,81,73,.45);
+            background:var(--err-soft); }
+    main { padding:1.2rem; max-width:1100px; margin:0 auto; }
+    footer { color:var(--muted); font-size:.8rem; text-align:center;
+            padding:1.5rem 1rem; }
+    footer a { color:var(--muted); }
+    h1 { font-family:var(--font-display); font-size:1.25rem; font-weight:600;
+         letter-spacing:-.01em; margin:0 0 1rem; }
+    /* Section headers read like labels stamped on an instrument panel. */
+    h2 { font-family:var(--font-display); font-size:.78rem; font-weight:700;
+         letter-spacing:.13em; text-transform:uppercase; color:var(--muted);
+         margin:0 0 .6rem; }
+    .card { background:var(--card); border:1px solid var(--border);
+            border-radius:10px; padding:1rem 1.2rem; margin:0 0 1.2rem;
+            box-shadow:inset 0 1px 0 var(--panel-hi), 0 1px 2px rgba(0,0,0,.35); }
+    .row { display:flex; gap:.5rem; align-items:center; flex-wrap:wrap; }
+    .muted { color:var(--muted); }
+    .ok { color:var(--ok); } .err { color:var(--err); }
+    /* Tables — a horizontally-scrollable wrapper keeps wide tables from pushing
+       the page wide on a narrow viewport. */
+    .table-wrap { overflow-x:auto; -webkit-overflow-scrolling:touch; }
+    table { width:100%; border-collapse:collapse; }
+    th, td { text-align:left; padding:.45rem .6rem;
+             border-bottom:1px solid var(--border); }
+    thead th { color:var(--muted); font-weight:600; font-size:.82rem; }
+    tbody tr:last-child td, tbody tr:last-child th { border-bottom:0; }
+    .num { text-align:right; font-family:var(--font-mono); }
+    .empty td { color:var(--muted); text-align:center; padding:1rem; }
+    .side-buy { color:var(--ok); } .side-sell { color:var(--err); }
+    /* Exchange group-header row in the strategies table. */
+    tr.group td { background:var(--accent-soft);
+            border-bottom:1px solid var(--border); padding:.4rem .6rem; }
+    tr.group .group-name { font-family:var(--font-display); font-weight:700;
+            font-size:.74rem; text-transform:uppercase; letter-spacing:.1em;
+            color:var(--accent); }
+    tr.group .group-count { margin-left:.5rem; color:var(--muted);
+            font-size:.72rem; }
+    /* Mode badge — paper (calm), testnet (amber), live (red, emphasised). */
+    .badge { display:inline-block; font-size:.68rem; font-weight:700;
+            text-transform:uppercase; letter-spacing:.09em;
+            padding:.18rem .5rem; border-radius:999px;
+            border:1px solid var(--border); }
+    .badge-paper   { color:var(--accent); border-color:rgba(94,162,255,.4);
+            background:var(--accent-soft); }
+    .badge-testnet { color:var(--warn); border-color:rgba(214,161,50,.45);
+            background:var(--warn-soft); }
+    .badge-live    { color:var(--err); border-color:rgba(248,81,73,.5);
+            background:var(--err-soft); }
+    /* Running / stopped pill with a status dot. */
+    .run-pill { display:inline-flex; align-items:center; gap:.4rem;
+            font-size:.8rem; }
+    .run-pill .dot { width:.5rem; height:.5rem; border-radius:50%;
+            background:var(--muted); }
+    .run-pill.is-running { color:var(--ok); }
+    .run-pill.is-running .dot { background:var(--ok); box-shadow:0 0 5px var(--ok); }
+    .run-pill.is-stopped { color:var(--muted); }
+    /* Buttons + the mode <select>. */
+    button, .btn { font:inherit; font-size:.82rem; cursor:pointer; color:var(--fg);
+            background:var(--card); border:1px solid var(--border);
+            border-radius:7px; padding:.32rem .8rem;
+            transition:background .12s, border-color .12s, color .12s; }
+    button:hover { background:var(--border); }
+    button:disabled { opacity:.5; cursor:not-allowed; }
+    button.btn-start { color:var(--ok); border-color:rgba(63,185,80,.45); }
+    button.btn-start:hover { background:var(--ok-soft); }
+    button.btn-stop { color:var(--err); border-color:rgba(248,81,73,.45); }
+    button.btn-stop:hover { background:var(--err-soft); }
+    button.btn-primary { color:#08110a; background:var(--ok);
+            border-color:var(--ok); font-weight:700; }
+    button.btn-primary:hover { filter:brightness(1.08); background:var(--ok); }
+    select.mode-select { font:inherit; font-size:.8rem; color:var(--fg);
+            background:var(--bg); border:1px solid var(--border);
+            border-radius:7px; padding:.28rem 1.6rem .28rem .55rem; cursor:pointer;
+            appearance:none;
+            background-image:
+              linear-gradient(45deg, transparent 50%, var(--muted) 50%),
+              linear-gradient(135deg, var(--muted) 50%, transparent 50%);
+            background-position:right .85rem center, right .6rem center;
+            background-size:5px 5px, 5px 5px; background-repeat:no-repeat; }
+    select.mode-select:focus { outline:none; border-color:var(--accent); }
+    input, textarea { background:var(--bg); color:var(--fg);
+            border:1px solid var(--border); border-radius:7px; padding:.4rem .6rem;
+            font:inherit; }
+    /* Modal — a shared overlay (e.g. the deliberate "go live" confirmation). */
+    .modal { position:fixed; inset:0; display:none; z-index:50;
+            align-items:center; justify-content:center;
+            background:rgba(4,7,12,.68); backdrop-filter:blur(2px); }
+    .modal.open { display:flex; }
+    .modal-card { background:var(--card); border:1px solid var(--border);
+            border-top:3px solid var(--err); border-radius:12px;
+            padding:1.3rem 1.4rem; max-width:420px; width:calc(100% - 2rem);
+            box-shadow:0 18px 50px rgba(0,0,0,.55); }
+    .modal-card h3 { margin:0 0 .5rem; font-size:1rem; }
+    .modal-card p { color:var(--muted); margin:.35rem 0 .9rem; }
+    .modal-card code { color:var(--fg); background:var(--err-soft);
+            padding:0 .3rem; border-radius:4px; }
+    .modal-card input { width:100%; margin-bottom:1rem;
+            font-family:var(--font-mono); }
+    .modal-card input:focus { outline:none; border-color:var(--err); }
+    .modal-actions { display:flex; gap:.6rem; justify-content:flex-end; }
+    /* Login page — a centred card. */
+    .login-body { display:flex; min-height:100vh; align-items:center;
+            justify-content:center; }
+    .login-card { width:min(92vw, 360px); }
+    .login-card label { display:block; font-size:.82rem; color:var(--muted);
+            margin-bottom:.35rem; }
+    .login-card input[type="password"] { width:100%;
+            font-family:var(--font-mono); }
+    .login-card input[type="password"]:focus { outline:none;
+            border-color:var(--accent); }
+    .login-err { margin:.9rem 0 0; color:var(--err); font-size:.85rem; }
+    /* Toast notifications, bottom-right. */
+    #toast-root { position:fixed; bottom:1rem; right:1rem; z-index:60;
+            display:flex; flex-direction:column; gap:.5rem; }
+    .toast { background:var(--card); border:1px solid var(--border);
+            border-left-width:4px; border-radius:6px; padding:.6rem .9rem;
+            box-shadow:0 2px 8px rgba(0,0,0,.4); max-width:22rem;
+            animation:toast-in .15s ease-out; }
+    .toast.ok { border-left-color:var(--ok); }
+    .toast.err { border-left-color:var(--err); }
+    @keyframes toast-in { from { opacity:0; transform:translateY(.5rem); }
+                          to { opacity:1; transform:none; } }
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after { animation:none !important; transition:none !important; }
+    }
+    @media (max-width: 640px) {
+      nav { padding:.5rem .8rem; gap:.15rem; }
+      nav a.tab { padding:.55rem .7rem; }
+      nav .brand-group .ver { display:none; }
+      main { padding:.9rem .7rem; }
+      h1 { font-size:1.15rem; }
+      .modal-card { width:calc(100vw - 2rem); }
+    }
+  </style>
+  {% block head %}{% endblock %}
+</head>
+<body{% block body_attrs %}{% endblock %}>
+  <nav>
+    <a href="/" class="brand-group">
+      <span class="brand">trading_bot</span>
+      <span class="ver">v{{ version }}</span>
+    </a>
+    {% set tabs = [
+      ('/', 'Overview'),
+      ('/strategies', 'Strategies'),
+      ('/orders', 'Orders'),
+      ('/pnl', 'PnL'),
+      ('/logs', 'Logs'),
+    ] %}
+    {% for href, text in tabs %}
+    <a href="{{ href }}" class="tab{% if active == href %} active{% endif %}">{{ text }}</a>
+    {% endfor %}
+    <span class="nav-right">
+      <span id="health-chip" class="chip">health …</span>
+      <span id="conn" class="conn"><span class="dot"></span>connecting…</span>
+      {% if auth %}
+      <form method="post" action="/logout" class="logout-form">
+        <button type="submit" class="logout-btn">sign out</button>
+      </form>
+      {% endif %}
+    </span>
+  </nav>
+  <main>
+    {% block content %}{% endblock %}
+  </main>
+  <footer>
+    trading_bot v{{ version }} — unified dashboard{% if read_only %} (read-only){% endif %}.
+    <a href="https://github.com/ArthurBernard/Trading_Bot">GitHub</a>
+  </footer>
+  <div id="toast-root"></div>
+  <script>
+    // Shared vanilla helpers used across every page — no JS framework. The
+    // read_only flag is surfaced so pages can hide/disable control affordances.
+    const TB_READ_ONLY = {{ 'true' if read_only else 'false' }};
+
+    // fetch() wrapper. Auth (when enabled) rides an HttpOnly session cookie set at
+    // /login; the raw token is never exposed to JS. `same-origin` sends the cookie.
+    async function api(method, url, body) {
+      const opts = { method, headers: {}, credentials: 'same-origin' };
+      if (body !== undefined) {
+        opts.headers['Content-Type'] = 'application/json';
+        opts.body = JSON.stringify(body);
+      }
+      const r = await fetch(url, opts);
+      const text = await r.text();
+      let data = null;
+      try { data = text ? JSON.parse(text) : null; } catch (e) { data = text; }
+      if (!r.ok) throw new Error((data && data.detail) || r.statusText);
+      return data;
+    }
+
+    // Format a number with thousands separators (no scientific notation),
+    // trimming needless decimals — e.g. 1000 -> "1,000", 42153.7 -> "42,153.7".
+    function fmtNum(n) {
+      if (n == null || isNaN(n)) return '—';
+      return Number(n).toLocaleString('en-US', { maximumFractionDigits: 8 });
+    }
+    // Render a money value verbatim. The API sends money as EXACT Decimal strings;
+    // never parseFloat a money field (that would reintroduce binary-float error).
+    // A bare number is grouped for readability; a string passes through unchanged.
+    function fmtMoney(v) {
+      if (v == null) return '—';
+      if (typeof v === 'number') return fmtNum(v);
+      return String(v);
+    }
+    // Format a ms epoch as "YYYY-MM-DD HH:mm" in the browser's local zone.
+    function fmtDate(ms) {
+      if (ms == null) return '—';
+      const opts = { year:'numeric', month:'2-digit', day:'2-digit',
+                     hour:'2-digit', minute:'2-digit', hour12:false };
+      return new Date(ms).toLocaleString('en-CA', opts).replace(',', '');
+    }
+
+    function escapeHtml(s) {
+      return String(s).replace(/[&<>"']/g, function (c) {
+        return { '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c];
+      });
+    }
+
+    // Toast — a transient bottom-right notification.
+    function toast(message, kind) {
+      const root = document.getElementById('toast-root');
+      if (!root) return;
+      const el = document.createElement('div');
+      el.className = 'toast ' + (kind === 'err' ? 'err' : 'ok');
+      el.textContent = message;
+      root.appendChild(el);
+      setTimeout(function () { el.remove(); }, kind === 'err' ? 6000 : 3500);
+    }
+
+    // Set the connection dot state: 'ok' (green), 'down' (red), or '' (amber,
+    // connecting). Optionally relabels the chip.
+    function setConn(state, label) {
+      const el = document.getElementById('conn');
+      if (!el) return;
+      el.className = 'conn' + (state ? ' ' + state : '');
+      const txt = label || (state === 'ok' ? 'live' : state === 'down' ? 'offline' : 'connecting…');
+      el.innerHTML = '<span class="dot"></span>' + escapeHtml(txt);
+    }
+
+    // Poll /api/health and reflect it in the header chip + connection dot. Page
+    // data lands in later leaves; the shell only proves liveness for now.
+    async function refreshHealth() {
+      try {
+        const h = await api('GET', '/api/health');
+        const chip = document.getElementById('health-chip');
+        if (chip) {
+          chip.className = 'chip health-ok';
+          chip.innerHTML = 'health <b>ok</b> · ' + escapeHtml(h.mode) +
+            ' · <b>' + fmtNum(h.strategies) + '</b> strat';
+        }
+        setConn('ok');
+      } catch (e) {
+        const chip = document.getElementById('health-chip');
+        if (chip) { chip.className = 'chip health-down'; chip.textContent = 'health down'; }
+        setConn('down');
+      }
+    }
+
+    // Open a Server-Sent-Events stream and mirror its liveness on the connection
+    // dot. Returns the EventSource so a page can attach message handlers. The
+    // stream endpoints themselves land in later leaves; this is the shared plumbing.
+    function connect(url, onMessage) {
+      const es = new EventSource(url, { withCredentials: true });
+      es.onopen = function () { setConn('ok'); };
+      es.onerror = function () { setConn('down'); };
+      if (onMessage) es.onmessage = onMessage;
+      return es;
+    }
+
+    document.addEventListener('DOMContentLoaded', function () {
+      refreshHealth();
+      setInterval(refreshHealth, 10000);
+    });
+  </script>
+  {% block scripts %}{% endblock %}
+</body>
+</html>

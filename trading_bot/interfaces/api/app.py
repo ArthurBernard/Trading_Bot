@@ -91,7 +91,7 @@ if TYPE_CHECKING:
     from trading_bot.domain.order import Order
     from trading_bot.domain.position import Position
 
-__all__ = ["create_app", "create_control_app"]
+__all__ = ["create_app", "create_control_app", "create_dashboard_app"]
 
 
 # ---------------------------------------------------------------------------
@@ -730,3 +730,132 @@ def _install_control_auth(
         resp = RedirectResponse("/login", status_code=303)
         resp.delete_cookie(_SESSION_COOKIE)
         return resp
+
+
+# ---------------------------------------------------------------------------
+# The unified dashboard — one shell hosting monitoring + control over a supervisor
+# ---------------------------------------------------------------------------
+
+
+#: The dashboard's page tabs: (route, template) for every server-rendered shell.
+#: ``GET /`` is Overview; the rest are their own page shells. Each ``{% extends
+#: "base.html" %}`` so they share the nav / health chip / connection dot.
+_DASHBOARD_PAGES: tuple[tuple[str, str], ...] = (
+    ("/", "overview.html"),
+    ("/strategies", "strategies.html"),
+    ("/orders", "orders.html"),
+    ("/pnl", "pnl.html"),
+    ("/logs", "logs.html"),
+)
+
+
+def create_dashboard_app(
+    supervisor: StrategySupervisor,
+    *,
+    auth_token: str | None = None,
+    read_only: bool = False,
+) -> FastAPI:
+    """Build the **unified dashboard** FastAPI over a :class:`StrategySupervisor`.
+
+    The foundation that hosts both monitoring *and* control in one app and one
+    shell (``base.html``): a top nav across Overview / Strategies / Orders / PnL /
+    Logs, a brand + version + health chip + connection dot. This factory ships the
+    **shell + stub pages + health** — the per-page data (positions, orders, PnL,
+    logs) lands in later leaves, fetched client-side over ``/api/*``.
+
+    Every page renders a server-side *shell only* (version + ``read_only`` + auth
+    flags); no supervisor data is rendered server-side, so the pages are pure HTTP
+    clients of the API. ``GET /api/health`` reports liveness + a snapshot of what
+    the supervisor manages (``{status, mode, strategies, read_only}``).
+
+    **Authentication (for remote exposure).** With ``auth_token`` set, the app is
+    gated behind the same token login as the control app
+    (:func:`_install_control_auth`): ``/login`` exchanges the token for an HttpOnly
+    session cookie, an auth-guard middleware then refuses unauthenticated requests
+    (``401`` for ``/api/*``; redirect to ``/login`` for pages), and login attempts
+    are rate-limited. With ``auth_token`` ``None`` (default) there is **no** auth —
+    only safe behind loopback / an SSH tunnel.
+
+    Parameters
+    ----------
+    supervisor : StrategySupervisor
+        The supervisor to expose, read through ``app.state.supervisor``.
+    auth_token : str or None, optional
+        When set, require this token to log in (enables the auth guard). ``None``
+        (default) leaves the app unauthenticated — loopback / tunnel only.
+    read_only : bool, optional
+        When ``True``, the shell advertises a read-only stance (surfaced to the
+        templates + ``app.state.read_only`` + the health payload) so later leaves
+        hide/disable control affordances. Defaults to ``False``.
+
+    Returns
+    -------
+    FastAPI
+        The configured dashboard application (serve via uvicorn, or a
+        ``TestClient``).
+
+    """
+    app = FastAPI(
+        title="trading_bot dashboard",
+        summary="Unified monitoring + control dashboard over the supervisor.",
+        default_response_class=_DecimalJSONResponse,
+    )
+    app.state.supervisor = supervisor
+    app.state.read_only = read_only
+    app.state.auth_enabled = bool(auth_token)
+
+    def _sup(request: Request) -> StrategySupervisor:
+        """Read the wired supervisor off ``app.state`` (explicit, testable access)."""
+        return request.app.state.supervisor  # type: ignore[no-any-return]
+
+    if STATIC_DIR.is_dir():
+        app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+    templates = (
+        Jinja2Templates(directory=str(TEMPLATES_DIR))
+        if TEMPLATES_DIR.is_dir()
+        else None
+    )
+
+    if templates is not None:
+
+        def _page(route: str, template: str) -> None:
+            """Register one page route rendering ``template`` (the base shell).
+
+            Bound in a helper so each of the five pages closes over its own
+            ``route`` / ``template`` (a bare loop would late-bind them all to the
+            last iteration). Every page passes ``{active, version, read_only,
+            auth}`` so the shared nav highlights the active tab and the footer /
+            JS see the read-only + auth flags.
+            """
+
+            @app.get(route, response_class=HTMLResponse, name=f"page:{route}")
+            async def page(request: Request) -> Any:
+                return templates.TemplateResponse(
+                    request,
+                    template,
+                    {
+                        "active": route,
+                        "version": trading_bot.__version__,
+                        "read_only": request.app.state.read_only,
+                        "auth": request.app.state.auth_enabled,
+                    },
+                )
+
+        for _route, _template in _DASHBOARD_PAGES:
+            _page(_route, _template)
+
+    @app.get("/api/health")
+    async def health(request: Request) -> dict[str, Any]:
+        """Liveness + a snapshot of what the supervisor manages."""
+        sup = _sup(request)
+        return {
+            "status": "ok",
+            "mode": sup.mode,
+            "strategies": len(sup.names()),
+            "read_only": request.app.state.read_only,
+        }
+
+    if auth_token:
+        _install_control_auth(app, auth_token=auth_token, templates=templates)
+
+    return app

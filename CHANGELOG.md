@@ -8,6 +8,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Unified dashboard skeleton** — one `create_dashboard_app` factory + a
+  dccd-style **self-contained `base.html` shell** (nav Overview / Strategies /
+  Orders / PnL / Logs; brand + version + health chip + connection dot; all shared
+  CSS + JS helpers in one file) + a `trading-bot dashboard` command that **quits
+  cleanly on Ctrl-C** (uvicorn owns SIGINT; the supervisor drains in `finally`).
+  Read-only is a runtime posture (`--read-only`), not a second app. Stub pages for
+  now; data lands in the following leaves. First leaf of the unified-dashboard epic
+  that will retire the split read-only/control apps. (#113)
+
 - **ALLOC1 portfolio config (Binance + Kraken)** — wires the research allocator ALLOC1
   (`../fynance-research/DEPLOY_ALLOC1.md`: a dynamic regime-aware blend of LS2 / MN1 / BEAR1)
   by config + a thin generic adapter, exactly like LS1. Adds

@@ -874,5 +874,103 @@ def start(
         raise typer.Exit(code=1) from exc
 
 
+# --- dashboard (unified UI) ------------------------------------------------ #
+
+
+@app.command()
+def dashboard(
+    config_path: pathlib.Path | None = typer.Option(
+        None,
+        "--config",
+        "-c",
+        help="YAML AppConfig path. Defaults to a paper config (no strategies).",
+    ),
+    host: str = typer.Option(
+        "127.0.0.1",
+        "--host",
+        help="Interface to bind. Defaults to loopback (local-only).",
+    ),
+    port: int = typer.Option(
+        8000,
+        "--port",
+        help="TCP port to listen on.",
+    ),
+    token: str | None = typer.Option(
+        None,
+        "--token",
+        envvar="TRADING_BOT_UI_TOKEN",
+        help="Require this token to log in to the dashboard (enables auth). "
+        "Mandatory to bind a non-loopback --host. Reads TRADING_BOT_UI_TOKEN.",
+    ),
+    read_only: bool = typer.Option(
+        False,
+        "--read-only",
+        help="Advertise a read-only stance (later leaves hide/disable controls).",
+    ),
+) -> None:
+    """Serve the **unified dashboard** (Overview / Strategies / Orders / PnL / Logs).
+
+    Builds a :class:`~trading_bot.application.supervisor.StrategySupervisor` from
+    ``--config`` (or a paper default) and serves the single-shell dashboard
+    (:func:`~trading_bot.interfaces.api.create_dashboard_app`) over uvicorn. This
+    MVP ships the shell + stub pages + health; per-page data lands in later leaves.
+
+    Binds **loopback** by default. Binding a non-loopback ``--host`` requires a
+    ``--token`` (``TRADING_BOT_UI_TOKEN``) — the same guard as ``start`` — since
+    the dashboard is the future control surface; otherwise the command refuses.
+
+    Clean shutdown
+    --------------
+    ``uvicorn.run`` **owns SIGINT**: Ctrl-C makes it return promptly, and the
+    ``finally`` then shuts the supervisor down. This leaf is control-only (no
+    scheduler / order path), so a plain ``uvicorn.run`` inside ``try/finally`` is
+    the whole loop — we deliberately do **not** also register a competing
+    ``loop.add_signal_handler(SIGINT, …)`` (that override is what makes
+    ``start --serve`` feel unquittable).
+    """
+    import uvicorn
+
+    from trading_bot.application.supervisor import StrategySupervisor
+    from trading_bot.interfaces.api import create_dashboard_app
+
+    config = (
+        AppConfig.from_yaml(config_path)
+        if config_path is not None
+        else AppConfig()
+    )
+
+    if host not in ("127.0.0.1", "localhost", "::1") and not token:
+        _console.print(
+            "[red]refusing to bind a non-loopback dashboard with no auth "
+            "token[/red] — set --token / TRADING_BOT_UI_TOKEN, or bind 127.0.0.1 "
+            "and tunnel (the dashboard is the control surface)."
+        )
+        raise typer.Exit(code=1)
+
+    try:
+        supervisor = StrategySupervisor(config)
+    except Exception as exc:  # noqa: BLE001 - surface any build failure cleanly
+        _console.print(f"[red]refusing to serve dashboard:[/red] {exc}")
+        raise typer.Exit(code=1) from exc
+
+    application = create_dashboard_app(
+        supervisor, auth_token=token, read_only=read_only
+    )
+    if token:
+        _console.print("[dim]dashboard auth: token login enabled[/dim]")
+    _console.print(
+        f"[green]serving dashboard[/green] (mode={config.mode}"
+        f"{', read-only' if read_only else ''}) on http://{host}:{port}"
+        "  —  Ctrl-C to stop"
+    )
+    try:
+        # uvicorn owns SIGINT: Ctrl-C returns from run() cleanly the first time.
+        uvicorn.run(application, host=host, port=port)
+    finally:
+        # Tear the supervisor down whether serve returned normally or on Ctrl-C.
+        asyncio.run(supervisor.shutdown())
+        _console.print("[green]dashboard stopped[/green]")
+
+
 if __name__ == "__main__":  # pragma: no cover - manual invocation only
     app()
