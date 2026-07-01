@@ -361,6 +361,17 @@ class StrategySupervisor:
         await reconcile(
             engine.broker, engine.router, engine.tracker, event_bus=engine.bus
         )
+        if unit.mode == "paper":
+            # Paper has no venue to reconcile against, so `reconcile` above just
+            # reset the tracker to the paper broker's (empty) fill set. Replay the
+            # store's persisted fills into the tracker + performance service so a
+            # paper unit's book survives a restart (positions + realised PnL). On
+            # live/testnet the venue's `reconcile` is the source of truth for
+            # positions, so we deliberately do NOT replay here — that would
+            # double-count against the broker-reported fills. Both `apply`s are
+            # idempotent by `fill_id`, so a start-twice (guarded by `unit.running`
+            # anyway) never double-applies.
+            self._replay_paper_book(engine)
         if unit.kind == "strategy":
             runners = build_runners(
                 unit.config, engine, dccd_client=self._dccd_client
@@ -373,6 +384,31 @@ class StrategySupervisor:
             unit.runner = pruns[0]
         unit.engine = engine
         unit.running = True
+
+    @staticmethod
+    def _replay_paper_book(engine: Engine) -> None:
+        """Fold the store's persisted fills into a paper engine's tracker + perf.
+
+        The paper simulator holds no venue state, so the startup ``reconcile``
+        leaves the freshly-built engine's tracker / performance service empty even
+        when the store holds a book. This replays the store's confirmed fills — the
+        PnL source of truth — into both, exactly as the ``status`` / ``kpi`` CLI
+        commands rebuild a view from ``store.fills()``. Idempotent: both
+        :meth:`~trading_bot.application.position_tracker.PositionTracker.apply` and
+        :meth:`~trading_bot.application.performance_service.PerformanceService.apply`
+        dedup by ``fill_id``, so a re-run never double-counts. Money stays exact
+        :class:`~decimal.Decimal`. A no-op when the engine has no store.
+
+        **Paper only** (the caller gates on ``unit.mode == "paper"``): on
+        live/testnet the venue's :func:`~trading_bot.application.reconcile.reconcile`
+        already rebuilt the positions from the *broker's* fills, so replaying the
+        store's fills too would double-count.
+        """
+        if engine.store is None:
+            return
+        for fill in engine.store.fills():
+            engine.tracker.apply(fill)
+            engine.perf.apply(fill)
 
     async def stop(self, name: str) -> None:
         """Tear down the unit's engine — it is no longer stepped. Idempotent."""
@@ -406,11 +442,16 @@ class StrategySupervisor:
                 "acknowledgement (see doc/dev/09-go-live.md). No order placed."
             )
         unit = self._unit(name)
+        # Validate the new mode (slice it) BEFORE mutating the unit, so a mode that
+        # cannot run (e.g. testnet/live on a venue with no matching broker → a
+        # ConfigError) leaves the unit untouched — "nothing changes" on a refused
+        # switch, matching the live-confirm gate above.
+        new_config = self._slice_for(name, unit.kind, mode, unit.exchange)
         was_running = unit.running
         if was_running:
             await self.stop(name)
         unit.mode = mode
-        unit.config = self._slice_for(name, unit.kind, mode, unit.exchange)
+        unit.config = new_config
         if was_running:
             await self.start(name)
 
