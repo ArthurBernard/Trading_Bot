@@ -419,14 +419,41 @@ def test_testnet_hard_pins_url_ignoring_mainnet_env(monkeypatch) -> None:
 
 def test_testnet_without_credentials_refuses(monkeypatch) -> None:
     """Testnet still needs (testnet) credentials → ``BrokerError`` without them."""
-    monkeypatch.delenv("BINANCE_API_KEY", raising=False)
-    monkeypatch.delenv("BINANCE_API_SECRET", raising=False)
+    for var in (
+        "BINANCE_API_KEY",
+        "BINANCE_API_SECRET",
+        "BINANCE_TESTNET_API_KEY",
+        "BINANCE_TESTNET_API_SECRET",
+    ):
+        monkeypatch.delenv(var, raising=False)
     cfg = AppConfig(
         mode="live",
         brokers=[BrokerConfig(name="bn", exchange="binance", testnet=True)],
     )
     with pytest.raises(BrokerError, match="credentials"):
         build_engine(cfg)
+
+
+def test_testnet_uses_testnet_specific_credentials(monkeypatch) -> None:
+    """The testnet adapter reads ``BINANCE_TESTNET_*`` — not the mainnet key.
+
+    Mainnet and testnet are distinct credentials (a mainnet key is rejected by
+    ``testnet.binance.vision``). With **only** the ``BINANCE_TESTNET_*`` pair set
+    (mainnet vars absent), the testnet broker must still report credentials — proof
+    it read the testnet-specific env vars, not ``BINANCE_API_KEY``.
+    """
+    monkeypatch.delenv("BINANCE_API_KEY", raising=False)
+    monkeypatch.delenv("BINANCE_API_SECRET", raising=False)
+    monkeypatch.setenv("BINANCE_TESTNET_API_KEY", "tk")
+    monkeypatch.setenv("BINANCE_TESTNET_API_SECRET", "ts")
+    cfg = AppConfig(
+        mode="live",
+        brokers=[BrokerConfig(name="bn", exchange="binance", testnet=True)],
+    )
+    engine = build_engine(cfg)
+    assert isinstance(engine.broker, BinanceBroker)
+    assert engine.broker.is_testnet
+    assert engine.broker.has_credentials  # read from BINANCE_TESTNET_*
 
 
 def test_testnet_kraken_refuses() -> None:

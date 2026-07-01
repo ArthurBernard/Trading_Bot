@@ -786,21 +786,29 @@ async def test_real_binance_testnet_round_trip(
 ) -> None:
     """Place → read back → cancel a far-from-market LIMIT on the Binance testnet.
 
-    Skips unless ``BINANCE_API_KEY`` / ``BINANCE_API_SECRET`` are present
-    (testnet keys from https://testnet.binance.vision). Points ``base_url`` at
-    the testnet, places a tiny LIMIT order far below market (so it never fills),
-    reads it back via ``open_orders`` (asserting the broker-reported state
-    matches what was requested), then cancels it via the composite id.
+    Skips unless testnet credentials are present — ``BINANCE_TESTNET_API_KEY`` /
+    ``BINANCE_TESTNET_API_SECRET`` (falling back to ``BINANCE_API_KEY`` /
+    ``BINANCE_API_SECRET`` for the older single-key setup), from
+    https://testnet.binance.vision. Points ``base_url`` at the testnet, places a
+    tiny LIMIT order far below market (so it never fills), reads it back via
+    ``open_orders`` (asserting the broker-reported state matches what was
+    requested), then cancels it via the composite id.
     """
     import os
 
-    key = os.environ.get("BINANCE_API_KEY")
-    secret = os.environ.get("BINANCE_API_SECRET")
+    key = os.environ.get("BINANCE_TESTNET_API_KEY") or os.environ.get(
+        "BINANCE_API_KEY"
+    )
+    secret = os.environ.get("BINANCE_TESTNET_API_SECRET") or os.environ.get(
+        "BINANCE_API_SECRET"
+    )
     if not key or not secret:
         pytest.skip("no Binance testnet credentials in the environment")
 
     symbol = Symbol("BTC", "USDT")
-    broker = BinanceBroker(base_url=TESTNET_API_BASE, symbols=[symbol])
+    broker = BinanceBroker(
+        api_key=key, api_secret=secret, base_url=TESTNET_API_BASE, symbols=[symbol]
+    )
     inst = await broker.instrument(symbol)
     mark = await broker.ticker(inst)
 

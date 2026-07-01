@@ -6,6 +6,21 @@ rejected approaches as tombstones.
 
 ---
 
+### 2026-07-01 Binance testnet reads `BINANCE_TESTNET_*` credentials (PR #108)  [accepted]
+- **Choice**: the testnet adapter built by `_build_testnet_venue("binance")` now
+  reads `BINANCE_TESTNET_API_KEY` / `BINANCE_TESTNET_API_SECRET`, falling back to
+  the generic `BINANCE_API_KEY` / `BINANCE_API_SECRET`. The URL was already
+  hard-pinned to `testnet.binance.vision`; only the credential source changed.
+- **Why**: mainnet and testnet are **distinct** Binance credentials — a mainnet
+  key is rejected by the testnet endpoint with `-2015`. Once mainnet + testnet keys
+  coexist in `.env`, the testnet path must pick the testnet pair, not the default
+  `BINANCE_API_KEY` (which is now mainnet). The fallback preserves the older
+  single-key setup where the only Binance key *was* the testnet one.
+- **Rejected alternatives**: (a) a per-broker `credentials_env` config field —
+  more config surface for a convention that can be derived; (b) requiring the user
+  to overwrite `BINANCE_API_KEY` with the testnet key when testing — brittle and
+  makes mainnet reads (validated read-only) impossible at the same time.
+
 ### 2026-06-30 Control dashboard auth — token login + sessions (dccd-style) (PR #102)  [accepted]
 
 **Choice.** The control dashboard gains an **optional** token auth (off by default):
