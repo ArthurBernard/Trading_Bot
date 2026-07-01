@@ -39,6 +39,40 @@
   </div>
 </section>
 
+{% if not read_only %}
+<!-- Deploy an EXISTING signal (a builtin name or a module:function ref discovered
+     from strategies/*/signal.py) as a new stopped unit. The UI composes the
+     DEPLOYMENT (venue / mode / capital / universe|symbol) — it never authors the
+     signal's Python. POSTing persists the manifest server-side. -->
+<section class="card" id="deploy-card">
+  <h2 style="margin-top:0;">Deploy a strategy</h2>
+  <p class="muted">Compose a deployment from a signal that already exists in code. The unit is added <b>stopped</b> (paper-safe).</p>
+  <form id="deploy-form" class="row" style="flex-wrap:wrap; gap:.5rem; align-items:flex-end;">
+    <label>Name<br><input id="dep-name" required autocomplete="off"></label>
+    <label>Kind<br>
+      <select id="dep-kind">
+        <option value="strategy">strategy</option>
+        <option value="portfolio">portfolio</option>
+      </select>
+    </label>
+    <label>Signal<br>
+      <select id="dep-signal"><option value="">loading…</option></select>
+    </label>
+    <label>Venue<br><input id="dep-venue" value="binance" autocomplete="off"></label>
+    <label>Mode<br>
+      <select id="dep-mode">
+        <option value="paper" selected>paper</option>
+        <option value="testnet">testnet</option>
+      </select>
+    </label>
+    <label class="dep-strategy-only">Symbol<br><input id="dep-symbol" placeholder="BTC/USD" autocomplete="off"></label>
+    <label class="dep-portfolio-only" hidden>Universe (comma-sep)<br><input id="dep-universe" placeholder="BTC/USDT, ETH/USDT" autocomplete="off"></label>
+    <label class="dep-portfolio-only" hidden>Capital<br><input id="dep-capital" value="100000" autocomplete="off"></label>
+    <button class="btn-primary" type="submit">Deploy</button>
+  </form>
+</section>
+{% endif %}
+
 <!-- Live confirmation modal: the deliberate "go real money" acknowledgement. The
      Go-live button only enables once the exact phrase is typed. -->
 <div id="live-modal" class="modal" role="dialog" aria-modal="true" aria-labelledby="live-modal-title">
@@ -104,10 +138,13 @@
     let action;
     if (TB_READ_ONLY) {
       action = '<span class="muted">—</span>';
-    } else if (s.running) {
-      action = '<button data-name="' + escapeHtml(s.name) + '" data-act="stop" class="btn-stop">Stop</button>';
     } else {
-      action = '<button data-name="' + escapeHtml(s.name) + '" data-act="start" class="btn-start">Start</button>';
+      const toggle = s.running
+        ? '<button data-name="' + escapeHtml(s.name) + '" data-act="stop" class="btn-stop">Stop</button>'
+        : '<button data-name="' + escapeHtml(s.name) + '" data-act="start" class="btn-start">Start</button>';
+      // Remove drops the deployment and rewrites the manifest server-side.
+      const remove = '<button data-name="' + escapeHtml(s.name) + '" data-act="remove" class="btn-stop" title="Remove deployment">Remove</button>';
+      action = toggle + ' ' + remove;
     }
     const pnl = s.realised_pnl == null ? '<span class="muted">—</span>' : escapeHtml(s.realised_pnl);
     return '<tr>' +
@@ -171,10 +208,70 @@
     const act = btn.dataset.act;
     btn.disabled = true;
     try {
-      await api('POST', '/api/strategies/' + encodeURIComponent(name) + '/' + act);
-      toast(name + ': ' + act + 'ed', 'ok');
+      if (act === 'remove') {
+        if (!window.confirm('Remove deployment "' + name + '"? Its manifest entry is rewritten.')) {
+          btn.disabled = false;
+          return;
+        }
+        await api('DELETE', '/api/strategies/' + encodeURIComponent(name));
+        toast(name + ': removed', 'ok');
+      } else {
+        await api('POST', '/api/strategies/' + encodeURIComponent(name) + '/' + act);
+        toast(name + ': ' + act + 'ed', 'ok');
+      }
     } catch (e) {
       toast(name + ': ' + e.message, 'err');
+    } finally {
+      await refresh();
+    }
+  }
+
+  // --- deploy form: compose a deployment of an existing signal ------------- //
+
+  async function loadSignals() {
+    const sel = document.getElementById('dep-signal');
+    if (!sel) return;
+    try {
+      const s = await api('GET', '/api/signals');
+      const opts = [];
+      (s.builtins || []).forEach(function (b) { opts.push('<option value="' + escapeHtml(b) + '">' + escapeHtml(b) + ' (builtin)</option>'); });
+      (s.discovered || []).forEach(function (d) { opts.push('<option value="' + escapeHtml(d) + '">' + escapeHtml(d) + '</option>'); });
+      sel.innerHTML = opts.length ? opts.join('') : '<option value="">no signals found</option>';
+    } catch (e) {
+      sel.innerHTML = '<option value="">' + escapeHtml(e.message) + '</option>';
+    }
+  }
+
+  function syncDeployKind() {
+    const kind = document.getElementById('dep-kind').value;
+    document.querySelectorAll('.dep-strategy-only').forEach(function (el) { el.hidden = kind !== 'strategy'; });
+    document.querySelectorAll('.dep-portfolio-only').forEach(function (el) { el.hidden = kind !== 'portfolio'; });
+  }
+
+  async function onDeploy(ev) {
+    ev.preventDefault();
+    const kind = document.getElementById('dep-kind').value;
+    const body = {
+      name: document.getElementById('dep-name').value.trim(),
+      kind: kind,
+      venue: document.getElementById('dep-venue').value.trim(),
+      mode: document.getElementById('dep-mode').value,
+      signal: document.getElementById('dep-signal').value,
+    };
+    if (kind === 'strategy') {
+      body.symbol = document.getElementById('dep-symbol').value.trim();
+    } else {
+      body.universe = document.getElementById('dep-universe').value
+        .split(',').map(function (p) { return p.trim(); }).filter(Boolean);
+      body.capital = document.getElementById('dep-capital').value.trim();
+    }
+    try {
+      await api('POST', '/api/strategies', body);
+      toast(body.name + ': deployed (stopped)', 'ok');
+      document.getElementById('deploy-form').reset();
+      syncDeployKind();
+    } catch (e) {
+      toast('deploy failed: ' + e.message, 'err');
     } finally {
       await refresh();
     }
@@ -232,6 +329,13 @@
     if (!TB_READ_ONLY) {
       body.addEventListener('click', onClick);
       body.addEventListener('change', onModeChange);
+      const form = document.getElementById('deploy-form');
+      if (form) {
+        loadSignals();
+        syncDeployKind();
+        document.getElementById('dep-kind').addEventListener('change', syncDeployKind);
+        form.addEventListener('submit', onDeploy);
+      }
     }
     refresh();
 

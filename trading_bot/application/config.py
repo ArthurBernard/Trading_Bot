@@ -537,3 +537,113 @@ class AppConfig(BaseModel):
         with open(path) as f:
             data = yaml.safe_load(f) or {}
         return cls.model_validate(data)
+
+    def to_yaml(self, path: str | pathlib.Path) -> None:
+        """Dump this config to a YAML file so a UI edit persists (round-trippable).
+
+        The inverse of :meth:`from_yaml`: serialise the validated model to YAML
+        at ``path``, such that ``AppConfig.from_yaml(path)`` reconstructs an
+        equivalent config. Money fields (``starting_capital`` / risk limits /
+        ``capital`` / ...) are dumped via ``model_dump(mode="json")`` so each
+        :class:`~decimal.Decimal` becomes an **exact string** (e.g.
+        ``"100000"``), which :meth:`from_yaml` re-parses back to the same
+        ``Decimal`` — never through ``float``. The parent directory is created
+        if absent (the dashboard writes a default manifest under ``configs/``).
+
+        Parameters
+        ----------
+        path : str or pathlib.Path
+            Destination YAML file. Its parent directory is created if missing.
+
+        """
+        target = pathlib.Path(path)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        # `mode="json"` renders every Decimal as an exact string, so the YAML
+        # scalar `from_yaml` reads back parses to the identical Decimal.
+        data = self.model_dump(mode="json")
+        with open(target, "w") as f:
+            yaml.safe_dump(data, f, sort_keys=False, default_flow_style=False)
+
+    def add_strategy(self, strategy: StrategyConfig) -> AppConfig:
+        """Return a new, validated config with ``strategy`` appended.
+
+        A pure helper (this config is unchanged): rejects a name already claimed
+        by a strategy **or** a portfolio (managed units share one name space),
+        then re-validates the whole config so a bad entry (e.g. an unparseable
+        symbol) is caught here rather than at deployment.
+
+        Raises
+        ------
+        ValueError
+            If a strategy or portfolio with the same ``name`` already exists.
+
+        """
+        self._reject_duplicate_name(strategy.name)
+        return self.model_validate(
+            {
+                **self.model_dump(),
+                "strategies": [*self.strategies, strategy],
+            }
+        )
+
+    def add_portfolio(self, portfolio: PortfolioStrategyConfig) -> AppConfig:
+        """Return a new, validated config with ``portfolio`` appended.
+
+        The portfolio analogue of :meth:`add_strategy`: rejects a name already
+        claimed by any managed unit and re-validates the whole config (so an
+        empty / duplicate-coin universe or a non-positive capital is caught).
+
+        Raises
+        ------
+        ValueError
+            If a strategy or portfolio with the same ``name`` already exists.
+
+        """
+        self._reject_duplicate_name(portfolio.name)
+        return self.model_validate(
+            {
+                **self.model_dump(),
+                "portfolios": [*self.portfolios, portfolio],
+            }
+        )
+
+    def remove_entry(self, name: str) -> AppConfig:
+        """Return a new, validated config with the strategy/portfolio ``name`` removed.
+
+        Drops the single-instrument strategy **or** portfolio whose ``name``
+        matches (the two share one name space, so at most one is dropped), then
+        re-validates. A pure helper — this config is unchanged.
+
+        Raises
+        ------
+        ValueError
+            If no strategy or portfolio is named ``name``.
+
+        """
+        strategies = [s for s in self.strategies if s.name != name]
+        portfolios = [p for p in self.portfolios if p.name != name]
+        if (
+            len(strategies) == len(self.strategies)
+            and len(portfolios) == len(self.portfolios)
+        ):
+            raise ValueError(
+                f"no strategy or portfolio named {name!r} to remove"
+            )
+        return self.model_validate(
+            {
+                **self.model_dump(),
+                "strategies": strategies,
+                "portfolios": portfolios,
+            }
+        )
+
+    def _reject_duplicate_name(self, name: str) -> None:
+        """Raise if ``name`` is already a strategy or portfolio (shared name space)."""
+        existing = {s.name for s in self.strategies} | {
+            p.name for p in self.portfolios
+        }
+        if name in existing:
+            raise ValueError(
+                f"duplicate name {name!r}: a strategy or portfolio with that "
+                "name already exists (managed units share one name space)"
+            )

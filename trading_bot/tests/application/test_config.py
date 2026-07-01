@@ -26,6 +26,7 @@ from trading_bot.application import (
     StorageConfig,
     StrategyConfig,
 )
+from trading_bot.application.config import PortfolioStrategyConfig
 
 #: The shipped runnable paper config (resolved from the repo root).
 EXAMPLE_CONFIG = (
@@ -421,6 +422,140 @@ def test_data_source_data_type_defaults_to_ohlc() -> None:
     assert cfg.strategies[0].data is not None
     assert cfg.strategies[0].data.data_type == "ohlc"
     assert cfg.strategies[0].data.start is None
+
+
+# --- to_yaml round-trip + add/remove-entry helpers (UI-driven persistence) ---
+
+
+def _full_config() -> AppConfig:
+    """A rich paper config exercising Decimals, a strategy and a portfolio."""
+    return AppConfig.model_validate(
+        {
+            "mode": "paper",
+            "starting_capital": "100000",
+            "brokers": [{"name": "paper-binance", "exchange": "paper"}],
+            "strategies": [
+                {
+                    "name": "btc-ma",
+                    "symbol": "BTC/USD",
+                    "data": {"exchange": "kraken", "span": 3600},
+                    "signal": {"ref": "ma_crossover", "params": {"fast": 10, "slow": 30}},
+                    "reference_qty": "0.5",
+                    "lookback": 30,
+                }
+            ],
+            "portfolios": [
+                {
+                    "name": "alloc1",
+                    "venue": "binance",
+                    "universe": ["BTC/USDT", "ETH/USDT"],
+                    "signal": {"ref": "pkg.mod:sig"},
+                    "capital": "100000",
+                    "data": {"exchange": "binance", "span": 86400},
+                }
+            ],
+            "risk": {"max_daily_loss": "5000"},
+        }
+    )
+
+
+def test_to_yaml_round_trips(tmp_path) -> None:  # noqa: ANN001
+    """`from_yaml(to_yaml(cfg))` reconstructs the same config (money exact)."""
+    cfg = _full_config()
+    path = tmp_path / "manifest.yaml"
+    cfg.to_yaml(path)
+    reloaded = AppConfig.from_yaml(path)
+    assert reloaded == cfg  # semantic equality: Decimals, portfolios and all
+    # And the money survived as an exact Decimal, never a float.
+    assert reloaded.portfolios[0].capital == Decimal("100000")
+    assert isinstance(reloaded.portfolios[0].capital, Decimal)
+
+
+def test_to_yaml_creates_parent_directory(tmp_path) -> None:  # noqa: ANN001
+    """`to_yaml` creates a missing parent dir (the dashboard's configs/ default)."""
+    path = tmp_path / "configs" / "dashboard.yaml"
+    assert not path.parent.exists()
+    AppConfig().to_yaml(path)
+    assert path.is_file()
+    assert AppConfig.from_yaml(path).mode == "paper"
+
+
+def test_add_strategy_appends_and_validates() -> None:
+    """`add_strategy` returns a new config with the entry appended (original intact)."""
+    cfg = AppConfig()
+    new = cfg.add_strategy(StrategyConfig(name="s1", symbol="BTC/USD"))
+    assert [s.name for s in new.strategies] == ["s1"]
+    assert cfg.strategies == []  # pure — the original is unchanged
+
+
+def test_add_portfolio_appends_and_validates() -> None:
+    """`add_portfolio` returns a new config with the portfolio appended."""
+    cfg = AppConfig()
+    entry = PortfolioStrategyConfig(
+        name="pf1",
+        venue="binance",
+        universe=["BTC/USDT", "ETH/USDT"],
+        signal=SignalRefConfig(ref="pkg.mod:sig"),
+        capital=Decimal("100000"),
+        data=DataSourceConfig(exchange="binance", span=86400),
+    )
+    new = cfg.add_portfolio(entry)
+    assert [p.name for p in new.portfolios] == ["pf1"]
+
+
+def test_add_strategy_rejects_a_duplicate_name() -> None:
+    """A name already claimed by a strategy is rejected (shared name space)."""
+    cfg = AppConfig().add_strategy(StrategyConfig(name="s1", symbol="BTC/USD"))
+    with pytest.raises(ValueError, match="duplicate name"):
+        cfg.add_strategy(StrategyConfig(name="s1", symbol="ETH/USD"))
+
+
+def test_add_portfolio_rejects_a_name_claimed_by_a_strategy() -> None:
+    """Strategies and portfolios share one name space — a cross-kind clash is rejected."""
+    cfg = AppConfig().add_strategy(StrategyConfig(name="dup", symbol="BTC/USD"))
+    with pytest.raises(ValueError, match="duplicate name"):
+        cfg.add_portfolio(
+            PortfolioStrategyConfig(
+                name="dup",
+                venue="binance",
+                universe=["BTC/USDT"],
+                signal=SignalRefConfig(ref="pkg.mod:sig"),
+                capital=Decimal("100000"),
+                data=DataSourceConfig(exchange="binance", span=86400),
+            )
+        )
+
+
+def test_add_portfolio_rejects_an_invalid_universe() -> None:
+    """A portfolio with a duplicate-coin universe is rejected at validation."""
+    with pytest.raises(ValidationError):
+        AppConfig().add_portfolio(
+            PortfolioStrategyConfig(
+                name="pf",
+                venue="binance",
+                universe=["BTC/USDT", "XBT/USDT"],  # same instrument twice
+                signal=SignalRefConfig(ref="pkg.mod:sig"),
+                capital=Decimal("100000"),
+                data=DataSourceConfig(exchange="binance", span=86400),
+            )
+        )
+
+
+def test_remove_entry_drops_a_strategy_or_portfolio() -> None:
+    """`remove_entry` drops the matching unit (strategy or portfolio)."""
+    cfg = _full_config()
+    without_strat = cfg.remove_entry("btc-ma")
+    assert [s.name for s in without_strat.strategies] == []
+    assert [p.name for p in without_strat.portfolios] == ["alloc1"]
+    without_pf = cfg.remove_entry("alloc1")
+    assert [p.name for p in without_pf.portfolios] == []
+    assert [s.name for s in without_pf.strategies] == ["btc-ma"]
+
+
+def test_remove_entry_rejects_an_unknown_name() -> None:
+    """Removing a name that is neither a strategy nor a portfolio raises."""
+    with pytest.raises(ValueError, match="no strategy or portfolio named"):
+        AppConfig().remove_entry("nope")
 
 
 def test_example_config_loads_and_validates() -> None:

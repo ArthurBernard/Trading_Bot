@@ -494,6 +494,19 @@ def test_strategies_page_read_only_note() -> None:
     assert "read-only" in html.lower()
 
 
+def test_strategies_page_has_deploy_form_when_writable() -> None:
+    """A writable Strategies page carries the deploy form wired to /api/signals."""
+    html = _client().get("/strategies").text
+    assert 'id="deploy-form"' in html
+    assert "/api/signals" in html  # the form fetches discoverable signal refs
+
+
+def test_strategies_page_hides_deploy_form_when_read_only() -> None:
+    """A read-only Strategies page omits the deploy form (no create affordance)."""
+    html = _client(read_only=True).get("/strategies").text
+    assert 'id="deploy-form"' not in html
+
+
 # --- restored paper book surfaces through the dashboard -------------------- #
 
 
@@ -544,6 +557,178 @@ def test_dashboard_shows_restored_paper_book(tmp_path) -> None:  # noqa: ANN001
     assert row["net_qty"] == "2"  # the restored book, exact Decimal string
     kpi = client.get("/api/kpi?level=total").json()[0]
     assert kpi["fees_paid"] == "1"  # the fee from the seeded fill
+
+
+# --- signal discovery + deployment CRUD + manifest persistence ------------- #
+
+
+def test_signals_endpoint_lists_builtins_and_discovered() -> None:
+    """`GET /api/signals` lists the `ma_crossover` builtin + a discovered ref.
+
+    Real strategy signals live under the gitignored `strategies/` (absent in CI), so
+    this drops a throwaway `strategies/<pkg>/signal.py` with a `*_signal` callable,
+    asserts the scan finds it as a `module:function` ref, then cleans it up — proving
+    discovery works without depending on any local-only strategy.
+    """
+    import pathlib
+    import shutil
+    import sys
+
+    from trading_bot.interfaces.api import app as app_module
+
+    pkg = "_disco_probe"
+    probe_dir = (
+        pathlib.Path(app_module.__file__).resolve().parents[3] / "strategies" / pkg
+    )
+    probe_dir.mkdir(parents=True, exist_ok=True)
+    (probe_dir / "signal.py").write_text(
+        "def probe_signal(asof_ms, frames):\n    return {}\n"
+    )
+    try:
+        body = _client().get("/api/signals").json()
+        assert "ma_crossover" in body["builtins"]
+        assert (
+            f"strategies.{pkg}.signal:probe_signal" in body["discovered"]
+        ), body["discovered"]
+        # A re-exported helper (as_portfolio_signal) / a private closure is NOT a ref.
+        assert not any(
+            ref.endswith(":as_portfolio_signal") for ref in body["discovered"]
+        )
+    finally:
+        shutil.rmtree(probe_dir, ignore_errors=True)
+        sys.modules.pop(f"strategies.{pkg}.signal", None)
+        sys.modules.pop(f"strategies.{pkg}", None)
+
+
+def _portfolio_deploy_body(name: str = "alloc1") -> dict:
+    """A create-deployment body deploying the alloc1 portfolio (paper, binance)."""
+    return {
+        "name": name,
+        "kind": "portfolio",
+        "venue": "binance",
+        "mode": "paper",
+        "signal": "strategies.alloc1.signal:alloc1_portfolio_signal",
+        "universe": ["BTC/USDT", "ETH/USDT"],
+        "capital": "100000",
+    }
+
+
+def test_create_strategy_adds_a_stopped_unit_and_persists(tmp_path) -> None:  # noqa: ANN001
+    """`POST /api/strategies` deploys a stopped unit and rewrites the manifest on disk."""
+    manifest = tmp_path / "dashboard.yaml"
+    sup = StrategySupervisor(AppConfig())  # empty paper base
+
+    def _persist() -> None:
+        sup.manifest().to_yaml(manifest)
+
+    client = TestClient(create_dashboard_app(sup, on_change=_persist))
+    r = client.post("/api/strategies", json=_portfolio_deploy_body())
+    assert r.status_code == 200, r.text
+    assert r.json()["status"]["running"] is False  # never auto-started
+
+    # It now lists via /api/strategies.
+    names = [s["name"] for s in client.get("/api/strategies").json()]
+    assert names == ["alloc1"]
+
+    # And it was PERSISTED to disk — re-read the manifest file.
+    assert manifest.is_file()
+    reloaded = AppConfig.from_yaml(manifest)
+    assert [p.name for p in reloaded.portfolios] == ["alloc1"]
+    assert reloaded.portfolios[0].capital == money("100000")
+
+
+def test_create_then_delete_persists_the_removal(tmp_path) -> None:  # noqa: ANN001
+    """`DELETE /api/strategies/{name}` removes the unit and rewrites the manifest."""
+    manifest = tmp_path / "dashboard.yaml"
+    sup = StrategySupervisor(AppConfig())
+
+    client = TestClient(
+        create_dashboard_app(sup, on_change=lambda: sup.manifest().to_yaml(manifest))
+    )
+    client.post("/api/strategies", json=_portfolio_deploy_body())
+    assert AppConfig.from_yaml(manifest).portfolios  # persisted on create
+
+    r = client.delete("/api/strategies/alloc1")
+    assert r.status_code == 200
+    assert r.json() == {"ok": True, "removed": "alloc1"}
+    assert client.get("/api/strategies").json() == []
+    # The removal was persisted too — the manifest is rewritten empty.
+    assert AppConfig.from_yaml(manifest).portfolios == []
+
+
+def test_create_single_instrument_strategy() -> None:
+    """A ``kind=strategy`` deployment builds a single-instrument unit from a builtin."""
+    sup = StrategySupervisor(AppConfig())
+    client = TestClient(create_dashboard_app(sup))
+    r = client.post(
+        "/api/strategies",
+        json={
+            "name": "btc-ma",
+            "kind": "strategy",
+            "venue": "kraken",
+            "signal": "ma_crossover",
+            "symbol": "BTC/USD",
+            "params": {"fast": 3, "slow": 6},
+            "reference_qty": "2",
+            "lookback": 6,
+            "span": 60,
+        },
+    )
+    assert r.status_code == 200, r.text
+    [s] = client.get("/api/strategies").json()
+    assert s["name"] == "btc-ma" and s["exchange"] == "kraken"
+
+
+def test_create_strategy_duplicate_name_is_422() -> None:
+    """Deploying a name already managed is rejected (422); nothing added."""
+    sup = StrategySupervisor(_config())  # already has 'btc-ma'
+    client = TestClient(create_dashboard_app(sup))
+    r = client.post(
+        "/api/strategies",
+        json={
+            "name": "btc-ma",
+            "kind": "strategy",
+            "venue": "kraken",
+            "signal": "ma_crossover",
+            "symbol": "ETH/USD",
+        },
+    )
+    assert r.status_code == 422
+    assert [s["name"] for s in client.get("/api/strategies").json()] == ["btc-ma"]
+
+
+def test_create_portfolio_without_universe_is_422() -> None:
+    """A portfolio deployment with no universe is rejected (422)."""
+    client = TestClient(create_dashboard_app(StrategySupervisor(AppConfig())))
+    r = client.post(
+        "/api/strategies",
+        json={
+            "name": "pf",
+            "kind": "portfolio",
+            "venue": "binance",
+            "signal": "pkg.mod:sig",
+            "capital": "100000",
+        },
+    )
+    assert r.status_code == 422
+
+
+def test_delete_unknown_strategy_is_404() -> None:
+    """Deleting an unmanaged name is a 404."""
+    client = TestClient(create_dashboard_app(StrategySupervisor(AppConfig())))
+    assert client.delete("/api/strategies/nope").status_code == 404
+
+
+def test_deployment_crud_is_403_under_read_only() -> None:
+    """Under `read_only`, POST/DELETE are 403 and never touch the supervisor."""
+    client = _client(read_only=True)
+    assert (
+        client.post("/api/strategies", json=_portfolio_deploy_body()).status_code
+        == 403
+    )
+    assert client.delete("/api/strategies/btc-ma").status_code == 403
+    # Nothing changed — the one declared unit is still there, unremoved.
+    assert [s["name"] for s in client.get("/api/strategies").json()] == ["btc-ma"]
 
 
 # --- CLI: dashboard command ------------------------------------------------ #
@@ -689,6 +874,75 @@ def test_dashboard_calls_start_all(monkeypatch: pytest.MonkeyPatch) -> None:
 
     assert result.exit_code == 0, result.output
     assert started == ["btc-ma"]  # the declared unit was started before serving
+
+
+def test_dashboard_no_config_creates_default_manifest(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:  # noqa: ANN001
+    """`dashboard` with no `-c` creates/reads the default `configs/dashboard.yaml`.
+
+    Runs the command in a tmp cwd (so the relative default path lands there) with
+    `uvicorn.run` patched, and asserts a fresh empty-paper manifest was written.
+    """
+    import os
+
+    import uvicorn
+
+    monkeypatch.setattr(uvicorn, "run", lambda app, **kw: None)
+
+    old_cwd = os.getcwd()
+    os.chdir(tmp_path)
+    try:
+        result = runner.invoke(cli_app, ["dashboard"])
+    finally:
+        os.chdir(old_cwd)
+
+    assert result.exit_code == 0, result.output
+    manifest = tmp_path / "configs" / "dashboard.yaml"
+    assert manifest.is_file()  # created on first launch
+    cfg = AppConfig.from_yaml(manifest)
+    assert cfg.mode == "paper"
+    assert cfg.strategies == [] and cfg.portfolios == []
+
+
+def test_dashboard_reads_an_existing_default_manifest(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:  # noqa: ANN001
+    """A pre-existing `configs/dashboard.yaml` is read (not overwritten) at launch."""
+    import os
+
+    import uvicorn
+
+    captured: dict[str, object] = {}
+    monkeypatch.setattr(
+        uvicorn, "run", lambda app, **kw: captured.update(app=app)
+    )
+
+    configs = tmp_path / "configs"
+    configs.mkdir()
+    # A manifest declaring one portfolio (no start → no dccd import).
+    (configs / "dashboard.yaml").write_text(
+        "mode: paper\n"
+        "portfolios:\n"
+        "  - name: alloc1\n"
+        "    venue: binance\n"
+        "    universe: [BTC/USDT, ETH/USDT]\n"
+        "    signal: {ref: 'strategies.alloc1.signal:alloc1_portfolio_signal'}\n"
+        "    capital: '100000'\n"
+        "    data: {exchange: binance, span: 86400}\n"
+    )
+
+    old_cwd = os.getcwd()
+    os.chdir(tmp_path)
+    try:
+        result = runner.invoke(cli_app, ["dashboard"])
+    finally:
+        os.chdir(old_cwd)
+
+    assert result.exit_code == 0, result.output
+    test_client = TestClient(captured["app"])
+    names = [s["name"] for s in test_client.get("/api/strategies").json()]
+    assert names == ["alloc1"]  # read from the existing manifest
 
 
 def test_dashboard_tolerates_a_unit_that_fails_to_start(

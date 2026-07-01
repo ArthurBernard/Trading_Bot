@@ -8,6 +8,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Manage strategies from the dashboard (persistent control plane).** The dashboard
+  now owns a **manifest** (`configs/dashboard.yaml`, the default for `trading-bot
+  dashboard` when no `-c` — gitignored, local-only) that it reads on startup and
+  **rewrites on every change**, so deployments survive a restart. New endpoints
+  (`403` under `--read-only`): `POST /api/strategies` (deploy — a name + kind + venue
+  + mode + **signal ref** + symbol/universe + capital + risk), `DELETE
+  /api/strategies/{name}`, and `GET /api/signals` (builtins + a scan of
+  `strategies/*/signal.py`). `StrategySupervisor` gains dynamic membership
+  (`add_unit` — validated + atomic + never auto-starts / `remove_unit` / `manifest`)
+  and `AppConfig` gains `to_yaml` + add/remove-entry helpers. The UI **deploys signals
+  that already exist in code** — it never authors the signal's Python (that stays in
+  `strategies/`), exactly as dccd's UI configures jobs, not the collector. A small
+  "Deploy a strategy" form + per-row Remove land on the Strategies page. (#117)
+
 - **Dashboard Strategies page + a book that survives a restart.** The unified
   dashboard now serves the control surface — `GET /api/strategies` and `POST
   /api/strategies/{name}/start|stop|mode` (shared with the old control app; live
