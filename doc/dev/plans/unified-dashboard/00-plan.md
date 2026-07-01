@@ -85,7 +85,7 @@ dccd `../Download_Crypto_Currencies_Data/dccd/interfaces/{api/app.py, ui/templat
 - [x] 03 strategies-page — feat/dashboard-strategies — medium
 - [x] 04 strategy-management — feat/dashboard-strategy-mgmt — high
 - [x] 05 pnl-data-model — feat/dashboard-pnl-data — high
-- [ ] 06 pnl-chart — feat/dashboard-pnl-chart — medium
+- [x] 06 pnl-chart — feat/dashboard-pnl-chart — medium
 - [ ] 07 orders-logs-cleanup — feat/dashboard-orders-logs — medium
 
 ## Dependencies

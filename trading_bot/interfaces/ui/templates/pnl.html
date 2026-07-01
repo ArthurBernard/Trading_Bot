@@ -1,11 +1,317 @@
 {% extends "base.html" %}
 {% block title %}PnL{% endblock %}
+{% block head %}
+  {# uPlot's stylesheet — vendored, self-hosted (no CDN). Loaded on this page
+     only (the chart is PnL-specific); the shell stays dependency-light. #}
+  <link rel="stylesheet" href="/static/uplot.min.css">
+{% endblock %}
 {% block content %}
 <h1>PnL</h1>
-<section class="card" id="pnl-panel">
-  <h2>PnL / KPI</h2>
-  <div class="table-wrap"><table><tbody id="pnl-body">
-    <tr class="empty"><td>PnL / KPI data lands in a later leaf.</td></tr>
-  </tbody></table></div>
+
+<!-- Controls — a strategy selector + a per-mode legend/toggle. The chart draws
+     live and testnet as SEPARATE, colour-coded series (never combined; testnet
+     is fake money). -->
+<section class="card" id="pnl-controls">
+  <div class="row" style="justify-content:space-between; align-items:flex-end;">
+    <div>
+      <label for="pnl-strategy" class="ctl-label">Strategy</label><br>
+      <select id="pnl-strategy" class="mode-select"></select>
+    </div>
+    <div id="pnl-legend" class="pnl-legend" role="group" aria-label="Modes shown">
+      <!-- One toggle chip per mode present, colour-coded, filled from /api/pnl. -->
+    </div>
+  </div>
 </section>
+
+<!-- The equity/PnL chart — uPlot renders into #pnl-chart; sized to its container
+     and re-sized on window resize. An empty history shows a "no fills yet" note. -->
+<section class="card" id="pnl-chart-card">
+  <h2>Equity over time</h2>
+  <div id="pnl-chart"></div>
+  <p id="pnl-empty" class="muted" style="display:none;">
+    No fills yet — the equity curve appears once this strategy records a fill.
+  </p>
+</section>
+
+<!-- Per-mode stats — final equity + realised PnL, colour-coded by mode. -->
+<section class="card" id="pnl-stats-card">
+  <h2>By mode</h2>
+  <div class="table-wrap">
+    <table id="pnl-stats-table">
+      <thead>
+        <tr>
+          <th>Mode</th>
+          <th class="num">Final equity</th>
+          <th class="num">Realised PnL</th>
+          <th class="num">Unrealised</th>
+        </tr>
+      </thead>
+      <tbody id="pnl-stats-body">
+        <tr class="empty"><td colspan="4">Select a strategy.</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endblock %}
+
+{% block scripts %}
+<!-- uPlot v1.6.31 (MIT) — vendored, self-hosted IIFE bundle exposing global uPlot. -->
+<script src="/static/uplot.min.js"></script>
+<script>
+  // PnL page — an interactive equity chart (uPlot) over /api/pnl, with live and
+  // testnet drawn as separate colour-coded series. Dependency-free vanilla JS;
+  // reuses base.html's api()/fmtMoney()/escapeHtml()/fmtDate(). Money arrives as
+  // EXACT Decimal strings; Number() is used ONLY for plotting (display), never to
+  // re-render a money figure (fmtMoney keeps the exact string).
+
+  // The three deployment modes, colour-coded to match the mode badges
+  // (paper=accent/blue, testnet=amber, live=red). The plot order is stable.
+  var MODES = ['paper', 'testnet', 'live'];
+  var MODE_COLOR = {
+    paper:   getComputedStyle(document.documentElement).getPropertyValue('--accent').trim() || '#5ea2ff',
+    testnet: getComputedStyle(document.documentElement).getPropertyValue('--warn').trim()   || '#d6a132',
+    live:    getComputedStyle(document.documentElement).getPropertyValue('--err').trim()    || '#f85149',
+  };
+
+  var CURRENT_STRATEGY = null;  // the selected strategy name
+  var chart = null;             // the live uPlot instance (rebuilt on data shape change)
+  var HIDDEN = {};              // mode -> true when its series is toggled off
+
+  // Plot a money Decimal string as a Number — for the canvas only. This never
+  // feeds back into a displayed money figure (those stay exact via fmtMoney).
+  function plotNum(s) {
+    if (s == null) return null;
+    var n = Number(s);
+    return isNaN(n) ? null : n;
+  }
+
+  // Build uPlot's column-major data from /api/pnl. uPlot wants aligned arrays:
+  // one x (timestamp) array, then one y array per series, each the same length,
+  // with null gaps where a mode has no point at that x. We take the UNION of all
+  // modes' timestamps (sorted, ascending — uPlot requires strictly increasing x)
+  // and, for each mode, forward-fill its last-known equity between its own points
+  // (a step curve: equity holds until the next fill), leaving null BEFORE a mode's
+  // first point (it did not exist yet).
+  function toChartData(payload, modes) {
+    // Collect the union of timestamps (seconds — uPlot's time axis is epoch secs).
+    var tsSet = {};
+    modes.forEach(function (mode) {
+      (payload.series[mode] || []).forEach(function (pt) {
+        tsSet[Math.floor(pt[0] / 1000)] = true;  // ms -> s
+      });
+    });
+    var xs = Object.keys(tsSet).map(Number).sort(function (a, b) { return a - b; });
+    // For each mode, walk its own points and forward-fill equity across xs.
+    var ys = modes.map(function (mode) {
+      var pts = (payload.series[mode] || []).map(function (pt) {
+        return [Math.floor(pt[0] / 1000), plotNum(pt[2])];  // [ts_s, equity]
+      });
+      var col = new Array(xs.length).fill(null);
+      var j = 0;
+      var last = null;
+      for (var i = 0; i < xs.length; i++) {
+        // Advance through this mode's points up to the current x, tracking the
+        // last-known equity (the step-hold value).
+        while (j < pts.length && pts[j][0] <= xs[i]) { last = pts[j][1]; j++; }
+        col[i] = last;  // null until the mode's first point, then its held equity
+      }
+      return col;
+    });
+    return [xs].concat(ys);
+  }
+
+  // The uPlot series descriptors for the modes present (x axis first).
+  function buildSeries(modes) {
+    var series = [{}];  // x (time) — the implicit first series
+    modes.forEach(function (mode) {
+      series.push({
+        label: mode,
+        stroke: MODE_COLOR[mode],
+        width: 2,
+        show: !HIDDEN[mode],
+        // Money is exact; the tooltip value is display-only (Number formatting).
+        value: function (self, v) { return v == null ? '—' : fmtMoney(v); },
+      });
+    });
+    return series;
+  }
+
+  // Size the chart to its container width (uPlot needs explicit pixel sizes).
+  function chartSize() {
+    var el = document.getElementById('pnl-chart');
+    var w = (el && el.clientWidth) ? el.clientWidth : 800;
+    return { width: w, height: 340 };
+  }
+
+  // (Re)build the uPlot chart for the modes present. Destroys any prior instance
+  // (the series set changes when a mode appears/disappears).
+  function renderChart(payload, modes) {
+    var mount = document.getElementById('pnl-chart');
+    var empty = document.getElementById('pnl-empty');
+    if (chart) { chart.destroy(); chart = null; }
+    mount.innerHTML = '';
+    if (!modes.length) {
+      empty.style.display = '';
+      return;
+    }
+    empty.style.display = 'none';
+    var data = toChartData(payload, modes);
+    var size = chartSize();
+    var opts = {
+      width: size.width,
+      height: size.height,
+      // A dark, legible axis/grid matching the shell palette.
+      axes: [
+        { stroke: '#8b97a7', grid: { stroke: 'rgba(255,255,255,.06)' },
+          ticks: { stroke: 'rgba(255,255,255,.06)' } },
+        { stroke: '#8b97a7', grid: { stroke: 'rgba(255,255,255,.06)' },
+          ticks: { stroke: 'rgba(255,255,255,.06)' } },
+      ],
+      series: buildSeries(modes),
+      legend: { show: false },  // we render our own colour-coded legend/toggle
+    };
+    chart = new uPlot(opts, data, mount);
+  }
+
+  // Fill the per-mode legend (a clickable colour chip toggling each series).
+  function renderLegend(modes) {
+    var root = document.getElementById('pnl-legend');
+    if (!modes.length) { root.innerHTML = ''; return; }
+    root.innerHTML = modes.map(function (mode) {
+      var off = HIDDEN[mode] ? ' is-off' : '';
+      return '<button type="button" class="pnl-mode' + off + '" data-mode="' +
+        escapeHtml(mode) + '">' +
+        '<span class="dot" style="background:' + MODE_COLOR[mode] + '"></span>' +
+        escapeHtml(mode) + '</button>';
+    }).join('');
+    root.querySelectorAll('.pnl-mode').forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        var mode = btn.dataset.mode;
+        HIDDEN[mode] = !HIDDEN[mode];
+        btn.classList.toggle('is-off', HIDDEN[mode]);
+        // Toggle the matching uPlot series by its index (x is 0, modes follow).
+        if (chart) {
+          var idx = modes.indexOf(mode) + 1;
+          chart.setSeries(idx, { show: !HIDDEN[mode] });
+        }
+      });
+    });
+  }
+
+  // Render the per-mode stats table (final equity + realised PnL + unrealised).
+  function renderStats(payload, modes) {
+    var body = document.getElementById('pnl-stats-body');
+    if (!modes.length) {
+      body.innerHTML = '<tr class="empty"><td colspan="4">No fills yet.</td></tr>';
+      return;
+    }
+    body.innerHTML = modes.map(function (mode) {
+      var series = payload.series[mode] || [];
+      var lastPnl = series.length ? series[series.length - 1][1] : null;
+      var cur = (payload.current && payload.current[mode]) || {};
+      var pnlCls = lastPnl == null ? '' :
+        (Number(lastPnl) > 0 ? 'ok' : (Number(lastPnl) < 0 ? 'err' : ''));
+      return '<tr>' +
+        '<td><span class="badge badge-' + escapeHtml(mode) + '">' +
+          escapeHtml(mode) + '</span></td>' +
+        '<td class="num">' + fmtMoney(cur.equity) + '</td>' +
+        '<td class="num ' + pnlCls + '">' + fmtMoney(lastPnl) + '</td>' +
+        '<td class="num">' + fmtMoney(cur.unrealised) + '</td>' +
+        '</tr>';
+    }).join('');
+  }
+
+  // Load /api/pnl for the current strategy and (re)draw everything.
+  async function loadPnl() {
+    if (!CURRENT_STRATEGY) return;
+    var payload;
+    try {
+      payload = await api('GET', '/api/pnl?strategy=' +
+        encodeURIComponent(CURRENT_STRATEGY));
+    } catch (e) {
+      document.getElementById('pnl-stats-body').innerHTML =
+        '<tr class="empty"><td colspan="4">' + escapeHtml(e.message) + '</td></tr>';
+      renderChart({ series: {} }, []);
+      document.getElementById('pnl-legend').innerHTML = '';
+      return;
+    }
+    // Modes present, in the stable MODES order (paper, testnet, live).
+    var modes = MODES.filter(function (m) {
+      return payload.series && payload.series[m] && payload.series[m].length;
+    });
+    renderChart(payload, modes);
+    renderLegend(modes);
+    renderStats(payload, modes);
+  }
+
+  // Populate the strategy selector from /api/strategies.
+  async function loadStrategies() {
+    var sel = document.getElementById('pnl-strategy');
+    var list;
+    try {
+      list = await api('GET', '/api/strategies');
+    } catch (e) {
+      sel.innerHTML = '<option value="">(none)</option>';
+      return;
+    }
+    if (!list.length) {
+      sel.innerHTML = '<option value="">(no strategies)</option>';
+      CURRENT_STRATEGY = null;
+      renderChart({ series: {} }, []);
+      renderStats({ series: {} }, []);
+      return;
+    }
+    var prev = CURRENT_STRATEGY;
+    sel.innerHTML = list.map(function (s) {
+      return '<option value="' + escapeHtml(s.name) + '">' +
+        escapeHtml(s.name) + '</option>';
+    }).join('');
+    // Keep the selection across refreshes when it still exists.
+    var names = list.map(function (s) { return s.name; });
+    CURRENT_STRATEGY = (prev && names.indexOf(prev) !== -1) ? prev : names[0];
+    sel.value = CURRENT_STRATEGY;
+  }
+
+  document.addEventListener('DOMContentLoaded', function () {
+    var sel = document.getElementById('pnl-strategy');
+    sel.addEventListener('change', function () {
+      CURRENT_STRATEGY = sel.value || null;
+      HIDDEN = {};  // reset per-mode toggles when the strategy changes
+      loadPnl();
+    });
+
+    // Initial load: strategies then the selected strategy's series.
+    loadStrategies().then(loadPnl);
+
+    // Resize: uPlot needs an explicit size, so re-size to the container on resize.
+    var resizeTimer = null;
+    window.addEventListener('resize', function () {
+      if (resizeTimer) clearTimeout(resizeTimer);
+      resizeTimer = setTimeout(function () {
+        if (chart) { var s = chartSize(); chart.setSize(s); }
+      }, 120);
+    });
+
+    // Polling refresh (dccd-style) — a fill may have landed; refetch the series.
+    setInterval(function () { loadStrategies().then(loadPnl); }, 10000);
+  });
+</script>
+<style>
+  /* uPlot chart container — full width, sized in JS. The vendored uplot.css
+     handles the internals; this only frames it in the shell palette. */
+  #pnl-chart { width:100%; min-height:340px; }
+  .uplot { color:var(--fg); }
+  .ctl-label { font-size:.78rem; color:var(--muted);
+          text-transform:uppercase; letter-spacing:.09em; }
+  /* Per-mode legend chips — colour dot + label; dimmed when toggled off. */
+  .pnl-legend { display:flex; gap:.5rem; flex-wrap:wrap; }
+  .pnl-mode { display:inline-flex; align-items:center; gap:.4rem;
+          font-size:.8rem; color:var(--fg); background:var(--card);
+          border:1px solid var(--border); border-radius:999px;
+          padding:.28rem .7rem; cursor:pointer; }
+  .pnl-mode .dot { width:.6rem; height:.6rem; border-radius:50%;
+          display:inline-block; }
+  .pnl-mode.is-off { color:var(--muted); opacity:.55;
+          text-decoration:line-through; }
+</style>
 {% endblock %}

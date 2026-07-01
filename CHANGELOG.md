@@ -8,6 +8,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Dashboard PnL chart (uPlot, self-hosted).** The PnL page draws a per-strategy
+  **equity-over-time chart** with **live and testnet as separate, colour-coded
+  series** (fake vs real money never combined), fed by `/api/pnl` — a strategy
+  selector, a per-mode legend/toggle, a stats table, empty-state + resize + polling.
+  Uses **uPlot v1.6.31** vendored into `static/` (MIT; no CDN, no build). And the
+  **aggregate ratio KPIs** (Sharpe/Sortino/Calmar/maxDD at `level=exchange|total`)
+  are now computed on the combined equity curve — filling the `null`s the Overview
+  left — degrading to `null` without `fynance`. (#119)
+
 - **PnL time-series (per strategy, per mode).** Persisted fills now carry a **mode +
   venue** storage tag (idempotent migration; existing rows default to `paper`; the
   domain `Fill` stays pure), and a new `application/pnl_series.py` folds a strategy's

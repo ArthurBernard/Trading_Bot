@@ -765,3 +765,97 @@ async def test_combined_equity_series_sums_v0_and_merges_fills(tmp_path) -> None
     # Single strategy 'a': +10 gross (no fees) from its v0.
     v0 = sup._units["a"].config.starting_capital  # noqa: SLF001
     assert combined[-1][2] == v0 + money("10")
+
+
+# --- aggregate ratio KPIs (exchange / total on the combined curve) --------- #
+
+
+def _kpi_ratio_supervisor(db_path: str) -> StrategySupervisor:
+    """A running paper unit whose store holds a multi-fill book (a real curve).
+
+    Records a spread of paper round trips to ``db_path`` (varied prices, so the
+    derived equity curve has non-zero dispersion — a Sharpe/Sortino/Calmar is
+    defined on it), then starts the unit so its engine reads that store. The unit
+    is running, so ``combined_equity_series`` reads the live ``engine.store``.
+    """
+    from trading_bot.storage.sqlite_store import SqliteStore
+
+    inst = Instrument(Symbol("BTC", "USD"))
+    store = SqliteStore(db_path, mode="paper", venue="kraken")
+    # A varied round-trip book (5 buys, 5 sells at different prices) so the equity
+    # curve moves up and down — a ratio is defined (a flat/monotone curve is not).
+    prices = [(100, 108), (108, 104), (104, 112), (112, 106), (106, 115)]
+    for i, (buy_px, sell_px) in enumerate(prices):
+        store.record_fill(
+            Fill(f"B{i}", f"cB{i}", inst, OrderSide.BUY,
+                 money("1"), money(str(buy_px)), money("0"), 2 * i + 1)
+        )
+        store.record_fill(
+            Fill(f"S{i}", f"cS{i}", inst, OrderSide.SELL,
+                 money("1"), money(str(sell_px)), money("0"), 2 * i + 2)
+        )
+    cfg = AppConfig.model_validate(
+        {
+            "mode": "paper",
+            "storage": {"db_path": db_path},
+            "brokers": [{"name": "kraken", "exchange": "kraken"}],
+            "strategies": [
+                {
+                    "name": "btc-ma",
+                    "symbol": "BTC/USD",
+                    "data": {"exchange": "kraken", "span": 60},
+                    "signal": {"ref": "ma_crossover", "params": {"fast": 3, "slow": 6}},
+                    "reference_qty": "2",
+                    "lookback": 6,
+                }
+            ],
+        }
+    )
+    return StrategySupervisor(
+        cfg, dccd_client=_FakeDccdClient({"BTC/USD": _dccd_ohlc(_trend())})
+    )
+
+
+async def test_kpi_total_ratios_come_from_the_combined_curve(tmp_path) -> None:  # noqa: ANN001
+    """`kpi("total")` / `kpi("exchange")` ratios are non-null on a real combined curve."""
+    pytest.importorskip("fynance")  # the ratios need the research dependency
+    sup = _kpi_ratio_supervisor(str(tmp_path / "book.sqlite"))
+    await sup.start("btc-ma")
+
+    [total] = sup.kpi("total")
+    # The combined curve has dispersion, so every ratio estimates to a real float.
+    assert isinstance(total.sharpe, float)
+    assert isinstance(total.sortino, float)
+    assert isinstance(total.calmar, float)
+    assert isinstance(total.max_drawdown, float)
+
+    [exchange] = sup.kpi("exchange")
+    assert exchange.exchange == "kraken"
+    assert isinstance(exchange.sharpe, float)
+
+
+async def test_kpi_aggregate_ratios_degrade_without_fynance(  # noqa: ANN001
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Without fynance the aggregate ratios are None (never raise)."""
+    sup = _kpi_ratio_supervisor(str(tmp_path / "book.sqlite"))
+    await sup.start("btc-ma")
+
+    # Make every ratio wrapper behave as if fynance were absent.
+    import trading_bot.application.supervisor as sup_mod
+    from trading_bot.domain.performance import PerformanceDependencyError
+
+    def _no_fynance(*_args: object, **_kwargs: object) -> float:
+        raise PerformanceDependencyError("sharpe")
+
+    for name in ("sharpe", "sortino", "calmar", "max_drawdown"):
+        monkeypatch.setattr(sup_mod, name, _no_fynance)
+
+    [total] = sup.kpi("total")
+    assert total.sharpe is None
+    assert total.sortino is None
+    assert total.calmar is None
+    assert total.max_drawdown is None
+    # PnL/fees still surface (the fold is money-exact, dependency-free).
+    # Round trips: (108-100)+(104-108)+(112-104)+(106-112)+(115-106) = 15, no fees.
+    assert total.realised_pnl == money("15")

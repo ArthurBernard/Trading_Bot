@@ -35,9 +35,9 @@ through the engines it builds (reconcile on start; the runners' router/broker).
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Literal, cast
 
 from trading_bot.application.pnl_series import by_mode, equity_series
 from trading_bot.application.reconcile import reconcile
@@ -45,7 +45,13 @@ from trading_bot.application.run_app import build_portfolio_runners, build_runne
 from trading_bot.application.service_factory import Engine, build_engine
 from trading_bot.domain.errors import ConfigError, LiveTradingNotEnabled
 from trading_bot.domain.money import money
-from trading_bot.domain.performance import PerformanceDependencyError
+from trading_bot.domain.performance import (
+    PerformanceDependencyError,
+    calmar,
+    max_drawdown,
+    sharpe,
+    sortino,
+)
 from trading_bot.storage.sqlite_store import SqliteStore
 
 if TYPE_CHECKING:
@@ -195,9 +201,11 @@ class KpiRow:
     one row per running unit and the ratios are that unit's
     :class:`~trading_bot.application.performance_service.PerformanceService`
     estimates. At ``level="exchange"`` the units sharing a venue are folded (PnL
-    and fees summed) and the ratios are ``None`` — an aggregate ratio needs a
-    combined equity curve, which a later leaf builds. At ``level="total"`` every
-    unit is folded (ratios ``None`` likewise).
+    and fees summed) and the ratios are computed on the **combined equity curve**
+    of that venue's units (:meth:`~StrategySupervisor.combined_equity_series`). At
+    ``level="total"`` every unit is folded (ratios on the combined curve of every
+    unit likewise). An aggregate ratio degrades to ``None`` when fynance is absent
+    or the combined curve is too short to estimate it.
 
     Attributes
     ----------
@@ -216,8 +224,9 @@ class KpiRow:
     fees_paid : Money
         Fees paid, summed over the folded units (exact).
     sharpe, sortino, calmar, max_drawdown : float or None
-        The per-strategy risk ratios (``level="strategy"`` only); ``None`` at the
-        aggregate levels (a combined curve lands in a later leaf).
+        The risk ratios — the unit's own at ``level="strategy"``, the group's
+        combined-curve ratios at ``level="exchange"`` / ``"total"``. ``None`` when
+        fynance is absent or the curve is too short to estimate the ratio.
 
     """
 
@@ -756,14 +765,16 @@ class StrategySupervisor:
           unit's realised PnL, fees and its Sharpe / Sortino / Calmar /
           max-drawdown ratios (read straight off the unit's performance service).
         * ``"exchange"`` — the units sharing a venue folded into one row per
-          exchange (PnL and fees **summed**, exact :class:`~decimal.Decimal`);
-          the ratios are ``None`` because an aggregate ratio needs a combined
-          equity curve, which a later leaf builds on top of this.
-        * ``"total"`` — every running unit folded into a single row (ratios
-          ``None`` likewise).
+          exchange (PnL and fees **summed**, exact :class:`~decimal.Decimal`); the
+          ratios are computed on the venue units' **combined equity curve**
+          (:meth:`combined_equity_series`, each unit's own current mode).
+        * ``"total"`` — every running unit folded into a single row, ratios on the
+          combined equity curve of every unit.
 
-        Money is kept exact end to end (never float); only the per-strategy ratios
-        are floats. Empty when no unit is running.
+        Aggregate ratios degrade to ``None`` when fynance is absent (never raise)
+        or the combined curve is too short / degenerate to estimate the ratio.
+        Money is kept exact end to end (never float); only the ratios are floats.
+        Empty when no unit is running.
 
         Parameters
         ----------
@@ -792,6 +803,65 @@ class StrategySupervisor:
         if level == "exchange":
             return self._exchange_kpi(units)
         return self._total_kpi(units)
+
+    def _combined_ratios(
+        self, units: list[_Unit]
+    ) -> tuple[float | None, float | None, float | None, float | None]:
+        """The Sharpe / Sortino / Calmar / maxDD of ``units``' combined equity curve.
+
+        Folds every unit in the group onto **one** combined equity curve — each
+        unit contributes the fills of **its own current mode** (so live and testnet
+        fake money are never mixed, and a paper unit contributes its paper book),
+        anchored at the sum of the units' ``v0`` — and estimates the four risk
+        ratios on it. Reuses :meth:`combined_equity_series` per mode (its ``mode``
+        slices exactly the live-vs-testnet separation the PnL series enforces) and
+        merges the resulting curves by timestamp.
+
+        Degrades to ``(None, None, None, None)`` when fynance is absent (the
+        estimators raise :class:`~trading_bot.domain.performance.
+        PerformanceDependencyError`) or the combined curve is too short to estimate
+        (each ratio degrades independently). Never raises — the dashboard stays
+        functional without the research dependency.
+        """
+        # Group the units by their current mode so live and testnet (fake money)
+        # never share a curve, then combine per mode and merge by timestamp. Each
+        # unit's own mode is what its book was built for.
+        names_by_mode: dict[StrategyMode, list[str]] = {}
+        for unit in units:
+            names_by_mode.setdefault(unit.mode, []).append(unit.name)
+        merged: list[list[object]] = []
+        for mode, names in names_by_mode.items():
+            merged.extend(self.combined_equity_series(names, mode=mode))
+        # Sort the merged points by timestamp (stable) so a mixed-mode group's
+        # equity path is chronological before the ratio estimators consume it.
+        merged.sort(key=lambda point: cast("int", point[0]))
+        # combined_equity_series' points are [ts_ms, realised_pnl, equity]; the
+        # equity column is Money (Decimal), the sequence the ratio estimators take.
+        equity: list[Money] = [cast("Money", point[2]) for point in merged]
+
+        # An empty curve has no ratio to estimate — fynance indexes ``X[0]`` and
+        # raises on it. Short-circuit to None (the "undefined estimator" outcome)
+        # before touching the research dependency at all.
+        if not equity:
+            return (None, None, None, None)
+
+        def _ratio(fn: Callable[[Sequence[Money]], float]) -> float | None:
+            try:
+                return fn(equity)
+            except PerformanceDependencyError:
+                return None
+            except (ValueError, ZeroDivisionError, ArithmeticError, IndexError):
+                # A degenerate / too-short combined curve — the ratio is undefined
+                # on it (fynance raises); surface it as None, like the per-strategy
+                # path's "undefined estimator → None" convention.
+                return None
+
+        return (
+            _ratio(sharpe),
+            _ratio(sortino),
+            _ratio(calmar),
+            _ratio(max_drawdown),
+        )
 
     @staticmethod
     def _strategy_kpi(unit: _Unit) -> KpiRow:
@@ -823,14 +893,16 @@ class StrategySupervisor:
             max_drawdown=_ratio(perf.max_drawdown),
         )
 
-    @staticmethod
-    def _exchange_kpi(units: list[_Unit]) -> list[KpiRow]:
-        """Fold the units per venue: PnL/fees summed, ratios ``None``.
+    def _exchange_kpi(self, units: list[_Unit]) -> list[KpiRow]:
+        """Fold the units per venue: PnL/fees summed, ratios on the combined curve.
 
-        Preserves first-seen exchange order so the view is deterministic.
+        Preserves first-seen exchange order so the view is deterministic. The
+        ratios come from each venue's units' combined equity curve (degrading to
+        ``None`` without fynance / on a too-short curve).
         """
         pnl: dict[str, Money] = {}
         fees: dict[str, Money] = {}
+        by_venue: dict[str, list[_Unit]] = {}
         order: list[str] = []
         for unit in units:
             assert unit.engine is not None
@@ -838,31 +910,36 @@ class StrategySupervisor:
             if venue not in pnl:
                 pnl[venue] = _ZERO
                 fees[venue] = _ZERO
+                by_venue[venue] = []
                 order.append(venue)
             pnl[venue] += unit.engine.perf.realised_pnl()
             fees[venue] += unit.engine.perf.fees_paid()
-        return [
-            KpiRow(
-                level="exchange",
-                key=venue,
-                strategy=None,
-                exchange=venue,
-                realised_pnl=pnl[venue],
-                fees_paid=fees[venue],
-                sharpe=None,
-                sortino=None,
-                calmar=None,
-                max_drawdown=None,
+            by_venue[venue].append(unit)
+        rows: list[KpiRow] = []
+        for venue in order:
+            sh, so, ca, mdd = self._combined_ratios(by_venue[venue])
+            rows.append(
+                KpiRow(
+                    level="exchange",
+                    key=venue,
+                    strategy=None,
+                    exchange=venue,
+                    realised_pnl=pnl[venue],
+                    fees_paid=fees[venue],
+                    sharpe=sh,
+                    sortino=so,
+                    calmar=ca,
+                    max_drawdown=mdd,
+                )
             )
-            for venue in order
-        ]
+        return rows
 
-    @staticmethod
-    def _total_kpi(units: list[_Unit]) -> list[KpiRow]:
-        """Fold every unit into a single total row (ratios ``None``).
+    def _total_kpi(self, units: list[_Unit]) -> list[KpiRow]:
+        """Fold every unit into a single total row (ratios on the combined curve).
 
         Always one row (a zero-PnL total even when no unit is running), so the
-        dashboard's total strip has a value to paint.
+        dashboard's total strip has a value to paint. The ratios come from every
+        unit's combined equity curve (``None`` without fynance / on a short curve).
         """
         total_pnl: Money = _ZERO
         total_fees: Money = _ZERO
@@ -870,6 +947,7 @@ class StrategySupervisor:
             assert unit.engine is not None
             total_pnl += unit.engine.perf.realised_pnl()
             total_fees += unit.engine.perf.fees_paid()
+        sh, so, ca, mdd = self._combined_ratios(units)
         return [
             KpiRow(
                 level="total",
@@ -878,10 +956,10 @@ class StrategySupervisor:
                 exchange=None,
                 realised_pnl=total_pnl,
                 fees_paid=total_fees,
-                sharpe=None,
-                sortino=None,
-                calmar=None,
-                max_drawdown=None,
+                sharpe=sh,
+                sortino=so,
+                calmar=ca,
+                max_drawdown=mdd,
             )
         ]
 
