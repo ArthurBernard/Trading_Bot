@@ -387,6 +387,20 @@ def test_vendored_uplot_assets_are_served() -> None:
     assert ".uplot" in css.text
 
 
+def test_branding_assets_are_served() -> None:
+    """The favicon + header logo are served (not the earlier 404 the shell linked)."""
+    client = _client()
+    for path in ("/static/favicon.svg", "/static/logo.svg"):
+        r = client.get(path)
+        assert r.status_code == 200, path
+        assert r.headers["content-type"].startswith("image/svg+xml")
+        assert "<svg" in r.text
+    # the shell references both.
+    html = client.get("/").text
+    assert "/static/favicon.svg" in html
+    assert "/static/logo.svg" in html
+
+
 # --- aggregate ratio KPIs surface non-null via /api/kpi -------------------- #
 
 
