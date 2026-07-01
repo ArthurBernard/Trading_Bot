@@ -877,6 +877,29 @@ def start(
 # --- dashboard (unified UI) ------------------------------------------------ #
 
 
+async def _start_dashboard_units(supervisor: object) -> None:
+    """Start every declared unit before the dashboard serves — tolerant of failures.
+
+    Wraps :meth:`~trading_bot.application.supervisor.StrategySupervisor.start_all`
+    per unit so the declared strategies come up **restored** (a paper unit's
+    persisted book replayed into its fresh engine) and immediately controllable.
+    A unit that fails to start (e.g. a live/testnet unit lacking credentials, or a
+    misconfigured feed) is logged as a warning and **skipped** — one bad unit never
+    stops the dashboard from serving the rest.
+    """
+    from trading_bot.application.supervisor import StrategySupervisor
+
+    assert isinstance(supervisor, StrategySupervisor)
+    for name in supervisor.names():
+        try:
+            await supervisor.start(name)
+        except Exception as exc:  # noqa: BLE001 - one bad unit must not crash serve
+            _console.print(
+                f"[yellow]skipping strategy {name!r}[/yellow] "
+                f"(failed to start: {exc})"
+            )
+
+
 @app.command()
 def dashboard(
     config_path: pathlib.Path | None = typer.Option(
@@ -911,20 +934,24 @@ def dashboard(
     """Serve the **unified dashboard** (Overview / Strategies / Orders / PnL / Logs).
 
     Builds a :class:`~trading_bot.application.supervisor.StrategySupervisor` from
-    ``--config`` (or a paper default) and serves the single-shell dashboard
-    (:func:`~trading_bot.interfaces.api.create_dashboard_app`) over uvicorn. This
-    MVP ships the shell + stub pages + health; per-page data lands in later leaves.
+    ``--config`` (or a paper default), **starts every declared strategy** (so each
+    comes online restored — a paper unit's persisted book replayed into its engine
+    — and immediately controllable) and serves the single-shell dashboard
+    (:func:`~trading_bot.interfaces.api.create_dashboard_app`) over uvicorn. A unit
+    that fails to start (e.g. a live unit lacking credentials) is logged and
+    skipped — the others still serve.
 
     Binds **loopback** by default. Binding a non-loopback ``--host`` requires a
     ``--token`` (``TRADING_BOT_UI_TOKEN``) — the same guard as ``start`` — since
-    the dashboard is the future control surface; otherwise the command refuses.
+    the dashboard is the control surface; otherwise the command refuses.
 
     Clean shutdown
     --------------
     ``uvicorn.run`` **owns SIGINT**: Ctrl-C makes it return promptly, and the
-    ``finally`` then shuts the supervisor down. This leaf is control-only (no
-    scheduler / order path), so a plain ``uvicorn.run`` inside ``try/finally`` is
-    the whole loop — we deliberately do **not** also register a competing
+    ``finally`` then shuts the supervisor down. There is no scheduler here (the
+    daemon's ``start`` steps strategies on a tick; the dashboard just serves the
+    restored + controllable units), so a plain ``uvicorn.run`` inside ``try/finally``
+    is the whole loop — we deliberately do **not** also register a competing
     ``loop.add_signal_handler(SIGINT, …)`` (that override is what makes
     ``start --serve`` feel unquittable).
     """
@@ -952,6 +979,15 @@ def dashboard(
     except Exception as exc:  # noqa: BLE001 - surface any build failure cleanly
         _console.print(f"[red]refusing to serve dashboard:[/red] {exc}")
         raise typer.Exit(code=1) from exc
+
+    # Bring the declared strategies up before serving so they come online
+    # **restored** (a paper unit's persisted book replayed into its engine — see
+    # StrategySupervisor.start) and immediately controllable. start_all() is async;
+    # the restored state lives in the in-memory engines, which persist across this
+    # asyncio.run and the later uvicorn.run. A unit that fails to start (e.g. a live
+    # unit lacking credentials) is logged and skipped — one bad unit never crashes
+    # the dashboard; the others still serve.
+    asyncio.run(_start_dashboard_units(supervisor))
 
     application = create_dashboard_app(
         supervisor, auth_token=token, read_only=read_only

@@ -2,10 +2,245 @@
 {% block title %}Strategies{% endblock %}
 {% block content %}
 <h1>Strategies</h1>
-<section class="card" id="strategies-panel">
-  <h2>Strategies</h2>
-  <div class="table-wrap"><table><tbody id="strategies-body">
-    <tr class="empty"><td>Strategy data lands in a later leaf.</td></tr>
-  </tbody></table></div>
+
+<!-- The control surface: every managed strategy grouped by exchange, with a mode
+     <select> (paper / testnet / live) and a start/stop button per row. Switching a
+     strategy to LIVE (real money) opens a typed-confirmation modal that maps to
+     {confirm:true} on the mode endpoint — the server also refuses live without it.
+     Read-only dashboards disable the controls (the write endpoints return 403). -->
+<section class="card" id="strategies-card">
+  <div class="row" style="justify-content:space-between;">
+    <h2 style="margin:0;">Strategies</h2>
+    <span class="row">
+      <span class="chip"><b id="sum-total">—</b> total</span>
+      <span class="chip"><b id="sum-running">—</b> running</span>
+    </span>
+  </div>
+  {% if read_only %}
+  <p class="muted" id="ro-note">Read-only dashboard — strategy controls are disabled.</p>
+  {% endif %}
+  <div class="table-wrap">
+    <table id="strategies-table">
+      <thead>
+        <tr>
+          <th>Strategy</th>
+          <th>Kind</th>
+          <th>Mode</th>
+          <th>Status</th>
+          <th class="num">Realised PnL</th>
+          <th class="num">Open orders</th>
+          <th>Action</th>
+        </tr>
+      </thead>
+      <tbody id="strategies-body">
+        <tr class="empty"><td colspan="7">Loading…</td></tr>
+      </tbody>
+    </table>
+  </div>
 </section>
+
+<!-- Live confirmation modal: the deliberate "go real money" acknowledgement. The
+     Go-live button only enables once the exact phrase is typed. -->
+<div id="live-modal" class="modal" role="dialog" aria-modal="true" aria-labelledby="live-modal-title">
+  <div class="modal-card">
+    <h3 id="live-modal-title"><span class="warn-mark">⚠</span> Switch to LIVE — real money</h3>
+    <p>
+      You are about to switch <b id="live-modal-name">—</b> to <b>live</b>. This
+      trades <b>real money</b> on the venue. Type <code>I UNDERSTAND</code> to confirm.
+    </p>
+    <input id="live-modal-input" type="text" placeholder="I UNDERSTAND" autocomplete="off" spellcheck="false">
+    <div class="modal-actions">
+      <button id="live-modal-cancel" type="button">Cancel</button>
+      <button id="live-modal-confirm" class="btn-primary" type="button" disabled>Go live</button>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  // Strategies page — the control plane ported into the unified shell. Lists the
+  // managed strategies grouped by exchange, and (unless the dashboard is read-only)
+  // lets you start/stop them and switch mode. Switching to LIVE opens a typed
+  // confirmation that maps to {confirm:true}. Dependency-free vanilla JS; reuses
+  // base.html's api()/escapeHtml()/toast()/connect() and the TB_READ_ONLY flag.
+
+  const MODES = ['paper', 'testnet', 'live'];
+  const PHRASE = 'I UNDERSTAND';
+
+  const body = document.getElementById('strategies-body');
+  const sumTotal = document.getElementById('sum-total');
+  const sumRunning = document.getElementById('sum-running');
+
+  const modal = document.getElementById('live-modal');
+  const modalName = document.getElementById('live-modal-name');
+  const modalInput = document.getElementById('live-modal-input');
+  const modalConfirm = document.getElementById('live-modal-confirm');
+  const modalCancel = document.getElementById('live-modal-cancel');
+
+  let pendingLive = null;  // {name} awaiting confirmation
+
+  // A signed-money cell class: green for a gain, red for a loss.
+  function pnlClass(v) {
+    if (v == null) return '';
+    const n = Number(v);
+    if (n > 0) return 'ok';
+    if (n < 0) return 'err';
+    return '';
+  }
+
+  function modeSelect(s) {
+    const dis = TB_READ_ONLY ? ' disabled' : '';
+    const opts = MODES.map(function (m) {
+      return '<option value="' + m + '"' + (m === s.mode ? ' selected' : '') + '>' + m + '</option>';
+    }).join('');
+    return '<select data-name="' + escapeHtml(s.name) + '" class="mode-select" aria-label="mode"' + dis + '>' + opts + '</select>';
+  }
+
+  function rowHtml(s) {
+    const status = s.running
+      ? '<span class="run-pill is-running"><span class="dot"></span>running</span>'
+      : '<span class="run-pill is-stopped"><span class="dot"></span>stopped</span>';
+    let action;
+    if (TB_READ_ONLY) {
+      action = '<span class="muted">—</span>';
+    } else if (s.running) {
+      action = '<button data-name="' + escapeHtml(s.name) + '" data-act="stop" class="btn-stop">Stop</button>';
+    } else {
+      action = '<button data-name="' + escapeHtml(s.name) + '" data-act="start" class="btn-start">Start</button>';
+    }
+    const pnl = s.realised_pnl == null ? '<span class="muted">—</span>' : escapeHtml(s.realised_pnl);
+    return '<tr>' +
+      '<td>' + escapeHtml(s.name) + '</td>' +
+      '<td>' + escapeHtml(s.kind) + '</td>' +
+      '<td><span class="badge badge-' + escapeHtml(s.mode) + '">' + escapeHtml(s.mode) + '</span> ' + modeSelect(s) + '</td>' +
+      '<td>' + status + '</td>' +
+      '<td class="num ' + pnlClass(s.realised_pnl) + '">' + pnl + '</td>' +
+      '<td class="num">' + escapeHtml(s.open_orders) + '</td>' +
+      '<td>' + action + '</td>' +
+      '</tr>';
+  }
+
+  function groupHeaderHtml(exchange, count) {
+    return '<tr class="group"><td colspan="7">' +
+      '<span class="group-name">' + escapeHtml(exchange) + '</span>' +
+      '<span class="group-count">' + count + '</span></td></tr>';
+  }
+
+  async function refresh() {
+    let list;
+    try {
+      list = await api('GET', '/api/strategies');
+    } catch (e) {
+      body.innerHTML = '<tr class="empty"><td colspan="7">' + escapeHtml(e.message) + '</td></tr>';
+      return;
+    }
+    sumTotal.textContent = list.length;
+    sumRunning.textContent = list.filter(function (s) { return s.running; }).length;
+    if (!list.length) {
+      body.innerHTML = '<tr class="empty"><td colspan="7">No strategies declared.</td></tr>';
+      return;
+    }
+    // Group strategies by exchange (alphabetical), each under a header row.
+    const byEx = {};
+    list.forEach(function (s) { (byEx[s.exchange] = byEx[s.exchange] || []).push(s); });
+    let html = '';
+    Object.keys(byEx).sort().forEach(function (ex) {
+      html += groupHeaderHtml(ex, byEx[ex].length);
+      html += byEx[ex].map(rowHtml).join('');
+    });
+    body.innerHTML = html;
+  }
+
+  async function setMode(name, mode, confirm) {
+    try {
+      await api('POST', '/api/strategies/' + encodeURIComponent(name) + '/mode',
+        { mode: mode, confirm: !!confirm });
+      toast(name + ': mode → ' + mode, 'ok');
+    } catch (e) {
+      toast(name + ': ' + e.message, 'err');
+    } finally {
+      await refresh();
+    }
+  }
+
+  async function onClick(ev) {
+    const btn = ev.target.closest('button[data-act]');
+    if (!btn) return;
+    const name = btn.dataset.name;
+    const act = btn.dataset.act;
+    btn.disabled = true;
+    try {
+      await api('POST', '/api/strategies/' + encodeURIComponent(name) + '/' + act);
+      toast(name + ': ' + act + 'ed', 'ok');
+    } catch (e) {
+      toast(name + ': ' + e.message, 'err');
+    } finally {
+      await refresh();
+    }
+  }
+
+  function onModeChange(ev) {
+    const sel = ev.target.closest('select.mode-select');
+    if (!sel) return;
+    const name = sel.dataset.name;
+    const mode = sel.value;
+    if (mode === 'live') {
+      openLiveModal(name);  // deliberate, typed acknowledgement
+      return;
+    }
+    setMode(name, mode, false);  // paper / testnet — no confirmation
+  }
+
+  // --- live confirmation modal -------------------------------------------- //
+
+  function openLiveModal(name) {
+    pendingLive = { name: name };
+    modalName.textContent = name;
+    modalInput.value = '';
+    modalConfirm.disabled = true;
+    modal.classList.add('open');
+    modalInput.focus();
+  }
+
+  function closeLiveModal() {
+    modal.classList.remove('open');
+    pendingLive = null;
+    refresh();  // re-render so a cancelled select reverts to the server's mode
+  }
+
+  modalInput.addEventListener('input', function () {
+    modalConfirm.disabled = modalInput.value.trim() !== PHRASE;
+  });
+  modalInput.addEventListener('keydown', function (e) {
+    if (e.key === 'Enter' && !modalConfirm.disabled) modalConfirm.click();
+    if (e.key === 'Escape') closeLiveModal();
+  });
+  modalConfirm.addEventListener('click', async function () {
+    const name = pendingLive && pendingLive.name;
+    modal.classList.remove('open');
+    if (name) await setMode(name, 'live', true);
+    pendingLive = null;
+  });
+  modalCancel.addEventListener('click', function () {
+    toast((pendingLive ? pendingLive.name : '') + ': live switch cancelled', 'err');
+    closeLiveModal();
+  });
+  modal.addEventListener('click', function (e) { if (e.target === modal) closeLiveModal(); });
+
+  document.addEventListener('DOMContentLoaded', function () {
+    if (!TB_READ_ONLY) {
+      body.addEventListener('click', onClick);
+      body.addEventListener('change', onModeChange);
+    }
+    refresh();
+
+    // Live: an event (order/fill/log) may have moved a strategy's PnL / open
+    // orders — refetch the list. connect() mirrors liveness on the connection dot.
+    connect('/api/events', function () { refresh(); });
+
+    // Polling fallback — refresh even if the SSE stream is down.
+    setInterval(refresh, 3000);
+  });
+</script>
 {% endblock %}

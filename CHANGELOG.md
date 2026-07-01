@@ -8,6 +8,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Dashboard Strategies page + a book that survives a restart.** The unified
+  dashboard now serves the control surface — `GET /api/strategies` and `POST
+  /api/strategies/{name}/start|stop|mode` (shared with the old control app; live
+  needs `confirm:true` → `403` otherwise; writes refused when `--read-only`) — and a
+  Strategies page grouped by exchange with a mode select, start/stop, and the typed
+  live-confirm modal. The `trading-bot dashboard` command now `start_all()`s the
+  declared strategies (a unit that can't start is skipped with a warning, never
+  crashing the dashboard), and **`supervisor.start()` replays the store's fills into
+  a paper unit's tracker/perf** so its book (positions + realised PnL) survives a
+  restart — live/testnet still reconcile from the broker (no double-count). Verified
+  end-to-end: a restarted dashboard shows the 14 restored alloc1 paper positions and
+  the live-mode switch is refused (403) without a typed confirmation. (#115)
+
 - **Dashboard Overview + KPI at 3 levels.** The dashboard app now serves aggregate
   reads over the supervisor's per-strategy engines — `GET /api/positions` &
   `/api/orders` (`?group_by=crypto|exchange|strategy`), `GET /api/kpi?level=strategy|
@@ -49,6 +62,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (#106)
 
 ### Fixed
+
+- **`StrategySupervisor.set_mode` no longer leaves a unit on the wrong mode when a
+  switch is refused.** It mutated `unit.mode` *before* validating the target slice, so
+  a testnet/live switch that raised `ConfigError` (e.g. no broker for the venue) left
+  the unit on the new mode anyway. The slice is now validated first — a refused switch
+  changes nothing, matching the live-confirm gate. (#115)
 
 - **Binance testnet now authenticates with testnet credentials.** The engine's
   testnet path (`testnet: true` on a Binance broker) hard-pinned the testnet URL

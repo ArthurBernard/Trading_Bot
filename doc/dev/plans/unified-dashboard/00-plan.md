@@ -75,7 +75,7 @@ dccd `../Download_Crypto_Currencies_Data/dccd/interfaces/{api/app.py, ui/templat
 
 - [x] 01 shell-and-command — feat/dashboard-shell — high
 - [x] 02 overview-kpi — feat/dashboard-overview — high
-- [ ] 03 strategies-page — feat/dashboard-strategies — medium
+- [x] 03 strategies-page — feat/dashboard-strategies — medium
 - [ ] 04 pnl-data-model — feat/dashboard-pnl-data — high
 - [ ] 05 pnl-chart — feat/dashboard-pnl-chart — medium
 - [ ] 06 orders-logs-cleanup — feat/dashboard-orders-logs — medium

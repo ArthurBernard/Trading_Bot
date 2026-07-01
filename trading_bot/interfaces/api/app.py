@@ -551,6 +551,100 @@ def _status_dict(status: StrategyStatus) -> dict[str, Any]:
     }
 
 
+def _register_strategy_control(app: FastAPI, *, read_only: bool = False) -> None:
+    """Register the shared strategy control endpoints on ``app``.
+
+    Adds the per-strategy control surface — ``GET /api/strategies`` (each managed
+    unit's status, tagged with its ``exchange``), and the write routes ``POST
+    /api/strategies/{name}/start|stop|mode`` — reading the supervisor off
+    ``app.state.supervisor``. **One implementation, two apps**: both
+    :func:`create_control_app` and :func:`create_dashboard_app` register these, so
+    the safety gates live in a single place.
+
+    **Real money is gated** (the invariant): ``.../mode`` to ``"live"`` requires
+    ``confirm: true`` in the body (:class:`_ModeBody`); without it the supervisor
+    raises :class:`~trading_bot.domain.errors.LiveTradingNotEnabled` and the
+    endpoint returns **403**, changing nothing.
+
+    Parameters
+    ----------
+    app : FastAPI
+        The app to register the routes on (must carry ``app.state.supervisor``).
+    read_only : bool, optional
+        When ``True``, the three **write** routes (start / stop / mode) return
+        **403** and never touch the supervisor — the read-only dashboard stance.
+        ``GET /api/strategies`` stays available (it is a read). Defaults to
+        ``False``.
+
+    """
+    from trading_bot.domain.errors import (
+        BrokerError,
+        ConfigError,
+        LiveTradingNotEnabled,
+    )
+
+    def _sup(request: Request) -> StrategySupervisor:
+        return request.app.state.supervisor  # type: ignore[no-any-return]
+
+    def _guard_write() -> None:
+        """Refuse a write when the app is read-only (403; nothing changes)."""
+        if read_only:
+            raise HTTPException(
+                status_code=403,
+                detail="dashboard is read-only; strategy control is disabled",
+            )
+
+    @app.get("/api/strategies")
+    async def strategies(request: Request) -> list[dict[str, Any]]:
+        """List every managed strategy with its exchange / mode / running / PnL."""
+        return [_status_dict(s) for s in _sup(request).status()]
+
+    @app.post("/api/strategies/{name}/start")
+    async def start_strategy(name: str, request: Request) -> dict[str, Any]:
+        _guard_write()
+        try:
+            await _sup(request).start(name)
+        except ConfigError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except (BrokerError, LiveTradingNotEnabled) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"ok": True, "status": _status_dict(_sup(request).status(name)[0])}
+
+    @app.post("/api/strategies/{name}/stop")
+    async def stop_strategy(name: str, request: Request) -> dict[str, Any]:
+        _guard_write()
+        try:
+            await _sup(request).stop(name)
+        except ConfigError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return {"ok": True, "status": _status_dict(_sup(request).status(name)[0])}
+
+    @app.post("/api/strategies/{name}/mode")
+    async def set_strategy_mode(
+        name: str, body: _ModeBody, request: Request
+    ) -> dict[str, Any]:
+        _guard_write()
+        if body.mode not in _CONTROL_MODES:
+            raise HTTPException(
+                status_code=400,
+                detail=f"unknown mode {body.mode!r}; expected one of {_CONTROL_MODES}",
+            )
+        try:
+            await _sup(request).set_mode(
+                name,
+                body.mode,  # type: ignore[arg-type]
+                confirm_live=body.confirm,
+            )
+        except LiveTradingNotEnabled as exc:
+            # Real money without the deliberate confirmation — refuse, change nothing.
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
+        except ConfigError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except (BrokerError, LiveTradingNotEnabled) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"ok": True, "status": _status_dict(_sup(request).status(name)[0])}
+
+
 def create_control_app(
     supervisor: StrategySupervisor, *, auth_token: str | None = None
 ) -> FastAPI:
@@ -589,14 +683,6 @@ def create_control_app(
         The control application (serve via uvicorn, or a ``TestClient``).
 
     """
-    from fastapi import HTTPException
-
-    from trading_bot.domain.errors import (
-        BrokerError,
-        ConfigError,
-        LiveTradingNotEnabled,
-    )
-
     app = FastAPI(
         title="trading_bot control",
         summary="Supervise + control the declared strategies.",
@@ -636,52 +722,9 @@ def create_control_app(
         running = sum(1 for s in _sup(request).status() if s.running)
         return {"status": "ok", "strategies": len(names), "running": running}
 
-    @app.get("/api/strategies")
-    async def strategies(request: Request) -> list[dict[str, Any]]:
-        """List every managed strategy with its mode / running / PnL."""
-        return [_status_dict(s) for s in _sup(request).status()]
-
-    @app.post("/api/strategies/{name}/start")
-    async def start_strategy(name: str, request: Request) -> dict[str, Any]:
-        try:
-            await _sup(request).start(name)
-        except ConfigError as exc:
-            raise HTTPException(status_code=404, detail=str(exc)) from exc
-        except (BrokerError, LiveTradingNotEnabled) as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        return {"ok": True, "status": _status_dict(_sup(request).status(name)[0])}
-
-    @app.post("/api/strategies/{name}/stop")
-    async def stop_strategy(name: str, request: Request) -> dict[str, Any]:
-        try:
-            await _sup(request).stop(name)
-        except ConfigError as exc:
-            raise HTTPException(status_code=404, detail=str(exc)) from exc
-        return {"ok": True, "status": _status_dict(_sup(request).status(name)[0])}
-
-    @app.post("/api/strategies/{name}/mode")
-    async def set_strategy_mode(
-        name: str, body: _ModeBody, request: Request
-    ) -> dict[str, Any]:
-        if body.mode not in _CONTROL_MODES:
-            raise HTTPException(
-                status_code=400,
-                detail=f"unknown mode {body.mode!r}; expected one of {_CONTROL_MODES}",
-            )
-        try:
-            await _sup(request).set_mode(
-                name,
-                body.mode,  # type: ignore[arg-type]
-                confirm_live=body.confirm,
-            )
-        except LiveTradingNotEnabled as exc:
-            # Real money without the deliberate confirmation — refuse, change nothing.
-            raise HTTPException(status_code=403, detail=str(exc)) from exc
-        except ConfigError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        except (BrokerError, LiveTradingNotEnabled) as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        return {"ok": True, "status": _status_dict(_sup(request).status(name)[0])}
+    # The strategy control surface (list + start/stop/mode) is shared with the
+    # unified dashboard — one implementation, one set of safety gates.
+    _register_strategy_control(app)
 
     if auth_token:
         _install_control_auth(app, auth_token=auth_token, templates=templates)
@@ -1100,6 +1143,10 @@ def create_dashboard_app(
                     bus.remove_queue(queue)
 
         return StreamingResponse(_generator(), media_type="text/event-stream")
+
+    # The strategy control surface (list + start/stop/mode) — shared with the
+    # control app. Under `read_only`, the write routes return 403 (the reads stay).
+    _register_strategy_control(app, read_only=read_only)
 
     if auth_token:
         _install_control_auth(app, auth_token=auth_token, templates=templates)

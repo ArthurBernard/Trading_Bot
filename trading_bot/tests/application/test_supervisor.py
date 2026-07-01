@@ -136,13 +136,19 @@ async def test_set_mode_live_requires_explicit_confirmation() -> None:
 
 
 async def test_testnet_without_a_broker_is_refused() -> None:
-    """A paper-only unit with no configured broker cannot go testnet/live."""
+    """A paper-only unit with no configured broker cannot go testnet/live.
+
+    And a refused switch changes **nothing**: the mode is validated (sliced) before
+    the unit is mutated, so a ConfigError leaves the unit on its previous mode.
+    """
     sup = StrategySupervisor(
         _config(with_broker=False),
         dccd_client=_FakeDccdClient({"BTC/USD": _dccd_ohlc(_trend())}),
     )
     with pytest.raises(ConfigError, match="no matching broker"):
         await sup.set_mode("btc-ma", "testnet")
+    # The refused switch left the unit on paper (config-validation is atomic).
+    assert sup.status("btc-ma")[0].mode == "paper"
 
 
 def test_status_includes_the_strategys_exchange() -> None:
@@ -376,3 +382,88 @@ def test_kpi_rejects_an_unknown_level() -> None:
     sup = StrategySupervisor(_two_venue_config(), dccd_client=_two_venue_client())
     with pytest.raises(ValueError, match="unknown KPI level"):
         sup.kpi("bogus")  # type: ignore[arg-type]
+
+
+# --- paper start-replay: a persisted book survives a restart --------------- #
+
+
+def _config_with_store(db_path: str) -> AppConfig:
+    """A paper BTC/USD strategy whose engine persists to (and restores from) ``db_path``."""
+    return AppConfig.model_validate(
+        {
+            "mode": "paper",
+            "storage": {"db_path": db_path},
+            "brokers": [{"name": "kraken", "exchange": "kraken"}],
+            "strategies": [
+                {
+                    "name": "btc-ma",
+                    "symbol": "BTC/USD",
+                    "data": {"exchange": "kraken", "span": 60},
+                    "signal": {"ref": "ma_crossover", "params": {"fast": 3, "slow": 6}},
+                    "reference_qty": "2",
+                    "lookback": 6,
+                }
+            ],
+        }
+    )
+
+
+def _seed_store(db_path: str) -> None:
+    """Persist a buy→sell round trip on BTC/USD to a fresh store (+8 realised)."""
+    from trading_bot.storage.sqlite_store import SqliteStore
+
+    inst = Instrument(Symbol("BTC", "USD"))
+    store = SqliteStore(db_path)
+    store.record_fill(
+        Fill("SF1", "sc1", inst, OrderSide.BUY, money("1"), money("100"), money("1"), 1)
+    )
+    store.record_fill(
+        Fill("SF2", "sc2", inst, OrderSide.SELL, money("1"), money("110"), money("1"), 2)
+    )
+
+
+async def test_paper_start_replays_the_stored_book(tmp_path) -> None:  # noqa: ANN001
+    """A paper unit started over a seeded store restores its tracker + realised PnL.
+
+    The end-to-end win: a freshly-built paper engine holds no venue state (its
+    startup reconcile resets the tracker to empty), so without the replay a
+    restarted paper unit would show an empty book. `start` replays the store's
+    fills into the engine's tracker + performance service, so the position and
+    realised PnL survive the restart.
+    """
+    db = str(tmp_path / "book.sqlite")
+    _seed_store(db)  # a buy→sell round trip: net flat, +10 gross - 2 fees = +8
+
+    sup = StrategySupervisor(
+        _config_with_store(db),
+        dccd_client=_FakeDccdClient({"BTC/USD": _dccd_ohlc(_trend())}),
+    )
+    await sup.start("btc-ma")
+
+    engine = sup._units["btc-ma"].engine  # noqa: SLF001
+    inst = Instrument(Symbol("BTC", "USD"))
+    position = engine.tracker.position(inst)
+    assert position is not None  # the book was restored, not empty
+    assert position.net_qty == money("0")  # bought 1, sold 1 → flat
+    assert position.realised_pnl == money("8")  # +10 gross - 2 fees
+    assert engine.perf.realised_pnl() == money("8")
+    assert engine.perf.fees_paid() == money("2")
+    # And the supervisor's status surfaces it.
+    assert sup.status("btc-ma")[0].realised_pnl == money("8")
+
+
+async def test_paper_start_replay_does_not_double_count_on_restart(tmp_path) -> None:  # noqa: ANN001
+    """Stopping and re-starting a paper unit restores the same book (no double-count)."""
+    db = str(tmp_path / "book.sqlite")
+    _seed_store(db)
+    sup = StrategySupervisor(
+        _config_with_store(db),
+        dccd_client=_FakeDccdClient({"BTC/USD": _dccd_ohlc(_trend())}),
+    )
+    await sup.start("btc-ma")
+    await sup.stop("btc-ma")
+    await sup.start("btc-ma")  # a fresh engine, replays the same fills once
+
+    engine = sup._units["btc-ma"].engine  # noqa: SLF001
+    assert engine.perf.realised_pnl() == money("8")  # not 16
+    assert engine.perf.fees_paid() == money("2")  # not 4

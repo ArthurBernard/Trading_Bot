@@ -6,6 +6,26 @@ rejected approaches as tombstones.
 
 ---
 
+### 2026-07-01 Paper unit start replays the store's fills; live/testnet reconcile (PR #115)  [accepted]
+- **Choice**: `StrategySupervisor.start()` replays the store's persisted fills into
+  the engine's tracker + performance service **only when the unit is paper**, so a
+  paper strategy's book (positions + realised PnL) survives a process restart. On
+  live/testnet it does **not** replay — the venue `reconcile` already rebuilt the
+  positions from the broker's fills. The `trading-bot dashboard` command `start_all()`s
+  on launch (skipping any unit that can't start) so the dashboard shows the restored
+  book immediately.
+- **Why**: the dashboard was empty on launch — units weren't started, and even when
+  started a paper unit's tracker was empty (the paper simulator holds no venue state,
+  so the startup `reconcile` resets it to an empty fill set). Fills are the PnL source
+  of truth, so replaying `store.fills()` is the correct restore for paper. Doing the
+  same on live would **double-count** against the broker-reported fills that
+  `reconcile` already applied — hence the paper-only gate. Both `apply`s dedup by
+  `fill_id`, so the replay is idempotent.
+- **Rejected alternatives**: (a) replay on all modes — double-counts live positions
+  against the broker; (b) leave the dashboard empty until a UI tick — poor UX and the
+  paper book is genuinely known from the store; (c) persist tracker snapshots
+  separately — redundant with the fills, which are already the source of truth.
+
 ### 2026-07-01 Dashboard KPI aggregation model — per-strategy ownership, exchange folding, ratios deferred (PR #114)  [accepted]
 - **Choice**: the supervisor exposes `positions()` / `open_orders()` / `kpi(level)`
   aggregating over the **running** units' engines. Each strategy **owns** its

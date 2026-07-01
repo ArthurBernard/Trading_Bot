@@ -28,9 +28,19 @@ from trading_bot.domain.money import money
 from trading_bot.domain.order import OrderSide
 from trading_bot.interfaces.api import create_dashboard_app
 from trading_bot.interfaces.cli.main import app as cli_app
-from trading_bot.tests.application.test_supervisor import _two_venue_client
+from trading_bot.tests.application.test_supervisor import (
+    _dccd_ohlc,
+    _FakeDccdClient,
+    _trend,
+    _two_venue_client,
+)
 
 runner = CliRunner()
+
+
+def _FakeStartClient() -> _FakeDccdClient:  # noqa: N802 — factory named like a class
+    """An offline dccd client for the single BTC/USD strategy (start() never imports dccd)."""
+    return _FakeDccdClient({"BTC/USD": _dccd_ohlc(_trend())})
 
 #: The five page routes the shared nav links to (Overview at ``/``).
 _PAGES = ("/", "/strategies", "/orders", "/pnl", "/logs")
@@ -380,6 +390,162 @@ async def test_events_stream_merges_and_yields_a_fill() -> None:
     assert [len(b._queues) for b in buses] == before  # noqa: SLF001
 
 
+# --- strategy control (list + start/stop/mode, the live gate) -------------- #
+
+
+def test_strategies_endpoint_lists_units_with_exchange() -> None:
+    """`GET /api/strategies` lists the managed units, tagged with their exchange."""
+    resp = _client().get("/api/strategies")
+    assert resp.status_code == 200
+    [s] = resp.json()
+    assert s["name"] == "btc-ma"
+    assert s["exchange"] == "kraken"  # grouped/displayed by exchange
+    assert s["mode"] == "paper"
+    assert s["running"] is False
+
+
+def test_set_mode_testnet_then_paper() -> None:
+    """Switching paper ↔ testnet needs no confirmation and updates the mode."""
+    client = _client()
+    r = client.post("/api/strategies/btc-ma/mode", json={"mode": "testnet"})
+    assert r.status_code == 200
+    assert r.json()["status"]["mode"] == "testnet"
+    r = client.post("/api/strategies/btc-ma/mode", json={"mode": "paper"})
+    assert r.json()["status"]["mode"] == "paper"
+
+
+def test_set_mode_live_without_confirmation_is_403() -> None:
+    """Switching to live (real money) without confirmation is refused — nothing changes."""
+    client = _client()
+    r = client.post("/api/strategies/btc-ma/mode", json={"mode": "live"})
+    assert r.status_code == 403
+    assert client.get("/api/strategies").json()[0]["mode"] == "paper"  # unchanged
+
+
+def test_set_mode_live_with_confirmation_flips() -> None:
+    """With the deliberate confirmation, the mode flips to live."""
+    client = _client()
+    r = client.post(
+        "/api/strategies/btc-ma/mode", json={"mode": "live", "confirm": True}
+    )
+    assert r.status_code == 200
+    assert r.json()["status"]["mode"] == "live"
+
+
+def test_set_mode_unknown_is_400() -> None:
+    """An unknown mode is rejected (400)."""
+    r = _client().post("/api/strategies/btc-ma/mode", json={"mode": "bogus"})
+    assert r.status_code == 400
+
+
+def test_start_unknown_strategy_is_404() -> None:
+    """Starting an unknown strategy is a 404."""
+    assert _client().post("/api/strategies/nope/start").status_code == 404
+
+
+def test_start_then_stop_toggles_running() -> None:
+    """`POST start` runs the unit in its own engine; `POST stop` tears it down."""
+    pytest.importorskip("fynance")  # ma_crossover evaluates fynance.sma
+    client = TestClient(
+        create_dashboard_app(
+            StrategySupervisor(
+                _config(), dccd_client=_FakeStartClient()
+            )
+        )
+    )
+    r = client.post("/api/strategies/btc-ma/start")
+    assert r.status_code == 200
+    assert r.json()["status"]["running"] is True
+    r = client.post("/api/strategies/btc-ma/stop")
+    assert r.status_code == 200
+    assert r.json()["status"]["running"] is False
+
+
+def test_read_only_write_routes_are_403() -> None:
+    """Under `read_only`, the write routes (start/stop/mode) are 403; reads work."""
+    client = _client(read_only=True)
+    assert client.get("/api/strategies").status_code == 200  # a read still works
+    assert client.post("/api/strategies/btc-ma/start").status_code == 403
+    assert client.post("/api/strategies/btc-ma/stop").status_code == 403
+    assert (
+        client.post("/api/strategies/btc-ma/mode", json={"mode": "testnet"}).status_code
+        == 403
+    )
+    # And nothing changed.
+    assert client.get("/api/strategies").json()[0]["mode"] == "paper"
+
+
+# --- Strategies page markup ------------------------------------------------ #
+
+
+def test_strategies_page_has_table_and_live_modal() -> None:
+    """`GET /strategies` carries the grouped table + mode select + the live modal."""
+    html = _client().get("/strategies").text
+    assert 'id="strategies-body"' in html  # the table the page fills
+    assert "mode-select" in html  # the paper/testnet/live select
+    assert 'id="live-modal"' in html  # the deliberate go-live confirmation
+    assert "I UNDERSTAND" in html  # the typed-confirmation phrase
+    assert "/api/strategies" in html  # it wires the control endpoints
+
+
+def test_strategies_page_read_only_note() -> None:
+    """A read-only dashboard's Strategies page advertises disabled controls."""
+    html = _client(read_only=True).get("/strategies").text
+    assert "read-only" in html.lower()
+
+
+# --- restored paper book surfaces through the dashboard -------------------- #
+
+
+def test_dashboard_shows_restored_paper_book(tmp_path) -> None:  # noqa: ANN001
+    """A paper unit over a seeded store, once started, shows its book on /api/positions.
+
+    The end-to-end win: the dashboard now starts the unit, `start` replays the
+    store's persisted fills into the engine, so a freshly-launched dashboard shows
+    the restored book (positions + realised PnL) rather than an empty one.
+    """
+    from trading_bot.storage.sqlite_store import SqliteStore
+
+    db = str(tmp_path / "book.sqlite")
+    inst = Instrument(Symbol("BTC", "USD"))
+    store = SqliteStore(db)
+    # A net-long book (buys only) so the position is non-flat.
+    store.record_fill(
+        Fill("SF1", "sc1", inst, OrderSide.BUY, money("2"), money("100"), money("1"), 1)
+    )
+
+    config = AppConfig.model_validate(
+        {
+            "mode": "paper",
+            "storage": {"db_path": db},
+            "brokers": [{"name": "kraken", "exchange": "kraken"}],
+            "strategies": [
+                {
+                    "name": "btc-ma",
+                    "symbol": "BTC/USD",
+                    "data": {"exchange": "kraken", "span": 60},
+                    "signal": {"ref": "ma_crossover", "params": {"fast": 3, "slow": 6}},
+                    "reference_qty": "2",
+                    "lookback": 6,
+                }
+            ],
+        }
+    )
+    sup = StrategySupervisor(config, dccd_client=_FakeStartClient())
+
+    import asyncio
+
+    asyncio.run(sup.start("btc-ma"))
+    client = TestClient(create_dashboard_app(sup))
+
+    rows = client.get("/api/positions").json()
+    [row] = rows
+    assert row["instrument"] == "BTC/USD"
+    assert row["net_qty"] == "2"  # the restored book, exact Decimal string
+    kpi = client.get("/api/kpi?level=total").json()[0]
+    assert kpi["fees_paid"] == "1"  # the fee from the seeded fill
+
+
 # --- CLI: dashboard command ------------------------------------------------ #
 
 
@@ -476,3 +642,93 @@ def test_dashboard_read_only_flag(monkeypatch: pytest.MonkeyPatch) -> None:
 
     test_client = TestClient(captured["app"])
     assert test_client.get("/api/health").json()["read_only"] is True
+
+
+def test_dashboard_calls_start_all(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`dashboard` starts every declared unit before serving (spy the start path).
+
+    The command now brings the declared strategies up (so they come online restored
+    + controllable). Patches ``uvicorn.run`` (no socket) and spies
+    ``StrategySupervisor.start`` — every declared unit must have been started before
+    uvicorn was handed the app.
+    """
+    import uvicorn
+
+    from trading_bot.application.supervisor import StrategySupervisor
+
+    started: list[str] = []
+    real_start = StrategySupervisor.start
+
+    async def _spy_start(self: StrategySupervisor, name: str) -> None:
+        started.append(name)
+        await real_start(self, name)
+
+    monkeypatch.setattr(StrategySupervisor, "start", _spy_start)
+    monkeypatch.setattr(uvicorn, "run", lambda app, **kw: None)
+
+    # A default paper config declares no strategies; use an explicit paper config
+    # with one so there is a unit to start.
+    import tempfile
+    from pathlib import Path
+
+    cfg = (
+        "mode: paper\n"
+        "brokers:\n  - name: kraken\n    exchange: kraken\n"
+        "strategies:\n"
+        "  - name: btc-ma\n"
+        "    symbol: BTC/USD\n"
+        "    data: {exchange: kraken, span: 60}\n"
+        "    signal: {ref: ma_crossover, params: {fast: 3, slow: 6}}\n"
+        "    reference_qty: '2'\n"
+        "    lookback: 6\n"
+    )
+    with tempfile.TemporaryDirectory() as d:
+        path = Path(d) / "cfg.yaml"
+        path.write_text(cfg)
+        result = runner.invoke(cli_app, ["dashboard", "-c", str(path)])
+
+    assert result.exit_code == 0, result.output
+    assert started == ["btc-ma"]  # the declared unit was started before serving
+
+
+def test_dashboard_tolerates_a_unit_that_fails_to_start(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A unit that fails to start is logged and skipped — the dashboard still serves."""
+    import uvicorn
+
+    from trading_bot.application.supervisor import StrategySupervisor
+
+    async def _boom(self: StrategySupervisor, name: str) -> None:
+        raise RuntimeError("no credentials")
+
+    monkeypatch.setattr(StrategySupervisor, "start", _boom)
+    served = {"ran": False}
+
+    def _fake_run(app: object, **kw: object) -> None:
+        served["ran"] = True
+
+    monkeypatch.setattr(uvicorn, "run", _fake_run)
+
+    import tempfile
+    from pathlib import Path
+
+    cfg = (
+        "mode: paper\n"
+        "brokers:\n  - name: kraken\n    exchange: kraken\n"
+        "strategies:\n"
+        "  - name: btc-ma\n"
+        "    symbol: BTC/USD\n"
+        "    data: {exchange: kraken, span: 60}\n"
+        "    signal: {ref: ma_crossover, params: {fast: 3, slow: 6}}\n"
+        "    reference_qty: '2'\n"
+        "    lookback: 6\n"
+    )
+    with tempfile.TemporaryDirectory() as d:
+        path = Path(d) / "cfg.yaml"
+        path.write_text(cfg)
+        result = runner.invoke(cli_app, ["dashboard", "-c", str(path)])
+
+    assert result.exit_code == 0, result.output
+    assert served["ran"] is True  # the dashboard still served despite the failure
+    assert "skipping strategy" in result.output
