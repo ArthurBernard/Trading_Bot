@@ -210,19 +210,30 @@ def test_auth_page_redirects_to_login() -> None:
     assert "/login" in r.headers["location"]
 
 
+def _csrf(client: TestClient) -> str:
+    """GET /login and return the double-submit CSRF token it set as a cookie (I-13)."""
+    assert client.get("/login").status_code == 200  # the form is open + sets the cookie
+    return client.cookies.get("tb_csrf", "")
+
+
 def test_auth_login_flow_sets_session_cookie() -> None:
     """A correct token at /login mints a session cookie that authenticates; logout clears it."""
     client, token = _auth_client()
-    assert client.get("/login").status_code == 200  # the form is open
+    csrf = _csrf(client)
+    assert csrf  # GET /login set the CSRF cookie
 
     bad = client.post(
-        "/login", data={"token": "nope", "next": "/"}, follow_redirects=False
+        "/login",
+        data={"token": "nope", "next": "/", "csrf": csrf},
+        follow_redirects=False,
     )
     assert bad.status_code == 401
     assert client.get("/api/strategies").status_code == 401  # still no session
 
     ok = client.post(
-        "/login", data={"token": token, "next": "/"}, follow_redirects=False
+        "/login",
+        data={"token": token, "next": "/", "csrf": _csrf(client)},
+        follow_redirects=False,
     )
     assert ok.status_code == 303
     assert client.get("/api/strategies").status_code == 200  # session cookie works
@@ -231,12 +242,26 @@ def test_auth_login_flow_sets_session_cookie() -> None:
     assert client.get("/api/strategies").status_code == 401  # cleared
 
 
+def test_auth_login_without_csrf_is_403() -> None:
+    """A login POST missing the CSRF token is refused (I-13 — login-CSRF guard)."""
+    client, token = _auth_client()
+    _csrf(client)  # the cookie is set, but the form omits the field
+    r = client.post(
+        "/login", data={"token": token, "next": "/"}, follow_redirects=False
+    )
+    assert r.status_code == 403
+    assert client.get("/api/strategies").status_code == 401  # no session minted
+
+
 def test_auth_login_is_rate_limited() -> None:
     """Repeated login attempts are throttled (429) — brute-force guard."""
     client, _ = _auth_client()
+    csrf = _csrf(client)
     statuses = [
         client.post(
-            "/login", data={"token": "x", "next": "/"}, follow_redirects=False
+            "/login",
+            data={"token": "x", "next": "/", "csrf": csrf},
+            follow_redirects=False,
         ).status_code
         for _ in range(20)
     ]

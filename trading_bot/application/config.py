@@ -39,6 +39,7 @@ downstream consumes a validated :class:`AppConfig`.
 
 from __future__ import annotations
 
+import os
 import pathlib
 from decimal import Decimal
 from typing import Any, Literal
@@ -471,6 +472,18 @@ class RiskConfig(BaseModel):
         return v
 
 
+#: The host values treated as loopback (local-only) — a non-loopback bind is what
+#: makes the dashboard reachable off the box, so it requires a token. Kept in sync
+#: with the CLI guard (:mod:`trading_bot.interfaces.cli.main`).
+_LOOPBACK_HOSTS = ("127.0.0.1", "localhost", "::1")
+
+#: The environment variable that can supply the dashboard login token, matching the
+#: CLI's ``--token`` / ``--serve-token`` ``envvar``. A non-loopback ``UIConfig`` with
+#: no in-file ``token`` still validates if this is set, so the token never has to sit
+#: in the manifest (the preferred posture).
+_UI_TOKEN_ENV = "TRADING_BOT_UI_TOKEN"
+
+
 class UIConfig(BaseModel):
     """How the dashboard binds + authenticates — the persistent web settings.
 
@@ -508,6 +521,35 @@ class UIConfig(BaseModel):
         if not v or not v.strip():
             raise ValueError("ui.host must be a non-empty string")
         return v
+
+    @model_validator(mode="after")
+    def _require_token_for_non_loopback(self) -> UIConfig:
+        """Refuse a non-loopback bind with no token (A-4 — defence in depth).
+
+        The dashboard is the money-moving *control* surface, so a manifest that
+        binds it off the loopback interface (``0.0.0.0`` / a Tailscale IP / any
+        non-``localhost`` host) with no ``token`` would expose it wide open with no
+        auth. The CLI already refuses this at bind time, but that is a single call
+        site: a hand-edited manifest, a ``to_yaml``/``from_yaml`` round-trip, a test
+        harness or a future entrypoint could bind wide open without ever hitting the
+        CLI guard. Enforcing it *in the model* means an unauthenticated non-loopback
+        ``UIConfig`` never even constructs — it fails validation.
+
+        The env var :data:`_UI_TOKEN_ENV` (``TRADING_BOT_UI_TOKEN``) satisfies the
+        token requirement too, matching the CLI semantics (the token can live in the
+        environment instead of the file — the preferred posture). The CLI guard is
+        kept as the second line of defence.
+        """
+        loopback = self.host.strip().lower() in _LOOPBACK_HOSTS
+        has_token = bool(self.token) or bool(os.environ.get(_UI_TOKEN_ENV))
+        if not loopback and not has_token:
+            raise ValueError(
+                f"ui.host {self.host!r} is non-loopback but no ui.token is set: the "
+                "dashboard is the control surface and refuses to bind wide open with "
+                f"no auth — set ui.token, export {_UI_TOKEN_ENV}, or bind a loopback "
+                f"host ({', '.join(_LOOPBACK_HOSTS)})"
+            )
+        return self
 
 
 class AppConfig(BaseModel):

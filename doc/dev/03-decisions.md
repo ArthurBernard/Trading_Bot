@@ -6,6 +6,21 @@ rejected approaches as tombstones.
 
 ---
 
+### 2026-07-02 Dashboard web-surface hardening posture (PR #147)  [accepted]
+- **Choice**: enforce "non-loopback host requires a token" in `UIConfig` itself (a
+  validator); give `run --serve` the same bind guard as `dashboard`; cap request
+  bodies; prune/bound the session + rate-limit maps; key the login limiter on the
+  real peer; add `Cache-Control: no-store` + `X-Content-Type-Options`/frame/referrer
+  headers; CSRF double-submit + `SameSite=strict` on login; do **not** trust a
+  client `X-Forwarded-Proto` for the `Secure` cookie unless a trusted proxy is
+  configured; reject a deploy `mode` the supervisor would silently discard.
+- **Why**: audit I-4…I-13 + A-4 — the dashboard is a control plane bound to
+  `0.0.0.0` behind a token on the tailnet; these were lower-severity but real
+  web-surface gaps (unbounded maps, no body cap, proxy-spoofable bits, missing
+  headers, a config that could encode a wide-open surface).
+- **Rejected alternatives**: honouring a per-deploy `mode` seed (threads a
+  money-adjacent live seed through `add_unit`) — rejected in favour of a clear 422.
+
 ### 2026-07-02 Bounded uvicorn graceful-shutdown so Ctrl-C quits promptly (PR #145)  [accepted]
 - **Choice**: every uvicorn serve path (`dashboard`, `serve`, `run --serve`,
   `start --serve`) sets `timeout_graceful_shutdown=_SHUTDOWN_GRACE_SECONDS` (3s).
