@@ -98,6 +98,15 @@ _SYNTHETIC_BARS = 80
 _RUNBOOK = "doc/dev/09-go-live.md"
 
 
+#: Seconds uvicorn waits for open connections to drain on Ctrl-C before force-
+#: closing them. Small so a bare ``dashboard`` / ``serve`` / ``start --serve`` quits
+#: promptly on the **first** SIGINT even when a browser holds the ``/api/events``
+#: SSE stream open — uvicorn's *default* graceful shutdown is unbounded and waits
+#: for that never-ending stream forever, which is what made the server feel
+#: unquittable (a second Ctrl-C was needed to force it).
+_SHUTDOWN_GRACE_SECONDS = 3
+
+
 @app.callback()
 def _main() -> None:
     """``trading-bot`` — the engine's command-line interface.
@@ -446,7 +455,13 @@ def _run_and_serve(config: AppConfig, *, host: str, port: int) -> None:
         system = await prepare_system(config)
         api = create_app(system.engine)
         server = uvicorn.Server(
-            uvicorn.Config(api, host=host, port=port, log_level="warning")
+            uvicorn.Config(
+                api,
+                host=host,
+                port=port,
+                log_level="warning",
+                timeout_graceful_shutdown=_SHUTDOWN_GRACE_SECONDS,
+            )
         )
         orch_task = asyncio.create_task(system.orchestrator.run())
         _console.print(
@@ -723,7 +738,12 @@ def serve(
         f"[green]serving dashboard[/green] (read-only, mode={config.mode}) on "
         f"http://{host}:{port}  —  use 'trading-bot dashboard' for the full control UI"
     )
-    uvicorn.run(application, host=host, port=port)
+    uvicorn.run(
+        application,
+        host=host,
+        port=port,
+        timeout_graceful_shutdown=_SHUTDOWN_GRACE_SECONDS,
+    )
 
 
 # --- start (daemon) -------------------------------------------------------- #
@@ -804,7 +824,13 @@ async def _run_daemon(
             if auth_token:
                 _console.print("[dim]control dashboard auth: token login enabled[/dim]")
             server = uvicorn.Server(
-                uvicorn.Config(api, host=host, port=port, log_level="warning")
+                uvicorn.Config(
+                api,
+                host=host,
+                port=port,
+                log_level="warning",
+                timeout_graceful_shutdown=_SHUTDOWN_GRACE_SECONDS,
+            )
             )
             _console.print(
                 f"[green]control dashboard[/green] on http://{host}:{port}"
@@ -1085,7 +1111,12 @@ def dashboard(
     )
     try:
         # uvicorn owns SIGINT: Ctrl-C returns from run() cleanly the first time.
-        uvicorn.run(application, host=host, port=port)
+        uvicorn.run(
+        application,
+        host=host,
+        port=port,
+        timeout_graceful_shutdown=_SHUTDOWN_GRACE_SECONDS,
+    )
     finally:
         # Tear the supervisor down whether serve returned normally or on Ctrl-C.
         asyncio.run(supervisor.shutdown())

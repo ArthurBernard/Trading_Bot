@@ -12,6 +12,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`trading-bot dashboard`/`serve` quit promptly on the first Ctrl-C.** Every uvicorn serve path now sets a bounded `timeout_graceful_shutdown`, so a browser holding the `/api/events` SSE stream open no longer pins uvicorn's (default unbounded) graceful shutdown — the server force-closes the stream and exits in ~3s on the first SIGINT instead of hanging until a second one. (#145)
+
 ### Deprecated
 
 ### Removed
