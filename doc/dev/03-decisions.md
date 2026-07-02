@@ -6,6 +6,20 @@ rejected approaches as tombstones.
 
 ---
 
+### 2026-07-02 Tooling/CI parity + format-the-tree (PR #PR)  [accepted]
+- **Choice**: CI runs `ruff check` + `ruff format --check` + `mypy` + `interrogate`
+  + pytest (actions SHA-pinned); pre-commit mirrors it; ruff pinned to a fixed
+  version so formatting is byte-reproducible; pytest gains `filterwarnings=error`
+  (one benign Starlette warning allow-listed) + a pinned asyncio loop scope; the
+  whole tree is `ruff format`-clean (one mechanical reformat commit).
+- **Why**: audit T-5 (CI ran only `ruff check`, so a format drift could wedge CI),
+  T-6/T-7/T-8/T-10/T-11/G-13 hygiene, T-9 (a wall-clock-sleep test was flaky). The
+  reformat is the one-time cost of making `ruff format --check` an enforceable gate.
+- **Rejected alternatives**: adding `format --check` without formatting the tree
+  (CI would fail immediately); deferring the reformat (the gate can't be enforced).
+- **Note**: applied on the integrated tree (post wave-3) so the mechanical reformat
+  never conflicted with the substantive fixes.
+
 ### 2026-07-02 Dashboard web-surface hardening posture (PR #147)  [accepted]
 - **Choice**: enforce "non-loopback host requires a token" in `UIConfig` itself (a
   validator); give `run --serve` the same bind guard as `dashboard`; cap request
