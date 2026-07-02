@@ -12,6 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Dashboard web-surface hardening.** `UIConfig` now rejects a non-loopback host without a token; `run --serve` gets the same bind guard; request bodies are capped, the session/rate-limit maps bounded, the login limiter keyed on the real peer; security headers (`no-store`/`nosniff`/frame/referrer) + login CSRF + `SameSite=strict` added; a client `X-Forwarded-Proto` is no longer trusted for the `Secure` cookie; a discarded deploy `mode` is rejected (audit A-4/I-4/I-5/I-6/I-7/I-9/I-10/I-11/I-13). (#PR)
 - **`trading-bot dashboard`/`serve` quit promptly on the first Ctrl-C.** Every uvicorn serve path now sets a bounded `timeout_graceful_shutdown`, so a browser holding the `/api/events` SSE stream open no longer pins uvicorn's (default unbounded) graceful shutdown — the server force-closes the stream and exits in ~3s on the first SIGINT instead of hanging until a second one. (#145)
 
 ### Deprecated
