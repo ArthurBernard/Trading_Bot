@@ -12,7 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **Dashboard can launch strategies with a local `signal.ref`.** `trading-bot` now puts the CWD on `sys.path` (a group callback), so a manifest referencing a gitignored local strategy package (e.g. `strategies.alloc1.signal:...`) resolves — previously the console script couldn't import it and the unit was silently skipped at start. (#135)
+- **Dashboard can launch strategies with a local `signal.ref`.** `trading-bot` now puts the CWD on `sys.path` (a group callback), so a manifest referencing a gitignored local strategy package (e.g. `strategies.<yourpkg>.signal:...`) resolves — previously the console script couldn't import it and the unit was silently skipped at start. (#135)
 
 ### Deprecated
 
@@ -88,7 +88,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   crashing the dashboard), and **`supervisor.start()` replays the store's fills into
   a paper unit's tracker/perf** so its book (positions + realised PnL) survives a
   restart — live/testnet still reconcile from the broker (no double-count). Verified
-  end-to-end: a restarted dashboard shows the 14 restored alloc1 paper positions and
+  end-to-end: a restarted dashboard shows the restored paper portfolio positions and
   the live-mode switch is refused (403) without a typed confirmation. (#115)
 
 - **Dashboard Overview + KPI at 3 levels.** The dashboard app now serves aggregate
@@ -99,7 +99,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   every running unit's engine bus onto one feed (dedup by id). The Overview page
   renders a KPI strip (level toggle), a positions table (group-by crypto/exchange) and
   an open-orders table, live via SSE with a polling fallback. Verified against a real
-  paper alloc1 book: the accessors equal the engine's own realised PnL/fees exactly.
+  paper portfolio book: the accessors equal the engine's own realised PnL/fees exactly.
   (#114)
 
 - **Unified dashboard skeleton** — one `create_dashboard_app` factory + a
@@ -111,16 +111,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   now; data lands in the following leaves. First leaf of the unified-dashboard epic
   that will retire the split read-only/control apps. (#113)
 
-- **ALLOC1 portfolio config (Binance + Kraken)** — wires the research allocator ALLOC1
-  (`../fynance-research/DEPLOY_ALLOC1.md`: a dynamic regime-aware blend of LS2 / MN1 / BEAR1)
-  by config + a thin generic adapter, exactly like LS1. Adds
-  `strategies/alloc1/{binance.yaml, kraken.yaml, signal.py, test_e2e.py}`: the signal wrapper
-  adapts `fynance_research.strategies.alloc1_live.target_weights(venue)` to the
-  `PortfolioSignalFn` contract (research imported lazily) for both venues; the paper configs
-  declare the 14-coin Binance USDT and 13-coin Kraken USD (no BNB) portfolios; the wiring tests
-  prove both validate + their signal refs resolve offline. Paper-only; no engine code changed.
-  **Binance is fully validated; the Kraken config is paper and blocked for live/2026** on a dccd
-  BTC-USD Kraken data gap (Jan–May 2026) — ready to activate once backfilled (DEPLOY_ALLOC1.md §Kraken).
+- **Portfolio-strategy config support (multi-asset units run by config).** A
+  multi-asset portfolio strategy can be declared entirely in a manifest — a
+  `universe` plus a `signal.ref` pointing at a `PortfolioSignalFn` — and run by
+  config through the generic portfolio adapter, with no per-strategy engine code.
+  Concrete strategies stay **local-only** under the gitignored `strategies/` tree
+  (strategy IP lives outside the engine repo; the engine stays generic). Paper by
+  default; the wiring is validated offline by the generic adapter tests.
 
 ### Changed
 

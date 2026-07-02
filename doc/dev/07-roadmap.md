@@ -41,7 +41,7 @@ archived).
 - [ ] **Binance futures/margin testnet adapter (for a faithful long/short testnet
   live-test).** The `BinanceBroker` is **spot** (`/api/v3`), and the Binance testnet
   it reaches (`testnet.binance.vision`) is spot-only — it **cannot short**.
-  Long/short portfolio strategies (e.g. ALLOC1, typically net-short) therefore can
+  Long/short portfolio strategies (typically net-short) therefore can
   only be *paper*-tested faithfully; a testnet "live test" would silently drop every
   short leg. A USDT-M **futures** testnet adapter (`testnet.binancefuture.com`, which
   supports shorts) is the prerequisite for a faithful testnet live-test of a

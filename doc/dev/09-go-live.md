@@ -219,7 +219,7 @@ back to `BINANCE_API_KEY` / `_SECRET`) — keep them distinct from the mainnet k
 which the testnet endpoint rejects with `-2015`.
 
 > **Spot testnet is long-only.** `testnet.binance.vision` is a **spot** venue — it
-> cannot short. A **long/short** portfolio (e.g. ALLOC1, typically net-short) would
+> cannot short. A **long/short** portfolio (typically net-short) would
 > have every short leg refused there, so it can only be *paper*-tested faithfully; a
 > faithful testnet live-test of a long/short book needs a **USDT-M futures** testnet
 > adapter (`testnet.binancefuture.com`) — an open follow-up (`07-roadmap.md`).
