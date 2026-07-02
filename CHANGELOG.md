@@ -8,6 +8,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+### Changed
+
+### Fixed
+
+### Deprecated
+
+### Removed
+
+## [0.8.0] - 2026-07-02
+
+### Added
+
 - **Config-driven dashboard web settings (remote access, the dccd way).** A manifest
   can carry a **`ui:`** section (`host` / `port` / `token` / `read_only`), and
   `trading-bot dashboard` reads it — so you set the host + token **once** in
