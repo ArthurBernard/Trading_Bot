@@ -6,6 +6,21 @@ rejected approaches as tombstones.
 
 ---
 
+### 2026-07-02 Enforce dashboard live/filesystem/import gates server-side (PR #PR)  [accepted]
+- **Choice**: validate the typed live-acknowledgement (`I UNDERSTAND`) on the server
+  with a constant-time compare (a bare `confirm:true` no longer flips to live); reject
+  absolute or `..`-traversal `db_path` in the deploy body (400); allow-list the deploy
+  `signal.ref` to a set of module roots (`strategies`, `fynance`, `fynance_research`,
+  `trading_bot`) at the API boundary + emit an audit log line on every `import_module`.
+- **Why**: audit I-1/I-2/I-3 — the dashboard is a control plane bound to `0.0.0.0`
+  behind only a token; the typed live-confirm was enforced only in browser JS, the
+  deploy `db_path` was unsanitised (write-anywhere SQLite), and `signal.ref` was an
+  unbounded `importlib` path (arbitrary-module import for a token holder).
+- **Rejected alternatives**: (a) trusting the browser check for the live gate; (b)
+  sanitising only the auto-derived `db_path` (the explicit one bypassed it). Residual
+  blast radius documented in code: allow-listed modules still run import-time code — the
+  auth token remains the real trust boundary.
+
 ### 2026-07-02 Config-driven dashboard web settings (a `ui:` section) (PR #125)  [accepted]
 - **Choice**: add a `ui:` section to `AppConfig` (`host` / `port` / `token` /
   `read_only`); the `dashboard` command reads it as the default, with CLI flags (and
