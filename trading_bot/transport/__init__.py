@@ -17,6 +17,8 @@ Public surface:
 * :class:`~trading_bot.transport.ratelimit.RateLimiter` /
   :class:`~trading_bot.transport.ratelimit.TokenBucket` — proactive
   per-exchange token-bucket throttling.
+* :class:`~trading_bot.transport.ratelimit.WeightBucket` — Binance's rolling
+  request-*weight* budget (weight-aware throttling + 418/429 back-off).
 * :class:`~trading_bot.transport.ratelimit.KrakenCallCounter` — Kraken's
   decaying private-endpoint call counter.
 """
@@ -32,6 +34,7 @@ from trading_bot.transport.ratelimit import (
     KrakenCallCounter,
     RateLimiter,
     TokenBucket,
+    WeightBucket,
 )
 from trading_bot.transport.ws import WebSocketBase
 
@@ -43,4 +46,5 @@ __all__ = [
     "RateLimiter",
     "TokenBucket",
     "WebSocketBase",
+    "WeightBucket",
 ]

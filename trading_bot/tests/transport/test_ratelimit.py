@@ -11,7 +11,12 @@ from __future__ import annotations
 
 import pytest
 
-from trading_bot.transport import KrakenCallCounter, RateLimiter, TokenBucket
+from trading_bot.transport import (
+    KrakenCallCounter,
+    RateLimiter,
+    TokenBucket,
+    WeightBucket,
+)
 
 
 class FakeClock:
@@ -100,6 +105,186 @@ async def test_capacity_overrides_burst() -> None:
 def test_non_positive_rate_rejected() -> None:
     with pytest.raises(ValueError):
         TokenBucket(0.0)
+
+
+# --------------------------------------------------------------------------- #
+# WeightBucket (Binance rolling request-weight budget)
+# --------------------------------------------------------------------------- #
+
+
+async def test_weighted_calls_deplete_budget_at_correct_rate() -> None:
+    # 60 weight / 60s window => 1 weight/s refill. A burst up to the limit is
+    # free; the next weighted call waits exactly ``overshoot / refill_rate``.
+    clock = FakeClock()
+    bucket = WeightBucket(
+        60.0, window=60.0, time_source=clock.time, sleep=clock.sleep
+    )
+
+    # Spend 50 weight (5 x weight-10 calls) — all within the 60 budget, no wait.
+    for _ in range(5):
+        await bucket.acquire(10.0)
+    assert clock.waits == []
+
+    # Used is now 50; a weight-20 call overshoots by 50 + 20 - 60 = 10, and at
+    # 1 weight/s that is a 10s wait for the window to age out enough weight.
+    await bucket.acquire(20.0)
+    assert clock.waits == [pytest.approx(10.0)]
+
+
+async def test_weight_below_budget_never_waits() -> None:
+    # A caller that stays under the rolling budget never waits.
+    clock = FakeClock()
+    bucket = WeightBucket(
+        1200.0, window=60.0, time_source=clock.time, sleep=clock.sleep
+    )
+    for _ in range(10):
+        clock.advance(1.0)
+        await bucket.acquire(20.0)  # 20 weight/s << 1200/60 = 20/s budget edge
+    assert clock.waits == []
+
+
+async def test_418_ban_backoff_parks_next_calls() -> None:
+    # A 418 (IP ban) parks every subsequent acquire until the ban window ends,
+    # regardless of remaining weight budget.
+    clock = FakeClock()
+    bucket = WeightBucket(
+        1200.0, window=60.0, time_source=clock.time, sleep=clock.sleep
+    )
+
+    await bucket.acquire(1.0)  # plenty of budget: no wait
+    assert clock.waits == []
+
+    bucket.back_off(30.0)  # venue banned the IP for 30s
+    # The very next call waits out the ban even though budget is free.
+    await bucket.acquire(1.0)
+    assert clock.waits == [pytest.approx(30.0)]
+    # The ban is one-shot: a following call (budget still ample) does not re-wait.
+    await bucket.acquire(1.0)
+    assert clock.waits == [pytest.approx(30.0)]
+
+
+async def test_429_retry_after_makes_next_call_wait() -> None:
+    # A 429 Retry-After: N is fed via back_off(N); the next call waits ~N.
+    clock = FakeClock()
+    bucket = WeightBucket(
+        1200.0, window=60.0, time_source=clock.time, sleep=clock.sleep
+    )
+    bucket.back_off(5.0)  # Retry-After: 5
+    await bucket.acquire(1.0)
+    assert clock.waits == [pytest.approx(5.0)]
+
+
+async def test_weight_ages_out_during_ban() -> None:
+    # Weight spent before a ban should decay *during* the ban wait, so a long
+    # ban does not leave the bucket over-throttled once it lifts.
+    clock = FakeClock()
+    bucket = WeightBucket(
+        60.0, window=60.0, time_source=clock.time, sleep=clock.sleep
+    )
+    await bucket.acquire(60.0)  # fully spent (used = 60), no wait yet
+    bucket.back_off(60.0)  # ban for 60s → 60 weight ages out at 1/s in that time
+    # The next call waits only the 60s ban; the budget has fully refilled during
+    # it, so no *additional* weight wait is stacked on top.
+    await bucket.acquire(60.0)
+    assert clock.waits == [pytest.approx(60.0)]
+
+
+async def test_back_off_extends_never_shortens() -> None:
+    # The most severe (longest) back-off window wins; a shorter one cannot
+    # shorten an active longer ban.
+    clock = FakeClock()
+    bucket = WeightBucket(
+        1200.0, window=60.0, time_source=clock.time, sleep=clock.sleep
+    )
+    bucket.back_off(30.0)
+    bucket.back_off(5.0)  # must NOT shorten the 30s ban
+    await bucket.acquire(1.0)
+    assert clock.waits == [pytest.approx(30.0)]
+
+
+async def test_observe_used_weight_resyncs_to_venue() -> None:
+    # The venue header ``X-MBX-USED-WEIGHT-1M`` is authoritative: observing a
+    # higher used-weight than we tracked throttles the next call accordingly.
+    clock = FakeClock()
+    bucket = WeightBucket(
+        60.0, window=60.0, time_source=clock.time, sleep=clock.sleep
+    )
+
+    await bucket.acquire(10.0)  # local used = 10, no wait
+    assert clock.waits == []
+
+    # Venue reports 55 used (other clients on the same IP burnt weight too).
+    bucket.observe_used_weight(55.0)
+    # A weight-10 call now overshoots by 55 + 10 - 60 = 5 → 5s wait at 1/s.
+    await bucket.acquire(10.0)
+    assert clock.waits == [pytest.approx(5.0)]
+
+
+async def test_observe_lower_used_weight_ignored() -> None:
+    # A venue figure LOWER than the local charge is ignored (stay conservative,
+    # never loosen below what we have already spent).
+    clock = FakeClock()
+    bucket = WeightBucket(
+        60.0, window=60.0, time_source=clock.time, sleep=clock.sleep
+    )
+    await bucket.acquire(50.0)  # local used = 50
+    bucket.observe_used_weight(5.0)  # venue lower → ignored
+    # A weight-20 call still overshoots by 50 + 20 - 60 = 10 → 10s wait.
+    await bucket.acquire(20.0)
+    assert clock.waits == [pytest.approx(10.0)]
+
+
+def test_weight_bucket_rejects_bad_params() -> None:
+    with pytest.raises(ValueError):
+        WeightBucket(0.0)
+    with pytest.raises(ValueError):
+        WeightBucket(100.0, window=0.0)
+
+
+async def test_weight_bucket_rejects_negative_weight() -> None:
+    bucket = WeightBucket(100.0)
+    with pytest.raises(ValueError):
+        await bucket.acquire(-1.0)
+
+
+# --------------------------------------------------------------------------- #
+# RateLimiter — weight-metered exchanges route to a WeightBucket
+# --------------------------------------------------------------------------- #
+
+
+async def test_rate_limiter_binance_is_weight_metered() -> None:
+    # Binance is weight-metered by default (1200/min). Charging weight-heavy
+    # calls depletes the budget and paces the next one, while a flat-rate
+    # exchange ignores the weight arg (token bucket, one token per call).
+    clock = FakeClock()
+    limiter = RateLimiter(time_source=clock.time, sleep=clock.sleep)
+
+    # 1200 budget over 60s => 20 weight/s refill. Spend 1180, then a weight-40
+    # call overshoots by 1180 + 40 - 1200 = 20 → 20 / 20 = 1s wait.
+    await limiter.acquire("binance", 1180.0)
+    assert clock.waits == []
+    await limiter.acquire("binance", 40.0)
+    assert clock.waits == [pytest.approx(1.0)]
+
+
+async def test_rate_limiter_penalise_and_observe_route_to_weight_bucket() -> None:
+    # penalise() parks the next binance acquire (429/418); observe() resyncs it.
+    clock = FakeClock()
+    limiter = RateLimiter(time_source=clock.time, sleep=clock.sleep)
+
+    limiter.penalise("binance", 7.0)  # Retry-After: 7
+    await limiter.acquire("binance", 1.0)
+    assert clock.waits == [pytest.approx(7.0)]
+
+    # A flat-rate exchange has no weight bucket: penalise/observe are no-ops
+    # (and must not raise).
+    limiter.penalise("kraken", 99.0)
+    limiter.observe("kraken", 99.0)
+    limiter.penalise(None, 99.0)
+    limiter.observe(None, 99.0)
+    clock.waits.clear()
+    await limiter.acquire("kraken", 1.0)  # kraken unaffected by the binance ban
+    assert clock.waits == []
 
 
 # --------------------------------------------------------------------------- #

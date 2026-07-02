@@ -1,15 +1,27 @@
 """Async rate-limiting primitives for the execution layer.
 
-Two complementary models, both pure-stdlib and **venue-neutral plumbing** (no
+Three complementary models, all pure-stdlib and **venue-neutral plumbing** (no
 I/O, no network, no domain business logic):
 
 * :class:`TokenBucket` / :class:`RateLimiter` — *proactive* per-exchange
   throttling. A single :class:`RateLimiter` (one :class:`TokenBucket` per
-  exchange) smooths concurrent operations on the same venue to its published
-  request rate, instead of each caller firing at the full rate independently.
-  Mirrors ``dccd.transport.ratelimit``;
+  exchange, or a :class:`WeightBucket` for weight-budgeted exchanges) smooths
+  concurrent operations on the same venue to its published request rate, instead
+  of each caller firing at the full rate independently. Mirrors
+  ``dccd.transport.ratelimit``;
   :class:`~trading_bot.transport.http.AsyncHTTPClient` keeps its reactive
   429/Retry-After handling as a backstop.
+
+* :class:`WeightBucket` — Binance's *request-weight* budget. Binance meters not
+  a flat request rate but a **rolling 1-minute weight** budget (default 1200
+  weight/min): each endpoint costs a per-call *weight*, so a flat token bucket
+  either over- or under-throttles. :meth:`WeightBucket.acquire` charges the
+  call its weight against the rolling window, waiting until enough weight has
+  aged out; :meth:`WeightBucket.observe_used_weight` resyncs the local window to
+  the venue's ``X-MBX-USED-WEIGHT-1M`` header (staying in step with the venue's
+  own accounting); :meth:`WeightBucket.back_off` parks all calls until a
+  418 (IP ban) / 429 ``Retry-After`` window elapses. Never exceeds the venue
+  budget (the "rate-limit per exchange" invariant).
 
 * :class:`KrakenCallCounter` — Kraken's private-endpoint **decaying call
   counter**. Each private call adds a per-endpoint *cost*; the counter decays
@@ -17,7 +29,7 @@ I/O, no network, no domain business logic):
   until adding the next cost would not exceed ``call_rate_limit``. The model
   (tier constants and per-endpoint costs) is ported from the legacy
   ``trading_bot/legacy/tools/call_counters.py`` — see :data:`_KRAKEN_TIERS` and
-  :data:`KrakenCallCounter.COSTS`.
+  :data:`KrakenCallCounter.COSTS`. Left unchanged by the Binance weight work.
 
 Default proactive rates are deliberately conservative (public, unauthenticated
 REST):
@@ -25,7 +37,8 @@ REST):
 ============  =========  ====================================================
 exchange      req/s      source
 ============  =========  ====================================================
-binance       10.0       weight-based, 1200 weight/min; klines weight 2 → high
+binance       n/a        weight-metered (:class:`WeightBucket`, 1200/min), not
+                         a flat req/s bucket — see :data:`_DEFAULT_WEIGHTS`
 coinbase       3.0       public endpoints 3 req/s (docs.cdp.coinbase.com)
 kraken         1.0       public endpoints ~1 req/s (support.kraken.com)
 bybit         10.0       public market data ~10 req/s
@@ -49,7 +62,12 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Awaitable, Callable
 
-__all__ = ["KrakenCallCounter", "RateLimiter", "TokenBucket"]
+__all__ = [
+    "KrakenCallCounter",
+    "RateLimiter",
+    "TokenBucket",
+    "WeightBucket",
+]
 
 _DEFAULT_RATES: dict[str, float] = {
     "binance": 10.0,
@@ -63,6 +81,15 @@ _DEFAULT_RATES: dict[str, float] = {
 
 # Rate (req/s) used for any exchange not listed in ``_DEFAULT_RATES``.
 _FALLBACK_RATE = 3.0
+
+# Exchanges metered by a rolling request-*weight* budget rather than a flat
+# per-second request rate. Each entry is ``(weight_limit, window_seconds)`` —
+# Binance spot publishes 1200 request-weight per rolling minute. A
+# :class:`RateLimiter` builds a :class:`WeightBucket` (not a :class:`TokenBucket`)
+# for these exchanges so calls are charged their per-endpoint weight.
+_DEFAULT_WEIGHTS: dict[str, tuple[float, float]] = {
+    "binance": (1200.0, 60.0),
+}
 
 
 class TokenBucket:
@@ -132,18 +159,185 @@ class TokenBucket:
             self._tokens -= 1.0
 
 
+class WeightBucket:
+    """Rolling request-*weight* budget for a weight-metered venue (Binance).
+
+    Binance meters a rolling *weight* window, not a flat request rate: each
+    endpoint charges a per-call *weight* and the account is limited to
+    ``weight_limit`` weight per ``window`` seconds (spot: 1200 per 60s). This
+    bucket refills continuously — ``weight_limit / window`` weight per second,
+    capped at ``weight_limit`` — so the *used* weight over any trailing window
+    never exceeds the budget, honouring the "rate-limit per exchange, never
+    exceed the venue budget" invariant.
+
+    Three levers keep it in step with the venue:
+
+    * :meth:`acquire` charges a call its ``weight``, waiting until enough weight
+      has aged back in (and honouring any active back-off first).
+    * :meth:`observe_used_weight` resyncs the local used-weight to the venue's
+      ``X-MBX-USED-WEIGHT-1M`` response header — the venue is authoritative, so
+      if it reports *more* used weight than we tracked (e.g. other clients on
+      the same IP), we adopt its figure and throttle accordingly.
+    * :meth:`back_off` parks every subsequent :meth:`acquire` until a wall-clock
+      instant, used to honour a **418** (IP ban) or **429** ``Retry-After``.
+
+    Parameters
+    ----------
+    weight_limit : float
+        Maximum weight spendable per rolling ``window`` (Binance spot: 1200).
+    window : float, optional
+        Rolling window length in seconds (Binance spot: 60). Defaults to 60.
+    time_source : callable, optional
+        Monotonic time source (seconds). Injected as a seam for deterministic
+        tests; defaults to :func:`time.monotonic`.
+    sleep : callable, optional
+        ``asyncio.sleep``-compatible coroutine used to wait for weight / a
+        back-off to clear. Injected as a seam so timing is testable without
+        real waits; defaults to :func:`asyncio.sleep`.
+    """
+
+    def __init__(
+        self,
+        weight_limit: float,
+        *,
+        window: float = 60.0,
+        time_source: Callable[[], float] = time.monotonic,
+        sleep: Callable[[float], Awaitable[object]] = asyncio.sleep,
+    ) -> None:
+        if weight_limit <= 0.0:
+            raise ValueError(
+                f"weight_limit must be positive, got {weight_limit!r}"
+            )
+        if window <= 0.0:
+            raise ValueError(f"window must be positive, got {window!r}")
+        self._limit = weight_limit
+        self._window = window
+        self._refill_rate = weight_limit / window
+        self._time_source = time_source
+        self._sleep = sleep
+        # Weight *used* in the rolling window (0 == full budget available).
+        self._used = 0.0
+        self._last = time_source()
+        # Wall-clock (``time_source``) instant until which calls are parked by a
+        # 418/429 back-off; ``None`` when no back-off is active.
+        self._backoff_until: float | None = None
+        self._lock = asyncio.Lock()
+
+    def _decay(self) -> None:
+        """Age out weight accrued since the last update (never below zero)."""
+        now = self._time_source()
+        elapsed = now - self._last
+        if elapsed > 0.0:
+            self._used = max(0.0, self._used - elapsed * self._refill_rate)
+            self._last = now
+
+    def _backoff_wait(self) -> float:
+        """Seconds remaining on an active 418/429 back-off (``0.0`` if none)."""
+        if self._backoff_until is None:
+            return 0.0
+        remaining = self._backoff_until - self._time_source()
+        if remaining <= 0.0:
+            self._backoff_until = None
+            return 0.0
+        return remaining
+
+    def observe_used_weight(self, used: float) -> None:
+        """Resync the local used-weight to the venue's report (authoritative).
+
+        Called with the integer value of the ``X-MBX-USED-WEIGHT-1M`` response
+        header. The venue's own accounting wins: the local figure is raised to
+        the venue's whenever the venue reports *more* used weight than we tracked
+        (another client on the same IP, or our own decay running slightly ahead),
+        so the next :meth:`acquire` throttles against reality rather than an
+        optimistic local view. A lower venue figure is ignored — never *loosen*
+        below what we have locally charged, to stay conservative.
+
+        Parameters
+        ----------
+        used : float
+            The venue-reported used weight for the rolling minute.
+        """
+        self._decay()
+        if used > self._used:
+            self._used = used
+            self._last = self._time_source()
+
+    def back_off(self, seconds: float) -> None:
+        """Park all subsequent :meth:`acquire` calls for ``seconds`` (418/429).
+
+        Honours a **418** (IP ban) or **429** ``Retry-After``: every acquire
+        waits out the longest active back-off before spending weight, so the
+        client stops hammering a banned/limited IP. Extends an existing back-off
+        rather than shortening it (the most severe window wins).
+
+        Parameters
+        ----------
+        seconds : float
+            Seconds to hold new calls, from now. Non-positive values are ignored.
+        """
+        if seconds <= 0.0:
+            return
+        until = self._time_source() + seconds
+        if self._backoff_until is None or until > self._backoff_until:
+            self._backoff_until = until
+
+    async def acquire(self, weight: float = 1.0) -> None:
+        """Charge a call ``weight`` against the rolling window, waiting if needed.
+
+        First waits out any active 418/429 back-off, then waits until enough
+        weight has aged out for ``weight`` to fit under ``weight_limit``, then
+        records the spend. Serialised by an :class:`asyncio.Lock` so concurrent
+        callers on the same venue spend weight one at a time.
+
+        Parameters
+        ----------
+        weight : float, optional
+            Request weight of the call (Binance's per-endpoint weight). Defaults
+            to 1.
+        """
+        if weight < 0.0:
+            raise ValueError(f"weight must be non-negative, got {weight!r}")
+        async with self._lock:
+            # 1) Honour an active 418/429 back-off before anything else.
+            backoff = self._backoff_wait()
+            if backoff > 0.0:
+                await self._sleep(backoff)
+                self._backoff_until = None
+
+            # 2) Wait until ``weight`` fits under the rolling budget. Decaying
+            # here also credits the weight that aged out *during* any back-off
+            # sleep above, so a long ban does not leave the bucket over-throttled.
+            self._decay()
+            overshoot = self._used + weight - self._limit
+            if overshoot > 0.0:
+                wait = overshoot / self._refill_rate
+                await self._sleep(wait)
+                self._decay()
+            self._used += weight
+
+
 class RateLimiter:
-    """Per-exchange rate limiter holding one :class:`TokenBucket` each.
+    """Per-exchange rate limiter — a :class:`TokenBucket` or :class:`WeightBucket`.
 
     Buckets are created lazily on first use of an exchange, so distinct
-    exchanges throttle independently. The seams are forwarded to every bucket.
+    exchanges throttle independently. An exchange listed in ``weights`` (Binance
+    by default) gets a **weight-aware** :class:`WeightBucket` — calls are charged
+    their per-endpoint *weight* against a rolling minute budget, and 418/429
+    back-offs and the ``X-MBX-USED-WEIGHT-1M`` header resync flow through it.
+    Every other exchange keeps a flat per-second :class:`TokenBucket`. The seams
+    are forwarded to every bucket.
 
     Parameters
     ----------
     rates : dict of str to float, optional
         Map of exchange name → requests per second, merged over the
         conservative defaults. Unknown exchanges fall back to
-        ``_FALLBACK_RATE``.
+        ``_FALLBACK_RATE``. Only consulted for *token-bucket* exchanges.
+    weights : dict of str to tuple, optional
+        Map of exchange name → ``(weight_limit, window_seconds)`` for
+        weight-metered venues, merged over :data:`_DEFAULT_WEIGHTS` (Binance
+        spot: ``(1200, 60)``). An exchange present here uses a
+        :class:`WeightBucket` instead of a token bucket.
     time_source : callable, optional
         Monotonic time source forwarded to each bucket (test seam); defaults
         to :func:`time.monotonic`.
@@ -155,23 +349,27 @@ class RateLimiter:
     -----
     Satisfies the structural ``_Limiter`` protocol expected by
     :class:`~trading_bot.transport.http.AsyncHTTPClient`
-    (``async acquire(exchange: str | None) -> None``). Calling
-    :meth:`acquire` with ``None`` is a deliberate no-op: a request with no
-    exchange key cannot be attributed to a bucket, so it is not throttled
-    (the HTTP client only passes ``None`` when no *exchange* was configured).
+    (``async acquire(exchange, weight=...)`` plus the optional
+    ``observe`` / ``penalise`` hooks). Calling :meth:`acquire` with ``None`` is a
+    deliberate no-op: a request with no exchange key cannot be attributed to a
+    bucket, so it is not throttled (the HTTP client only passes ``None`` when no
+    *exchange* was configured).
     """
 
     def __init__(
         self,
         rates: dict[str, float] | None = None,
         *,
+        weights: dict[str, tuple[float, float]] | None = None,
         time_source: Callable[[], float] = time.monotonic,
         sleep: Callable[[float], Awaitable[object]] = asyncio.sleep,
     ) -> None:
         self._rates = {**_DEFAULT_RATES, **(rates or {})}
+        self._weights = {**_DEFAULT_WEIGHTS, **(weights or {})}
         self._time_source = time_source
         self._sleep = sleep
         self._buckets: dict[str, TokenBucket] = {}
+        self._weight_buckets: dict[str, WeightBucket] = {}
 
     def _bucket(self, exchange: str) -> TokenBucket:
         bucket = self._buckets.get(exchange)
@@ -183,18 +381,81 @@ class RateLimiter:
             self._buckets[exchange] = bucket
         return bucket
 
-    async def acquire(self, exchange: str | None) -> None:
-        """Wait until a token is available for *exchange*, then consume it.
+    def _weight_bucket(self, exchange: str) -> WeightBucket:
+        bucket = self._weight_buckets.get(exchange)
+        if bucket is None:
+            weight_limit, window = self._weights[exchange]
+            bucket = WeightBucket(
+                weight_limit,
+                window=window,
+                time_source=self._time_source,
+                sleep=self._sleep,
+            )
+            self._weight_buckets[exchange] = bucket
+        return bucket
+
+    async def acquire(self, exchange: str | None, weight: float = 1.0) -> None:
+        """Throttle a call for *exchange*, charging ``weight`` where it applies.
+
+        For a weight-metered exchange the call is charged ``weight`` against the
+        rolling weight budget (and waits out any active 418/429 back-off); for a
+        flat-rate exchange it consumes one token (``weight`` is ignored — a token
+        bucket has no per-call weight).
 
         Parameters
         ----------
         exchange : str or None
             Exchange key selecting the bucket. ``None`` is a no-op (an
             unattributed request is not throttled).
+        weight : float, optional
+            Request weight for weight-metered venues (Binance's per-endpoint
+            weight). Ignored by token-bucket exchanges. Defaults to 1.
         """
         if exchange is None:
             return
+        if exchange in self._weights:
+            await self._weight_bucket(exchange).acquire(weight)
+            return
         await self._bucket(exchange).acquire()
+
+    def observe(self, exchange: str | None, used_weight: float) -> None:
+        """Resync a weight-metered *exchange* to a ``X-MBX-USED-WEIGHT-1M`` value.
+
+        A no-op for a flat-rate exchange (no weight window to resync) or a
+        ``None`` exchange. Lets the reactive HTTP path feed the venue's own
+        used-weight back into the proactive limiter so the next call throttles
+        against the venue's accounting rather than an optimistic local view.
+
+        Parameters
+        ----------
+        exchange : str or None
+            Exchange key.
+        used_weight : float
+            The venue-reported used weight (``X-MBX-USED-WEIGHT-1M``).
+        """
+        if exchange is None or exchange not in self._weights:
+            return
+        self._weight_bucket(exchange).observe_used_weight(used_weight)
+
+    def penalise(self, exchange: str | None, seconds: float) -> None:
+        """Park a weight-metered *exchange* for ``seconds`` (418/429 back-off).
+
+        A no-op for a flat-rate exchange or a ``None`` exchange. Honours a
+        418 (IP ban) or a 429 ``Retry-After`` reported by the reactive HTTP
+        path: the **next** :meth:`acquire` on this exchange waits out the window
+        before spending weight, so a 429 raised with ``retry=False`` (an order
+        submit that must never blind-retry) still slows the following call.
+
+        Parameters
+        ----------
+        exchange : str or None
+            Exchange key.
+        seconds : float
+            Back-off duration from now (418 ban / 429 ``Retry-After``).
+        """
+        if exchange is None or exchange not in self._weights:
+            return
+        self._weight_bucket(exchange).back_off(seconds)
 
     @asynccontextmanager
     async def __call__(self, exchange: str) -> AsyncIterator[None]:

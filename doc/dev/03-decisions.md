@@ -37,6 +37,21 @@ rejected approaches as tombstones.
 - **Rejected alternatives**: (a) `asyncio.to_thread` per write — no single ordering
   point / drain seam; (b) an async SQLite lib — a heavier dependency/rewrite for a
   write path that is already append-only and idempotent.
+### 2026-07-02 Weight-aware Binance rate limiter (PR #142)  [accepted]
+- **Choice**: a `WeightBucket` (limit 1200/60s, continuous refill) charges each
+  endpoint its published request-weight, resyncs to the venue's
+  `X-MBX-USED-WEIGHT-1M` header (adopts a higher figure, ignores a lower one), and
+  parks all acquires on a 418 ban / 429 `Retry-After` window (longest wins). The
+  `RateLimiter` uses it for weight-metered venues (binance) and keeps the
+  `TokenBucket` / Kraken call-counter paths unchanged. A `retry=False` 429 still
+  raises `AmbiguousRequestError` but surfaces `Retry-After` to the limiter.
+- **Why**: audit B-6 — the Binance limiter was a flat per-second token bucket that
+  ignored the weight budget and 418/`Retry-After`, so it could exceed the venue
+  budget and get IP-banned. B-9 — `Retry-After` on a `retry=False` 429 was
+  discarded. B-7 — a Binance error inside a JSON array was undetected.
+- **Rejected alternatives**: (a) keep the flat token bucket — wrong model (Binance
+  meters by weight, not calls); (b) auto-retry a 429 submit — breaks the
+  ambiguous-submit → reconcile guarantee; the Retry-After only paces the *next* call.
 
 ### 2026-07-02 Config-driven portfolio data source (resample + store path) (PR #138)  [accepted]
 - **Choice**: add `source_span` and `data_path` to `DataSourceConfig`;
