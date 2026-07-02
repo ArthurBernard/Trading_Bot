@@ -12,6 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Domain hygiene.** An over-fill within `fill_tolerance` now clamps-and-closes instead of raising (a genuine over-fill still raises); the order factories set the client-order-id at construction so the `Order` aggregate is truly immutable; the dead `InsufficientFunds` error is removed and a docstring corrected (audit D-6/D-11/D-12/D-13/A-12). (#PR)
 - **`trading-bot dashboard`/`serve` quit promptly on the first Ctrl-C.** Every uvicorn serve path now sets a bounded `timeout_graceful_shutdown`, so a browser holding the `/api/events` SSE stream open no longer pins uvicorn's (default unbounded) graceful shutdown — the server force-closes the stream and exits in ~3s on the first SIGINT instead of hanging until a second one. (#145)
 
 ### Deprecated
