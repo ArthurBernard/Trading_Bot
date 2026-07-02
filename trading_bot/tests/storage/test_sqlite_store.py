@@ -26,7 +26,9 @@ Async tests run un-decorated (``asyncio_mode = "auto"``).
 
 from __future__ import annotations
 
+import asyncio
 import sqlite3
+import time
 
 from trading_bot.application import (
     EventBus,
@@ -635,10 +637,12 @@ def test_attach_populates_from_events(tmp_path) -> None:
     bus.emit(OrderEvent(order))
     bus.emit(FillEvent(_fill(fill_id="T1")))
     bus.emit(LogEvent(message="ignored"))  # non-order/fill: ignored
+    store.flush()  # writes are applied off-loop; drain before reading
 
     assert store.get_order("cid-1") is not None
     assert len(store.fills()) == 1
     assert len(store.orders()) == 1
+    store.close()
 
 
 def test_attach_tracks_latest_order_state(tmp_path) -> None:
@@ -652,12 +656,14 @@ def test_attach_tracks_latest_order_state(tmp_path) -> None:
     order.submit()
     order.open("VID-1")
     bus.emit(OrderEvent(order))
+    store.flush()  # writes are applied off-loop; drain before reading
 
     assert len(store.orders()) == 1
     got = store.get_order("cid-1")
     assert got is not None
     assert got.status is OrderStatus.OPEN
     assert got.venue_order_id == "VID-1"
+    store.close()
 
 
 # --- verification on real data: reopen the file ---------------------------- #
@@ -737,4 +743,396 @@ async def test_engine_sequence_survives_reopen(tmp_path) -> None:
     assert rebuilt.avg_entry_price == live_pos.avg_entry_price
     assert rebuilt.realised_pnl == live_pos.realised_pnl
     assert rebuilt.fees_paid == live_pos.fees_paid
+    reopened.close()
+
+
+# --- D-8: WAL journal mode + explicit busy_timeout ------------------------- #
+
+
+def test_connection_uses_wal_and_explicit_busy_timeout(tmp_path) -> None:
+    """Every store connection opens in WAL mode with an explicit busy_timeout.
+
+    Concurrent access (the writer thread + reconciliation reads on the loop) must
+    not raise ``database is locked``: WAL lets a reader and the writer proceed,
+    and the busy_timeout is set **explicitly per connection** rather than left to
+    sqlite3's implicit 5 s default. Proven by opening the same file directly and
+    reading the pragmas the store's connection asserts.
+    """
+    from trading_bot.storage.sqlite_store import _BUSY_TIMEOUT_MS
+
+    db = tmp_path / "engine.db"
+    store = SqliteStore(db)
+    store.record_fill(_fill(fill_id="T1"))  # forces a real connection + write
+
+    raw = sqlite3.connect(str(db))
+    try:
+        (journal,) = raw.execute("PRAGMA journal_mode").fetchone()
+    finally:
+        raw.close()
+    # journal_mode is a persistent DB property: the store set it to WAL.
+    assert journal.lower() == "wal"
+
+    # busy_timeout is per-connection; assert the store's own connection carries the
+    # explicit value (not the implicit default).
+    with store._conn() as conn:
+        (timeout,) = conn.execute("PRAGMA busy_timeout").fetchone()
+    assert timeout == _BUSY_TIMEOUT_MS
+    assert timeout != 5000  # not the implicit sqlite3 default
+
+
+# --- D-9: composite fill identity (fill_id + venue + mode) ----------------- #
+
+
+def test_same_fill_id_across_modes_both_persist(tmp_path) -> None:
+    """A paper fill and a live fill sharing a fill_id both persist, mode-partitioned.
+
+    The regression D-9 guards: with ``fill_id`` as the sole primary key, the
+    second ``INSERT OR IGNORE`` for a shared venue id silently dropped one fill
+    (the PnL source of truth), commingling the separate per-mode series. Under the
+    composite ``(fill_id, venue, mode)`` key the two coexist as distinct rows.
+    """
+    db = tmp_path / "engine.db"
+    store = SqliteStore(db, mode="paper", venue="")
+    store.record_fill(_fill(fill_id="SHARED", qty="1", price="30000"))
+
+    store.set_context(mode="live", venue="kraken")
+    # Same venue fill_id, different money — must NOT collide with the paper row.
+    store.record_fill(_fill(fill_id="SHARED", qty="2", price="31000"))
+
+    records = store.stored_fills()
+    assert len(records) == 2  # both survived; nothing dropped
+    by_mode = {r.mode: r for r in records}
+    assert set(by_mode) == {"paper", "live"}
+    assert by_mode["paper"].fill.qty == money("1")
+    assert by_mode["paper"].fill.price == money("30000")
+    assert by_mode["live"].fill.qty == money("2")
+    assert by_mode["live"].fill.price == money("31000")
+    # And each series is cleanly filterable by mode.
+    assert by_mode["live"].venue == "kraken"
+    assert by_mode["paper"].venue == ""
+
+
+def test_identical_fill_same_mode_is_still_idempotent(tmp_path) -> None:
+    """Re-recording the SAME execution (id+venue+mode) is still a no-op.
+
+    The composite key must not weaken append-only idempotency: a replayed event or
+    a reconciliation re-fetch of the exact same fill stays a silent no-op.
+    """
+    store = SqliteStore(tmp_path / "engine.db", mode="live", venue="kraken")
+    store.record_fill(_fill(fill_id="T1", qty="1", price="30000"))
+    store.record_fill(_fill(fill_id="T1", qty="1", price="30000"))  # replay
+    store.record_fill(_fill(fill_id="T1", qty="99", price="1"))  # tampered dup
+    records = store.stored_fills()
+    assert len(records) == 1
+    assert records[0].fill.qty == money("1")  # original wins, untouched
+
+
+def _legacy_single_pk_fills_db(db) -> None:
+    """Create a pre-D-9 ``fills`` table keyed on ``fill_id`` alone (with tags).
+
+    Mirrors a database written after the mode/venue tags landed but before the
+    composite key: the tag columns exist, but ``fill_id`` is the sole primary key.
+    Holds one paper row so the migration has something to carry across.
+    """
+    legacy = sqlite3.connect(str(db))
+    try:
+        legacy.executescript(
+            """
+            CREATE TABLE fills (
+                fill_id         TEXT PRIMARY KEY,
+                client_order_id TEXT NOT NULL,
+                instrument      TEXT NOT NULL,
+                side            TEXT NOT NULL,
+                qty             TEXT NOT NULL,
+                price           TEXT NOT NULL,
+                fee             TEXT NOT NULL,
+                ts              INTEGER NOT NULL,
+                mode            TEXT NOT NULL DEFAULT 'paper',
+                venue           TEXT NOT NULL DEFAULT ''
+            );
+            CREATE INDEX idx_fills_ts ON fills(ts);
+            CREATE INDEX idx_fills_cid ON fills(client_order_id);
+            """
+        )
+        legacy.execute(
+            "INSERT INTO fills VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            ("OLD1", "c1", "BTC/USD", "buy", "0.5", "30000.5", "1.25", 1_700,
+             "paper", ""),
+        )
+        legacy.commit()
+    finally:
+        legacy.close()
+
+
+def test_fills_pk_migration_upgrades_old_single_pk_db(tmp_path) -> None:
+    """An old single-``fill_id``-PK fills table is rebuilt under the composite key.
+
+    Opening a pre-D-9 DB must widen the primary key (preserving the existing row,
+    money intact) so a paper fill and a live fill sharing a venue id then coexist —
+    the collision that motivated the migration no longer drops a fill.
+    """
+    db = tmp_path / "legacy.db"
+    _legacy_single_pk_fills_db(db)
+
+    store = SqliteStore(db)  # opening runs the PK migration
+    # The pre-existing row survived, money exact.
+    [rec] = store.stored_fills()
+    assert rec.fill.fill_id == "OLD1"
+    assert rec.fill.qty == money("0.5")
+    assert rec.fill.price == money("30000.5")
+    assert rec.mode == "paper"
+
+    # The composite key is really in place now: a live fill sharing OLD1's id coexists.
+    store.set_context(mode="live", venue="kraken")
+    store.record_fill(_fill(fill_id="OLD1", qty="2", price="31000"))
+    records = store.stored_fills()
+    assert {(r.fill.fill_id, r.mode) for r in records} == {
+        ("OLD1", "paper"),
+        ("OLD1", "live"),
+    }
+
+    # The table's declared PK is the composite one.
+    pk_cols = {
+        row[1]
+        for row in sqlite3.connect(str(db)).execute("PRAGMA table_info(fills)")
+        if row[5]  # the `pk` flag column
+    }
+    assert pk_cols == {"fill_id", "venue", "mode"}
+
+
+def test_fills_pk_migration_is_idempotent(tmp_path) -> None:
+    """Re-opening a composite-key DB is a no-op (the migration self-detects)."""
+    db = tmp_path / "engine.db"
+    store = SqliteStore(db, mode="paper", venue="")
+    store.record_fill(_fill(fill_id="T1"))
+    # Second and third opens: the PK is already composite, migration returns early.
+    SqliteStore(db)
+    reopened = SqliteStore(db)
+    [rec] = reopened.stored_fills()
+    assert rec.fill.fill_id == "T1"
+    # Still writable and still collision-free after repeated opens.
+    reopened.set_context(mode="live", venue="kraken")
+    reopened.record_fill(_fill(fill_id="T1", qty="2"))
+    assert len(reopened.stored_fills()) == 2
+
+
+def test_fills_pk_migration_composes_with_tags_migration(tmp_path) -> None:
+    """A v0 fills table (no tags, single PK) gets BOTH migrations, in order.
+
+    The oldest shape: no ``mode`` / ``venue`` columns and ``fill_id`` as the sole
+    PK. Opening must add the tag columns (backfilling paper/'') *then* widen the
+    key — the existing row survives and both-mode coexistence works afterwards.
+    """
+    db = tmp_path / "legacy.db"
+    legacy = sqlite3.connect(str(db))
+    try:
+        legacy.executescript(
+            """
+            CREATE TABLE fills (
+                fill_id         TEXT PRIMARY KEY,
+                client_order_id TEXT NOT NULL,
+                instrument      TEXT NOT NULL,
+                side            TEXT NOT NULL,
+                qty             TEXT NOT NULL,
+                price           TEXT NOT NULL,
+                fee             TEXT NOT NULL,
+                ts              INTEGER NOT NULL
+            );
+            """
+        )
+        legacy.execute(
+            "INSERT INTO fills VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            ("V0", "c1", "BTC/USD", "buy", "0.5", "30000.5", "1.25", 1_700),
+        )
+        legacy.commit()
+    finally:
+        legacy.close()
+
+    store = SqliteStore(db)
+    [rec] = store.stored_fills()
+    assert rec.fill.fill_id == "V0"
+    assert rec.fill.qty == money("0.5")  # money survived both migrations
+    assert (rec.mode, rec.venue) == ("paper", "")  # tags backfilled
+    store.set_context(mode="live", venue="kraken")
+    store.record_fill(_fill(fill_id="V0", qty="2"))
+    assert len(store.stored_fills()) == 2  # composite key in force
+
+
+# --- A-2: off-loop writes (no event-loop block) ---------------------------- #
+
+
+async def test_bus_writes_do_not_block_the_event_loop(tmp_path) -> None:
+    """A burst of bus-driven writes does not stall a concurrent coroutine.
+
+    The A-2 regression: the store's bus handler used to open→write→commit→close
+    SQLite **synchronously inside emit**, on the event loop, blocking every runner
+    on the order/fill hot path. Now the handler only enqueues and a writer thread
+    does the I/O, so a coroutine ticking concurrently keeps making progress with
+    low latency while a flood of fills is emitted.
+    """
+    store = SqliteStore(tmp_path / "engine.db")
+    bus = EventBus()
+    store.attach(bus)
+
+    ticks = 0
+    max_gap = 0.0
+    stop = False
+
+    async def heartbeat() -> None:
+        nonlocal ticks, max_gap, stop
+        last = time.perf_counter()
+        while not stop:
+            await asyncio.sleep(0)  # yield to the loop
+            now = time.perf_counter()
+            max_gap = max(max_gap, now - last)
+            last = now
+            ticks += 1
+
+    async def flood() -> None:
+        nonlocal stop
+        # Emit many fills, yielding after every one so the heartbeat interleaves.
+        # emit() must be a near-instant enqueue (no I/O): if it blocked on a
+        # synchronous open→write→commit→close the per-emit gap would balloon.
+        for i in range(500):
+            bus.emit(FillEvent(_fill(fill_id=f"F{i}", ts=1_700 + i)))
+            await asyncio.sleep(0)
+        stop = True
+
+    hb = asyncio.create_task(heartbeat())
+    await flood()
+    await hb
+
+    store.flush()  # drain the writer, then verify nothing was lost
+    assert len(store.fills()) == 500
+    # The heartbeat interleaved with every emit (the loop was never blocked by the
+    # writes) and no single gap was pathological — a blocking sync write on the hot
+    # path would starve the heartbeat and spike the inter-tick gap.
+    assert ticks >= 500
+    assert max_gap < 0.5, f"event loop stalled: max inter-tick gap {max_gap:.3f}s"
+    store.close()
+
+
+async def test_bus_writes_preserve_arrival_order(tmp_path) -> None:
+    """The writer applies fills in the exact order they were emitted (FIFO)."""
+    store = SqliteStore(tmp_path / "engine.db")
+    bus = EventBus()
+    store.attach(bus)
+
+    for i in range(200):
+        bus.emit(FillEvent(_fill(fill_id=f"S{i}", ts=1_700 + i)))
+    store.flush()
+
+    got = [f.fill_id for f in store.fills()]
+    assert got == [f"S{i}" for i in range(200)]  # insertion order preserved
+    store.close()
+
+
+async def test_in_flight_tag_is_snapshotted_at_enqueue(tmp_path) -> None:
+    """A set_context after emit does not retag a fill already handed to the writer.
+
+    The tag is captured at enqueue time, so an emitted paper fill stays paper even
+    if the store's context flips to live before the writer drains it.
+    """
+    store = SqliteStore(tmp_path / "engine.db", mode="paper", venue="")
+    bus = EventBus()
+    store.attach(bus)
+
+    bus.emit(FillEvent(_fill(fill_id="P1")))
+    store.set_context(mode="live", venue="kraken")  # flip AFTER emitting P1
+    bus.emit(FillEvent(_fill(fill_id="L1")))
+    store.flush()
+
+    by_id = {r.fill.fill_id: r for r in store.stored_fills()}
+    assert (by_id["P1"].mode, by_id["P1"].venue) == ("paper", "")
+    assert (by_id["L1"].mode, by_id["L1"].venue) == ("live", "kraken")
+    store.close()
+
+
+async def test_close_drains_pending_writes_no_loss(tmp_path) -> None:
+    """close() drains every queued write before returning — a shutdown loses none.
+
+    Emits a burst then immediately closes: because close drains the writer queue
+    and joins the thread, a fresh store reopened on the file must see every fill.
+    """
+    db = tmp_path / "engine.db"
+    store = SqliteStore(db)
+    bus = EventBus()
+    store.attach(bus)
+
+    for i in range(300):
+        bus.emit(FillEvent(_fill(fill_id=f"D{i}", ts=1_700 + i)))
+    store.close()  # drain-on-shutdown: no flush() first, close must not lose any
+
+    reopened = SqliteStore(db)
+    ids = {f.fill_id for f in reopened.fills()}
+    assert ids == {f"D{i}" for i in range(300)}  # every write persisted
+    reopened.close()
+
+
+def test_close_is_idempotent_and_safe_without_writer(tmp_path) -> None:
+    """close() is a harmless no-op on an un-attached store and if called twice."""
+    store = SqliteStore(tmp_path / "engine.db")  # never attached: no writer
+    store.close()
+    store.close()  # second call: still fine
+    # A no-op flush too (no writer running).
+    store.flush()
+
+
+async def test_writer_survives_a_bad_job(tmp_path) -> None:
+    """One failing write does not wedge the writer; later writes still land.
+
+    The writer swallows a job that raises (logged) and keeps draining, so a single
+    malformed row cannot silently stall every subsequent fill. Simulated by
+    emitting a well-formed fill, a poisoned event that makes the write raise, then
+    another good fill — the two good fills must both persist.
+    """
+    store = SqliteStore(tmp_path / "engine.db")
+    bus = EventBus()
+    store.attach(bus)
+
+    bus.emit(FillEvent(_fill(fill_id="G1")))
+    # A FillEvent whose fill will blow up when written (qty is not stringifiable to
+    # a valid store value in a way that trips the INSERT). Use a broken instrument.
+
+    class _Boom:
+        def __getattr__(self, name):
+            raise RuntimeError("boom")
+
+    bus.emit(FillEvent(_Boom()))  # type: ignore[arg-type]
+    bus.emit(FillEvent(_fill(fill_id="G2")))
+    store.flush()
+
+    ids = {f.fill_id for f in store.fills()}
+    assert {"G1", "G2"} <= ids  # both good fills survived the bad one
+    store.close()
+
+
+async def test_double_attach_starts_a_single_writer(tmp_path) -> None:
+    """Attaching twice does not spawn a second writer; writes stay FIFO / lossless."""
+    store = SqliteStore(tmp_path / "engine.db")
+    bus_a = EventBus()
+    bus_b = EventBus()
+    store.attach(bus_a)
+    writer = store._writer
+    store.attach(bus_b)  # second attach: _ensure_writer early-returns
+    assert store._writer is writer  # same thread, not a fresh one
+
+    bus_a.emit(FillEvent(_fill(fill_id="A1")))
+    bus_b.emit(FillEvent(_fill(fill_id="B1")))
+    store.flush()
+    assert {f.fill_id for f in store.fills()} == {"A1", "B1"}
+    store.close()
+
+
+async def test_context_manager_drains_on_exit(tmp_path) -> None:
+    """Using the store as a context manager drains its writer on __exit__."""
+    db = tmp_path / "engine.db"
+    with SqliteStore(db) as store:
+        bus = EventBus()
+        store.attach(bus)
+        for i in range(50):
+            bus.emit(FillEvent(_fill(fill_id=f"C{i}", ts=1_700 + i)))
+    # __exit__ -> close() drained the writer: every fill persisted.
+    reopened = SqliteStore(db)
+    assert {f.fill_id for f in reopened.fills()} == {f"C{i}" for i in range(50)}
     reopened.close()

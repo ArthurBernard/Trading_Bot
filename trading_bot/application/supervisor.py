@@ -443,10 +443,13 @@ class StrategySupervisor:
 
         """
         unit = self._unit(name)
-        # Route through the same teardown `stop` uses (one code path, so the two
-        # can never diverge if `stop` later grows awaited I/O — A-10). `stop` is
-        # async, but its effect is purely in-memory state-clearing, so we can call
-        # the shared sync helper here and keep `remove_unit`'s sync contract.
+        # Drain the store's writer so no enqueued order/fill is lost, then route
+        # through the same in-memory teardown `stop` uses (one code path — A-10).
+        # `remove_unit` is sync, so it closes the store directly (blocking, but the
+        # writer's I/O is already off the loop) rather than via `_drain_store`'s
+        # `await asyncio.to_thread`, keeping its sync contract.
+        if unit.engine is not None and unit.engine.store is not None:
+            unit.engine.store.close()
         self._teardown(unit)
         del self._units[name]
         self._base = self._base.remove_entry(name)
@@ -644,17 +647,32 @@ class StrategySupervisor:
         """Tear down the unit's engine — it is no longer stepped. Idempotent."""
         unit = self._unit(name)
         async with unit.lock:
+            await self._drain_store(unit)
             self._teardown(unit)
+
+    @staticmethod
+    async def _drain_store(unit: _Unit) -> None:
+        """Drain the store's off-loop writer before an engine is dropped.
+
+        Joins the writer thread so every order/fill already enqueued is persisted
+        before we drop the engine — a graceful teardown loses no write (the store is
+        the reconciliation source of truth). Off the loop (the writer does blocking
+        I/O) so the scheduler is not stalled. A no-op when the unit has no store.
+        Used by the async teardown paths (:meth:`stop`, :meth:`set_mode`); the sync
+        :meth:`remove_unit` closes the store directly (it is already off the loop).
+        """
+        if unit.engine is not None and unit.engine.store is not None:
+            await asyncio.to_thread(unit.engine.store.close)
 
     @staticmethod
     def _teardown(unit: _Unit) -> None:
         """Clear a unit's in-memory running state (the single teardown code path).
 
-        The one place :meth:`stop` and :meth:`remove_unit` both funnel through, so
-        the teardown can never diverge (A-10): if it ever grows real work, both
-        paths get it. Purely in-memory today (drop the runner + engine, flip
-        ``running`` off), which is why the sync :meth:`remove_unit` can call it
-        directly while :meth:`stop` calls it under the unit's lock.
+        The one place :meth:`stop`, :meth:`set_mode` and :meth:`remove_unit` funnel
+        through, so the in-memory teardown can never diverge (A-10). Purely in-memory
+        (drop the runner + engine, flip ``running`` off); the store is drained first
+        by :meth:`_drain_store` (async paths) or a direct blocking close
+        (:meth:`remove_unit`) so no enqueued write is lost.
         """
         unit.running = False
         unit.runner = None
@@ -699,6 +717,7 @@ class StrategySupervisor:
         async with unit.lock:
             was_running = unit.running
             if was_running:
+                await self._drain_store(unit)
                 self._teardown(unit)
             unit.mode = mode
             unit.config = new_config
@@ -1282,6 +1301,9 @@ class StrategySupervisor:
         with no ``db_path`` there is nowhere to read from, so the fills are empty.
         """
         if unit.running and unit.engine is not None and unit.engine.store is not None:
+            # The store writes bus-driven fills on a background thread; drain it so
+            # this reconciliation-source read reflects every confirmed fill.
+            unit.engine.store.flush()
             return unit.engine.store.stored_fills()
         db_path = unit.config.storage.db_path
         if db_path is None:

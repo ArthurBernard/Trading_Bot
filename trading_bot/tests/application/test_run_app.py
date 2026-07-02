@@ -660,6 +660,7 @@ async def test_dedup_survives_restart_via_store(tmp_path) -> None:
     engine1 = build_engine(config, db_path=db)
     await engine1.router.submit(_order("restart-1"))
     assert engine1.store is not None
+    engine1.store.flush()  # the store writes off-loop; drain before reading
     assert engine1.store.get_order("restart-1") is not None  # persisted
     engine1.store.close()
 

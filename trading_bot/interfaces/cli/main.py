@@ -226,7 +226,14 @@ async def _run_engine(
         event_bus=engine.bus,
         order_factory=_limit_at_close_factory(),
     )
-    return await runner.run()
+    try:
+        return await runner.run()
+    finally:
+        # Drain the store's off-loop writer before the run returns so the persisted
+        # DB holds every order/fill (the reconciliation source loses nothing on a
+        # normal exit). Off the loop (blocking I/O); a no-op when no store / writer.
+        if engine.store is not None:
+            await asyncio.to_thread(engine.store.close)
 
 
 @app.command()

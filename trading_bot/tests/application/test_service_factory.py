@@ -176,8 +176,10 @@ def test_db_path_attaches_sqlite_store(tmp_path) -> None:
         type=OrderType.MARKET,
     )
     engine.bus.emit(OrderEvent(order))
+    engine.store.flush()  # the store writes off-loop; drain before reading
 
     assert engine.store.get_order("cid-store") is not None
+    engine.store.close()
 
 
 def test_live_mode_not_enabled_refuses_regardless_of_credentials(
