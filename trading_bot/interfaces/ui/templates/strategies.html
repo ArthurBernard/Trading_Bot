@@ -5,8 +5,8 @@
 
 <!-- The control surface: every managed strategy grouped by exchange, with a mode
      <select> (paper / testnet / live) and a start/stop button per row. Switching a
-     strategy to LIVE (real money) opens a typed-confirmation modal that maps to
-     {confirm:true} on the mode endpoint — the server also refuses live without it.
+     strategy to LIVE (real money) opens a typed-confirmation modal whose phrase is
+     sent as {ack:"I UNDERSTAND"} and enforced server-side (the modal is UX only).
      Read-only dashboards disable the controls (the write endpoints return 403). -->
 <section class="card" id="strategies-card">
   <div class="row" style="justify-content:space-between;">
@@ -189,10 +189,12 @@
     body.innerHTML = html;
   }
 
-  async function setMode(name, mode, confirm) {
+  async function setMode(name, mode, confirm, ack) {
     try {
+      // `ack` is the typed live-confirmation phrase; the server enforces it for a
+      // live switch (the modal is UX, the gate is server-side).
       await api('POST', '/api/strategies/' + encodeURIComponent(name) + '/mode',
-        { mode: mode, confirm: !!confirm });
+        { mode: mode, confirm: !!confirm, ack: ack || null });
       toast(name + ': mode → ' + mode, 'ok');
     } catch (e) {
       toast(name + ': ' + e.message, 'err');
@@ -315,8 +317,9 @@
   });
   modalConfirm.addEventListener('click', async function () {
     const name = pendingLive && pendingLive.name;
+    const ack = modalInput.value.trim();  // the typed phrase — sent for server-side check
     modal.classList.remove('open');
-    if (name) await setMode(name, 'live', true);
+    if (name) await setMode(name, 'live', true, ack);
     pendingLive = null;
   });
   modalCancel.addEventListener('click', function () {

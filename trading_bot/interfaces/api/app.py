@@ -61,7 +61,10 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import math
+import re
+import secrets
 from collections.abc import Callable
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any, Literal
@@ -100,6 +103,8 @@ if TYPE_CHECKING:
     from trading_bot.domain.position import Position
 
 __all__ = ["create_app", "create_control_app", "create_dashboard_app"]
+
+logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -572,6 +577,12 @@ def create_app(engine: Engine) -> FastAPI:
 #: Valid deployment modes the control API accepts.
 _CONTROL_MODES = ("paper", "testnet", "live")
 
+#: The exact phrase a client must type + submit to switch a unit to ``live`` (real
+#: money). Enforced **server-side** (not just in the browser modal): the mode route
+#: refuses a live switch unless the request body carries this ack verbatim, so a raw
+#: ``{"mode":"live","confirm":true}`` — bypassing the UI — cannot flip to live.
+_LIVE_ACK_PHRASE = "I UNDERSTAND"
+
 #: Browser session cookie set on a successful /login (opaque, HttpOnly).
 _SESSION_COOKIE = "tb_session"
 #: How long a control session stays valid (seconds).
@@ -581,16 +592,41 @@ _LOGIN_RATE_PER_MIN = 10
 #: Path prefixes reachable without a session (the login flow + assets).
 _OPEN_PREFIXES = ("/login", "/logout", "/static")
 
+#: The module prefixes a deploy-body ``signal.ref`` may import from (I-1). A dotted
+#: ``"module:function"`` ref is handed to :func:`importlib.import_module` at unit
+#: start — arbitrary-module import is RCE-adjacent for a token holder. Confining the
+#: importable module to these prefixes shrinks the blast radius to the trading
+#: stack's own signal code (local ``strategies/`` + the research/execution repos).
+#: A ref must start with one of these (as a dotted-path segment boundary) or the
+#: deploy is rejected 400.
+_SIGNAL_REF_ALLOWED_PREFIXES = (
+    "strategies",
+    "fynance",
+    "fynance_research",
+    "trading_bot",
+)
+
+#: A conservative shape check for the module part of a ``"module:function"`` ref:
+#: dotted identifiers only (each segment a Python identifier). Rejects paths with
+#: separators, spaces or other injection-ish characters before any import happens.
+_SIGNAL_REF_MODULE_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*$")
+
 
 class _ModeBody(BaseModel):
     """Request body for ``POST /api/strategies/{name}/mode``.
 
-    ``confirm`` must be ``true`` to switch to ``live`` (real money) — the
-    deliberate acknowledgement; the endpoint refuses live without it.
+    Switching to ``live`` (real money) is gated **server-side** by a typed
+    acknowledgement, not merely a boolean: the client must submit ``ack`` equal to
+    :data:`_LIVE_ACK_PHRASE` (verbatim, case-sensitive) — the same phrase the
+    browser modal makes the operator type. ``confirm`` is kept as a coarse flag for
+    backward compatibility, but a live switch requires the exact ``ack`` phrase; a
+    bare ``{"mode":"live","confirm":true}`` (bypassing the UI) is refused with 403.
+    ``paper`` / ``testnet`` need neither.
     """
 
     mode: str
     confirm: bool = False
+    ack: str | None = None
 
 
 class _CreateStrategyBody(BaseModel):
@@ -693,6 +729,7 @@ def _entry_from_body(
     Raises
     ------
     HTTPException
+        ``400`` if the ``signal`` ref is outside the import allow-list (I-1);
         ``422`` if the deployment shape is invalid for its ``kind`` (a strategy
         without a symbol, a portfolio without a universe / capital), or the
         underlying config validation rejects the entry (an unparseable pair,
@@ -707,6 +744,8 @@ def _entry_from_body(
         StrategyConfig,
     )
 
+    # I-1: gate the signal ref before it can reach import_module at unit start.
+    _validate_signal_ref(body.signal)
     signal_ref = SignalRefConfig(ref=body.signal, params=dict(body.params))
     data = DataSourceConfig(exchange=body.venue, span=body.span)
     try:
@@ -774,6 +813,115 @@ def _auto_db_path(name: str, *, global_db_path: str | None) -> str:
         else pathlib.PurePosixPath(".")
     )
     return str(base_dir / "dashboard" / f"{safe}.sqlite")
+
+
+def _sanitise_body_db_path(raw: str) -> str:
+    """Confine a client-supplied ``db_path`` to the dashboard data dir (raises otherwise).
+
+    I-3 hardening: the auto-derived store path (:func:`_auto_db_path`) is already
+    filename-sanitised, but an **explicit** ``db_path`` in the deploy body used to be
+    trusted verbatim — a token holder could pass ``../../../../tmp/evil.sqlite`` or an
+    absolute ``/etc/x.sqlite`` and get a write-anywhere SQLite file. This clamps the
+    body path to a *relative, traversal-free* location so it always lands under the
+    process's data dir (the manifest's own relative root), never outside it:
+
+    * an **absolute** path (POSIX ``/…`` or a Windows drive / UNC) is rejected;
+    * any ``..`` path component (traversal) is rejected;
+    * a benign relative path (incl. a leading ``./``) passes through **verbatim**
+      (no silent rewrite) so ``"./var/custom/pf.sqlite"`` is stored as given.
+
+    Parameters
+    ----------
+    raw : str
+        The explicit ``db_path`` from the deploy body.
+
+    Returns
+    -------
+    str
+        The confined path, verbatim (whitespace-stripped).
+
+    Raises
+    ------
+    HTTPException
+        ``400`` if the path is absolute, empty, or contains a ``..`` traversal.
+    """
+    import ntpath
+
+    candidate = (raw or "").strip()
+    # Reject POSIX-absolute (`/x`), Windows-absolute / drive-relative (`C:\`, `\x`)
+    # and UNC paths up front — never let the store escape the data dir via an
+    # absolute root. `ntpath.isabs` catches the Windows shapes `posixpath` misses.
+    if not candidate or candidate.startswith(("/", "\\")) or ntpath.isabs(candidate):
+        raise HTTPException(
+            status_code=400,
+            detail="db_path must be a relative path under the dashboard data dir",
+        )
+    # Split on both separators so `..\\..` (Windows-style) is caught too, then reject
+    # any traversal component. A single leading `.` is fine (current dir).
+    parts = candidate.replace("\\", "/").split("/")
+    if any(part == ".." for part in parts):
+        raise HTTPException(
+            status_code=400,
+            detail="db_path must not traverse outside the dashboard data dir ('..')",
+        )
+    return candidate
+
+
+def _validate_signal_ref(ref: str) -> None:
+    """Gate a deploy-body ``signal.ref`` before it reaches ``import_module`` (I-1).
+
+    A dotted ``"module:function"`` ref is imported at unit start via
+    :func:`importlib.import_module` — for a token holder that is an
+    arbitrary-module-import primitive (RCE-adjacent: importing a module runs its
+    top level). This validates the ref at the HTTP boundary so a disallowed one is a
+    ``400`` (nothing imported), *before* the supervisor is asked to build the unit:
+
+    * a **builtin** name (no ``":"``, e.g. ``"ma_crossover"``) is not an import path
+      — it maps to :data:`~trading_bot.application.run_app._BUILTIN_SIGNALS` — so it
+      passes the import gate here (its own validity is checked when the unit builds);
+    * a **dotted** ``"module:function"`` ref must have a non-empty module + function,
+      the module part must be a dotted identifier (:data:`_SIGNAL_REF_MODULE_RE`),
+      and its first segment must be in :data:`_SIGNAL_REF_ALLOWED_PREFIXES`. Anything
+      else is rejected.
+
+    Residual blast radius (documented, not eliminated): this confines the *import
+    root* to the trading stack's own packages, but any importable module **under**
+    those prefixes still runs its top-level code on import, and the named callable is
+    then invoked with client-supplied ``params``. The allow-list narrows *which*
+    packages a token holder can pull in; it is not a sandbox. The real trust boundary
+    remains the auth token — treat dashboard write access as code-execution-adjacent.
+
+    Parameters
+    ----------
+    ref : str
+        The deploy body's ``signal`` ref (builtin name or ``"module:function"``).
+
+    Raises
+    ------
+    HTTPException
+        ``400`` if a dotted ref is malformed or its module is outside the allow-list.
+    """
+    if ":" not in ref:
+        # A builtin name — not an import path; the unit-build step validates it.
+        return
+    module_name, _, attr = ref.partition(":")
+    if not module_name or not attr or not _SIGNAL_REF_MODULE_RE.match(module_name):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"signal ref {ref!r} must be a dotted 'module:function' "
+                "(dotted-identifier module, non-empty function)"
+            ),
+        )
+    root = module_name.split(".", 1)[0]
+    if root not in _SIGNAL_REF_ALLOWED_PREFIXES:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"signal ref module {module_name!r} is not in the allow-list "
+                f"{_SIGNAL_REF_ALLOWED_PREFIXES}; deploy refused"
+            ),
+        )
 
 
 def _discover_signals() -> dict[str, list[str]]:
@@ -859,9 +1007,11 @@ def _register_strategy_control(app: FastAPI, *, read_only: bool = False) -> None
     the safety gates live in a single place.
 
     **Real money is gated** (the invariant): ``.../mode`` to ``"live"`` requires
-    ``confirm: true`` in the body (:class:`_ModeBody`); without it the supervisor
-    raises :class:`~trading_bot.domain.errors.LiveTradingNotEnabled` and the
-    endpoint returns **403**, changing nothing.
+    the typed acknowledgement — the body's ``ack`` must equal
+    :data:`_LIVE_ACK_PHRASE` (enforced server-side, not just in the browser); a bare
+    ``{"mode":"live","confirm":true}`` without it returns **403**, changing nothing.
+    The supervisor's own ``confirm_live`` gate is the second line of defence (a
+    :class:`~trading_bot.domain.errors.LiveTradingNotEnabled` there is also **403**).
 
     Parameters
     ----------
@@ -926,6 +1076,21 @@ def _register_strategy_control(app: FastAPI, *, read_only: bool = False) -> None
                 status_code=400,
                 detail=f"unknown mode {body.mode!r}; expected one of {_CONTROL_MODES}",
             )
+        # Server-side live gate (I-2): a live switch requires the typed
+        # acknowledgement phrase in the body, not just `confirm:true`. The browser
+        # modal makes the operator type it (UX), but the enforcement lives HERE so a
+        # raw POST bypassing the UI cannot flip to live. Constant-time compare (the
+        # phrase is not a secret, but this avoids a length/prefix oracle).
+        if body.mode == "live":
+            ack = body.ack or ""
+            if not secrets.compare_digest(ack, _LIVE_ACK_PHRASE):
+                raise HTTPException(
+                    status_code=403,
+                    detail=(
+                        "switching to live requires the typed acknowledgement "
+                        f"{_LIVE_ACK_PHRASE!r} in the request body's 'ack' field"
+                    ),
+                )
         try:
             await _sup(request).set_mode(
                 name,
@@ -957,9 +1122,10 @@ def create_control_app(
     single implementation and one set of gates.
 
     **Real money is gated** (unchanged): switching a strategy to ``live`` requires
-    ``confirm: true`` in the request body; otherwise the endpoint returns **403**
-    and nothing changes. The factory's credential + risk-limit gates still apply
-    when a live unit is actually started.
+    the typed acknowledgement (``ack`` == :data:`_LIVE_ACK_PHRASE`) in the request
+    body, enforced server-side; otherwise the endpoint returns **403** and nothing
+    changes. The factory's credential + risk-limit gates still apply when a live unit
+    is actually started.
 
     **Authentication (for remote exposure)** is the dashboard's token login: with
     ``auth_token`` set, ``/login`` exchanges the token for an HttpOnly session
@@ -996,7 +1162,6 @@ def _install_control_auth(
     non-browser clients. Constant-time token comparison; ``Secure`` cookie behind
     HTTPS. Sessions are in-process (reset on restart — fine for a single daemon).
     """
-    import secrets
     import time
 
     from fastapi.responses import RedirectResponse
@@ -1573,11 +1738,16 @@ def create_dashboard_app(
             )
         sup = _sup(request)
         # Isolate this deployment's store by default: use an explicit body.db_path
-        # if given, else auto-assign one under the manifest's storage dir keyed by
-        # name (so two UI-deployed strategies never commingle their fills). The
-        # assigned path round-trips into the persisted manifest via the entry.
-        db_path = body.db_path or _auto_db_path(
-            body.name, global_db_path=sup.manifest().storage.db_path
+        # if given (sanitised — I-3: a raw body path used to be write-anywhere), else
+        # auto-assign one under the manifest's storage dir keyed by name (so two
+        # UI-deployed strategies never commingle their fills). The assigned path
+        # round-trips into the persisted manifest via the entry.
+        db_path = (
+            _sanitise_body_db_path(body.db_path)
+            if body.db_path
+            else _auto_db_path(
+                body.name, global_db_path=sup.manifest().storage.db_path
+            )
         )
         entry = _entry_from_body(body, db_path=db_path)
         try:

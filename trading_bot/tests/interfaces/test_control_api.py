@@ -108,10 +108,11 @@ def test_set_mode_live_without_confirmation_is_403() -> None:
 
 
 def test_set_mode_live_with_confirmation_flips() -> None:
-    """With the deliberate confirmation, the mode flips to live."""
+    """With the typed acknowledgement phrase, the mode flips to live."""
     client = _client()
     r = client.post(
-        "/api/strategies/btc-ma/mode", json={"mode": "live", "confirm": True}
+        "/api/strategies/btc-ma/mode",
+        json={"mode": "live", "confirm": True, "ack": "I UNDERSTAND"},
     )
     assert r.status_code == 200
     assert r.json()["status"]["mode"] == "live"

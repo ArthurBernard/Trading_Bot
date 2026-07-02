@@ -814,10 +814,11 @@ def test_set_mode_live_without_confirmation_is_403() -> None:
 
 
 def test_set_mode_live_with_confirmation_flips() -> None:
-    """With the deliberate confirmation, the mode flips to live."""
+    """With the typed acknowledgement phrase, the mode flips to live."""
     client = _client()
     r = client.post(
-        "/api/strategies/btc-ma/mode", json={"mode": "live", "confirm": True}
+        "/api/strategies/btc-ma/mode",
+        json={"mode": "live", "confirm": True, "ack": "I UNDERSTAND"},
     )
     assert r.status_code == 200
     assert r.json()["status"]["mode"] == "live"
@@ -1142,7 +1143,9 @@ def test_create_portfolio_without_universe_is_422() -> None:
             "name": "pf",
             "kind": "portfolio",
             "venue": "binance",
-            "signal": "pkg.mod:sig",
+            # An allow-listed ref (so the 422 is the missing-universe shape check,
+            # not the signal-ref import gate — which would be a 400).
+            "signal": "strategies.pf.signal:sig",
             "capital": "100000",
         },
     )
@@ -1164,6 +1167,175 @@ def test_deployment_crud_is_403_under_read_only() -> None:
     )
     assert client.delete("/api/strategies/btc-ma").status_code == 403
     # Nothing changed — the one declared unit is still there, unremoved.
+    assert [s["name"] for s in client.get("/api/strategies").json()] == ["btc-ma"]
+
+
+# --- server-side gate hardening (I-2 live ack / I-3 db_path / I-1 signal ref) --- #
+
+
+def test_set_mode_live_with_confirm_but_no_ack_is_403() -> None:
+    """I-2: `confirm:true` alone (no typed ack phrase) cannot flip to live — 403.
+
+    The typed acknowledgement is enforced SERVER-SIDE: a raw body bypassing the
+    browser modal (`{"mode":"live","confirm":true}`) is refused, nothing changes.
+    """
+    client = _client()
+    r = client.post(
+        "/api/strategies/btc-ma/mode", json={"mode": "live", "confirm": True}
+    )
+    assert r.status_code == 403
+    assert client.get("/api/strategies").json()[0]["mode"] == "paper"  # unchanged
+
+
+def test_set_mode_live_with_blank_ack_is_403() -> None:
+    """I-2: a blank / wrong ack phrase is refused (403) — the phrase must be exact."""
+    client = _client()
+    for ack in ("", "   ", "i understand", "I UNDERSTAND!"):
+        r = client.post(
+            "/api/strategies/btc-ma/mode",
+            json={"mode": "live", "confirm": True, "ack": ack},
+        )
+        assert r.status_code == 403, ack
+    assert client.get("/api/strategies").json()[0]["mode"] == "paper"  # unchanged
+
+
+def test_set_mode_live_with_correct_ack_flips() -> None:
+    """I-2: the exact typed acknowledgement phrase flips paper → live (200)."""
+    client = _client()
+    r = client.post(
+        "/api/strategies/btc-ma/mode",
+        json={"mode": "live", "confirm": True, "ack": "I UNDERSTAND"},
+    )
+    assert r.status_code == 200
+    assert r.json()["status"]["mode"] == "live"
+
+
+def test_set_mode_paper_testnet_need_no_ack() -> None:
+    """I-2: paper / testnet switches never require the ack (only live is gated)."""
+    client = _client()
+    assert (
+        client.post("/api/strategies/btc-ma/mode", json={"mode": "testnet"}).status_code
+        == 200
+    )
+    assert (
+        client.post("/api/strategies/btc-ma/mode", json={"mode": "paper"}).status_code
+        == 200
+    )
+
+
+def test_every_mutating_route_is_403_under_read_only() -> None:
+    """I-2 matrix: under `read_only`, EVERY mutating route → 403; reads still 200.
+
+    Extends the read-only stance across the full write surface (deploy / delete /
+    start / stop / mode incl. the live-ack path) — a read-only dashboard can observe
+    but never mutate, and the live gate is unreachable.
+    """
+    client = _client(read_only=True)
+    # Reads still work.
+    assert client.get("/api/strategies").status_code == 200
+    assert client.get("/api/health").status_code == 200
+    # Every mutation is refused.
+    mutations = (
+        client.post("/api/strategies", json=_portfolio_deploy_body()),
+        client.delete("/api/strategies/btc-ma"),
+        client.post("/api/strategies/btc-ma/start"),
+        client.post("/api/strategies/btc-ma/stop"),
+        client.post("/api/strategies/btc-ma/mode", json={"mode": "testnet"}),
+        client.post(
+            "/api/strategies/btc-ma/mode",
+            json={"mode": "live", "confirm": True, "ack": "I UNDERSTAND"},
+        ),
+    )
+    assert all(r.status_code == 403 for r in mutations), [
+        r.status_code for r in mutations
+    ]
+    # Nothing changed.
+    assert client.get("/api/strategies").json()[0]["mode"] == "paper"
+
+
+def test_deploy_with_traversal_db_path_is_4xx() -> None:
+    """I-3: a `..` traversal db_path is rejected (4xx); nothing is deployed."""
+    sup = StrategySupervisor(AppConfig())
+    client = TestClient(create_dashboard_app(sup))
+    body = {**_portfolio_deploy_body("pf"), "db_path": "../../evil.sqlite"}
+    r = client.post("/api/strategies", json=body)
+    assert 400 <= r.status_code < 500, r.status_code
+    assert sup.manifest().portfolios == []  # nothing added
+
+
+def test_deploy_with_absolute_db_path_is_4xx() -> None:
+    """I-3: an absolute db_path (write-anywhere) is rejected (4xx); nothing deployed."""
+    sup = StrategySupervisor(AppConfig())
+    client = TestClient(create_dashboard_app(sup))
+    for abs_path in ("/tmp/evil.sqlite", "/etc/evil.sqlite"):
+        body = {**_portfolio_deploy_body("pf"), "db_path": abs_path}
+        r = client.post("/api/strategies", json=body)
+        assert 400 <= r.status_code < 500, (abs_path, r.status_code)
+    assert sup.manifest().portfolios == []  # nothing added
+
+
+def test_deploy_with_normal_db_path_lands_under_the_data_dir() -> None:
+    """I-3: a normal relative db_path is accepted (200) and confined (no `..`, relative)."""
+    sup = StrategySupervisor(AppConfig())
+    client = TestClient(create_dashboard_app(sup))
+    body = {**_portfolio_deploy_body("pf"), "db_path": "dashboard/pf.sqlite"}
+    r = client.post("/api/strategies", json=body)
+    assert r.status_code == 200, r.text
+    [p] = sup.manifest().portfolios
+    assert p.db_path == "dashboard/pf.sqlite"
+    # The stored path is relative + traversal-free (confined to the data dir).
+    assert p.db_path is not None
+    assert not p.db_path.startswith("/")
+    assert ".." not in p.db_path.split("/")
+
+
+def test_deploy_with_signal_ref_outside_allow_list_is_4xx() -> None:
+    """I-1: a signal ref whose module is outside the allow-list is rejected (4xx).
+
+    A dotted ref is handed to `importlib.import_module` at unit start; the allow-list
+    confines the import root to the trading stack's own packages. `os:system` (and
+    other out-of-tree modules) never reach the import.
+    """
+    sup = StrategySupervisor(AppConfig())
+    client = TestClient(create_dashboard_app(sup))
+    for bad_ref in ("os:system", "subprocess:run", "builtins:eval", "evilpkg.x:go"):
+        body = {**_portfolio_deploy_body("pf"), "signal": bad_ref}
+        r = client.post("/api/strategies", json=body)
+        assert 400 <= r.status_code < 500, (bad_ref, r.status_code)
+    assert sup.manifest().portfolios == []  # nothing added
+
+
+def test_deploy_with_malformed_signal_ref_is_4xx() -> None:
+    """I-1: a malformed dotted ref (bad module shape / empty function) is 4xx."""
+    sup = StrategySupervisor(AppConfig())
+    client = TestClient(create_dashboard_app(sup))
+    for bad_ref in ("strategies foo:sig", "strategies.:sig", "strategies.mod:"):
+        body = {**_portfolio_deploy_body("pf"), "signal": bad_ref}
+        r = client.post("/api/strategies", json=body)
+        assert 400 <= r.status_code < 500, (bad_ref, r.status_code)
+    assert sup.manifest().portfolios == []  # nothing added
+
+
+def test_deploy_with_allow_listed_signal_ref_passes_the_gate() -> None:
+    """I-1: an allow-listed ref clears the import gate (a builtin name is fine too).
+
+    The gate only rejects *out-of-list* imports; a builtin single-instrument signal
+    (`ma_crossover`, no `:`) is not an import path and deploys.
+    """
+    sup = StrategySupervisor(AppConfig())
+    client = TestClient(create_dashboard_app(sup))
+    r = client.post(
+        "/api/strategies",
+        json={
+            "name": "btc-ma",
+            "kind": "strategy",
+            "venue": "kraken",
+            "signal": "ma_crossover",
+            "symbol": "BTC/USD",
+            "params": {"fast": 3, "slow": 6},
+        },
+    )
+    assert r.status_code == 200, r.text
     assert [s["name"] for s in client.get("/api/strategies").json()] == ["btc-ma"]
 
 

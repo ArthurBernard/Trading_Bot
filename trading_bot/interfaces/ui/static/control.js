@@ -1,7 +1,7 @@
 // trading_bot control plane — list strategies, start/stop, switch mode.
 // Pure HTTP client of /api/strategies. Switching to LIVE opens a typed-confirmation
-// modal that maps to {confirm:true} on the mode endpoint (the server also refuses
-// live without it).
+// modal whose phrase is sent as {ack:"I UNDERSTAND"} and enforced server-side (the
+// modal is UX only).
 "use strict";
 
 const MODES = ["paper", "testnet", "live"];
@@ -103,12 +103,14 @@ async function refresh() {
   }
 }
 
-async function setMode(name, mode, confirm) {
+async function setMode(name, mode, confirm, ack) {
   try {
+    // `ack` is the typed live-confirmation phrase; the server enforces it for a
+    // live switch (the modal is UX, the gate is server-side).
     await api(`/api/strategies/${encodeURIComponent(name)}/mode`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ mode, confirm: !!confirm }),
+      body: JSON.stringify({ mode, confirm: !!confirm, ack: ack || null }),
     });
     flash(`${name}: mode → ${mode}`, false);
   } catch (e) {
@@ -171,8 +173,9 @@ modalInput.addEventListener("keydown", (e) => {
 });
 modalConfirm.addEventListener("click", async () => {
   const name = pendingLive && pendingLive.name;
+  const ack = modalInput.value.trim(); // the typed phrase — sent for server-side check
   modal.classList.remove("open");
-  if (name) await setMode(name, "live", true);
+  if (name) await setMode(name, "live", true, ack);
   pendingLive = null;
 });
 modalCancel.addEventListener("click", () => {
