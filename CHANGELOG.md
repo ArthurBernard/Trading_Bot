@@ -127,7 +127,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **`max_daily_loss` is now genuinely daily.** The day-loss breaker is scoped to realised PnL since UTC midnight and auto-resets at the day boundary (it previously used cumulative session PnL and latched the kill-switch permanently); plus an idempotent `orders`-table schema migration, a persisted order timestamp, and a restored reject reason on reload (audit A-1/D-2/D-5/D-14). (#PR)
+- **`max_daily_loss` is now genuinely daily.** The day-loss breaker is scoped to realised PnL since UTC midnight and auto-resets at the day boundary (it previously used cumulative session PnL and latched the kill-switch permanently); plus an idempotent `orders`-table schema migration, a persisted order timestamp, and a restored reject reason on reload (audit A-1/D-2/D-5/D-14). (#131)
 - **A paper unit's book no longer commingles testnet/live fills.** `start()`'s
   paper-book replay folded **all** stored fills into the paper simulator; once a store
   held fills from a different deployment mode (a strategy run testnet/live, then
