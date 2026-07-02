@@ -6,6 +6,20 @@ rejected approaches as tombstones.
 
 ---
 
+### 2026-07-02 Domain applies its own money() guard at construction (PR #PR)  [accepted]
+- **Choice**: route every money field through `money()` inside `Order`/`Fill`/`Signal`
+  `__post_init__` and **reject** a raw `float` (fail-fast) rather than coerce it; pin an
+  explicit `decimal.localcontext` on the average-price / average-entry divisions; reject
+  non-finite (`NaN`/`Inf`) Decimals with a `MoneyError`.
+- **Why**: audit D-1 (Critical) — the `money()` guard existed but was never applied in
+  the value-object constructors, so a stray `float` could silently enter the PnL source
+  of truth and only fail later (or persist corrupt). Every legitimate caller already
+  builds amounts via `money(str(...))`, so rejecting floats is a pure backstop, not a
+  behaviour change. D-4: the global 28-digit context rounded repeating quotients
+  non-deterministically; a pinned context makes average prices deterministic.
+- **Rejected alternatives**: silent float→Decimal coercion (hides caller bugs and the
+  `float(x)` precision loss it's meant to prevent).
+
 ### 2026-07-02 Config-driven dashboard web settings (a `ui:` section) (PR #125)  [accepted]
 - **Choice**: add a `ui:` section to `AppConfig` (`host` / `port` / `token` /
   `read_only`); the `dashboard` command reads it as the default, with CLI flags (and
