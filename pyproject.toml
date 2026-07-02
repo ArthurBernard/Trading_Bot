@@ -103,7 +103,7 @@ include = ["trading_bot*"]
 "trading_bot.interfaces.ui" = ["templates/*.html", "static/*", "static/fonts/*.woff2"]
 
 [tool.pytest.ini_options]
-addopts = "--exitfirst -vv --cov=trading_bot --cov-report=term-missing -m 'not network'"
+addopts = "-vv --cov=trading_bot --cov-report=term-missing --cov-fail-under=90 -m 'not network'"
 testpaths = ["trading_bot"]
 asyncio_mode = "auto"
 markers = [
