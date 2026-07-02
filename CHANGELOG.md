@@ -110,7 +110,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- **Groom the dev-doc pack to match the shipped engine** — real module set, the dashboard framed as a control plane, the Binance adapter documented, stale `legacy/`/`scheduler.py`/`BrokerRegistry` references removed, and 12 finished plan trees archived (audit G-1…G-9). (#PR)
+- **Groom the dev-doc pack to match the shipped engine** — real module set, the dashboard framed as a control plane, the Binance adapter documented, stale `legacy/`/`scheduler.py`/`BrokerRegistry` references removed, and 12 finished plan trees archived (audit G-1…G-9). (#133)
 - **The split web apps are retired onto one `dashboard` command.** `trading-bot serve`
   is now an alias that serves the unified dashboard **read-only**, and `trading-bot
   start --serve` serves the same `create_dashboard_app` (single code path) alongside
