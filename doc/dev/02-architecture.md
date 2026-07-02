@@ -1,8 +1,8 @@
-# 02 — Architecture (target)
+# 02 — Architecture
 
 Hexagonal, async-first, mirroring dccd's layering under the same `trading_bot/`
-package. The MVP layers are in place (see [`07-roadmap.md`](07-roadmap.md) for
-what comes next).
+package. All layers are shipped; the one maintainer step left (real-key live
+enablement) is tracked in [`07-roadmap.md`](07-roadmap.md).
 
 ```
 trading_bot/
@@ -11,7 +11,7 @@ trading_bot/
   brokers/       # exchange adapters behind a Broker port
   storage/       # persistence + reconciliation source
   application/   # the engine (use-cases, wiring)
-  interfaces/    # CLI, later HTTP/UI
+  interfaces/    # CLI + FastAPI/Jinja2 control-plane dashboard
   tests/
 ```
 
@@ -48,12 +48,14 @@ declare capabilities; multi-exchange is designed for from day one.
 
 | Broker | Status |
 |--------|--------|
-| `kraken.py` | **implemented at MVP** (REST + WS) |
+| `kraken.py` + `kraken_ws.py` | **shipped** — REST + public WS + private executions/fills WS |
+| `binance.py` | **shipped** — spot REST (HMAC-SHA256, testnet-capable) |
 | `paper.py` | **`PaperBroker`** — in-process simulation behind the same port (default) |
 | others (Bitfinex, …) | declared, raise early until implemented |
 
-**Adding an exchange**: add the adapter here, register it in
-`application/service_factory.py`.
+**Adding an exchange**: add the adapter here, wire it in
+`application/service_factory.py`. See [`04-brokers.md`](04-brokers.md) for the
+capability matrix.
 
 ## Storage (`storage/`)
 
@@ -67,23 +69,35 @@ with what the broker reports and converges.
 |--------|----------|
 | `config.py` | `AppConfig` (pydantic) — strategies, brokers, data sources, risk limits |
 | `events.py` | `EventBus` — pub/sub fan-out (orders, fills, PnL, logs) |
-| `strategy_runner.py` | loads a strategy (config + fynance signal), feeds it data (dccd), emits target positions/orders |
-| `order_router.py` | idempotent submit (client-order-id), routing, **reconciliation** |
+| `strategy.py` / `strategy_runner.py` | `Strategy` (config + fynance signal, safe loader) and the live loop: data → signal → target position → orders via the router |
+| `portfolio.py` / `portfolio_runner.py` | multi-asset analogues — a `PortfolioStrategy` driving a universe from a weight vector, and its runner |
+| `data_feed.py` / `data_provider.py` / `portfolio_feed.py` | causal, freshness-gated bar windows fed from dccd (single- and multi-asset) |
+| `order_router.py` | idempotent submit (client-order-id), routing, broker-response → domain Order |
+| `reconcile.py` | startup/reconnect: refetch open orders+balances+fills, converge local state |
 | `position_tracker.py` | net positions from broker-confirmed fills |
-| `performance.py` | live PnL/KPI service |
-| `risk.py` | `RiskManager` — pre-trade limits + **kill-switch** |
-| `scheduler.py` | async orchestration of strategy loops |
-| `service_factory.py` | **single wiring point** — builds brokers, stores, registries |
+| `live_fills.py` | `LiveFillStreamer` — pump a venue's live fills onto the engine bus |
+| `performance_service.py` / `pnl_series.py` | live PnL/KPI service (KPI via fynance) + realised-PnL / equity curve helpers |
+| `risk.py` | `RiskManager` — pre-trade limits (max order/position/daily-loss) + **kill-switch** |
+| `orchestrator.py` / `supervisor.py` | run many strategy loops concurrently (`Orchestrator`) with each declared strategy as an independent supervised unit |
+| `run_app.py` | the triptych entrypoint — one `AppConfig` runs the whole system |
+| `service_factory.py` | **single wiring point** — builds brokers, stores, feeds (per-venue dispatch, no registry) |
 
 ## Interfaces (`interfaces/`)
 
-- `cli/` — Typer commands (start/stop strategies, status, KPI table). Replaces the
-  pre-2026 `blessed` CLI **and** the multiprocessing server (async orchestration
-  instead of processes-over-socket).
-- `api/` + `ui/` — FastAPI + Jinja2 dashboard (positions/orders/PnL), later;
-  mirrors dccd's UI.
+- `cli/` — Typer `trading-bot` CLI: `run` (run the declared system / demo),
+  `start` (supervise strategies as a daemon, step on a schedule), `status`,
+  `kpi`, `dashboard`, `serve`, `version`. Replaces the pre-2026 `blessed` CLI
+  **and** the multiprocessing server (async orchestration instead of
+  processes-over-socket).
+- `api/` (FastAPI) + `ui/` (Jinja2, `templates/` + `static/`) — the unified
+  **control-plane dashboard** (Overview / Strategies / Orders / PnL / Logs). It is
+  **not** read-only: it exposes control routes (deploy a strategy, set an engine
+  `mode`, start/stop). The one deliberate exception is orders — there is **no POST
+  order route** (a POST to a plausible order path returns `405`), so a compromised
+  web client cannot place an order. `trading-bot serve` is a **read-only** alias of
+  `dashboard --read-only` for a view-only deployment.
 
-## Data flow (target)
+## Data flow
 
 ```
 dccd (prices) ─▶ StrategyRunner ─▶ Signal ─▶ target Position
@@ -91,7 +105,7 @@ dccd (prices) ─▶ StrategyRunner ─▶ Signal ─▶ target Position
                                           OrderRouter (idempotent)
                                                   │  ── RiskManager gate ──
                                                   ▼
-                                            Broker (paper | kraken)
+                                     Broker (paper | kraken | binance)
                                                   │  fills
                                                   ▼
                               PositionTracker / PerformanceService / storage

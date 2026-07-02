@@ -38,7 +38,7 @@ master          ← stable releases only (tagged vX.Y.Z)
 ## Tests & linting
 
 ```bash
-pytest                      # full suite (legacy excluded, network excluded)
+pytest                      # full suite (network E2E deselected by default)
 ruff check trading_bot/
 mypy trading_bot/
 ```

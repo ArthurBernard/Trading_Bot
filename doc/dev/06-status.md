@@ -1,6 +1,6 @@
 # 06 — Status
 
-_Last updated: 2026-06-29_
+_Last updated: 2026-07-02_
 
 ## Where things stand
 
@@ -11,15 +11,19 @@ Phase 0 (tooling) plus all ten epics shipped: `domain/` (pure, mypy-strict),
 (declarative `AppConfig`+`EventBus`, idempotent risk-gated `OrderRouter`,
 `PositionTracker`, `reconcile`, `Strategy`+safe loader, causal `DataFeed`+`feed_for`,
 `StrategyRunner`, `PerformanceService`, `RiskManager`+kill-switch, `Orchestrator`,
-`run_app`, `service_factory`), and `interfaces/` (Typer `trading-bot` CLI +
-read-only FastAPI `api`/Jinja2 `ui`). One `AppConfig` conducts the triptych — dccd
-data (library import) + fynance signals + brokers — and `trading-bot run <config>`
-runs the whole declared multi-strategy system (paper by default); `trading-bot serve`
-exposes the read-only dashboard. The money-safety invariants (reconcile convergence,
+`run_app`, `service_factory`), and `interfaces/` (Typer `trading-bot` CLI + a
+FastAPI `api`/Jinja2 `ui` **control-plane dashboard** — start/stop/mode/deploy, not
+read-only; the one deliberate exception is orders, where there is **no POST order
+route** so a web client cannot place an order). One `AppConfig` conducts the
+triptych — dccd data (library import) + fynance signals + brokers — and
+`trading-bot run <config>` runs the whole declared multi-strategy system (paper by
+default); `trading-bot dashboard` serves the control plane and `trading-bot serve`
+its read-only alias. The money-safety invariants (reconcile convergence,
 idempotency, kill-switch) are **proven under fault injection** (`tests/hardening/`).
 **Live trading is off by default** behind an explicit `live_enabled` opt-in +
 credentials + the go-live runbook (`doc/dev/09-go-live.md`) — **no real order is ever
-sent from the repo**. ~718 tests green under the `trading_bot_env` pyenv-virtualenv; ruff + mypy clean
+sent from the repo**. 898 tests collected and green under the `trading_bot_env`
+pyenv-virtualenv (907 total, 9 network E2E deselected by default); ruff + mypy clean
 across the whole package.
 
 **Post-0.2.0 — E11 (Binance) shipped:** `BinanceBroker` (spot REST) is the **2nd live
@@ -60,8 +64,9 @@ venue-level idempotency against a real-key sandbox, then flip `live_enabled`) �
 maintainer step left, see `07-roadmap.md`. The **project name is decided** (kept
 `trading_bot`, with `dccd` / `fynance`; no rename). Engine layers, the triptych wiring
 (one `AppConfig` →
-`run_app` → one engine → runners via the `Orchestrator`; `trading-bot serve` for the
-read-only dashboard), and the Phase-0 dev standard (packaging, CI 3.11–3.13, Git Flow,
+`run_app` → one engine → runners via the `Orchestrator`; `trading-bot dashboard` for
+the control-plane dashboard, `serve` for its read-only alias), and the Phase-0 dev
+standard (packaging, CI 3.11–3.13, Git Flow,
 `.claude/` workflow, this `doc/dev/` pack) are all in place — see the paragraphs above
 and `CHANGELOG.md` for what shipped.
 

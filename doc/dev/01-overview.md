@@ -27,15 +27,18 @@ deepens it epic by epic.
 | **fynance** | research (features, models, allocation, backtest) | the signal a live strategy evaluates; KPI/PnL math |
 | **trading_bot** | execution & orchestration | — |
 
-## Current state (2026-06)
+## Current state (2026-07)
 
-- **Rewrite complete through the MVP.** The new hexagonal, async-first layers
-  exist natively — domain, transport, brokers (Kraken + paper), storage,
-  application (router/risk/tracker/perf/reconcile/strategy/datafeed/runner/
-  orchestrator) and a Typer CLI. The pre-2026 implementation (a
-  `multiprocessing` server/clients design over an authenticated socket, REST
-  Kraken/Bitfinex, a `blessed` CLI) has been retired; it lives in git history
-  only (no in-tree legacy package).
+- **Rewrite complete; the engine is feature-complete and hardened.** The
+  hexagonal, async-first layers exist natively — domain, transport, brokers
+  (Kraken REST+WS, Binance spot, paper), storage, application
+  (router/risk/tracker/perf/reconcile/strategy/portfolio/datafeed/runner/
+  orchestrator/run_app), a Typer CLI, and a FastAPI/Jinja2 **control-plane
+  dashboard** (start/stop/mode/deploy — not read-only). The pre-2026
+  implementation (a `multiprocessing` server/clients design over an
+  authenticated socket, REST Kraken/Bitfinex, a `blessed` CLI) has been retired;
+  it lives in git history only (no in-tree legacy package). The one maintainer
+  step left is real-key live enablement.
 - See [`02-architecture.md`](02-architecture.md) for the design and
   [`07-roadmap.md`](07-roadmap.md) for what comes next.
 - **Decided direction:** full rewrite (not incremental); execution **and**
@@ -49,14 +52,14 @@ deepens it epic by epic.
 trading_bot/         # the package
   domain/            # pure core — orders, positions, fills, money, KPI
   transport/         # async HTTP/WS, rate-limit, retry
-  brokers/           # Kraken + paper broker behind the Broker port
+  brokers/           # Kraken (REST+WS), Binance (spot), paper broker behind the Broker port
   storage/           # append-only order/fill history + engine state
-  application/       # runner, router, risk, tracker, perf, reconcile, orchestrator
-  interfaces/        # Typer CLI
+  application/       # runner, router, risk, tracker, perf, reconcile, portfolio, orchestrator, run_app
+  interfaces/        # Typer CLI + FastAPI/Jinja2 control-plane dashboard
   tests/             # the test suite
   __init__.py        # exposes __version__
 doc/dev/             # this developer brief + plan trees
-strategies/          # example strategy folders (pre-2026 shape — will evolve)
+strategies/          # example strategy folders (gitignored, local-only)
 data_base/           # example data fixtures (pre-2026)
 execution_scripts/   # pre-2026 shell launchers
 CLAUDE.md            # authoritative working rules
@@ -75,4 +78,4 @@ The pre-2026 implementation has been fully superseded and removed from the tree
 | `OrdersManager` (funds check, call-counter) (`orders_manager.py`) | `application/OrderRouter` + `RiskManager` |
 | `_PnLI` (`performance.py`) | `application/PerformanceService` (KPI via fynance) |
 | `blessed` CLI (`cli.py`) | `interfaces/cli` (Typer) |
-| `exchanges/API_kraken.py`, `API_bfx.py` | `brokers/kraken.py` (+ port, registry) |
+| `exchanges/API_kraken.py`, `API_bfx.py` | `brokers/` behind the `Broker` port — `kraken.py` + `kraken_ws.py`, `binance.py`, `paper.py` (wired in `service_factory.py`) |
