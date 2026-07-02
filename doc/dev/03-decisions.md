@@ -6,7 +6,7 @@ rejected approaches as tombstones.
 
 ---
 
-### 2026-07-02 SQLite writes off the event loop via a writer thread (PR #PR)  [accepted]
+### 2026-07-02 SQLite writes off the event loop via a writer thread (PR #140)  [accepted]
 - **Choice**: the bus handler enqueues a write job (non-blocking) onto a FIFO
   `queue.Queue`; one daemon writer thread drains it and does the SQLite I/O.
   `close()` drains + joins the thread on shutdown; `flush()` is the read-side

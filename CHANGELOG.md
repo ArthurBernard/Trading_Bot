@@ -14,7 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **SQLite writes moved off the event loop.** Order/fill persistence hands off to a dedicated FIFO writer thread (append-only, drained on shutdown) instead of a synchronous open→write→commit→close inside the async loop that blocked all runners; connections use WAL + an explicit `busy_timeout`; fills are keyed `(fill_id, venue, mode)` so a paper and a live fill sharing a venue id no longer collide (audit A-2/D-8/D-9). (#PR)
+- **SQLite writes moved off the event loop.** Order/fill persistence hands off to a dedicated FIFO writer thread (append-only, drained on shutdown) instead of a synchronous open→write→commit→close inside the async loop that blocked all runners; connections use WAL + an explicit `busy_timeout`; fills are keyed `(fill_id, venue, mode)` so a paper and a live fill sharing a venue id no longer collide (audit A-2/D-8/D-9). (#140)
 - **Engine reads a real dccd store synchronously.** `_make_client` primes the dccd `Client`'s store/registry (the read-only half of dccd's async `__aenter__`), so the feed's sync `read()` works from inside the async step — it previously raised `Client must be used inside 'async with Client()'` (dccd API drift), starving every real-dccd read. Verified against 4.66M real 1m bars. (#137)
 - **Dashboard can launch strategies with a local `signal.ref`.** `trading-bot` now puts the CWD on `sys.path` (a group callback), so a manifest referencing a gitignored local strategy package (e.g. `strategies.<yourpkg>.signal:...`) resolves — previously the console script couldn't import it and the unit was silently skipped at start. (#135)
 
