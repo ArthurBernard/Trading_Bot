@@ -824,9 +824,19 @@ class BinanceBroker(Broker):
         venue_symbol = str(info.get("symbol", ""))
         symbol = parse_binance_symbol(venue_symbol)
         side = OrderSide(str(info.get("side", "BUY")).lower())
-        otype = _BINANCE_TO_ORDERTYPE.get(
-            str(info.get("type", "")), OrderType.LIMIT
-        )
+        # B-12: never silently coerce an unrecognised venue order-type to LIMIT —
+        # a wrong type is a wrong order. Reject it so ``reconcile`` surfaces the
+        # unmapped type instead of adopting a mislabelled order (e.g. a Binance
+        # ``TAKE_PROFIT_LIMIT`` rebuilt as a plain LIMIT).
+        raw_type = str(info.get("type", ""))
+        try:
+            otype = _BINANCE_TO_ORDERTYPE[raw_type]
+        except KeyError:
+            raise BrokerError(
+                f"Binance open order {info.get('orderId')}: unknown type "
+                f"{raw_type!r} (not one of {sorted(_BINANCE_TO_ORDERTYPE)}); "
+                "refusing to guess"
+            ) from None
         qty = money(str(info.get("origQty", "0")))
         price = info.get("price")
         limit_price = (

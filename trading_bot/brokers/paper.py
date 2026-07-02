@@ -181,6 +181,25 @@ class PaperBroker(Broker):
         Fraction of the order quantity consumed on placement under
         ``fill_model="partial"``. ``1`` (default) fully fills (order closes);
         a value in ``(0, 1)`` leaves the remainder *open*. Must be in ``(0, 1]``.
+    strict : bool, optional
+        Bring the simulator closer to live venue semantics (B-13) so a paper-
+        validated strategy behaves the same on a real venue. Defaults to
+        ``False`` (the permissive historical model). When ``True``:
+
+        * **Precision / min-notional rejection** — an order is quantized to the
+          instrument's lot/tick and checked against ``min_qty`` / ``min_notional``
+          via
+          :meth:`~trading_bot.domain.instrument.Instrument.prepare_order_values`,
+          exactly like the live brokers; a sub-minimum or over-precise order is
+          rejected with
+          :class:`~trading_bot.domain.errors.OrderTooSmall` (a
+          :class:`~trading_bot.domain.errors.BrokerError`) instead of silently
+          filling — so B-2's reject condition is visible in paper.
+        * **Client-order-id dedup** — re-placing an order whose
+          ``client_order_id`` is already live returns the **existing** synthetic
+          venue id without creating a second paper order, mirroring the venue-
+          side dedup the idempotency invariant relies on (Binance ``-2010``). A
+          retried client-order-id never duplicates a paper order.
 
     Attributes
     ----------
@@ -202,6 +221,7 @@ class PaperBroker(Broker):
         event_bus: EventBus | None = None,
         partial_chunks: int = 2,
         partial_fill_ratio: Money = money("1"),
+        strict: bool = False,
     ) -> None:
         if fill_model not in ("immediate", "partial"):
             raise BrokerError(
@@ -227,6 +247,7 @@ class PaperBroker(Broker):
         self._bus = event_bus
         self._partial_chunks = partial_chunks
         self._partial_fill_ratio = partial_fill_ratio
+        self._strict = strict
 
         # Deterministic id seams.
         self._order_ids = count(1)
@@ -234,6 +255,11 @@ class PaperBroker(Broker):
         # Live orders keyed by their synthetic venue id — the simulator's *own*
         # record (never the caller's Order); see ``_OpenOrder``.
         self._open: dict[str, _OpenOrder] = {}
+        # Strict mode: map every client-order-id ever accepted to its synthetic
+        # venue id, so a retried client-order-id is deduped to the SAME id rather
+        # than placing a second paper order (mirrors venue-side dedup). Populated
+        # only when ``strict`` is set; the permissive model does no dedup.
+        self._venue_id_by_cid: dict[str, str] = {}
         # Every fill ever produced, in execution order.
         self._fills: list[Fill] = []
         # One-shot override of the placement fill ratio (see ``arm_partial``),
@@ -337,16 +363,43 @@ class PaperBroker(Broker):
         BrokerError
             If a MARKET (or unpriced BEST_LIMIT) order has no mark price for its
             instrument.
+        OrderTooSmall
+            In ``strict`` mode only, if the order quantizes below the venue lot /
+            ``min_qty`` / ``min_notional`` (a :class:`BrokerError` subclass).
 
         """
+        # Strict mode: dedup a retried client-order-id to the SAME synthetic
+        # venue id, never a second paper order (mirrors venue-side dedup). Return
+        # the existing id BEFORE allocating a new one, so the id counter and
+        # fills are untouched by the duplicate — exactly as a real venue would
+        # reject the re-submission rather than opening a new order.
+        if self._strict:
+            existing = self._venue_id_by_cid.get(order.client_order_id)
+            if existing is not None:
+                return existing
+
+        # Strict mode: quantize to the instrument lot/tick and reject a sub-
+        # minimum / over-precise order (``OrderTooSmall``) exactly like the live
+        # brokers, so B-2's reject condition is visible in paper. The quantized
+        # values then drive the fill so the paper order matches what a live venue
+        # would have accepted. In the permissive model the raw values are used.
+        qty = order.qty
+        limit_price = order.limit_price
+        if self._strict:
+            qty, limit_price, _stop = order.instrument.prepare_order_values(
+                order.qty,
+                limit_price=order.limit_price,
+                stop_price=order.stop_price,
+            )
+
         venue_order_id = f"PAPER-{next(self._order_ids)}"
         record = _OpenOrder(
             client_order_id=order.client_order_id,
             instrument=order.instrument,
             side=order.side,
             type=order.type,
-            qty=order.qty,
-            limit_price=order.limit_price,
+            qty=qty,
+            limit_price=limit_price,
             fill_tolerance=order.fill_tolerance,
         )
 
@@ -355,10 +408,15 @@ class PaperBroker(Broker):
         armed = self._armed_ratio
         self._armed_ratio = None
 
-        price = self._execution_price(order)
-        fill_qty = self._placement_fill_qty(order.qty, armed)
+        price = self._execution_price_for(order, limit_price)
+        fill_qty = self._placement_fill_qty(qty, armed)
         for slice_qty in self._slice(fill_qty):
             self._execute(record, slice_qty, price)
+
+        # Record the accepted client-order-id -> venue id mapping so a later
+        # retry of the same id is deduped (strict mode only).
+        if self._strict:
+            self._venue_id_by_cid[order.client_order_id] = venue_order_id
 
         # Keep the order live only if a quantity remains unfilled (i.e. the
         # simulated fills did not fully consume it within tolerance).
@@ -366,14 +424,17 @@ class PaperBroker(Broker):
             self._open[venue_order_id] = record
         return venue_order_id
 
-    def _execution_price(self, order: Order) -> Money:
-        """Resolve the price an order fills at (limit price, or the mark).
+    def _execution_price_for(
+        self, order: Order, limit_price: Money | None
+    ) -> Money:
+        """Resolve the price ``order`` fills at, given its resolved limit price.
 
-        A LIMIT (or priced BEST_LIMIT) fills at its ``limit_price``; a MARKET
-        order (or an unpriced BEST_LIMIT) fills at the injected mark price.
+        A LIMIT (or priced BEST_LIMIT) fills at ``limit_price`` (which in strict
+        mode is the *quantized* limit); a MARKET order (or an unpriced
+        BEST_LIMIT) fills at the injected mark price.
         """
-        if order.limit_price is not None:
-            return order.limit_price
+        if limit_price is not None:
+            return limit_price
         # MARKET / unpriced BEST_LIMIT: take the injected mark.
         price = self._prices.get(order.instrument)
         if price is None:

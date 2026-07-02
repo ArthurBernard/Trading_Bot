@@ -725,9 +725,19 @@ class KrakenBroker(Broker):
         descr = info.get("descr", {})
         symbol = parse_kraken_pair(str(descr.get("pair", "")))
         side = OrderSide(descr.get("type", "buy"))
-        otype = _KRAKEN_TO_ORDERTYPE.get(
-            str(descr.get("ordertype", "")), OrderType.LIMIT
-        )
+        # B-12: never silently coerce an unrecognised venue order-type to LIMIT —
+        # a wrong type is a wrong order. Reject it so ``reconcile`` surfaces the
+        # unmapped type instead of adopting a mislabelled order (e.g. a Kraken
+        # ``take-profit`` / ``trailing-stop`` rebuilt as a plain LIMIT).
+        raw_ordertype = str(descr.get("ordertype", ""))
+        try:
+            otype = _KRAKEN_TO_ORDERTYPE[raw_ordertype]
+        except KeyError:
+            raise BrokerError(
+                f"Kraken open order {txid}: unknown ordertype "
+                f"{raw_ordertype!r} (not one of "
+                f"{sorted(_KRAKEN_TO_ORDERTYPE)}); refusing to guess"
+            ) from None
         qty = money(str(info.get("vol", "0")))
         price_str = descr.get("price")
         limit_price = (

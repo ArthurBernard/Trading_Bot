@@ -33,6 +33,19 @@ rejected approaches as tombstones.
   reconcile pending a venue idempotency token (documented).
 - **Rejected alternatives**: persisting the transient in-flight future (A-9) — the
   dedup map already covers restart; the venue token is the real fix, deferred.
+### 2026-07-02 Transport hardening + optional strict PaperBroker (PR #149)  [accepted]
+- **Choice**: the async HTTP client gets connection-pool limits, distinct
+  connect/read/write timeouts, `trust_env=False` + no-redirects, and a response-size
+  cap (`ResponseTooLargeError`); an unknown venue order-type raises on rebuild instead
+  of coercing to `LIMIT`; the PaperBroker gains an opt-in `strict=True` mode that
+  rejects sub-min-notional / over-precise sizes and dedups a retried client-order-id.
+- **Why**: audit B-11 (no pool/timeout/cap; connect vs read undistinguished),
+  B-12 (silent order-type coercion = wrong order), B-13 (paper diverged from live so a
+  paper-validated strategy could behave differently live). A read-timeout on a submit
+  stays ambiguous → reconcile (never auto-retried), preserving idempotency.
+- **Rejected alternatives**: making connect-timeouts retryable on a submit — kept
+  conservative (both ambiguous) to protect the never-blind-retry-a-submit rule;
+  making strict paper the default — gated opt-in so the deterministic paper suite stays green.
 
 ### 2026-07-02 Bounded uvicorn graceful-shutdown so Ctrl-C quits promptly (PR #145)  [accepted]
 - **Choice**: every uvicorn serve path (`dashboard`, `serve`, `run --serve`,
