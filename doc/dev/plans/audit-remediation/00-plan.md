@@ -43,13 +43,13 @@ are already clean.
 
 ## Leaf checklist
 
-- [ ] 01 test-hermeticity — fix/test-hermeticity — high
-- [ ] 02 domain-hardening — fix/domain-hardening — high
-- [ ] 03 transport-secret-redaction — fix/transport-secret-redaction — medium
-- [ ] 04 broker-live-readiness — fix/broker-live-readiness — high
-- [ ] 05 dashboard-gate-hardening — fix/dashboard-gate-hardening — high
-- [ ] 06 engine-risk-storage — fix/engine-risk-storage — high
-- [ ] 07 docs-groom — docs/groom-audit — low
+- [x] 01 test-hermeticity — fix/test-hermeticity — high — PR #132
+- [x] 02 domain-hardening — fix/domain-hardening — high — PR #128
+- [x] 03 transport-secret-redaction — fix/transport-secret-redaction — medium — PR #127
+- [x] 04 broker-live-readiness — fix/broker-live-readiness — high — PR #129
+- [x] 05 dashboard-gate-hardening — fix/dashboard-gate-hardening — high — PR #130
+- [x] 06 engine-risk-storage — fix/engine-risk-storage — high — PR #131
+- [x] 07 docs-groom — docs/groom-audit — low — PR #133
 
 ## Dependencies
 
