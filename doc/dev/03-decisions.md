@@ -6,7 +6,7 @@ rejected approaches as tombstones.
 
 ---
 
-### 2026-07-02 Dashboard web-surface hardening posture (PR #PR)  [accepted]
+### 2026-07-02 Dashboard web-surface hardening posture (PR #147)  [accepted]
 - **Choice**: enforce "non-loopback host requires a token" in `UIConfig` itself (a
   validator); give `run --serve` the same bind guard as `dashboard`; cap request
   bodies; prune/bound the session + rate-limit maps; key the login limiter on the
