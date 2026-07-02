@@ -127,7 +127,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **Hermetic, enforced test gate.** An autouse `conftest.py` runs each test from a temp CWD and scrubs `TRADING_BOT_*` env, so the suite no longer reads a developer's local `configs/dashboard.yaml`; `--exitfirst` is dropped from `addopts` (all failures reported) and coverage is floored at `--cov-fail-under=90` (audit T-1/T-2/T-3). (#PR)
+- **Hermetic, enforced test gate.** An autouse `conftest.py` runs each test from a temp CWD and scrubs `TRADING_BOT_*` env, so the suite no longer reads a developer's local `configs/dashboard.yaml`; `--exitfirst` is dropped from `addopts` (all failures reported) and coverage is floored at `--cov-fail-under=90` (audit T-1/T-2/T-3). (#132)
 - **A paper unit's book no longer commingles testnet/live fills.** `start()`'s
   paper-book replay folded **all** stored fills into the paper simulator; once a store
   held fills from a different deployment mode (a strategy run testnet/live, then
