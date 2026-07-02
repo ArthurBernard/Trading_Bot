@@ -6,7 +6,7 @@ rejected approaches as tombstones.
 
 ---
 
-### 2026-07-02 Engine/order robustness: idempotent cancel, bounded feed, honest KPI anchor (PR #PR)  [accepted]
+### 2026-07-02 Engine/order robustness: idempotent cancel, bounded feed, honest KPI anchor (PR #148)  [accepted]
 - **Choice**: `cancel` is idempotent (a terminal-order cancel is a no-op; concurrent
   cancels serialised by a per-id in-flight future, no venue re-hit); `rebalance_latest`
   reads only the latest aligned window (one store read) instead of draining the whole
