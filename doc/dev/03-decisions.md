@@ -6,7 +6,7 @@ rejected approaches as tombstones.
 
 ---
 
-### 2026-07-02 Weight-aware Binance rate limiter (PR #PR)  [accepted]
+### 2026-07-02 Weight-aware Binance rate limiter (PR #142)  [accepted]
 - **Choice**: a `WeightBucket` (limit 1200/60s, continuous refill) charges each
   endpoint its published request-weight, resyncs to the venue's
   `X-MBX-USED-WEIGHT-1M` header (adopts a higher figure, ignores a lower one), and
