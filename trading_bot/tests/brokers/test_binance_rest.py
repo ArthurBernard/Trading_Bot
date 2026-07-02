@@ -433,6 +433,11 @@ async def test_open_orders_rebuilds_domain_orders(
 async def test_open_orders_partial_fill_reflected(
     httpx_mock, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    # B-8: the average fill price is the executed cost / qty
+    # (cummulativeQuoteQty / executedQty = 1005 / 0.5 = 2010), NOT the resting
+    # limit price (2000). The two diverge whenever the book fills through the
+    # limit; a fill is the PnL source of truth, so the venue's executed basis
+    # must win, never the order's asking price.
     httpx_mock.add_response(
         json=[
             {
@@ -442,6 +447,7 @@ async def test_open_orders_partial_fill_reflected(
                 "price": "2000.00",
                 "origQty": "2.0000",
                 "executedQty": "0.5000",
+                "cummulativeQuoteQty": "1005.00",
                 "type": "LIMIT",
                 "side": "SELL",
                 "status": "PARTIALLY_FILLED",
@@ -453,7 +459,37 @@ async def test_open_orders_partial_fill_reflected(
     orders = await broker.open_orders()
 
     assert orders[0].filled_qty == Decimal("0.5000")
-    assert orders[0].avg_fill_price == Decimal("2000.00")
+    # cummulativeQuoteQty / executedQty = 1005 / 0.5 = 2010, not the 2000 limit.
+    assert orders[0].avg_fill_price == Decimal("2010")
+
+
+async def test_open_orders_zero_executed_applies_no_fill(
+    httpx_mock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # B-8: a zero-executed order carries no average price — no bogus fill is
+    # applied (never the limit price masquerading as an execution).
+    httpx_mock.add_response(
+        json=[
+            {
+                "symbol": "ETHUSDT",
+                "orderId": 43,
+                "clientOrderId": "strat-10",
+                "price": "2000.00",
+                "origQty": "2.0000",
+                "executedQty": "0.0000",
+                "cummulativeQuoteQty": "0.00000000",
+                "type": "LIMIT",
+                "side": "SELL",
+                "status": "NEW",
+            }
+        ]
+    )
+    broker = _broker(monkeypatch)
+
+    orders = await broker.open_orders()
+
+    assert orders[0].filled_qty == Decimal("0")
+    assert orders[0].avg_fill_price is None
 
 
 async def test_fills_over_two_symbol_set(

@@ -756,13 +756,50 @@ class KrakenBroker(Broker):
         order.submit()
         order.open(txid)
         # Reflect any already-executed volume so the status matches Kraken's.
+        # B-8: derive the *true* average fill price from Kraken's executed
+        # fields — ``cost / vol_exec`` (falling back to the top-level ``price``,
+        # which Kraken sets to the average executed price) — never
+        # ``descr.price`` (the resting LIMIT/STOP price). Fills are the PnL
+        # source of truth, so a partial fill's basis must be what the venue
+        # actually executed at, not what the order asked for. With no executed
+        # volume there is no average yet, so no fill is applied.
         vol_exec = money(str(info.get("vol_exec", "0")))
         if vol_exec > 0:
-            avg_price = info.get("price") or descr.get("price") or "0"
-            fill_price = money(str(avg_price))
-            if fill_price > 0:
-                order.apply_fill(vol_exec, fill_price)
+            avg_price = self._avg_fill_price(info, vol_exec)
+            if avg_price is not None and avg_price > 0:
+                order.apply_fill(vol_exec, avg_price)
         return order
+
+    @staticmethod
+    def _avg_fill_price(info: Mapping[str, Any], vol_exec: Money) -> Money | None:
+        """Average fill price of a partial fill: executed cost / executed volume.
+
+        Kraken's ``OpenOrders`` reports the total quote spent on the executed
+        portion as ``cost`` and the executed base volume as ``vol_exec``; their
+        ratio is the volume-weighted average execution price. The top-level
+        ``price`` field (Kraken's own average executed price) is used as a
+        fallback. The order's resting limit price (``descr.price``) is **never**
+        used as the PnL basis — the two diverge whenever the book fills through
+        the limit, and :class:`~trading_bot.domain.fill.Fill` is the source of
+        truth for PnL.
+
+        Returns ``None`` when neither a positive ``cost`` nor a positive
+        ``price`` is available (so the caller applies no bogus fill). All
+        arithmetic stays exact ``Decimal``.
+        """
+        if vol_exec <= 0:
+            return None
+        cost = money(str(info.get("cost", "0")))
+        if cost > 0:
+            return cost / vol_exec
+        # Fallback: Kraken's top-level ``price`` is the average executed price
+        # (distinct from ``descr.price``, the resting limit).
+        avg = info.get("price")
+        if avg is not None:
+            avg_price = money(str(avg))
+            if avg_price > 0:
+                return avg_price
+        return None
 
     async def fills(self, since_ms: int | None = None) -> list[Fill]:
         """Return executions as domain :class:`Fill`s (``TradesHistory``).
