@@ -41,7 +41,7 @@ pyenv virtualenv 3.12.13 trading_bot_env && pyenv local trading_bot_env
 pip install -e ".[dev,daemon]"
 pip install -e ../Fynance                            # fynance — enables the KPI tests
 pip install -e ../Download_Crypto_Currencies_Data    # dccd — market data (E5+)
-pip install -e ../fynance-research                   # live portfolio signals (e.g. ALLOC1)
+pip install -e ../fynance-research                   # live portfolio signals
 
 # Run the full unit suite (network E2E excluded by default)
 pytest

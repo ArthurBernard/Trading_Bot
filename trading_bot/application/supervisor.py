@@ -35,8 +35,9 @@ through the engines it builds (reconcile on start; the runners' router/broker).
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Literal, cast
 
 from trading_bot.application.pnl_series import by_mode, equity_series
@@ -278,7 +279,16 @@ class KpiRow:
 
 @dataclass
 class _Unit:
-    """One managed strategy: its config slice, mode, and (when running) engine."""
+    """One managed strategy: its config slice, mode, and (when running) engine.
+
+    Each unit carries its **own** :class:`asyncio.Lock` (``lock``) serialising that
+    unit's lifecycle transitions (``start`` / ``stop`` / ``set_mode`` /
+    ``remove_unit``) against its ``step``. The lock is deliberately **per-unit**
+    (never one supervisor-wide lock) so independent strategies still start / step /
+    stop concurrently — only operations on the **same** unit contend, which is
+    exactly the race being closed: a scheduler ``step`` must never see a
+    half-torn-down or half-rebuilt unit.
+    """
 
     name: str
     kind: _KIND
@@ -288,6 +298,7 @@ class _Unit:
     engine: Engine | None = None
     runner: StrategyRunner | PortfolioRunner | None = None
     running: bool = False
+    lock: asyncio.Lock = field(default_factory=asyncio.Lock, repr=False, compare=False)
 
 
 class StrategySupervisor:
@@ -432,13 +443,14 @@ class StrategySupervisor:
 
         """
         unit = self._unit(name)
-        if unit.running:
-            # `stop` is async but only clears in-memory state (no awaited I/O);
-            # inline its effect so `remove_unit` stays a sync accessor mirroring
-            # the shape of the other registry helpers.
-            unit.running = False
-            unit.runner = None
-            unit.engine = None
+        # Drain the store's writer so no enqueued order/fill is lost, then route
+        # through the same in-memory teardown `stop` uses (one code path — A-10).
+        # `remove_unit` is sync, so it closes the store directly (blocking, but the
+        # writer's I/O is already off the loop) rather than via `_drain_store`'s
+        # `await asyncio.to_thread`, keeping its sync contract.
+        if unit.engine is not None and unit.engine.store is not None:
+            unit.engine.store.close()
+        self._teardown(unit)
         del self._units[name]
         self._base = self._base.remove_entry(name)
 
@@ -546,6 +558,20 @@ class StrategySupervisor:
 
         """
         unit = self._unit(name)
+        async with unit.lock:
+            # Hold the unit's lock across the whole build so a concurrent `step`
+            # (or `stop` / `set_mode`) never observes a half-built engine: the unit
+            # flips to `running` only once the engine + runner are fully wired.
+            await self._start_locked(unit)
+
+    async def _start_locked(self, unit: _Unit) -> None:
+        """Build ``unit``'s engine + runner (caller holds ``unit.lock``).
+
+        The body of :meth:`start`, factored out so :meth:`set_mode`'s restart can
+        rebuild the unit **under the same held lock** as its stop — the whole
+        stop → re-slice → start transition is then one atomic critical section, so a
+        concurrent ``step`` never catches the unit mid-rebuild.
+        """
         if unit.running:
             return
         engine = build_engine(unit.config, db_path=unit.config.storage.db_path)
@@ -620,6 +646,34 @@ class StrategySupervisor:
     async def stop(self, name: str) -> None:
         """Tear down the unit's engine — it is no longer stepped. Idempotent."""
         unit = self._unit(name)
+        async with unit.lock:
+            await self._drain_store(unit)
+            self._teardown(unit)
+
+    @staticmethod
+    async def _drain_store(unit: _Unit) -> None:
+        """Drain the store's off-loop writer before an engine is dropped.
+
+        Joins the writer thread so every order/fill already enqueued is persisted
+        before we drop the engine — a graceful teardown loses no write (the store is
+        the reconciliation source of truth). Off the loop (the writer does blocking
+        I/O) so the scheduler is not stalled. A no-op when the unit has no store.
+        Used by the async teardown paths (:meth:`stop`, :meth:`set_mode`); the sync
+        :meth:`remove_unit` closes the store directly (it is already off the loop).
+        """
+        if unit.engine is not None and unit.engine.store is not None:
+            await asyncio.to_thread(unit.engine.store.close)
+
+    @staticmethod
+    def _teardown(unit: _Unit) -> None:
+        """Clear a unit's in-memory running state (the single teardown code path).
+
+        The one place :meth:`stop`, :meth:`set_mode` and :meth:`remove_unit` funnel
+        through, so the in-memory teardown can never diverge (A-10). Purely in-memory
+        (drop the runner + engine, flip ``running`` off); the store is drained first
+        by :meth:`_drain_store` (async paths) or a direct blocking close
+        (:meth:`remove_unit`) so no enqueued write is lost.
+        """
         unit.running = False
         unit.runner = None
         unit.engine = None
@@ -652,15 +706,23 @@ class StrategySupervisor:
         # Validate the new mode (slice it) BEFORE mutating the unit, so a mode that
         # cannot run (e.g. testnet/live on a venue with no matching broker → a
         # ConfigError) leaves the unit untouched — "nothing changes" on a refused
-        # switch, matching the live-confirm gate above.
+        # switch, matching the live-confirm gate above. (Slicing is a pure read, so
+        # it is fine to do it before taking the lock.)
         new_config = self._slice_for(name, unit.kind, mode, unit.exchange)
-        was_running = unit.running
-        if was_running:
-            await self.stop(name)
-        unit.mode = mode
-        unit.config = new_config
-        if was_running:
-            await self.start(name)
+        # Hold the lock across the whole stop → re-slice → start transition so a
+        # concurrent `step` never catches the unit half-rebuilt (torn down but not
+        # yet started, or started on the old paper runner after a live flip). Use
+        # the *_locked helpers, not the public `stop`/`start`, to avoid re-acquiring
+        # the same non-reentrant lock (which would deadlock).
+        async with unit.lock:
+            was_running = unit.running
+            if was_running:
+                await self._drain_store(unit)
+                self._teardown(unit)
+            unit.mode = mode
+            unit.config = new_config
+            if was_running:
+                await self._start_locked(unit)
 
     async def step(self, name: str) -> Order | object | None:
         """Run **one** re-evaluation of the unit over the latest data.
@@ -671,18 +733,28 @@ class StrategySupervisor:
         .rebalance_latest`). A no-op (returns ``None``) when the unit is stopped.
         This is what the daemon's scheduler calls per tick.
         """
-        unit = self._unit(name)
-        if not unit.running or unit.runner is None:
-            return None
-        if unit.kind == "strategy":
-            from trading_bot.application.strategy_runner import StrategyRunner
-
-            assert isinstance(unit.runner, StrategyRunner)
-            return await unit.runner.step_latest()
         from trading_bot.application.portfolio_runner import PortfolioRunner
+        from trading_bot.application.strategy_runner import StrategyRunner
 
-        assert isinstance(unit.runner, PortfolioRunner)
-        return await unit.runner.rebalance_latest()
+        unit = self._unit(name)
+        # Snapshot the runner under the unit's lock, then release it before the
+        # (possibly long) feed drain. Taking the lock only around the state read
+        # guarantees `step` sees a consistent, fully-built-or-absent unit — it never
+        # observes a half-torn-down/half-rebuilt one, because `stop`/`set_mode`/
+        # `start` mutate `runner`/`engine`/`running` only while holding this same
+        # lock. Holding the lock across the drain is deliberately avoided (per the
+        # A-3 note): once we hold a live `runner` reference locally, a concurrent
+        # teardown that nulls `unit.runner` cannot corrupt this in-flight step (the
+        # engine it drives stays alive while this reference holds it), so there is no
+        # need to serialise the whole rebalance behind the lock.
+        async with unit.lock:
+            if not unit.running or unit.runner is None:
+                return None
+            runner = unit.runner
+        if isinstance(runner, StrategyRunner):
+            return await runner.step_latest()
+        assert isinstance(runner, PortfolioRunner)
+        return await runner.rebalance_latest()
 
     async def start_all(self) -> None:
         """Start every managed unit (the daemon's boot — each in its config mode)."""
@@ -1229,6 +1301,9 @@ class StrategySupervisor:
         with no ``db_path`` there is nowhere to read from, so the fills are empty.
         """
         if unit.running and unit.engine is not None and unit.engine.store is not None:
+            # The store writes bus-driven fills on a background thread; drain it so
+            # this reconciliation-source read reflects every confirmed fill.
+            unit.engine.store.flush()
             return unit.engine.store.stored_fills()
         db_path = unit.config.storage.db_path
         if db_path is None:

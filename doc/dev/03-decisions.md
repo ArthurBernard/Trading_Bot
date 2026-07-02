@@ -6,7 +6,118 @@ rejected approaches as tombstones.
 
 ---
 
-### 2026-07-02 Make the pytest gate hermetic and enforced (PR #PR)  [accepted]
+### 2026-07-02 Per-unit lock serialises supervisor lifecycle vs stepping (PR #141)  [accepted]
+- **Choice**: each `_Unit` gets its own `asyncio.Lock`. `start`/`stop`/`set_mode`/
+  `remove` mutate unit state only under that lock (`set_mode`'s stop→re-slice→start
+  is one atomic critical section via `_start_locked`); `step` takes the lock only to
+  **snapshot the runner**, then releases it before the long feed drain — once it
+  holds a live runner reference a concurrent teardown can't corrupt the in-flight
+  step. `stop` and `remove_unit` share one `_teardown` helper.
+- **Why**: audit A-3 — `step` vs `set_mode`/`stop`/`remove` were un-locked over
+  shared `_Unit` state, so a scheduler tick could double-build an engine or step a
+  half-built/torn-down unit. A **per-unit** lock (not a supervisor-wide one) keeps
+  independent strategies concurrent while removing the same-unit race. A-10 — the
+  two teardown paths were hand-inlined and could diverge.
+- **Rejected alternatives**: (a) a single global lock — serialises unrelated
+  strategies; (b) holding the lock across the whole rebalance — needlessly blocks
+  control ops for the feed-drain duration.
+### 2026-07-02 SQLite writes off the event loop via a writer thread (PR #140)  [accepted]
+- **Choice**: the bus handler enqueues a write job (non-blocking) onto a FIFO
+  `queue.Queue`; one daemon writer thread drains it and does the SQLite I/O.
+  `close()` drains + joins the thread on shutdown; `flush()` is the read-side
+  barrier for reconciliation reads. Connections use WAL + explicit `busy_timeout`;
+  fills are keyed `(fill_id, venue, mode)`.
+- **Why**: audit A-2 — a synchronous open→write→commit→close ran inside the async
+  loop on every order/fill (hot path), blocking all runners. `EventBus.emit` is
+  synchronous and called from the loop, so a writer thread + queue (rather than
+  `asyncio.to_thread` per write) gives a non-blocking hand-off with strict FIFO
+  ordering and one place to drain on shutdown. D-9 — a single `fill_id` PK let a
+  paper and a live fill with the same venue id collide (`INSERT OR IGNORE` dropped
+  one), breaking the separate-series / no-double-count guarantee.
+- **Rejected alternatives**: (a) `asyncio.to_thread` per write — no single ordering
+  point / drain seam; (b) an async SQLite lib — a heavier dependency/rewrite for a
+  write path that is already append-only and idempotent.
+### 2026-07-02 Weight-aware Binance rate limiter (PR #142)  [accepted]
+- **Choice**: a `WeightBucket` (limit 1200/60s, continuous refill) charges each
+  endpoint its published request-weight, resyncs to the venue's
+  `X-MBX-USED-WEIGHT-1M` header (adopts a higher figure, ignores a lower one), and
+  parks all acquires on a 418 ban / 429 `Retry-After` window (longest wins). The
+  `RateLimiter` uses it for weight-metered venues (binance) and keeps the
+  `TokenBucket` / Kraken call-counter paths unchanged. A `retry=False` 429 still
+  raises `AmbiguousRequestError` but surfaces `Retry-After` to the limiter.
+- **Why**: audit B-6 — the Binance limiter was a flat per-second token bucket that
+  ignored the weight budget and 418/`Retry-After`, so it could exceed the venue
+  budget and get IP-banned. B-9 — `Retry-After` on a `retry=False` 429 was
+  discarded. B-7 — a Binance error inside a JSON array was undetected.
+- **Rejected alternatives**: (a) keep the flat token bucket — wrong model (Binance
+  meters by weight, not calls); (b) auto-retry a 429 submit — breaks the
+  ambiguous-submit → reconcile guarantee; the Retry-After only paces the *next* call.
+### 2026-07-02 True average fill price on partial fills; Kraken WS reconcile-on-gap (PR #143)  [accepted]
+- **Choice**: `open_orders` computes a partially-filled order's average fill price
+  from the venue's executed fields — Binance `cummulativeQuoteQty / executedQty`,
+  Kraken `cost / vol_exec` (fallback the top-level `price`) — never the resting
+  limit/stop price; zero-executed ⇒ no avg price (`None`). Kraken private-WS tracks
+  the executions `sequence` and reconciles on a gap or (re)connect; a present-but-
+  unparseable `ts` raises rather than silently becoming `0`.
+- **Why**: audit B-8 — using the limit price as the avg fill price is a wrong PnL
+  basis (fills are the source of truth for PnL). B-10 — the WS had no
+  reconcile-on-fill-gap and a bad timestamp silently zeroed (corrupting ordering).
+- **Rejected alternatives**: (a) keep the limit price — wrong basis; (b) treat a
+  per-connection sequence restart as a gap — Kraken resets its counter each connect,
+  so the baseline resets on (re)connect to avoid a false gap.
+
+### 2026-07-02 Config-driven portfolio data source (resample + store path) (PR #138)  [accepted]
+- **Choice**: add `source_span` and `data_path` to `DataSourceConfig`;
+  `build_portfolio_runners` wraps the real dccd client in a `ResamplingDccdClient`
+  (`daily_span=span`, `source_span`) when `source_span` is set and no client is
+  injected, and `_make_client` accepts a **store-root directory** as `data_path`.
+- **Why**: dccd serves bars at their stored span and does not resample, so a daily
+  portfolio over a 1-minute store read zero rows. The offline tests injected a
+  ready `ResamplingDccdClient`, but the supervisor/dashboard path passes
+  `client=None`, so the real daily-on-1m case never worked from the dashboard. The
+  resampling seam already existed (`ResamplingDccdClient`); this makes it reachable
+  **by config**, mirroring what `run_paper.py` did by hand.
+- **Rejected alternatives**: (a) auto-detecting the stored span from the store
+  inventory — implicit and surprising; a declared `source_span` is explicit; (b)
+  promoting the local `_ParquetSource` test helper into the engine — it bypasses
+  dccd; the primed dccd client now reads the store directly.
+- **Verified**: a paper portfolio rebalance over the **real** 1m store routes every
+  leg (full long/short book), fill-driven PnL/fees — via the config path, no
+  injected client.
+
+### 2026-07-02 Prime the dccd client for sync reads instead of a lifecycle refactor (PR #137)  [accepted]
+- **Choice**: `_make_client` builds the dccd `Client`'s read state (`_store` /
+  `_registry`, via dccd's public `build_store` / `build_registry`) synchronously —
+  the read-only half of dccd's async `__aenter__` — so the engine's synchronous
+  feed `read()` works without an `async with Client()` block.
+- **Why**: dccd drifted to require `async with Client()` (whose `__aenter__` builds
+  the store/registry AND opens per-adapter HTTP pools). The engine only *reads*
+  stored parquet (never collects), and reads happen synchronously inside the async
+  step, so a full async-context lifecycle (enter/exit at engine start/shutdown,
+  threaded through the sync feed) is a large refactor for HTTP pools reads never
+  use. Priming just the read state is contained and correct for read-only use.
+- **Rejected alternatives**: (a) a full async-context lifecycle refactor of the
+  feed/engine — large, and opens collection-only pools; (b) keeping the local
+  `_ParquetSource` workaround — it bypasses dccd and isn't in the engine.
+- **Note**: reaches dccd's private `_store`/`_registry` — a sibling-repo seam; a
+  clean long-term fix is a public read-only entry on dccd's `Client`.
+
+### 2026-07-02 Resolve local strategy signal refs by putting the CWD on sys.path (PR #135)  [accepted]
+- **Choice**: the CLI group callback runs `_ensure_cwd_importable()` before every
+  command, inserting the current working directory into `sys.path` so a manifest's
+  `signal.ref` pointing at the gitignored local `strategies/` tree (e.g.
+  `strategies.<yourpkg>.signal:...`) resolves.
+- **Why**: a console-script entry point (`trading-bot`) does not add the CWD to
+  `sys.path` the way `python script.py` / `python -m` do, so importing a local
+  strategy module failed and `_start_dashboard_units` silently skipped the unit —
+  the strategy never launched from the dashboard. Running `trading-bot` from the
+  project root (which holds `strategies/`) now behaves like a script launched there.
+- **Rejected alternatives**: (a) mutating `sys.path` inside the application-layer
+  signal loaders — a layering smell (application assuming CWD semantics); (b)
+  requiring `PYTHONPATH=.` — undiscoverable and easy to forget. The interface layer
+  is the right place to set up the import environment.
+
+### 2026-07-02 Make the pytest gate hermetic and enforced (PR #132)  [accepted]
 - **Choice**: add a repo `conftest.py` with an autouse fixture that runs every test
   from a temp CWD and scrubs `TRADING_BOT_*` env; drop `--exitfirst` from `addopts`;
   add `--cov-fail-under=90`.
@@ -17,7 +128,7 @@ rejected approaches as tombstones.
 - **Rejected alternatives**: patching the five individual tests to look elsewhere —
   leaves the whole class of CWD/env bleed unaddressed; the autouse fixture fixes it
   once for the whole suite.
-### 2026-07-02 Domain applies its own money() guard at construction (PR #PR)  [accepted]
+### 2026-07-02 Domain applies its own money() guard at construction (PR #128)  [accepted]
 - **Choice**: route every money field through `money()` inside `Order`/`Fill`/`Signal`
   `__post_init__` and **reject** a raw `float` (fail-fast) rather than coerce it; pin an
   explicit `decimal.localcontext` on the average-price / average-entry divisions; reject
@@ -30,7 +141,7 @@ rejected approaches as tombstones.
   non-deterministically; a pinned context makes average prices deterministic.
 - **Rejected alternatives**: silent float→Decimal coercion (hides caller bugs and the
   `float(x)` precision loss it's meant to prevent).
-### 2026-07-02 Broker order-path live-readiness (PR #PR)  [accepted]
+### 2026-07-02 Broker order-path live-readiness (PR #129)  [accepted]
 - **Choice**: quantize qty/price to the venue lot/tick (`ROUND_DOWN`, reject
   sub-min-lot/notional with `OrderTooSmall`) before submit on both venues; give Kraken
   a monotonic, lock-guarded nonce; map venue error codes to domain errors and retry
@@ -46,7 +157,7 @@ rejected approaches as tombstones.
   would break the ambiguous-submit→reconcile idempotency guarantee, so submit still
   raises `AmbiguousRequestError`; (b) rounding size up — can oversell holdings; (c)
   silently dropping an out-of-charset client-order-id.
-### 2026-07-02 Redact secrets at the transport boundary (PR #PR)  [accepted]
+### 2026-07-02 Redact secrets at the transport boundary (PR #127)  [accepted]
 - **Choice**: a redaction helper in `transport/http.py` masks the values of
   sensitive query params (`signature`, api key, `token`, `nonce`) in every log line
   and exception message, and the `HTTPError`/`AmbiguousRequestError` objects store the
@@ -58,7 +169,7 @@ rejected approaches as tombstones.
 - **Rejected alternatives**: (a) sign in headers only — not all Binance endpoints
   support it; (b) scrub at the logging formatter — misses exception `__str__` paths
   that get logged far from the transport.
-### 2026-07-02 Enforce dashboard live/filesystem/import gates server-side (PR #PR)  [accepted]
+### 2026-07-02 Enforce dashboard live/filesystem/import gates server-side (PR #130)  [accepted]
 - **Choice**: validate the typed live-acknowledgement (`I UNDERSTAND`) on the server
   with a constant-time compare (a bare `confirm:true` no longer flips to live); reject
   absolute or `..`-traversal `db_path` in the deploy body (400); allow-list the deploy
@@ -72,7 +183,7 @@ rejected approaches as tombstones.
   sanitising only the auto-derived `db_path` (the explicit one bypassed it). Residual
   blast radius documented in code: allow-listed modules still run import-time code — the
   auth token remains the real trust boundary.
-### 2026-07-02 Daily-loss breaker is UTC-day-scoped; orders table gets a migration (PR #PR)  [accepted]
+### 2026-07-02 Daily-loss breaker is UTC-day-scoped; orders table gets a migration (PR #131)  [accepted]
 - **Choice**: wire `max_daily_loss` to realised PnL **since UTC midnight** via an
   injectable clock, so the breaker resets automatically at the day boundary; add an
   idempotent `orders`-table column migration mirroring `_migrate_fills_tags`.

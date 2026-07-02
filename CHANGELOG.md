@@ -16,6 +16,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 
+## [0.9.0] - 2026-07-02
+
+### Added
+
+- **Config-driven portfolio data source.** `DataSourceConfig` gains `source_span` (resample a finer stored span up to `span` — e.g. a **daily** portfolio over a **1-minute** dccd store) and `data_path` (the dccd **store root** to read); `build_portfolio_runners` wraps the client in a `ResamplingDccdClient` when `source_span` is set, so a supervisor/dashboard reads a live 1m store as daily bars with no injected client. Verified end-to-end on the real store (every leg routed). (#138)
+
+### Changed
+
+### Fixed
+
+- **Supervisor lifecycle no longer races stepping.** A per-unit `asyncio.Lock` guards start/stop/step/set_mode/remove so a scheduler tick can't step a half-built or torn-down unit (it previously could double-build an engine or hit `None`); independent strategies still run concurrently; stop/remove share one teardown path (audit A-3/A-10). (#141)
+- **SQLite writes moved off the event loop.** Order/fill persistence hands off to a dedicated FIFO writer thread (append-only, drained on shutdown) instead of a synchronous open→write→commit→close inside the async loop that blocked all runners; connections use WAL + an explicit `busy_timeout`; fills are keyed `(fill_id, venue, mode)` so a paper and a live fill sharing a venue id no longer collide (audit A-2/D-8/D-9). (#140)
+- **Weight-aware Binance rate limiter.** The limiter now charges each endpoint its request-weight, tracks the rolling 1-minute budget (honouring `X-MBX-USED-WEIGHT-1M`), and backs off on 418 (IP ban) / 429 (`Retry-After`); a `retry=False` 429 surfaces `Retry-After` without ever blind-retrying a submit; a Binance error inside a JSON array is now detected (audit B-6/B-9/B-7). (#142)
+- **True average fill price on partial fills + Kraken WS reconcile-on-gap.** `open_orders` derives a partial fill's average price from the venue's executed cost/qty (Binance `cummulativeQuoteQty/executedQty`, Kraken `cost/vol_exec`), never the resting limit price; the Kraken private-WS reconciles on a sequence gap / (re)connect and rejects an unparseable timestamp instead of silently zeroing it (audit B-8/B-10). (#143)
+- **Engine reads a real dccd store synchronously.** `_make_client` primes the dccd `Client`'s store/registry (the read-only half of dccd's async `__aenter__`), so the feed's sync `read()` works from inside the async step — it previously raised `Client must be used inside 'async with Client()'` (dccd API drift), starving every real-dccd read. Verified against 4.66M real 1m bars. (#137)
+- **Dashboard can launch strategies with a local `signal.ref`.** `trading-bot` now puts the CWD on `sys.path` (a group callback), so a manifest referencing a gitignored local strategy package (e.g. `strategies.<yourpkg>.signal:...`) resolves — previously the console script couldn't import it and the unit was silently skipped at start. (#135)
+
+### Deprecated
+
+### Removed
+
 ## [0.8.0] - 2026-07-02
 
 ### Added
@@ -86,7 +107,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   crashing the dashboard), and **`supervisor.start()` replays the store's fills into
   a paper unit's tracker/perf** so its book (positions + realised PnL) survives a
   restart — live/testnet still reconcile from the broker (no double-count). Verified
-  end-to-end: a restarted dashboard shows the 14 restored alloc1 paper positions and
+  end-to-end: a restarted dashboard shows the restored paper portfolio positions and
   the live-mode switch is refused (403) without a typed confirmation. (#115)
 
 - **Dashboard Overview + KPI at 3 levels.** The dashboard app now serves aggregate
@@ -97,7 +118,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   every running unit's engine bus onto one feed (dedup by id). The Overview page
   renders a KPI strip (level toggle), a positions table (group-by crypto/exchange) and
   an open-orders table, live via SSE with a polling fallback. Verified against a real
-  paper alloc1 book: the accessors equal the engine's own realised PnL/fees exactly.
+  paper portfolio book: the accessors equal the engine's own realised PnL/fees exactly.
   (#114)
 
 - **Unified dashboard skeleton** — one `create_dashboard_app` factory + a
@@ -109,16 +130,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   now; data lands in the following leaves. First leaf of the unified-dashboard epic
   that will retire the split read-only/control apps. (#113)
 
-- **ALLOC1 portfolio config (Binance + Kraken)** — wires the research allocator ALLOC1
-  (`../fynance-research/DEPLOY_ALLOC1.md`: a dynamic regime-aware blend of LS2 / MN1 / BEAR1)
-  by config + a thin generic adapter, exactly like LS1. Adds
-  `strategies/alloc1/{binance.yaml, kraken.yaml, signal.py, test_e2e.py}`: the signal wrapper
-  adapts `fynance_research.strategies.alloc1_live.target_weights(venue)` to the
-  `PortfolioSignalFn` contract (research imported lazily) for both venues; the paper configs
-  declare the 14-coin Binance USDT and 13-coin Kraken USD (no BNB) portfolios; the wiring tests
-  prove both validate + their signal refs resolve offline. Paper-only; no engine code changed.
-  **Binance is fully validated; the Kraken config is paper and blocked for live/2026** on a dccd
-  BTC-USD Kraken data gap (Jan–May 2026) — ready to activate once backfilled (DEPLOY_ALLOC1.md §Kraken).
+- **Portfolio-strategy config support (multi-asset units run by config).** A
+  multi-asset portfolio strategy can be declared entirely in a manifest — a
+  `universe` plus a `signal.ref` pointing at a `PortfolioSignalFn` — and run by
+  config through the generic portfolio adapter, with no per-strategy engine code.
+  Concrete strategies stay **local-only** under the gitignored `strategies/` tree
+  (strategy IP lives outside the engine repo; the engine stays generic). Paper by
+  default; the wiring is validated offline by the generic adapter tests.
 
 ### Changed
 

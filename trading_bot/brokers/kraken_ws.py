@@ -145,16 +145,41 @@ def _broker_token_provider(broker: KrakenBroker) -> Callable[[], Awaitable[str]]
 def _parse_iso_ms(ts_str: str) -> int:
     """Parse a Kraken ISO-8601 timestamp to milliseconds since the epoch (UTC).
 
-    Kraken v2 stamps events as e.g. ``"2024-01-02T03:04:05.123456Z"``. Returns
-    ``0`` for a missing/unparseable value (callers carry ``ts`` for record-keeping
-    only; it never re-sorts fills).
+    Kraken v2 stamps events as e.g. ``"2024-01-02T03:04:05.123456Z"``.
+
+    B-10: a **missing** timestamp is a legitimate absence and maps to ``0`` (the
+    :class:`~trading_bot.domain.fill.Fill` still carries every money field the
+    PnL fold needs). A **present-but-malformed** timestamp, by contrast, is a bad
+    frame: silently zeroing it would corrupt event ordering and the PnL timing of
+    the fill it stamps, so it is **rejected** (raised) rather than swallowed —
+    fail loud on a corrupt timestamp instead of fabricating ``0``.
+
+    Parameters
+    ----------
+    ts_str : str
+        The raw timestamp string (empty/absent is allowed).
+
+    Returns
+    -------
+    int
+        Milliseconds since the Unix epoch (UTC), or ``0`` for a missing value.
+
+    Raises
+    ------
+    BrokerError
+        If ``ts_str`` is non-empty but cannot be parsed as an ISO-8601 instant
+        (a corrupt timestamp that must not be silently coerced to ``0``).
     """
     if not ts_str:
         return 0
     try:
         dt = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
-    except (ValueError, AttributeError):
-        return 0
+    except (ValueError, AttributeError, TypeError) as exc:
+        from trading_bot.domain.errors import BrokerError
+
+        raise BrokerError(
+            f"Kraken executions: unparseable timestamp {ts_str!r}"
+        ) from exc
     return int(dt.timestamp() * 1000)
 
 
@@ -233,6 +258,11 @@ class KrakenPrivateWS(WebSocketBase):
         self._snap_trades = snap_trades
         self._snap_orders = snap_orders
         self._on_connected = on_connected
+        # B-10: last ``sequence`` seen on the executions channel. Kraken v2
+        # numbers executions messages consecutively; a jump means the engine
+        # missed a frame (a fill it never saw), so a reconcile is triggered.
+        # ``None`` means "no baseline yet" (first message / just (re)connected).
+        self._last_sequence: int | None = None
 
     @classmethod
     def from_broker(
@@ -271,7 +301,9 @@ class KrakenPrivateWS(WebSocketBase):
         is refreshed and the subscription re-established automatically — and, if an
         ``on_connected`` hook was supplied, it is awaited afterwards (the seam a
         live caller uses to **reconcile** the engine to the venue after every
-        reconnect; a failure there is logged, never breaking the stream).
+        reconnect; a failure there is logged, never breaking the stream). The
+        same hook also fires on a detected ``sequence`` gap mid-stream (B-10 —
+        see :meth:`_check_sequence_gap`).
         """
         token = await self._token_provider()
         sub: dict[str, Any] = {
@@ -284,11 +316,27 @@ class KrakenPrivateWS(WebSocketBase):
             },
         }
         await ws.send(json.dumps(sub))
-        if self._on_connected is not None:
-            try:
-                await self._on_connected()
-            except Exception:
-                logger.exception("on_connected hook failed after WS (re)connect")
+        # B-10: a reconnect restarts Kraken's per-connection ``sequence`` counter
+        # (and replays a snapshot), so drop the baseline — the first message on
+        # the new connection re-seeds it and must not read as a gap.
+        self._last_sequence = None
+        await self._trigger_reconcile("WS (re)connect")
+
+    async def _trigger_reconcile(self, reason: str) -> None:
+        """Fire the reconcile hook, if one was supplied (never breaks the stream).
+
+        The single seam a live caller uses to **reconcile** the engine to the
+        venue — invoked both after every (re)connect's subscribe and on a
+        detected ``sequence`` gap (B-10): a missed fill must be **recovered by
+        re-reading the venue**, never assumed. A failure in the hook is logged,
+        never propagated, so a reconcile error cannot kill the fill stream.
+        """
+        if self._on_connected is None:
+            return
+        try:
+            await self._on_connected()
+        except Exception:
+            logger.exception("reconcile hook failed after %s", reason)
 
     async def events(self) -> AsyncIterator[Fill | OrderUpdate]:
         """Yield domain :class:`Fill`s and :class:`OrderUpdate`s from the feed.
@@ -313,10 +361,41 @@ class KrakenPrivateWS(WebSocketBase):
             if data.get("channel") != "executions":
                 # Ignore heartbeats, status frames, subscription acks, etc.
                 continue
+            await self._check_sequence_gap(data)
             for entry in data.get("data", []):
                 event = self._parse_entry(entry)
                 if event is not None:
                     yield event
+
+    async def _check_sequence_gap(self, data: dict[str, Any]) -> None:
+        """Trigger a reconcile when the executions ``sequence`` skips a value.
+
+        B-10: Kraken v2 numbers executions messages with a per-connection
+        ``sequence`` counter that increments by 1. A jump (``seq >
+        last + 1``) means the engine missed one or more frames — i.e. one or
+        more **fills it never saw**. Fills are the PnL source of truth, so a
+        missed fill must be *recovered by re-reading the venue*, never assumed:
+        the gap fires the reconcile hook (:meth:`_trigger_reconcile`). A message
+        without a ``sequence`` (or a non-increasing one — a snapshot replay after
+        resubscribe) never counts as a gap.
+        """
+        seq = data.get("sequence")
+        if not isinstance(seq, int):
+            return
+        last = self._last_sequence
+        if last is not None and seq > last + 1:
+            logger.warning(
+                "Kraken executions sequence gap: %d -> %d (missed %d frame(s)); "
+                "reconciling",
+                last,
+                seq,
+                seq - last - 1,
+            )
+            await self._trigger_reconcile("executions sequence gap")
+        # Advance the baseline monotonically (a replayed snapshot with a lower
+        # sequence must not rewind it and mask a subsequent real gap).
+        if last is None or seq > last:
+            self._last_sequence = seq
 
     async def fills(self) -> AsyncIterator[Fill]:
         """Yield only the executed-trade :class:`Fill`s (drops order updates).

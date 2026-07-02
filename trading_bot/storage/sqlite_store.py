@@ -53,8 +53,11 @@ engine's event stream (``OrderEvent -> upsert_order``,
 
 from __future__ import annotations
 
+import logging
 import pathlib
+import queue
 import sqlite3
+import threading
 import time
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -76,10 +79,19 @@ if TYPE_CHECKING:
 
 __all__ = ["StoredFill", "SqliteStore"]
 
+logger = logging.getLogger(__name__)
+
 #: The mode stamped on a fill whose deployment mode is unknown (a pre-migration
 #: row, or a store written with no mode context). ``"paper"`` is the safe default
 #: — a fill with no venue could only have been the simulator's.
 _DEFAULT_MODE = "paper"
+
+#: Milliseconds a connection waits for a held lock before raising ``database is
+#: locked``, set explicitly per connection (``PRAGMA busy_timeout``). WAL lets
+#: readers and the single writer proceed concurrently, but a checkpoint or a
+#: second writer can still briefly hold the lock; a generous, *explicit* budget
+#: (rather than sqlite3's implicit 5 s default) keeps concurrent access safe.
+_BUSY_TIMEOUT_MS = 30_000
 
 _SCHEMA = """
 PRAGMA journal_mode=WAL;
@@ -103,7 +115,7 @@ CREATE TABLE IF NOT EXISTS orders (
 );
 
 CREATE TABLE IF NOT EXISTS fills (
-    fill_id         TEXT PRIMARY KEY,
+    fill_id         TEXT NOT NULL,
     client_order_id TEXT NOT NULL,
     instrument      TEXT NOT NULL,
     side            TEXT NOT NULL,
@@ -112,7 +124,14 @@ CREATE TABLE IF NOT EXISTS fills (
     fee             TEXT NOT NULL,
     ts              INTEGER NOT NULL,
     mode            TEXT NOT NULL DEFAULT 'paper',
-    venue           TEXT NOT NULL DEFAULT ''
+    venue           TEXT NOT NULL DEFAULT '',
+    -- Composite identity: a paper fill and a live fill can legitimately share a
+    -- venue ``fill_id`` (the simulator mints ids independently of any venue), so
+    -- keying on ``fill_id`` alone would let ``INSERT OR IGNORE`` silently drop the
+    -- second — commingling / losing a fill (the PnL source of truth). Partitioning
+    -- the key by ``(fill_id, venue, mode)`` keeps the separate-series guarantee:
+    -- same execution (same id + venue + mode) still dedups to a no-op.
+    PRIMARY KEY (fill_id, venue, mode)
 );
 
 CREATE INDEX IF NOT EXISTS idx_fills_ts ON fills(ts);
@@ -151,6 +170,25 @@ class StoredFill:
     """
 
     fill: Fill
+    mode: str
+    venue: str
+
+
+@dataclass(frozen=True, slots=True)
+class _WriteJob:
+    """One append-only write queued for the off-loop writer thread.
+
+    A tagged union carrying either an :class:`~trading_bot.domain.order.Order` to
+    UPSERT or a :class:`~trading_bot.domain.fill.Fill` to append, plus the
+    ``mode`` / ``venue`` context captured **at enqueue time** so a later
+    :meth:`SqliteStore.set_context` cannot retag a fill already in flight (the tag
+    is fixed the instant the event lands). Exactly one of ``order`` / ``fill`` is
+    set. Enqueued by the bus handler (off the event loop) and drained FIFO by the
+    single writer thread, which applies it via the store's synchronous write API.
+    """
+
+    order: Order | None
+    fill: Fill | None
     mode: str
     venue: str
 
@@ -226,11 +264,19 @@ class SqliteStore:
         # + venue). A storage/deployment concern, kept off the pure domain Fill.
         self._mode = mode
         self._venue = venue
+        # The off-loop writer: a single dedicated thread draining a FIFO queue of
+        # append-only writes, started lazily by ``attach`` (only the bus/event hot
+        # path needs it; direct method calls stay synchronous for read-after-write).
+        # ``None`` until attached. See ``_ensure_writer`` / ``_writer_loop``.
+        self._writer: threading.Thread | None = None
+        self._write_queue: queue.Queue[_WriteJob | None] = queue.Queue()
+        self._writer_lock = threading.Lock()
         if str(self._path) != ":memory:":
             self._path.parent.mkdir(parents=True, exist_ok=True)
         with self._conn() as conn:
             conn.executescript(_SCHEMA)
             _migrate_fills_tags(conn)
+            _migrate_fills_pk(conn)
             _migrate_orders_columns(conn)
 
     def set_context(self, *, mode: str, venue: str) -> None:
@@ -255,9 +301,20 @@ class SqliteStore:
 
     @contextmanager
     def _conn(self) -> Generator[sqlite3.Connection, None, None]:
-        """Yield a fresh connection (``sqlite3.Row`` rows), commit or rollback."""
+        """Yield a fresh connection (``sqlite3.Row`` rows), commit or rollback.
+
+        Every connection is opened in WAL journal mode with an **explicit**
+        ``busy_timeout`` (:data:`_BUSY_TIMEOUT_MS`) rather than relying on
+        sqlite3's implicit 5 s default, so concurrent access (the writer thread
+        plus reconciliation reads on the loop) waits on a briefly-held lock
+        instead of raising ``database is locked``. ``journal_mode`` is a
+        persistent database property but is (re)asserted here so a connection to a
+        DB created elsewhere still lands in WAL.
+        """
         conn = sqlite3.connect(str(self._path))
         conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute(f"PRAGMA busy_timeout={_BUSY_TIMEOUT_MS}")
         try:
             yield conn
             conn.commit()
@@ -333,22 +390,38 @@ class SqliteStore:
     def record_fill(self, fill: Fill) -> None:
         """Append ``fill`` to the fills table — append-only, no overwrite.
 
-        ``INSERT OR IGNORE`` on the ``fill_id`` primary key: re-recording the
-        same execution (a replayed :class:`~trading_bot.application.events.
-        FillEvent`, a reconciliation re-fetch) is a silent no-op. Fills are
-        immutable facts; they never mutate and never duplicate. Money/qty/fee
-        are stored as ``str(Decimal)`` TEXT.
+        ``INSERT OR IGNORE`` on the composite ``(fill_id, venue, mode)`` primary
+        key: re-recording the *same* execution (a replayed
+        :class:`~trading_bot.application.events.FillEvent`, a reconciliation
+        re-fetch) is a silent no-op, while a paper fill and a live fill that
+        happen to share a venue ``fill_id`` are **kept as distinct rows** (the
+        simulator mints ids independently of any venue — keying on ``fill_id``
+        alone would silently drop the second and lose a fill). Fills are immutable
+        facts; they never mutate and never duplicate. Money/qty/fee are stored as
+        ``str(Decimal)`` TEXT.
 
         The row is tagged with the store's current ``mode`` / ``venue`` (see
         :meth:`set_context`) — a **storage / deployment** concern kept off the
         pure domain :class:`Fill`, so a per-mode PnL curve can keep live and
-        testnet (fake money) as separate series.
+        testnet (fake money) as separate series. The tags are part of the fill's
+        storage identity, so the separate series never collide.
 
         Parameters
         ----------
         fill : Fill
             The broker-confirmed execution to persist.
 
+        """
+        self._record_fill_tagged(fill, self._mode, self._venue)
+
+    def _record_fill_tagged(self, fill: Fill, mode: str, venue: str) -> None:
+        """Append ``fill`` with *explicit* ``mode`` / ``venue`` storage tags.
+
+        The tag-bearing core of :meth:`record_fill`. The public method reads the
+        store's *current* context; the off-loop writer replays a job with the tags
+        captured **at enqueue time** so a fill in flight is never retagged by a
+        later :meth:`set_context`. Idempotent (``INSERT OR IGNORE`` on the
+        composite key).
         """
         with self._conn() as conn:
             conn.execute(
@@ -367,8 +440,8 @@ class SqliteStore:
                     str(fill.price),
                     str(fill.fee),
                     fill.ts,
-                    self._mode,
-                    self._venue,
+                    mode,
+                    venue,
                 ),
             )
 
@@ -504,11 +577,29 @@ class SqliteStore:
         """Subscribe the store to ``event_bus`` so it fills from the event stream.
 
         A thin adapter: it subscribes one handler that routes
-        :class:`~trading_bot.application.events.OrderEvent` to
-        :meth:`upsert_order` and :class:`~trading_bot.application.events.
-        FillEvent` to :meth:`record_fill` (other events are ignored). The store
-        works standalone without a bus; this just wires the engine's order/fill
-        stream straight into the history.
+        :class:`~trading_bot.application.events.OrderEvent` to an UPSERT and
+        :class:`~trading_bot.application.events.FillEvent` to an append (other
+        events are ignored). The store works standalone without a bus; this wires
+        the engine's order/fill stream straight into the history.
+
+        **Off the event loop.** :meth:`~trading_bot.application.events.EventBus.
+        emit` calls handlers synchronously, on whatever coroutine emitted (the
+        broker / router, on the event loop). A synchronous SQLite open → write →
+        commit → close inside that handler would block *every* runner on the loop
+        on the order/fill hot path. So the handler only **enqueues** a
+        :class:`_WriteJob` (a non-blocking, in-memory hand-off) and a single
+        dedicated writer thread drains the FIFO queue and does the actual I/O.
+        This keeps the loop free while preserving:
+
+        * **ordering** — one FIFO queue, one consumer, so fills/orders are applied
+          in arrival order;
+        * **append-only / idempotency** — the writer calls the same UPSERT /
+          ``INSERT OR IGNORE`` API, so a retried write never duplicates;
+        * **no loss / clean drain** — :meth:`close` (and :meth:`flush`) drain the
+          queue and join the thread before returning, so a shutdown loses nothing.
+
+        The ``mode`` / ``venue`` tags are captured **at enqueue time** so a later
+        :meth:`set_context` never retags a fill already in flight.
 
         Parameters
         ----------
@@ -520,24 +611,111 @@ class SqliteStore:
         # application layer (it works standalone); only ``attach`` needs it.
         from trading_bot.application.events import FillEvent, OrderEvent
 
+        self._ensure_writer()
+
         def _on_event(event: Event) -> None:
+            # Enqueue only — no I/O on the event loop. Tags are snapshotted now so
+            # a concurrent set_context cannot retag this in-flight fill.
             if isinstance(event, OrderEvent):
-                self.upsert_order(event.order)
+                self._write_queue.put(
+                    _WriteJob(
+                        order=event.order,
+                        fill=None,
+                        mode=self._mode,
+                        venue=self._venue,
+                    )
+                )
             elif isinstance(event, FillEvent):
-                self.record_fill(event.fill)
+                self._write_queue.put(
+                    _WriteJob(
+                        order=None,
+                        fill=event.fill,
+                        mode=self._mode,
+                        venue=self._venue,
+                    )
+                )
 
         event_bus.subscribe(_on_event)
+
+    # --- off-loop writer --------------------------------------------------- #
+
+    def _ensure_writer(self) -> None:
+        """Start the dedicated writer thread once (idempotent).
+
+        Called by :meth:`attach`: the writer only exists to drain bus-driven
+        writes, so a store used purely through its synchronous API never spawns a
+        thread. Guarded by a lock so a double :meth:`attach` (or attach from two
+        threads) starts exactly one writer.
+        """
+        with self._writer_lock:
+            if self._writer is not None and self._writer.is_alive():
+                return
+            self._writer = threading.Thread(
+                target=self._writer_loop,
+                name=f"sqlite-store-writer-{id(self):x}",
+                daemon=True,
+            )
+            self._writer.start()
+
+    def _writer_loop(self) -> None:
+        """Drain the write queue FIFO, applying each job, until the sentinel.
+
+        The single consumer: it blocks on the queue, applies each
+        :class:`_WriteJob` through the synchronous write API (preserving arrival
+        order, append-only semantics and idempotency), and marks it done so
+        :meth:`flush` / :meth:`close` can join. A ``None`` sentinel stops the loop
+        (drain-then-exit — every job enqueued before it is applied first). A write
+        that raises is logged and swallowed so one bad row cannot wedge the writer
+        and silently stall every later write; the job is still marked done.
+        """
+        while True:
+            job = self._write_queue.get()
+            try:
+                if job is None:
+                    return
+                if job.order is not None:
+                    self.upsert_order(job.order)
+                elif job.fill is not None:
+                    self._record_fill_tagged(job.fill, job.mode, job.venue)
+            except Exception:
+                logger.exception("SqliteStore writer failed to apply a job")
+            finally:
+                self._write_queue.task_done()
+
+    def flush(self) -> None:
+        """Block until every queued write has been applied.
+
+        The barrier the read side / tests use after driving events through an
+        attached bus: because writes are applied on a background thread,
+        ``emit(...)`` returns before the row lands. :meth:`flush` waits on the
+        queue to drain so a subsequent read (or reconciliation) sees every write.
+        A no-op when no writer is running (the synchronous API writes inline).
+        """
+        if self._writer is None:
+            return
+        self._write_queue.join()
 
     # --- lifecycle --------------------------------------------------------- #
 
     def close(self) -> None:
-        """Close the store.
+        """Close the store, draining any pending off-loop writes first.
 
-        A no-op for connection state (each operation opens and closes its own
-        connection), provided so callers can treat the store as a closable
-        resource symmetrically with a real connection-holding store.
+        Drains the writer queue and joins the writer thread so **no queued write
+        is lost** on shutdown: every order/fill already enqueued is persisted
+        before ``close`` returns. Idempotent — a second call (or a call on a store
+        that was never attached, hence has no writer) is a harmless no-op. Each
+        connection is per-operation (see :meth:`_conn`), so there is no long-lived
+        connection to release beyond the writer.
         """
-        # Nothing to release: connections are per-operation (see ``_conn``).
+        with self._writer_lock:
+            writer = self._writer
+            self._writer = None
+        if writer is None:
+            return
+        # Drain outstanding jobs, then signal the writer to stop and join it.
+        self._write_queue.join()
+        self._write_queue.put(None)  # sentinel: drain-then-exit
+        writer.join()
 
     def __enter__(self) -> SqliteStore:
         """Enter the runtime context, returning the store."""
@@ -638,6 +816,74 @@ def _migrate_fills_tags(conn: sqlite3.Connection) -> None:
         )
     if "venue" not in columns:
         conn.execute("ALTER TABLE fills ADD COLUMN venue TEXT NOT NULL DEFAULT ''")
+
+
+#: The composite primary key the current ``fills`` table carries — a fill's
+#: storage identity is its venue id *plus* the deployment tags, so a paper fill
+#: and a live fill sharing a ``fill_id`` never collide (see :func:`_migrate_fills_pk`).
+_FILLS_PK: frozenset[str] = frozenset({"fill_id", "venue", "mode"})
+
+
+def _migrate_fills_pk(conn: sqlite3.Connection) -> None:
+    """Widen the ``fills`` primary key to composite ``(fill_id, venue, mode)``.
+
+    A pre-existing ``fills`` table keys on ``fill_id`` alone, so a paper fill and a
+    live fill that share a venue ``fill_id`` **collide**: ``INSERT OR IGNORE``
+    keeps the first and silently drops the second — losing a fill (the PnL source
+    of truth) and breaking the separate-series / no-double-count guarantee. This
+    rebuilds the table under the composite key so the two coexist, mode-partitioned.
+
+    SQLite cannot alter a primary key in place, so the migration follows the
+    supported table-rebuild recipe **inside the caller's transaction**: create a
+    new table with the composite key, copy every row across (``INSERT OR IGNORE``
+    so any pre-existing exact-duplicate id — only possible under the old single-id
+    key, hence already unique — copies cleanly), drop the old table, rename the new
+    one, and rebuild the indexes. No money column is touched and no row is lost;
+    the tag columns are assumed present (:func:`_migrate_fills_tags` runs first).
+
+    Idempotent and safe on fresh / partial / old DBs: it inspects the live PK via
+    ``PRAGMA table_info`` and returns immediately when the composite key is already
+    in place (a fresh DB — :data:`_SCHEMA` builds it composite — or a second open
+    of a migrated one). Must run *before* any composite-key write.
+    """
+    pk_columns = {
+        row["name"]
+        for row in conn.execute("PRAGMA table_info(fills)")
+        if row["pk"]
+    }
+    if pk_columns == set(_FILLS_PK):
+        return  # already composite — fresh DB or already migrated
+    # Rebuild under the composite key. ``synchronous`` / ``journal_mode`` are
+    # connection-level and untouched; this is pure DDL + a copy.
+    conn.executescript(
+        """
+        CREATE TABLE fills_new (
+            fill_id         TEXT NOT NULL,
+            client_order_id TEXT NOT NULL,
+            instrument      TEXT NOT NULL,
+            side            TEXT NOT NULL,
+            qty             TEXT NOT NULL,
+            price           TEXT NOT NULL,
+            fee             TEXT NOT NULL,
+            ts              INTEGER NOT NULL,
+            mode            TEXT NOT NULL DEFAULT 'paper',
+            venue           TEXT NOT NULL DEFAULT '',
+            PRIMARY KEY (fill_id, venue, mode)
+        );
+        INSERT OR IGNORE INTO fills_new (
+            fill_id, client_order_id, instrument, side, qty, price,
+            fee, ts, mode, venue
+        )
+        SELECT fill_id, client_order_id, instrument, side, qty, price,
+               fee, ts, mode, venue
+        FROM fills
+        ORDER BY rowid;
+        DROP TABLE fills;
+        ALTER TABLE fills_new RENAME TO fills;
+        CREATE INDEX IF NOT EXISTS idx_fills_ts ON fills(ts);
+        CREATE INDEX IF NOT EXISTS idx_fills_cid ON fills(client_order_id);
+        """
+    )
 
 
 #: Columns the current ``orders`` schema carries that a pre-migration table may

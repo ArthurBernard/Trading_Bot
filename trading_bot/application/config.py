@@ -44,7 +44,7 @@ from decimal import Decimal
 from typing import Any, Literal
 
 import yaml
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from trading_bot.domain.instrument import Symbol, parse_kraken_pair
 from trading_bot.domain.money import money
@@ -117,6 +117,20 @@ class DataSourceConfig(BaseModel):
     data_type : str, optional
         The dccd data kind to read. Defaults to ``"ohlc"`` (the only kind the
         bars feed normalises).
+    source_span : int, optional
+        When set, the store holds bars at this **finer** span and the feed
+        resamples them up to ``span`` (via
+        :class:`~trading_bot.application.data_provider.ResamplingDccdClient`). Use
+        it for a **daily** portfolio over a **1-minute** dccd store (``span:
+        86400`` + ``source_span: 60``): dccd serves bars at their stored span and
+        does not resample, so without this a daily read of a 1m store returns zero
+        rows. ``None`` (default) reads ``span`` directly. Must be ``> 0`` and
+        ``< span``.
+    data_path : str or None, optional
+        The dccd **store root** directory to read from (e.g. a synced
+        ``~/data/<host>``). ``None`` (default) uses dccd's configured default
+        store. A directory is used as the store root directly; anything else is
+        treated as a dccd config path.
 
     """
 
@@ -124,6 +138,8 @@ class DataSourceConfig(BaseModel):
     span: int
     start: str | int | None = None
     data_type: str = "ohlc"
+    source_span: int | None = None
+    data_path: str | None = None
 
     @field_validator("exchange")
     @classmethod
@@ -140,6 +156,21 @@ class DataSourceConfig(BaseModel):
         if v <= 0:
             raise ValueError(f"span must be positive seconds, got {v}")
         return v
+
+    @model_validator(mode="after")
+    def _finer_source_span(self) -> DataSourceConfig:
+        """A resampling ``source_span`` must be a positive span finer than ``span``."""
+        if self.source_span is not None:
+            if self.source_span <= 0:
+                raise ValueError(
+                    f"source_span must be positive seconds, got {self.source_span}"
+                )
+            if self.source_span >= self.span:
+                raise ValueError(
+                    f"source_span ({self.source_span}) must be finer than span "
+                    f"({self.span}) to resample up"
+                )
+        return self
 
 
 class SignalRefConfig(BaseModel):

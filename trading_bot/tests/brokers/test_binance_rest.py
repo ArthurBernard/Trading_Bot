@@ -31,6 +31,9 @@ from trading_bot.brokers.binance import (
     TESTNET_API_BASE,
     _sign,
 )
+from trading_bot.brokers.binance import (
+    BinanceBroker as _BinanceBroker,
+)
 from trading_bot.brokers.paper import PaperBroker
 from trading_bot.domain import (
     Fill,
@@ -42,7 +45,13 @@ from trading_bot.domain import (
     money,
     parse_binance_symbol,
 )
-from trading_bot.domain.errors import LiveTradingNotEnabled
+from trading_bot.domain.errors import (
+    InsufficientBalance,
+    InvalidInstrument,
+    LiveTradingNotEnabled,
+    RateLimited,
+    ServiceUnavailable,
+)
 from trading_bot.transport import AmbiguousRequestError, AsyncHTTPClient
 
 BTC_USDT = Instrument(Symbol("BTC", "USDT"), price_precision=2, qty_precision=5)
@@ -424,6 +433,11 @@ async def test_open_orders_rebuilds_domain_orders(
 async def test_open_orders_partial_fill_reflected(
     httpx_mock, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    # B-8: the average fill price is the executed cost / qty
+    # (cummulativeQuoteQty / executedQty = 1005 / 0.5 = 2010), NOT the resting
+    # limit price (2000). The two diverge whenever the book fills through the
+    # limit; a fill is the PnL source of truth, so the venue's executed basis
+    # must win, never the order's asking price.
     httpx_mock.add_response(
         json=[
             {
@@ -433,6 +447,7 @@ async def test_open_orders_partial_fill_reflected(
                 "price": "2000.00",
                 "origQty": "2.0000",
                 "executedQty": "0.5000",
+                "cummulativeQuoteQty": "1005.00",
                 "type": "LIMIT",
                 "side": "SELL",
                 "status": "PARTIALLY_FILLED",
@@ -444,7 +459,37 @@ async def test_open_orders_partial_fill_reflected(
     orders = await broker.open_orders()
 
     assert orders[0].filled_qty == Decimal("0.5000")
-    assert orders[0].avg_fill_price == Decimal("2000.00")
+    # cummulativeQuoteQty / executedQty = 1005 / 0.5 = 2010, not the 2000 limit.
+    assert orders[0].avg_fill_price == Decimal("2010")
+
+
+async def test_open_orders_zero_executed_applies_no_fill(
+    httpx_mock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # B-8: a zero-executed order carries no average price — no bogus fill is
+    # applied (never the limit price masquerading as an execution).
+    httpx_mock.add_response(
+        json=[
+            {
+                "symbol": "ETHUSDT",
+                "orderId": 43,
+                "clientOrderId": "strat-10",
+                "price": "2000.00",
+                "origQty": "2.0000",
+                "executedQty": "0.0000",
+                "cummulativeQuoteQty": "0.00000000",
+                "type": "LIMIT",
+                "side": "SELL",
+                "status": "NEW",
+            }
+        ]
+    )
+    broker = _broker(monkeypatch)
+
+    orders = await broker.open_orders()
+
+    assert orders[0].filled_qty == Decimal("0")
+    assert orders[0].avg_fill_price is None
 
 
 async def test_fills_over_two_symbol_set(
@@ -687,6 +732,143 @@ async def test_binance_error_body_raises_broker_error(
 
     with pytest.raises(BrokerError, match="insufficient balance"):
         await broker.place_order(order)
+
+
+# --- B-7: array-wrapped Binance errors are detected & mapped -------------- #
+
+
+def test_raise_on_error_detects_array_wrapped_error() -> None:
+    """An error object nested in a top-level list raises (not silently returned).
+
+    Batch/list endpoints return the error inside a JSON array; the old
+    single-object check missed it, so a list/batch failure looked like success.
+    """
+    payload = [{"code": -1121, "msg": "Invalid symbol."}]
+    with pytest.raises(InvalidInstrument):
+        _BinanceBroker._raise_on_error(payload, context="batchOrders")
+
+
+def test_raise_on_error_maps_array_wrapped_codes_to_domain_errors() -> None:
+    """Each array-wrapped Binance code maps to its specific domain error."""
+    cases = [
+        (-1121, "Invalid symbol.", InvalidInstrument),
+        (-1003, "Too many requests.", RateLimited),
+        (-1001, "Internal error; disconnected.", ServiceUnavailable),
+        (-2010, "Account has insufficient balance.", InsufficientBalance),
+    ]
+    for code, msg, exc_type in cases:
+        with pytest.raises(exc_type):
+            _BinanceBroker._raise_on_error(
+                [{"code": code, "msg": msg}], context="ctx"
+            )
+
+
+def test_raise_on_error_finds_error_in_mixed_batch() -> None:
+    """A single failed item in a mixed batch response is surfaced, not ignored."""
+    payload = [
+        {"symbol": "BTCUSDT", "orderId": 1, "status": "NEW"},
+        {"code": -2010, "msg": "Account has insufficient balance."},
+    ]
+    with pytest.raises(InsufficientBalance):
+        _BinanceBroker._raise_on_error(payload, context="batch")
+
+
+def test_raise_on_error_passes_clean_list_through() -> None:
+    """A successful list (no error element) is returned verbatim."""
+    payload = [
+        {"symbol": "BTCUSDT", "orderId": 1, "status": "NEW"},
+        {"symbol": "ETHUSDT", "orderId": 2, "status": "FILLED"},
+    ]
+    assert _BinanceBroker._raise_on_error(payload, context="ok") is payload
+
+
+async def test_open_orders_array_wrapped_error_raises(
+    httpx_mock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An array-wrapped error on the list endpoint ``/openOrders`` raises mapped."""
+    httpx_mock.add_response(json=[{"code": -1003, "msg": "Too many requests."}])
+    broker = _broker(monkeypatch)
+    with pytest.raises(RateLimited):
+        await broker.open_orders()
+
+
+# --- B-6: per-endpoint request weight is charged to the limiter ---------- #
+
+
+def test_weight_for_uses_published_per_endpoint_weights() -> None:
+    """Each endpoint charges its published Binance spot weight (else the default)."""
+    assert _BinanceBroker._weight_for("account") == 20
+    assert _BinanceBroker._weight_for("order") == 1
+    assert _BinanceBroker._weight_for("myTrades") == 20
+    assert _BinanceBroker._weight_for("exchangeInfo") == 20
+    assert _BinanceBroker._weight_for("ticker/price") == 2
+    # An unknown endpoint charges the conservative default weight.
+    assert _BinanceBroker._weight_for("somethingNew") == 1
+
+
+async def test_signed_request_charges_endpoint_weight(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The broker forwards the endpoint's weight to the transport per call."""
+
+    class _RecordingHTTP:
+        """Minimal AsyncHTTPClient stand-in recording the weight per request."""
+
+        def __init__(self) -> None:
+            self.weights: list[float] = []
+
+        async def __aenter__(self) -> "_RecordingHTTP":
+            return self
+
+        async def __aexit__(self, *args: object) -> None:
+            return None
+
+        async def request(
+            self, method: str, url: str, *, weight: float = 1.0, **_: object
+        ) -> object:
+            self.weights.append(weight)
+            return {"balances": []}
+
+        async def get(
+            self, url: str, params: object = None, *, weight: float = 1.0
+        ) -> object:
+            self.weights.append(weight)
+            return {}
+
+    http = _RecordingHTTP()
+    broker = _broker(monkeypatch, http=http)  # type: ignore[arg-type]
+
+    await broker.balances()  # GET /account → weight 20
+    assert http.weights == [20]
+
+
+async def test_place_order_never_blind_retries_on_429(
+    httpx_mock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An ambiguous 429 on the order POST raises ambiguous, sent once — B-9.
+
+    Even though the transport now surfaces the 429 Retry-After to the limiter,
+    the order submit still refuses to auto-retry: the ambiguous-submit →
+    reconcile guarantee is untouched.
+    """
+    httpx_mock.add_response(status_code=429, headers={"Retry-After": "5"})
+    sleep = _RecordingSleep()
+    http = AsyncHTTPClient(exchange="binance", max_retries=3, sleep=sleep)
+    broker = _broker(monkeypatch, http=http)
+    order = Order(
+        client_order_id="strat-429",
+        instrument=BTC_USDT,
+        side=OrderSide.BUY,
+        qty=money("1"),
+        type=OrderType.MARKET,
+    )
+
+    with pytest.raises(AmbiguousRequestError, match="reconcile"):
+        await broker.place_order(order)
+
+    # Sent at most once — no blind-retry — and no per-call backoff on this path.
+    assert len(httpx_mock.get_requests()) == 1
+    assert sleep.calls == []
 
 
 async def test_private_call_without_credentials_raises(

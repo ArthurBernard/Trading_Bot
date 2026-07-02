@@ -992,14 +992,14 @@ def test_signals_endpoint_lists_builtins_and_discovered() -> None:
         sys.modules.pop(f"strategies.{pkg}", None)
 
 
-def _portfolio_deploy_body(name: str = "alloc1") -> dict:
-    """A create-deployment body deploying the alloc1 portfolio (paper, binance)."""
+def _portfolio_deploy_body(name: str = "demo1") -> dict:
+    """A create-deployment body deploying the demo1 portfolio (paper, binance)."""
     return {
         "name": name,
         "kind": "portfolio",
         "venue": "binance",
         "mode": "paper",
-        "signal": "strategies.alloc1.signal:alloc1_portfolio_signal",
+        "signal": "strategies.demo.signal:portfolio_signal",
         "universe": ["BTC/USDT", "ETH/USDT"],
         "capital": "100000",
     }
@@ -1020,12 +1020,12 @@ def test_create_strategy_adds_a_stopped_unit_and_persists(tmp_path) -> None:  # 
 
     # It now lists via /api/strategies.
     names = [s["name"] for s in client.get("/api/strategies").json()]
-    assert names == ["alloc1"]
+    assert names == ["demo1"]
 
     # And it was PERSISTED to disk — re-read the manifest file.
     assert manifest.is_file()
     reloaded = AppConfig.from_yaml(manifest)
-    assert [p.name for p in reloaded.portfolios] == ["alloc1"]
+    assert [p.name for p in reloaded.portfolios] == ["demo1"]
     assert reloaded.portfolios[0].capital == money("100000")
 
 
@@ -1048,19 +1048,19 @@ def test_create_strategy_auto_assigns_an_isolated_db_path(tmp_path) -> None:  # 
         create_dashboard_app(sup, on_change=lambda: sup.manifest().to_yaml(manifest))
     )
 
-    r1 = client.post("/api/strategies", json=_portfolio_deploy_body("alloc1-binance"))
-    r2 = client.post("/api/strategies", json=_portfolio_deploy_body("alloc1-kraken"))
+    r1 = client.post("/api/strategies", json=_portfolio_deploy_body("demo-binance"))
+    r2 = client.post("/api/strategies", json=_portfolio_deploy_body("demo-kraken"))
     assert r1.status_code == 200, r1.text
     assert r2.status_code == 200, r2.text
 
     reloaded = AppConfig.from_yaml(manifest)
     by_name = {p.name: p for p in reloaded.portfolios}
     # Each got its own, distinct, non-null store path under dashboard/.
-    a = by_name["alloc1-binance"].db_path
-    b = by_name["alloc1-kraken"].db_path
+    a = by_name["demo-binance"].db_path
+    b = by_name["demo-kraken"].db_path
     assert a is not None and b is not None and a != b
-    assert a.endswith("dashboard/alloc1-binance.sqlite"), a
-    assert b.endswith("dashboard/alloc1-kraken.sqlite"), b
+    assert a.endswith("dashboard/demo-binance.sqlite"), a
+    assert b.endswith("dashboard/demo-kraken.sqlite"), b
 
 
 def test_create_strategy_honours_an_explicit_db_path() -> None:
@@ -1085,9 +1085,9 @@ def test_create_then_delete_persists_the_removal(tmp_path) -> None:  # noqa: ANN
     client.post("/api/strategies", json=_portfolio_deploy_body())
     assert AppConfig.from_yaml(manifest).portfolios  # persisted on create
 
-    r = client.delete("/api/strategies/alloc1")
+    r = client.delete("/api/strategies/demo1")
     assert r.status_code == 200
-    assert r.json() == {"ok": True, "removed": "alloc1"}
+    assert r.json() == {"ok": True, "removed": "demo1"}
     assert client.get("/api/strategies").json() == []
     # The removal was persisted too — the manifest is rewritten empty.
     assert AppConfig.from_yaml(manifest).portfolios == []
@@ -1670,10 +1670,10 @@ def test_dashboard_reads_an_existing_default_manifest(
     (configs / "dashboard.yaml").write_text(
         "mode: paper\n"
         "portfolios:\n"
-        "  - name: alloc1\n"
+        "  - name: demo1\n"
         "    venue: binance\n"
         "    universe: [BTC/USDT, ETH/USDT]\n"
-        "    signal: {ref: 'strategies.alloc1.signal:alloc1_portfolio_signal'}\n"
+        "    signal: {ref: 'strategies.demo.signal:portfolio_signal'}\n"
         "    capital: '100000'\n"
         "    data: {exchange: binance, span: 86400}\n"
     )
@@ -1688,7 +1688,7 @@ def test_dashboard_reads_an_existing_default_manifest(
     assert result.exit_code == 0, result.output
     test_client = TestClient(captured["app"])
     names = [s["name"] for s in test_client.get("/api/strategies").json()]
-    assert names == ["alloc1"]  # read from the existing manifest
+    assert names == ["demo1"]  # read from the existing manifest
 
 
 def test_dashboard_tolerates_a_unit_that_fails_to_start(

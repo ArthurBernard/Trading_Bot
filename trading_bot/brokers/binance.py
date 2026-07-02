@@ -55,10 +55,14 @@ the router / reconcile / store, so this is self-contained.
 Rate limit
 ----------
 Construction wires an :class:`~trading_bot.transport.http.AsyncHTTPClient` for the
-``"binance"`` exchange with a generic
-:class:`~trading_bot.transport.ratelimit.RateLimiter` token bucket. Binance's
-finer-grained *weight*-budget accounting is future work; the generic per-second
-token bucket is enough for this adapter.
+``"binance"`` exchange with a :class:`~trading_bot.transport.ratelimit.RateLimiter`.
+Binance is **weight-metered**, not flat-rate: the limiter builds a
+:class:`~trading_bot.transport.ratelimit.WeightBucket` (1200 request-weight per
+rolling minute) for ``"binance"``, and each call is charged its per-endpoint
+*weight* (:data:`_ENDPOINT_WEIGHTS`). The transport also feeds Binance's
+``X-MBX-USED-WEIGHT-1M`` response header back into the bucket to stay in step with
+the venue, and honours **418** (IP ban) / **429** ``Retry-After`` by parking the
+next call. See :meth:`BinanceBroker._weight_for`.
 
 Money
 -----
@@ -151,6 +155,23 @@ _BINANCE_INSUFFICIENT_MARKERS: tuple[str, ...] = (
 # ``-1121`` invalid symbol; ``-1100``/`-1130` illegal params sometimes name a bad
 # symbol, but ``-1121`` is the unambiguous invalid-instrument code.
 _BINANCE_INVALID_SYMBOL_CODES: frozenset[int] = frozenset({-1121})
+
+# Per-endpoint Binance spot *request weight* (charged against the 1200/min budget
+# via the WeightBucket). Values from Binance's published spot API weights; a
+# symbol-scoped query costs less than an account-wide one. An endpoint not listed
+# here charges :data:`_DEFAULT_ENDPOINT_WEIGHT` (conservative). These are the
+# venue-published costs, so the proactive limiter depletes the budget at the same
+# rate the venue does — the "never exceed the venue budget" invariant.
+_ENDPOINT_WEIGHTS: dict[str, int] = {
+    "ticker/price": 2,  # single-symbol price
+    "exchangeInfo": 20,  # symbol metadata
+    "account": 20,  # balances
+    "order": 1,  # place (POST) / cancel (DELETE), symbol-scoped
+    "openOrders": 6,  # symbol-scoped; account-wide is 80 (we scope per call)
+    "myTrades": 20,  # per-symbol trade history
+}
+#: Weight charged for an endpoint absent from :data:`_ENDPOINT_WEIGHTS`.
+_DEFAULT_ENDPOINT_WEIGHT = 1
 
 
 def _binance_client_order_id(client_order_id: str) -> str:
@@ -393,12 +414,34 @@ class BinanceBroker(Broker):
         """Return ``payload`` or raise a mapped domain error on a Binance error body.
 
         Binance signals a rejection with a JSON object
-        ``{"code": -xxxx, "msg": "..."}``. The code/msg are mapped to the most
-        specific domain error via :func:`_map_binance_error` (invalid instrument /
-        rate limit / service unavailable / insufficient funds / generic). The
-        ``msg`` is a plain venue diagnostic (never key material), so it is safe to
-        surface. A successful payload is a list or an object without a ``code``
-        field.
+        ``{"code": -xxxx, "msg": "..."}``. On a **batch/list** endpoint the error
+        instead arrives **inside a JSON array** — either a single-element list
+        wrapping the error object, or a mixed list where one element failed
+        (Binance's batch-order responses interleave successes and per-item
+        ``{"code", "msg"}`` errors). Both shapes are detected here: a bare error
+        object *or* the first error object found in a top-level list raises,
+        rather than being silently returned as a "successful" payload. The
+        code/msg are mapped to the most specific domain error via
+        :func:`_map_binance_error` (invalid instrument / rate limit / service
+        unavailable / insufficient funds / generic). The ``msg`` is a plain venue
+        diagnostic (never key material), so it is safe to surface. A successful
+        payload is a non-error object, or a list with no error element.
+        """
+        error = BinanceBroker._find_error(payload)
+        if error is not None:
+            code, msg = error
+            raise _map_binance_error(code, msg, context=context)
+        return payload
+
+    @staticmethod
+    def _find_error(payload: Any) -> tuple[int, str] | None:
+        """Return the ``(code, msg)`` of a Binance error in ``payload``, or ``None``.
+
+        Handles both the bare error object ``{"code", "msg"}`` and the
+        **array-wrapped** shape (an error object nested in a top-level list, as
+        batch/list endpoints return). Scans only the top level of a list — a
+        single failed item anywhere in a batch response is surfaced. A ``code``
+        that is not coercible to ``int`` degrades to ``0`` (still an error).
         """
         if isinstance(payload, dict) and "code" in payload and "msg" in payload:
             code = payload["code"]
@@ -406,8 +449,25 @@ class BinanceBroker(Broker):
                 code_int = int(code)
             except (TypeError, ValueError):
                 code_int = 0
-            raise _map_binance_error(code_int, str(payload["msg"]), context=context)
-        return payload
+            return code_int, str(payload["msg"])
+        if isinstance(payload, list):
+            for item in payload:
+                nested = BinanceBroker._find_error(item)
+                if nested is not None:
+                    return nested
+        return None
+
+    @staticmethod
+    def _weight_for(endpoint: str) -> int:
+        """Return the Binance request *weight* charged for ``endpoint``.
+
+        Looks ``endpoint`` up in :data:`_ENDPOINT_WEIGHTS`, falling back to
+        :data:`_DEFAULT_ENDPOINT_WEIGHT`. The weight is passed to the transport,
+        which charges it against the ``"binance"``
+        :class:`~trading_bot.transport.ratelimit.WeightBucket` so the proactive
+        limiter depletes the rolling-minute budget at the venue's own rate.
+        """
+        return _ENDPOINT_WEIGHTS.get(endpoint, _DEFAULT_ENDPOINT_WEIGHT)
 
     async def _public_get(
         self, endpoint: str, params: Mapping[str, Any]
@@ -415,7 +475,9 @@ class BinanceBroker(Broker):
         """GET a public endpoint and return its parsed JSON (or raise)."""
         url = f"{self._base_url}{_API_PREFIX}/{endpoint}"
         async with self._http as client:
-            payload = await client.get(url, params=dict(params))
+            payload = await client.get(
+                url, params=dict(params), weight=self._weight_for(endpoint)
+            )
         return self._raise_on_error(payload, context=endpoint)
 
     async def _signed_request(
@@ -466,7 +528,11 @@ class BinanceBroker(Broker):
 
         async with self._http as client:
             payload = await client.request(
-                method, url, headers=headers, retry=retry
+                method,
+                url,
+                headers=headers,
+                retry=retry,
+                weight=self._weight_for(endpoint),
             )
         return self._raise_on_error(payload, context=endpoint)
 
@@ -791,12 +857,40 @@ class BinanceBroker(Broker):
         order.submit()
         order.open(composite)
         # Reflect any already-executed volume so the status matches Binance's.
+        # B-8: derive the *true* average fill price from Binance's executed
+        # fields — ``cummulativeQuoteQty / executedQty`` — never the resting
+        # LIMIT/STOP price. Fills are the PnL source of truth, so a partial
+        # fill's basis must be what the venue actually executed at, not what the
+        # order asked for (the two diverge whenever the book fills through the
+        # limit). With no executed qty there is no average yet, so no fill is
+        # applied.
         executed = money(str(info.get("executedQty", "0")))
         if executed > 0:
-            avg_price = limit_price or stop_price
+            avg_price = self._avg_fill_price(info, executed)
             if avg_price is not None and avg_price > 0:
                 order.apply_fill(executed, avg_price)
         return order
+
+    @staticmethod
+    def _avg_fill_price(info: Mapping[str, Any], executed: Money) -> Money | None:
+        """Average fill price of a partial fill: quote spent / base executed.
+
+        Binance reports the cumulative quote spent on the executed portion as
+        ``cummulativeQuoteQty`` and the executed base quantity as
+        ``executedQty``; their ratio is the volume-weighted average execution
+        price — the correct PnL basis (:class:`~trading_bot.domain.fill.Fill` is
+        the source of truth for PnL, not the resting limit price).
+
+        Returns ``None`` when the average cannot be derived (``executed`` is
+        non-positive, or the venue reported no ``cummulativeQuoteQty`` yet) so
+        the caller applies no bogus fill. All arithmetic stays exact ``Decimal``.
+        """
+        if executed <= 0:
+            return None
+        cumulative_quote = money(str(info.get("cummulativeQuoteQty", "0")))
+        if cumulative_quote <= 0:
+            return None
+        return cumulative_quote / executed
 
     async def fills(self, since_ms: int | None = None) -> list[Fill]:
         """Return executions as domain :class:`Fill`s (``GET /myTrades`` per symbol).

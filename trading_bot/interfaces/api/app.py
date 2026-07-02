@@ -934,9 +934,9 @@ def _discover_signals() -> dict[str, list[str]]:
       ``ma_crossover``).
     * ``discovered`` — every ``strategies/*/signal.py`` module scanned for
       module-level callables whose name ends with ``_signal`` (the
-      portfolio-signal wrapper shape, e.g. ``alloc1_portfolio_signal`` /
-      ``ls1_kraken_signal``), returned as ``"module:function"`` refs (e.g.
-      ``"strategies.alloc1.signal:alloc1_portfolio_signal"``).
+      portfolio-signal wrapper shape, e.g. ``my_portfolio_signal`` /
+      ``my_kraken_signal``), returned as ``"module:function"`` refs (e.g.
+      ``"strategies.<yourpkg>.signal:my_portfolio_signal"``).
 
     The scan is *tolerant*: a module that fails to import (a missing research
     dependency, a syntax error) is skipped, so a broken local strategy never
@@ -1703,7 +1703,7 @@ def create_dashboard_app(
         """Deployable signal refs — builtins + a scan of ``strategies/*/signal.py``.
 
         A read (safe under ``read_only``): ``{builtins: [...], discovered:
-        ["strategies.alloc1.signal:alloc1_portfolio_signal", ...]}``. The UI picks
+        ["strategies.<yourpkg>.signal:my_portfolio_signal", ...]}``. The UI picks
         one of these to compose a deployment — it never authors signal code.
         """
         return _discover_signals()

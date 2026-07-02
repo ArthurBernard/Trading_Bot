@@ -489,3 +489,153 @@ async def test_on_connected_failure_does_not_break_the_stream() -> None:
     events = await _drain(private, limit=1)
 
     assert len(events) == 1  # the trade still streamed despite the hook raising
+
+
+# --- B-10: sequence-gap reconcile + robust timestamp ----------------------- #
+
+
+def _trade_frame_seq(sequence: int) -> str:
+    """A single-trade executions update stamped with a top-level ``sequence``."""
+    return json.dumps(
+        {
+            "channel": "executions",
+            "type": "update",
+            "sequence": sequence,
+            "data": [
+                {
+                    "exec_type": "trade",
+                    "exec_id": f"EXEC-{sequence}",
+                    "trade_id": sequence,
+                    "order_id": "O-SEQ",
+                    "order_userref": 7,
+                    "symbol": "BTC/USD",
+                    "side": "buy",
+                    "last_qty": 0.1,
+                    "last_price": 40000.0,
+                    "timestamp": "2024-01-02T03:04:05.000000Z",
+                }
+            ],
+        }
+    )
+
+
+async def test_sequence_gap_triggers_reconcile() -> None:
+    """A jump in the executions ``sequence`` fires the reconcile hook.
+
+    Two consecutive frames (seq 1, then seq 3) skip seq 2 — a missed fill. The
+    hook must fire: once on the initial connect, then again on the detected gap
+    (a missed fill is recovered by re-reading the venue, never assumed).
+    """
+    calls: list[str] = []
+
+    async def hook() -> None:
+        calls.append("reconcile")
+
+    private = KrakenPrivateWS(
+        FakeTokenProvider(),
+        connect=FakeConnector(
+            [FakeWS([_trade_frame_seq(1), _trade_frame_seq(3)])]
+        ),
+        sleep=RecordingSleep(),
+        on_connected=hook,
+    )
+
+    events = await _drain(private, limit=2)
+
+    assert len(events) == 2  # both trades still streamed
+    # Connect (1) + gap after seq 1->3 (1) = 2 reconciles.
+    assert len(calls) == 2
+
+
+async def test_consecutive_sequence_does_not_reconcile_mid_stream() -> None:
+    """Consecutive sequences (no gap) fire no extra reconcile beyond connect."""
+    calls: list[str] = []
+
+    async def hook() -> None:
+        calls.append("reconcile")
+
+    private = KrakenPrivateWS(
+        FakeTokenProvider(),
+        connect=FakeConnector(
+            [FakeWS([_trade_frame_seq(1), _trade_frame_seq(2)])]
+        ),
+        sleep=RecordingSleep(),
+        on_connected=hook,
+    )
+
+    events = await _drain(private, limit=2)
+
+    assert len(events) == 2
+    # Only the on-connect reconcile; seq 1 -> 2 is consecutive, no gap.
+    assert len(calls) == 1
+
+
+async def test_reconnect_resets_sequence_baseline_no_false_gap() -> None:
+    """A reconnect restarts Kraken's per-connection counter — no false gap.
+
+    The first connection ends at seq 5; the second restarts at seq 1. Dropping
+    the baseline on reconnect means the fresh seq 1 is not read as a rewind /
+    gap: the only reconciles are the two on-connect ones.
+    """
+    calls: list[str] = []
+
+    async def hook() -> None:
+        calls.append("reconcile")
+
+    private = KrakenPrivateWS(
+        FakeTokenProvider(),
+        connect=FakeConnector(
+            [
+                FakeWS([_trade_frame_seq(5)]),
+                FakeWS([_trade_frame_seq(1)]),
+            ]
+        ),
+        sleep=RecordingSleep(),
+        on_connected=hook,
+    )
+
+    events = await _drain(private, limit=2)
+
+    assert len(events) == 2
+    # Two connects → two reconciles; the seq restart is NOT a mid-stream gap.
+    assert len(calls) == 2
+
+
+async def test_bad_timestamp_is_flagged_not_silently_zeroed() -> None:
+    """B-10: a present-but-malformed timestamp raises, never silently becomes 0.
+
+    Silently zeroing a corrupt ``ts`` would corrupt event ordering and the PnL
+    timing of the fill it stamps. A missing timestamp is still allowed (mapped to
+    0); only a non-empty unparseable one is rejected.
+    """
+    from trading_bot.brokers.kraken_ws import _parse_iso_ms
+
+    # Missing → 0 (a legitimate absence, not corruption).
+    assert _parse_iso_ms("") == 0
+    # Present-but-garbage → raised, not zeroed.
+    with pytest.raises(BrokerError, match="unparseable timestamp"):
+        _parse_iso_ms("not-a-timestamp")
+
+    # And it surfaces through the parse path on a real frame.
+    frame = json.dumps(
+        {
+            "channel": "executions",
+            "type": "update",
+            "data": [
+                {
+                    "exec_type": "trade",
+                    "exec_id": "EXEC-BADTS",
+                    "order_id": "O-1",
+                    "symbol": "BTC/USD",
+                    "side": "buy",
+                    "last_qty": 0.1,
+                    "last_price": 40000.0,
+                    "timestamp": "garbage",
+                }
+            ],
+        }
+    )
+    private, _, _ = _make_ws([frame])
+    with pytest.raises(BrokerError, match="unparseable timestamp"):
+        async for _ in private.events():
+            pass

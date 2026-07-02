@@ -316,6 +316,10 @@ async def test_open_orders_rebuilds_domain_orders(
 async def test_open_orders_partial_fill_reflected(
     httpx_mock, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    # B-8: the average fill price is the *executed* cost / volume
+    # (15750 / 0.5 = 31500), NOT the resting limit price (31000 in ``descr``).
+    # The two diverge whenever the book fills through the limit; a fill is the
+    # PnL source of truth, so the venue's executed basis must win.
     httpx_mock.add_response(
         json={
             "error": [],
@@ -324,7 +328,7 @@ async def test_open_orders_partial_fill_reflected(
                     "OABC-2": {
                         "vol": "2.0",
                         "vol_exec": "0.5",
-                        "price": "31000.0",
+                        "cost": "15750.0",
                         "descr": {
                             "pair": "XBTUSD",
                             "type": "sell",
@@ -341,7 +345,75 @@ async def test_open_orders_partial_fill_reflected(
     orders = await broker.open_orders()
 
     assert orders[0].filled_qty == Decimal("0.5")
-    assert orders[0].avg_fill_price == Decimal("31000.0")
+    # cost / vol_exec = 15750 / 0.5 = 31500, not the 31000 limit price.
+    assert orders[0].avg_fill_price == Decimal("31500.0")
+
+
+async def test_open_orders_partial_fill_avg_falls_back_to_price(
+    httpx_mock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # B-8: when Kraken reports no ``cost`` but a top-level ``price`` (its own
+    # average executed price), that price is used — still distinct from the
+    # resting limit in ``descr.price``.
+    httpx_mock.add_response(
+        json={
+            "error": [],
+            "result": {
+                "open": {
+                    "OABC-3": {
+                        "vol": "2.0",
+                        "vol_exec": "0.5",
+                        "price": "31500.0",
+                        "descr": {
+                            "pair": "XBTUSD",
+                            "type": "sell",
+                            "ordertype": "limit",
+                            "price": "31000.0",
+                        },
+                    }
+                }
+            },
+        }
+    )
+    broker = _broker(monkeypatch)
+
+    orders = await broker.open_orders()
+
+    assert orders[0].filled_qty == Decimal("0.5")
+    assert orders[0].avg_fill_price == Decimal("31500.0")
+
+
+async def test_open_orders_zero_executed_applies_no_fill(
+    httpx_mock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # B-8: a zero-executed order carries no average price — no bogus fill is
+    # applied (never the limit price masquerading as an execution).
+    httpx_mock.add_response(
+        json={
+            "error": [],
+            "result": {
+                "open": {
+                    "OABC-4": {
+                        "vol": "2.0",
+                        "vol_exec": "0.0",
+                        "cost": "0.0",
+                        "descr": {
+                            "pair": "XBTUSD",
+                            "type": "sell",
+                            "ordertype": "limit",
+                            "price": "31000.0",
+                        },
+                    }
+                }
+            },
+        }
+    )
+    broker = _broker(monkeypatch)
+
+    orders = await broker.open_orders()
+
+    assert orders[0].filled_qty == Decimal("0")
+    assert orders[0].avg_fill_price is None
 
 
 async def test_fills_builds_domain_fills(

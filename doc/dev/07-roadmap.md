@@ -31,17 +31,24 @@ domain money guards, transport secret redaction, broker live-readiness, dashboar
 gate hardening, engine risk + storage, docs groom (see `CHANGELOG.md`; plan tree
 archived).
 
-- [ ] **Audit remediation — wave 2 (deferred, needs care).** Async SQLite off the
-  event loop (`A-2`), supervisor step/set_mode/stop locking (`A-3`), Binance weight
-  budget + 418/`Retry-After` limiter (`B-6`), and the long tail of Medium/Low
-  robustness items. Tracked per-finding in the audit reports.
+**Wave 2 (the "needs care" items) shipped in v0.9.0** — SQLite writes off the event
+loop + WAL/busy_timeout + fill-id mode isolation (`A-2`/`D-8`/`D-9`), per-unit
+supervisor lock (`A-3`/`A-10`), weight-aware Binance limiter (`B-6`/`B-9`/`B-7`),
+true avg fill price + Kraken WS reconcile-on-gap (`B-8`/`B-10`) (see `CHANGELOG.md`;
+plan tree archived).
+
+- [ ] **Audit remediation — long tail (Medium/Low).** The remaining lower-severity
+  robustness items from the audit: dashboard `X-Forwarded-Proto`/body-cap/unbounded
+  maps (`I-4`/`I-6`/`I-7`), tooling parity + dep pinning + `MANIFEST`/`filterwarnings`
+  (`T-5`/`T-6`/`T-7`/`T-8`), `fill_tolerance` over-fill (`D-6`), cancel idempotency
+  (`A-8`), and the rest. Tracked per-finding in `doc/dev/audit/`.
 
 ## Known issues / follow-ups
 
 - [ ] **Binance futures/margin testnet adapter (for a faithful long/short testnet
   live-test).** The `BinanceBroker` is **spot** (`/api/v3`), and the Binance testnet
   it reaches (`testnet.binance.vision`) is spot-only — it **cannot short**.
-  Long/short portfolio strategies (e.g. ALLOC1, typically net-short) therefore can
+  Long/short portfolio strategies (typically net-short) therefore can
   only be *paper*-tested faithfully; a testnet "live test" would silently drop every
   short leg. A USDT-M **futures** testnet adapter (`testnet.binancefuture.com`, which
   supports shorts) is the prerequisite for a faithful testnet live-test of a
