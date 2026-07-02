@@ -29,7 +29,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import urllib.parse
-from typing import TYPE_CHECKING, Any, Protocol
+from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 import httpx
 
@@ -58,6 +58,13 @@ _SENSITIVE_QUERY_KEYS = frozenset(
     {"signature", "api_key", "apikey", "token", "nonce"}
 )
 _REDACTED = "<redacted>"
+
+# Binance reports the weight consumed in the trailing rolling minute in this
+# response header. Feeding it back to a weight-aware limiter (via its ``observe``
+# hook) keeps the proactive budget in step with the venue's own accounting —
+# including weight burnt by other clients sharing the IP. Case-insensitive lookup
+# is via ``httpx.Headers`` (which lower-cases keys), so the constant is lower.
+_USED_WEIGHT_HEADER = "x-mbx-used-weight-1m"
 
 
 def _redact_url(url: str) -> str:
@@ -188,16 +195,20 @@ class AmbiguousRequestError(Exception):
         )
 
 
+@runtime_checkable
 class _Limiter(Protocol):
     """Minimal structural type for a proactive rate limiter.
 
     Typed as a :class:`~typing.Protocol` so this module has no hard import on
-    the (not-yet-built) ratelimit module: any object exposing an async
-    ``acquire(exchange)`` satisfies it.
+    the ratelimit module: any object exposing an async ``acquire(exchange,
+    weight=...)`` satisfies it. The reactive-feedback hooks — ``observe`` (feed
+    back a venue-reported used-weight header) and ``penalise`` (feed back a
+    418/429 back-off) — are **optional**: they are consulted only when present
+    (checked via :func:`hasattr`), so a bare token-bucket limiter still works.
     """
 
-    async def acquire(self, exchange: str | None) -> None:
-        """Block until a token is available for *exchange*."""
+    async def acquire(self, exchange: str | None, weight: float = ...) -> None:
+        """Block until *exchange*'s budget admits a call charging ``weight``."""
         ...
 
 
@@ -311,7 +322,13 @@ class AsyncHTTPClient:
         """
         await self._sleep(self._backoff(attempt))
 
-    async def get(self, url: str, params: Mapping[str, Any] | None = None) -> Any:
+    async def get(
+        self,
+        url: str,
+        params: Mapping[str, Any] | None = None,
+        *,
+        weight: float = 1.0,
+    ) -> Any:
         """Perform a GET request with retry/backoff. Returns parsed JSON.
 
         Parameters
@@ -320,6 +337,9 @@ class AsyncHTTPClient:
             Request URL (or path, if ``base_url`` is set).
         params : mapping, optional
             Query-string parameters.
+        weight : float, optional
+            Request weight charged to a weight-metered limiter (Binance's
+            per-endpoint weight). Ignored by flat-rate limiters. Defaults to 1.
 
         Returns
         -------
@@ -331,7 +351,7 @@ class AsyncHTTPClient:
         HTTPError
             On a non-retryable 4xx, or once retries are exhausted.
         """
-        return await self._request("GET", url, params=params)
+        return await self._request("GET", url, params=params, weight=weight)
 
     async def post(
         self,
@@ -341,6 +361,7 @@ class AsyncHTTPClient:
         json: Any | None = None,
         headers: Mapping[str, str] | None = None,
         retry: bool = True,
+        weight: float = 1.0,
     ) -> Any:
         """Perform a POST request. Returns parsed JSON.
 
@@ -354,6 +375,9 @@ class AsyncHTTPClient:
             JSON body (mutually exclusive with *data*, per httpx).
         headers : mapping, optional
             Per-request headers, merged over the client defaults.
+        weight : float, optional
+            Request weight charged to a weight-metered limiter (ignored by
+            flat-rate limiters). Defaults to 1.
         retry : bool, default True
             Whether transient failures (5xx / 429 / transport errors) may be
             retried with backoff. ``True`` (the default) is for **idempotent**
@@ -380,7 +404,13 @@ class AsyncHTTPClient:
             transport error — the outcome is unknown; reconcile before retrying.
         """
         return await self._request(
-            "POST", url, data=data, json=json, headers=headers, retry=retry
+            "POST",
+            url,
+            data=data,
+            json=json,
+            headers=headers,
+            retry=retry,
+            weight=weight,
         )
 
     async def request(
@@ -391,6 +421,7 @@ class AsyncHTTPClient:
         params: Mapping[str, Any] | None = None,
         headers: Mapping[str, str] | None = None,
         retry: bool = True,
+        weight: float = 1.0,
     ) -> Any:
         """Perform an arbitrary-verb request (GET / POST / DELETE / ...).
 
@@ -414,6 +445,9 @@ class AsyncHTTPClient:
             Per-request headers, merged over the client defaults.
         retry : bool, default True
             Whether transient failures may be retried (see :meth:`post`).
+        weight : float, optional
+            Request weight charged to a weight-metered limiter (ignored by
+            flat-rate limiters). Defaults to 1.
 
         Returns
         -------
@@ -429,7 +463,12 @@ class AsyncHTTPClient:
             When ``retry=False`` and the single attempt fails ambiguously.
         """
         return await self._request(
-            method, url, params=params, headers=headers, retry=retry
+            method,
+            url,
+            params=params,
+            headers=headers,
+            retry=retry,
+            weight=weight,
         )
 
     async def _request(
@@ -442,6 +481,7 @@ class AsyncHTTPClient:
         json: Any | None = None,
         headers: Mapping[str, str] | None = None,
         retry: bool = True,
+        weight: float = 1.0,
     ) -> Any:
         """Shared request loop for GET and POST.
 
@@ -470,12 +510,12 @@ class AsyncHTTPClient:
         last_exc: Exception | None = None
         for attempt in range(max_attempts):
             try:
-                # Proactive throttle: wait for a token before each outbound
-                # request so concurrent operations on the same exchange stay
-                # under its published rate. Reactive 429 handling below remains
-                # a backstop.
+                # Proactive throttle: charge the call its ``weight`` before each
+                # outbound request so concurrent operations on the same exchange
+                # stay under its published budget. Reactive 429/418 handling
+                # below remains a backstop.
                 if self._limiter is not None and self._exchange is not None:
-                    await self._limiter.acquire(self._exchange)
+                    await self._limiter.acquire(self._exchange, weight)
 
                 resp = await client.request(
                     method,
@@ -486,14 +526,33 @@ class AsyncHTTPClient:
                     headers=dict(headers) if headers is not None else None,
                 )
 
-                if resp.status_code == 429:
+                # Resync the proactive weight budget to the venue's own report
+                # (``X-MBX-USED-WEIGHT-1M``) on *every* response, success or not,
+                # so it tracks reality (including other clients on this IP).
+                self._observe_used_weight(resp)
+
+                # 418 (IP auto-ban) and 429 (rate-limited) both carry a
+                # ``Retry-After`` the venue wants honoured. Feed it to the
+                # limiter so the NEXT call on this exchange waits it out — even
+                # when this call does not retry (an order submit that must never
+                # blind-retry still slows what follows).
+                if resp.status_code in (418, 429):
+                    wait = self._retry_after(resp, attempt)
+                    self._penalise(wait)
+                    banned = resp.status_code == 418
+                    kind = "IP-banned" if banned else "rate-limited"
                     if not retry:
                         raise AmbiguousRequestError(
-                            url, f"HTTP 429 (rate-limited): {resp.text[:200]}"
+                            url,
+                            f"HTTP {resp.status_code} ({kind}): "
+                            f"{resp.text[:200]}",
                         )
-                    wait = self._retry_after(resp, attempt)
                     logger.warning(
-                        "Rate-limited by %s, sleeping %.1fs", safe_url, wait
+                        "HTTP %d (%s) from %s, sleeping %.1fs",
+                        resp.status_code,
+                        kind,
+                        safe_url,
+                        wait,
                     )
                     last_exc = HTTPError(resp.status_code, url, resp.text)
                     await self._sleep(wait)
@@ -547,7 +606,7 @@ class AsyncHTTPClient:
         )
 
     def _retry_after(self, resp: httpx.Response, attempt: int) -> float:
-        """Delay to honour a 429: ``Retry-After`` header, else backoff."""
+        """Delay to honour a 429/418: ``Retry-After`` header, else backoff."""
         header = resp.headers.get("Retry-After")
         if header is not None:
             try:
@@ -557,3 +616,44 @@ class AsyncHTTPClient:
                 # than parse the date format here.
                 logger.debug("Unparseable Retry-After %r, using backoff", header)
         return self._backoff(attempt)
+
+    def _observe_used_weight(self, resp: httpx.Response) -> None:
+        """Feed a venue ``X-MBX-USED-WEIGHT-1M`` header back to the limiter.
+
+        When the limiter exposes an ``observe`` hook and the response carries the
+        used-weight header, resync the proactive budget to the venue's figure so
+        the next call throttles against the venue's own accounting. A no-op when
+        the limiter has no ``observe`` hook, no exchange is configured, or the
+        header is absent / unparseable.
+        """
+        limiter = self._limiter
+        if limiter is None or self._exchange is None:
+            return
+        observe = getattr(limiter, "observe", None)
+        if observe is None:
+            return
+        header = resp.headers.get(_USED_WEIGHT_HEADER)
+        if header is None:
+            return
+        try:
+            used = float(header)
+        except ValueError:
+            logger.debug("Unparseable %s %r", _USED_WEIGHT_HEADER, header)
+            return
+        observe(self._exchange, used)
+
+    def _penalise(self, seconds: float) -> None:
+        """Feed a 418/429 back-off (``seconds``) back to the limiter.
+
+        When the limiter exposes a ``penalise`` hook and an exchange is
+        configured, park the exchange for ``seconds`` so the next call waits out
+        the venue's advised window. A no-op otherwise (the reactive per-call
+        sleep above is still applied on the retrying path).
+        """
+        limiter = self._limiter
+        if limiter is None or self._exchange is None or seconds <= 0.0:
+            return
+        penalise = getattr(limiter, "penalise", None)
+        if penalise is None:
+            return
+        penalise(self._exchange, seconds)

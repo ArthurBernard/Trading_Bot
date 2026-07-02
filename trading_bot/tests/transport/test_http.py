@@ -305,16 +305,125 @@ async def test_limiter_acquired_before_request(httpx_mock) -> None:
 
     class FakeLimiter:
         def __init__(self) -> None:
-            self.acquired: list[str | None] = []
+            self.acquired: list[tuple[str | None, float]] = []
 
-        async def acquire(self, exchange: str | None) -> None:
-            self.acquired.append(exchange)
+        async def acquire(
+            self, exchange: str | None, weight: float = 1.0
+        ) -> None:
+            self.acquired.append((exchange, weight))
 
     limiter = FakeLimiter()
     async with AsyncHTTPClient(exchange="kraken", limiter=limiter) as client:
-        await client.get("https://example.test/data")
+        await client.get("https://example.test/data", weight=3.0)
 
-    assert limiter.acquired == ["kraken"]
+    # The exchange and the per-call weight are both forwarded to the limiter.
+    assert limiter.acquired == [("kraken", 3.0)]
+
+
+# --- weight-aware limiter feedback (observe / penalise) ------------------- #
+
+
+class _FeedbackLimiter:
+    """A weight-aware limiter recording every acquire / observe / penalise.
+
+    Exposes the optional ``observe`` / ``penalise`` hooks so the HTTP client's
+    feedback path (used-weight resync + 418/429 back-off) is asserted directly
+    against a fake — no real limiter, no network.
+    """
+
+    def __init__(self) -> None:
+        self.acquired: list[tuple[str | None, float]] = []
+        self.observed: list[tuple[str | None, float]] = []
+        self.penalised: list[tuple[str | None, float]] = []
+
+    async def acquire(self, exchange: str | None, weight: float = 1.0) -> None:
+        self.acquired.append((exchange, weight))
+
+    def observe(self, exchange: str | None, used_weight: float) -> None:
+        self.observed.append((exchange, used_weight))
+
+    def penalise(self, exchange: str | None, seconds: float) -> None:
+        self.penalised.append((exchange, seconds))
+
+
+async def test_used_weight_header_fed_back_to_limiter(httpx_mock) -> None:
+    """A ``X-MBX-USED-WEIGHT-1M`` response header resyncs the limiter."""
+    httpx_mock.add_response(
+        status_code=200, json={"ok": True}, headers={"X-MBX-USED-WEIGHT-1M": "137"}
+    )
+    limiter = _FeedbackLimiter()
+
+    async with AsyncHTTPClient(exchange="binance", limiter=limiter) as client:
+        await client.get("https://example.test/data", weight=2.0)
+
+    assert limiter.acquired == [("binance", 2.0)]
+    # The venue-reported used weight is fed back for the next call to throttle on.
+    assert limiter.observed == [("binance", 137.0)]
+
+
+async def test_429_retry_after_penalises_limiter_then_retries(httpx_mock) -> None:
+    """A retried 429 feeds ``Retry-After`` to the limiter AND waits it out."""
+    httpx_mock.add_response(status_code=429, headers={"Retry-After": "4"})
+    httpx_mock.add_response(status_code=200, json={"ok": 1})
+    sleep = RecordingSleep()
+    limiter = _FeedbackLimiter()
+
+    async with AsyncHTTPClient(
+        exchange="binance", limiter=limiter, sleep=sleep
+    ) as client:
+        result = await client.get("https://example.test/limited")
+
+    assert result == {"ok": 1}
+    # The next call is told to wait ~4s (penalise), and this call slept ~4s too.
+    assert limiter.penalised == [("binance", pytest.approx(4.0))]
+    assert sleep.calls == [pytest.approx(4.0)]
+
+
+async def test_418_ip_ban_penalises_and_backs_off(httpx_mock) -> None:
+    """A 418 (IP auto-ban) honours ``Retry-After``: penalise + wait, then retry."""
+    httpx_mock.add_response(status_code=418, headers={"Retry-After": "120"})
+    httpx_mock.add_response(status_code=200, json={"ok": True})
+    sleep = RecordingSleep()
+    limiter = _FeedbackLimiter()
+
+    async with AsyncHTTPClient(
+        exchange="binance", limiter=limiter, sleep=sleep
+    ) as client:
+        result = await client.get("https://example.test/banned")
+
+    assert result == {"ok": True}
+    # 418 is treated as a rate-limit/ban class: back off the full Retry-After,
+    # capped at _MAX_BACKOFF (60s) by _retry_after.
+    assert limiter.penalised == [("binance", pytest.approx(60.0))]
+    assert sleep.calls == [pytest.approx(60.0)]
+
+
+async def test_no_retry_429_still_penalises_but_never_retries(httpx_mock) -> None:
+    """A ``retry=False`` 429 raises ambiguous AND surfaces Retry-After to the limiter.
+
+    The order submit must NOT auto-retry (ambiguous → reconcile), yet the
+    advised back-off is still fed to the limiter so the *next* (post-reconcile)
+    call waits the venue's window — B-9.
+    """
+    httpx_mock.add_response(status_code=429, headers={"Retry-After": "9"})
+    sleep = RecordingSleep()
+    limiter = _FeedbackLimiter()
+
+    async with AsyncHTTPClient(
+        exchange="binance", limiter=limiter, sleep=sleep
+    ) as client:
+        with pytest.raises(AmbiguousRequestError, match="reconcile"):
+            await client.post(
+                "https://example.test/order",
+                data={"symbol": "BTCUSDT"},
+                retry=False,
+            )
+
+    # Sent at most once: no blind-retry, no per-call backoff sleep on this path.
+    assert len(httpx_mock.get_requests()) == 1
+    assert sleep.calls == []
+    # But the Retry-After was surfaced to the limiter for the NEXT call.
+    assert limiter.penalised == [("binance", pytest.approx(9.0))]
 
 
 # --- secret redaction: the helper ----------------------------------------- #
@@ -441,7 +550,7 @@ async def test_signed_url_429_no_secret_leak(httpx_mock, caplog) -> None:
 
     assert result == {"ok": True}
     _assert_no_secret(caplog.text)
-    assert "Rate-limited" in caplog.text
+    assert "rate-limited" in caplog.text
     assert "redacted" in caplog.text
 
 
