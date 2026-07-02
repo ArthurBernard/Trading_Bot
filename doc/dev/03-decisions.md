@@ -6,7 +6,7 @@ rejected approaches as tombstones.
 
 ---
 
-### 2026-07-02 Domain hygiene: over-fill tolerance, immutable order id, dead-error removal (PR #PR)  [accepted]
+### 2026-07-02 Domain hygiene: over-fill tolerance, immutable order id, dead-error removal (PR #150)  [accepted]
 - **Choice**: an over-fill strictly within `fill_tolerance` now clamps-and-closes
   (symmetric with the under-fill rule; the real executed qty/price still weight the
   average — nothing dropped/double-counted); a material over-fill still raises. The
