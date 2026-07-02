@@ -6,6 +6,25 @@ rejected approaches as tombstones.
 
 ---
 
+### 2026-07-02 Config-driven portfolio data source (resample + store path) (PR #PR)  [accepted]
+- **Choice**: add `source_span` and `data_path` to `DataSourceConfig`;
+  `build_portfolio_runners` wraps the real dccd client in a `ResamplingDccdClient`
+  (`daily_span=span`, `source_span`) when `source_span` is set and no client is
+  injected, and `_make_client` accepts a **store-root directory** as `data_path`.
+- **Why**: dccd serves bars at their stored span and does not resample, so a daily
+  portfolio over a 1-minute store read zero rows. The offline tests injected a
+  ready `ResamplingDccdClient`, but the supervisor/dashboard path passes
+  `client=None`, so the real daily-on-1m case never worked from the dashboard. The
+  resampling seam already existed (`ResamplingDccdClient`); this makes it reachable
+  **by config**, mirroring what `run_paper.py` did by hand.
+- **Rejected alternatives**: (a) auto-detecting the stored span from the store
+  inventory — implicit and surprising; a declared `source_span` is explicit; (b)
+  promoting the local `_ParquetSource` test helper into the engine — it bypasses
+  dccd; the primed dccd client now reads the store directly.
+- **Verified**: a paper portfolio rebalance over the **real** 1m store routes every
+  leg (full long/short book), fill-driven PnL/fees — via the config path, no
+  injected client.
+
 ### 2026-07-02 Prime the dccd client for sync reads instead of a lifecycle refactor (PR #137)  [accepted]
 - **Choice**: `_make_client` builds the dccd `Client`'s read state (`_store` /
   `_registry`, via dccd's public `build_store` / `build_registry`) synchronously —
