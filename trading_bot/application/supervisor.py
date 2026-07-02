@@ -1249,10 +1249,14 @@ class StrategySupervisor:
         The seam the aggregate ratio KPIs (a later leaf) fold over: it takes each
         named strategy's per-mode fills, merges them into **one** timestamp-ordered
         stream, and folds that stream into a single combined equity curve anchored
-        at the **sum** of the strategies' ``v0`` (each contributes its own
-        starting capital). Only the ``mode`` slice is combined — live and testnet
-        (fake money) are never mixed. A pure fold over the confirmed fills; money
-        stays exact.
+        at the **sum** of the ``v0`` of the units that **actually traded in this
+        mode** (each contributing unit adds its own starting capital). A unit with
+        **zero fills in the requested mode** contributes neither fills nor ``v0``:
+        anchoring on its idle capital would inflate the equity base with money that
+        has no PnL motion behind it, distorting the combined returns path and so
+        the aggregate Sharpe/Sortino/Calmar/maxDD (:meth:`_combined_ratios`). Only
+        the ``mode`` slice is combined — live and testnet (fake money) are never
+        mixed. A pure fold over the confirmed fills; money stays exact.
 
         Parameters
         ----------
@@ -1274,9 +1278,14 @@ class StrategySupervisor:
         combined_v0: Money = _ZERO
         for name in wanted:
             unit = self._unit(name)
+            mode_fills = by_mode(self._stored_fills_of(unit)).get(mode, [])
+            if not mode_fills:
+                # A unit with no fills in this mode does not anchor the aggregate:
+                # adding its idle v0 would inflate the equity base with capital
+                # that has no PnL behind it, skewing the combined ratio KPIs.
+                continue
             combined_v0 += self._v0_of(unit)
-            buckets = by_mode(self._stored_fills_of(unit))
-            combined_fills.extend(buckets.get(mode, []))
+            combined_fills.extend(mode_fills)
         points = equity_series(combined_fills, v0=combined_v0)
         return [[p.ts_ms, p.realised_pnl, p.equity] for p in points]
 

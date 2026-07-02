@@ -433,14 +433,25 @@ class PortfolioRunner:
     async def rebalance_latest(self) -> RebalanceResult | None:
         """Rebalance the book over the feed's **latest** cross-section — for a daemon.
 
-        Reads the feed's most recent causal cross-section (the last one a fresh
-        iteration yields — a live :class:`~trading_bot.application.portfolio_feed
-        .PortfolioFeed` re-reads the dccd store each iteration) and runs **one**
+        Reads the feed's most recent causal cross-section and runs **one**
         :meth:`rebalance` over it. Where :meth:`run` *drains* the feed once
         (replay/backtest), this is the single, on-demand rebalance a
         **scheduler-driven daemon** calls each tick: per-coin deltas are computed
         against the live tracker, so a tick over unchanged weights/data submits
         nothing and only changed targets trade. Idempotent under repetition.
+
+        Bounded per tick. A live :class:`~trading_bot.application.portfolio_feed.
+        PortfolioFeed` exposes :meth:`~trading_bot.application.portfolio_feed.
+        PortfolioFeed.latest`, which returns the **full aligned** cross-section
+        (every common date, oldest→newest) with a **single** store read — this is
+        used when present (mirroring :meth:`~trading_bot.application.strategy_runner
+        .StrategyRunner.step_latest`). That full window is *still causal*: it is the
+        exact final window a full drain would yield (the last growing prefix is the
+        whole aligned frame), so there is no lookahead — the daemon just skips the
+        O(total bars) work of re-walking every intermediate prefix only to discard
+        all but the last. A feed that exposes no ``latest()`` (a plain iterable, a
+        backtest/test fake) falls back to draining and keeping the last yielded
+        cross-section, which is identically the final causal window.
 
         Returns
         -------
@@ -449,7 +460,17 @@ class PortfolioRunner:
             cross-section (e.g. the universe has no common closed bar yet).
 
         """
-        latest: Mapping[Symbol, pl.DataFrame] | None = None
+        feed_latest = getattr(self._feed, "latest", None)
+        if callable(feed_latest):
+            # Live path: one store read for the full aligned (causal) window,
+            # instead of draining every prefix to keep only the last.
+            latest: Mapping[Symbol, pl.DataFrame] | None = feed_latest()
+            if not latest or not any(f.height > 0 for f in latest.values()):
+                return None
+            return await self.rebalance(latest)
+        # Fallback: a plain iterable feed (no ``latest()``). Drain and keep the
+        # last yielded cross-section — identically the final causal window.
+        latest = None
         for frames in self._feed:  # type: ignore[attr-defined]
             latest = frames
         if latest is None:
