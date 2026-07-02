@@ -1370,6 +1370,12 @@ def test_dashboard_builds_app_and_calls_uvicorn(
     assert isinstance(kwargs, dict)
     assert kwargs["host"] == "127.0.0.1"
     assert kwargs["port"] == 9137
+    # A bounded graceful-shutdown timeout so Ctrl-C quits promptly even when a
+    # browser holds the /api/events SSE stream open — uvicorn's default graceful
+    # shutdown is unbounded and waits for that never-ending stream forever, which
+    # made the server feel unquittable on the first SIGINT.
+    grace = kwargs["timeout_graceful_shutdown"]
+    assert isinstance(grace, int) and grace > 0
 
     test_client = TestClient(captured["app"])
     resp = test_client.get("/")
