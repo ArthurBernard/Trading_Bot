@@ -19,7 +19,10 @@ the table formatting is unit-checked without invoking a command.
 
 from __future__ import annotations
 
+import importlib
+import os
 import pathlib
+import sys
 
 import polars as pl
 import pytest
@@ -32,10 +35,42 @@ from trading_bot.domain.money import money
 from trading_bot.domain.order import Order, OrderSide, OrderType
 from trading_bot.domain.position import Position
 from trading_bot.interfaces.cli import _render
-from trading_bot.interfaces.cli.main import app
+from trading_bot.interfaces.cli.main import _ensure_cwd_importable, app
 from trading_bot.storage.sqlite_store import SqliteStore
 
 runner = CliRunner()
+
+
+def test_ensure_cwd_importable_makes_a_local_strategy_module_resolvable(monkeypatch):
+    """A local ``strategies.*`` module (gitignored, in the project root) must be
+    importable after the helper runs — a console-script launch does not put the
+    CWD on ``sys.path`` on its own. Regression for the dashboard silently skipping
+    manifest strategies whose ``signal.ref`` is a local module."""
+    # The autouse conftest already runs us from a temp CWD. Simulate a console
+    # script: the CWD is NOT on sys.path.
+    cwd = os.getcwd()
+    monkeypatch.setattr(sys, "path", [p for p in sys.path if p not in ("", cwd)])
+    pathlib.Path(cwd, "loc_probe_mod.py").write_text("VALUE = 42\n")
+    sys.modules.pop("loc_probe_mod", None)
+    with pytest.raises(ModuleNotFoundError):
+        importlib.import_module("loc_probe_mod")
+
+    _ensure_cwd_importable()
+
+    assert cwd in sys.path
+    assert importlib.import_module("loc_probe_mod").VALUE == 42
+    _ensure_cwd_importable()  # idempotent
+    assert sys.path.count(cwd) == 1
+    sys.modules.pop("loc_probe_mod", None)
+
+
+def test_cli_callback_puts_cwd_on_syspath(monkeypatch):
+    """Any command's group callback runs :func:`_ensure_cwd_importable` first."""
+    cwd = os.getcwd()
+    monkeypatch.setattr(sys, "path", [p for p in sys.path if p not in ("", cwd)])
+    result = runner.invoke(app, ["version"])
+    assert result.exit_code == 0
+    assert cwd in sys.path
 
 _BTC_USD = Instrument(Symbol("BTC", "USD"))
 
