@@ -23,14 +23,14 @@ the gitignored `strategies/`, real dccd-data verified). History in `CHANGELOG.md
 ## Audit remediation (2026-07-02)
 
 Full deep audit landed in [`audit/`](audit/) — 90 findings (4 Critical, 16 High,
-30 Medium, 24 Low, 16 Info). Plan tree: [`plans/audit-remediation/`](plans/audit-remediation/).
-All money-risk findings are **latent** (paper/testnet only today); they gate go-live.
+30 Medium, 24 Low, 16 Info). All money-risk findings are **latent** (paper/testnet
+only today); they gate go-live.
 
-- [ ] **Audit remediation — wave 1 (Critical + top High).** Test-gate hermeticity
-  (`T-1`/`T-2`/`T-3`), domain money guards (`D-1`/`D-3`/`D-4`/`D-7`), transport
-  secret redaction (`B-1`), broker live-readiness (`B-2`/`B-3`/`B-4`/`B-5`/`B-15`),
-  dashboard gate hardening (`I-1`/`I-2`/`I-3`), engine risk + storage
-  (`A-1`/`D-2`), docs groom (`G-1`…`G-9`). See the plan tree.
+**Wave 1 (all 4 Critical + top High) shipped in v0.8.0** — test-gate hermeticity,
+domain money guards, transport secret redaction, broker live-readiness, dashboard
+gate hardening, engine risk + storage, docs groom (see `CHANGELOG.md`; plan tree
+archived).
+
 - [ ] **Audit remediation — wave 2 (deferred, needs care).** Async SQLite off the
   event loop (`A-2`), supervisor step/set_mode/stop locking (`A-3`), Binance weight
   budget + 418/`Retry-After` limiter (`B-6`), and the long tail of Medium/Low
