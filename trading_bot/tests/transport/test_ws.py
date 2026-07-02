@@ -9,6 +9,7 @@ hits Kraken's public v2 WebSocket.
 
 from __future__ import annotations
 
+import asyncio
 import json
 from collections.abc import AsyncIterator
 from typing import Any
@@ -216,6 +217,95 @@ async def test_stop_before_start_yields_nothing() -> None:
 
     received = [frame async for frame in base.stream_raw()]
     assert received == []
+
+
+async def test_stop_mid_stream_returns_before_the_next_frame() -> None:
+    # The live socket has more frames queued, but stop() is called after the
+    # first: the in-loop stop check must return *before* yielding the second, and
+    # no reconnect is attempted (the connector is scripted with only one attempt).
+    ws = FakeWS(["first", "second", "third"])
+    connector = FakeConnector([ws])
+    base = WebSocketBase("wss://example.test", connect=connector)
+
+    received: list[str | bytes] = []
+    async for frame in base.stream_raw():
+        received.append(frame)
+        base.stop()  # stop right after the first frame
+
+    # Only the first frame surfaced; the loop returned before the queued rest.
+    assert received == ["first"]
+    assert connector.urls == ["wss://example.test"]  # exactly one connect, no reconnect
+
+
+async def test_cancelled_error_during_connect_returns_cleanly() -> None:
+    # A CancelledError from the connect (e.g. the task is cancelled) ends the
+    # stream cleanly with no reconnect and no backoff sleep.
+    connector = FakeConnector([asyncio.CancelledError()])
+    sleep = RecordingSleep()
+    base = WebSocketBase("wss://example.test", connect=connector, sleep=sleep)
+
+    received = [frame async for frame in base.stream_raw()]
+    assert received == []
+    assert sleep.calls == []  # CancelledError is not a reconnect trigger
+
+
+async def test_stop_during_disconnect_handler_skips_backoff_and_returns() -> None:
+    # The connect fails (a normal disconnect), but stop() has already been
+    # requested: the exception handler must see the stop flag and return *without*
+    # sleeping or reconnecting.
+    class _StopOnConnect:
+        """A connector that trips stop() then fails the connect, once."""
+
+        def __init__(self, base_ref: dict[str, WebSocketBase]) -> None:
+            self._base_ref = base_ref
+            self.calls = 0
+
+        def __call__(self, url: str) -> _Conn:
+            self.calls += 1
+            self._base_ref["base"].stop()  # request stop before the failure lands
+            return _Conn(ConnectionError("disconnected while stopping"))
+
+    ref: dict[str, WebSocketBase] = {}
+    sleep = RecordingSleep()
+    connector = _StopOnConnect(ref)
+    base = WebSocketBase("wss://example.test", connect=connector, sleep=sleep)
+    ref["base"] = base
+
+    received = [frame async for frame in base.stream_raw()]
+    assert received == []
+    assert connector.calls == 1  # tried once, then the stop short-circuited
+    assert sleep.calls == []  # no backoff when stopping
+
+
+async def test_base_parse_message_default_yields_nothing() -> None:
+    # The venue-neutral base parses nothing; brokers override it. Covers the
+    # default no-op so stream() over an un-overridden base is a documented empty.
+    base = WebSocketBase("wss://example.test", connect=FakeConnector([]))
+    assert [record async for record in base.parse_message("anything")] == []
+
+
+async def test_stream_yields_parsed_records_over_reconnect() -> None:
+    # stream() delegates to stream_raw() and parses each frame via parse_message;
+    # prove the parsed path (not just stream_raw) reconnects and yields records.
+    class _JsonWS(WebSocketBase):
+        async def parse_message(self, raw: Any) -> AsyncIterator[Any]:
+            yield json.loads(raw)
+
+    frames = ['{"n": 1}', '{"n": 2}']
+    connector = FakeConnector([ConnectionError("blip"), FakeWS(frames)])
+    sleep = RecordingSleep()
+    base = _JsonWS(
+        "wss://example.test", connect=connector, sleep=sleep, backoff_base=0.5
+    )
+
+    received: list[Any] = []
+    async for record in base.stream():
+        received.append(record)
+        if len(received) == 2:
+            base.stop()
+
+    assert received == [{"n": 1}, {"n": 2}]
+    assert sleep.calls == [pytest.approx(0.5)]  # one reconnect before the good connect
 
 
 @pytest.mark.network

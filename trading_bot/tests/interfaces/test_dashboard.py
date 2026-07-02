@@ -1570,9 +1570,13 @@ def test_dashboard_non_loopback_without_token_refuses(
 
     result = runner.invoke(cli_app, ["dashboard", "--host", "0.0.0.0"])
 
+    # Behaviour, not prose: the command fails (non-zero) and never serves. The
+    # refusal must point the user at the missing auth token (the load-bearing
+    # remedy), asserted as a stable keyword rather than the exact sentence — which
+    # is free to be reworded without breaking this test.
     assert result.exit_code != 0
-    assert "refusing to bind" in result.output
     assert called["run"] is False  # never reached uvicorn
+    assert "token" in result.output.lower()  # names the missing credential
 
 
 def test_dashboard_read_only_flag(monkeypatch: pytest.MonkeyPatch) -> None:

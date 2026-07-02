@@ -59,6 +59,19 @@ rejected approaches as tombstones.
   regression test).
 - **Rejected alternatives**: wiring `InsufficientFunds` — its venue role is covered by
   `InsufficientBalance`, and no client-side pre-trade balance gate exists to populate it.
+### 2026-07-02 Cover money-critical error branches; collapse the daily-loss breaker; drop dead code (PR #151)  [accepted]
+- **Choice**: add tests for the previously-uncovered money-critical error branches
+  (kill-switch cancel-failure, order-router forbidden reject transition, reconcile
+  divergence, WS reconnect), taking `risk.py`/`order_router.py`/`reconcile.py` to 100%.
+  Remove the dead recorded-value daily-PnL path (`record_daily_pnl`/`reset_day`) — the
+  breaker now uses only the injected day-scoped provider ("no provider" = "no loss").
+  Remove the dead legacy dashboard assets (`control.js`/`control.html`) and pre-rewrite
+  tracked artifacts (`data_base/`, `execution_scripts/`, `general_config_example.yaml`).
+  De-couple impl-detail-coupled tests via a public `PaperBroker.seed_fills` seam.
+- **Why**: audit T-4 (money-critical branches uncovered), A-11 (dead breaker path — a
+  silent footgun), I-12/G-14 (dead assets/artifacts), T-12 (tests coupled to privates).
+- **Rejected alternatives**: keeping the recorded daily-PnL path — dead since wave 2's
+  clock-driven provider became canonical.
 
 ### 2026-07-02 Bounded uvicorn graceful-shutdown so Ctrl-C quits promptly (PR #145)  [accepted]
 - **Choice**: every uvicorn serve path (`dashboard`, `serve`, `run --serve`,

@@ -414,6 +414,45 @@ async def test_fills_since_ms_filters() -> None:
     assert [f.fill_id for f in later] == [all_fills[1].fill_id]
 
 
+async def test_seed_fills_appends_to_recorded_history() -> None:
+    """``seed_fills`` records venue-confirmed fills the engine never placed.
+
+    The public reconciliation seam: fills the venue already had (e.g. during a
+    disconnect) surface via ``fills()`` and honour the ``since_ms`` filter, so a
+    rebuild folds them in as the PnL truth with no matching local order.
+    """
+    broker = PaperBroker(starting_balances={"USD": money("1000000")})
+    seeded = [
+        Fill(
+            fill_id="SEED-1",
+            client_order_id="offline-1",
+            instrument=BTC_USD,
+            side=OrderSide.BUY,
+            qty=money("2"),
+            price=money("30000"),
+            fee=money("0"),
+            ts=100,
+        ),
+        Fill(
+            fill_id="SEED-2",
+            client_order_id="offline-2",
+            instrument=BTC_USD,
+            side=OrderSide.SELL,
+            qty=money("1"),
+            price=money("31000"),
+            fee=money("0"),
+            ts=200,
+        ),
+    ]
+
+    broker.seed_fills(seeded)
+
+    recorded = await broker.fills()
+    assert [f.fill_id for f in recorded] == ["SEED-1", "SEED-2"]
+    # The since_ms filter still applies to seeded history.
+    assert [f.fill_id for f in await broker.fills(since_ms=200)] == ["SEED-2"]
+
+
 async def test_injected_clock_stamps_fills() -> None:
     """An injected clock supplies the fill timestamps deterministically."""
     broker = PaperBroker(

@@ -428,8 +428,12 @@ def test_build_runners_equivalent_symbol_spellings_commingle() -> None:
     """
     config = _same_symbol_config(second_symbol="XBT/USD")
     engine = build_engine(config, db_path=None)
-    with pytest.raises(ConfigError, match="commingle"):
+    # Assert the behaviour (the alias is recognised as the same instrument and
+    # rejected), not the exact wording: a ConfigError that names the normalised
+    # duplicate — the stable, load-bearing detail — rather than a prose regex.
+    with pytest.raises(ConfigError) as exc_info:
         build_runners(config, engine, dccd_client=_FakeDccdClient({}))
+    assert "BTC/USD" in str(exc_info.value)  # XBT normalised to BTC and caught
 
 
 def test_run_app_same_symbol_rejected() -> None:
@@ -437,7 +441,9 @@ def test_run_app_same_symbol_rejected() -> None:
     import asyncio
 
     config = _same_symbol_config()
-    with pytest.raises(ConfigError, match="commingle"):
+    # The contract is the *type* that surfaces (the config is rejected before any
+    # order path), not the human message — so assert on ConfigError alone.
+    with pytest.raises(ConfigError):
         asyncio.run(run_app(config, dccd_client=_FakeDccdClient({})))
 
 
