@@ -6,7 +6,7 @@ rejected approaches as tombstones.
 
 ---
 
-### 2026-07-02 True average fill price on partial fills; Kraken WS reconcile-on-gap (PR #PR)  [accepted]
+### 2026-07-02 True average fill price on partial fills; Kraken WS reconcile-on-gap (PR #143)  [accepted]
 - **Choice**: `open_orders` computes a partially-filled order's average fill price
   from the venue's executed fields — Binance `cummulativeQuoteQty / executedQty`,
   Kraken `cost / vol_exec` (fallback the top-level `price`) — never the resting
