@@ -6,6 +6,18 @@ rejected approaches as tombstones.
 
 ---
 
+### 2026-07-02 Make the pytest gate hermetic and enforced (PR #PR)  [accepted]
+- **Choice**: add a repo `conftest.py` with an autouse fixture that runs every test
+  from a temp CWD and scrubs `TRADING_BOT_*` env; drop `--exitfirst` from `addopts`;
+  add `--cov-fail-under=90`.
+- **Why**: audit T-1 (Critical) — the gate was red locally / green in CI because ~5
+  dashboard tests read the CWD-relative, secret-bearing `configs/dashboard.yaml` (no
+  `conftest.py`, no isolation). T-2: `--exitfirst` hid every failure after the first
+  and invalidated coverage; T-3: coverage (~96%) was measured but never enforced.
+- **Rejected alternatives**: patching the five individual tests to look elsewhere —
+  leaves the whole class of CWD/env bleed unaddressed; the autouse fixture fixes it
+  once for the whole suite.
+
 ### 2026-07-02 Config-driven dashboard web settings (a `ui:` section) (PR #125)  [accepted]
 - **Choice**: add a `ui:` section to `AppConfig` (`host` / `port` / `token` /
   `read_only`); the `dashboard` command reads it as the default, with CLI flags (and
