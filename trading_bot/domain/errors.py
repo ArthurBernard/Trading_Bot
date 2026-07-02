@@ -17,6 +17,7 @@ from decimal import Decimal
 
 __all__ = [
     "TradingBotError",
+    "MoneyError",
     "OrderError",
     "OrderStatusError",
     "MissingOrder",
@@ -33,6 +34,29 @@ __all__ = [
 
 class TradingBotError(Exception):
     """Root of every error raised by the trading bot domain."""
+
+
+class MoneyError(TradingBotError):
+    """A monetary value is not a valid, finite decimal amount.
+
+    Raised by :func:`~trading_bot.domain.money.money` when a value cannot serve
+    as money: a ``float`` (whose binary rounding error is baked in — pass a
+    ``str``/``int``/``Decimal`` instead), a ``bool``, an unsupported type, an
+    unparsable string, or a **non-finite** ``Decimal`` (``NaN``, ``sNaN``,
+    ``±Inf``). A non-finite amount would silently corrupt the PnL source of
+    truth (``NaN`` poisons every comparison and every fold it touches), so it is
+    rejected at construction with this typed domain error rather than a bare
+    :class:`decimal.InvalidOperation` leaking out of arithmetic later.
+
+    Parameters
+    ----------
+    msg : str
+        Human-readable detail of why the value is not valid money.
+
+    """
+
+    def __init__(self, msg: str) -> None:
+        super().__init__(msg)
 
 
 class BrokerError(TradingBotError):

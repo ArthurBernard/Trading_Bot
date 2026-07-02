@@ -135,9 +135,27 @@ class Signal:
     strength: Money | None = None
 
     def __post_init__(self) -> None:
-        """Validate the target against its mode, ``ts`` and ``strength``."""
+        """Validate the target against its mode, ``ts`` and ``strength``.
+
+        ``target`` and ``strength`` are routed through
+        :func:`~trading_bot.domain.money.money` first: it **rejects a raw
+        ``float``** (``TypeError``) and any non-finite ``Decimal``
+        (``MoneyError``, i.e. ``NaN``/``±Inf``) before the range guards below.
+        In particular a :data:`SignalMode.TARGET_QTY` target has no numeric
+        bound, so without this guard a ``NaN``/``Inf`` quantity would flow
+        straight into :meth:`delta_to` and the order size; rejecting it here
+        keeps a poisoned target out of the router. This is a fail-fast backstop
+        (reject, never coerce). The dataclass is frozen, so the guarded values
+        are written back via ``object.__setattr__``.
+        """
         if self.ts < 0:
             raise SignalError(f"signal ts must be non-negative, got {self.ts}")
+
+        # Guard the money fields through money(): reject float / non-finite
+        # (NaN/Inf) before any range check or arithmetic sees them.
+        object.__setattr__(self, "target", money(self.target))
+        if self.strength is not None:
+            object.__setattr__(self, "strength", money(self.strength))
 
         if self.mode is SignalMode.EXPOSURE:
             if not (_NEG_ONE <= self.target <= _ONE):
@@ -145,7 +163,7 @@ class Signal:
                     "exposure target must be in [-1, 1], got "
                     f"{self.target}"
                 )
-        # TARGET_QTY accepts any signed Decimal (incl. 0 = flat); no bound.
+        # TARGET_QTY accepts any finite signed Decimal (incl. 0 = flat); no bound.
 
         if self.strength is not None and not (0 <= self.strength <= 1):
             raise SignalError(
