@@ -485,18 +485,24 @@ def test_brokerconfig_testnet_defaults_false() -> None:
 
 
 def test_build_engine_wires_daily_loss_provider_to_performance_service() -> None:
-    """``build_engine`` feeds the risk gate the day's realised PnL from ``perf``.
+    """``build_engine`` feeds the risk gate the *current UTC day's* realised PnL.
 
     Verification on real engine state: with ``max_daily_loss`` set, a BUY then a
     lower SELL are emitted as fills on the engine bus (realising a loss in the
     shared :class:`PerformanceService`). The risk gate — which previously saw a
-    constant zero and never engaged — now reads that loss through the wired
-    provider and refuses the next order with ``max_daily_loss``.
+    constant zero and never engaged — now reads today's realised loss through the
+    day-scoped provider (``perf.realised_pnl_since``) and refuses the next order
+    with ``max_daily_loss``. The fills are stamped with a *current* timestamp so
+    they fall inside today's UTC window (a 1970-epoch fill would fall outside it —
+    which is exactly the daily reset the A-1 fix introduces).
     """
+    import time
+
     from trading_bot.application.config import RiskConfig
 
     config = AppConfig(risk=RiskConfig(max_daily_loss=money("5")))
     engine = build_engine(config)
+    now_ms = int(time.time() * 1000)
 
     # Before any loss, the gate passes.
     probe = Order(
@@ -510,12 +516,16 @@ def test_build_engine_wires_daily_loss_provider_to_performance_service() -> None
     engine.risk.check(probe)  # no raise — flat day
 
     # Realise a loss of 10 (BUY 1 @ 100, SELL 1 @ 90) via fills on the bus, so the
-    # shared performance service reports realised_pnl == -10.
-    engine.bus.emit(_fill_event("F1", OrderSide.BUY, qty="1", price="100", fee="0"))
-    engine.bus.emit(_fill_event("F2", OrderSide.SELL, qty="1", price="90", fee="0"))
+    # shared performance service reports realised_pnl == -10 for today.
+    engine.bus.emit(
+        _fill_event("F1", OrderSide.BUY, qty="1", price="100", fee="0", ts=now_ms)
+    )
+    engine.bus.emit(
+        _fill_event("F2", OrderSide.SELL, qty="1", price="90", fee="0", ts=now_ms)
+    )
     assert engine.perf.realised_pnl() == money("-10")
 
-    # The gate now reads that loss through the wired provider and halts.
+    # The gate now reads today's loss through the wired provider and halts.
     with pytest.raises(RiskLimitBreached) as excinfo:
         engine.risk.check(probe)
     assert excinfo.value.limit == "max_daily_loss"

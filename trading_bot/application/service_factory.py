@@ -197,16 +197,18 @@ def build_engine(
     # not sign-cross), making Sharpe/Sortino/Calmar over a real run meaningful.
     perf = PerformanceService(v0=config.starting_capital, event_bus=bus)
     # Wire the daily-loss circuit breaker to the live PnL: the risk manager reads
-    # the day's *signed realised PnL* (a loss is negative) straight off the
-    # performance service. Without this, ``max_daily_loss`` saw a constant zero and
-    # never engaged; with it, once the day's realised loss reaches the limit the
-    # gate refuses every new order (and the router escalates to the kill-switch —
-    # cancelling resting orders + halting — on that breach). "Daily" here is the run
-    # session (no clock); a multi-day reset wires ``reset_day`` to a scheduler.
+    # the *current UTC day's* signed realised PnL (a loss is negative) off the
+    # performance service via ``realised_pnl_since(day_start_ms)``. "Daily" is a
+    # real UTC calendar day — the manager derives today's midnight from its clock
+    # and asks the service for the realised PnL since then, so the window resets
+    # automatically at the boundary (yesterday's loss no longer latches the book).
+    # Once the day's realised loss reaches the limit the gate refuses every new
+    # order (and the router escalates to the kill-switch — cancelling resting
+    # orders + halting — on that breach) for the rest of that UTC day.
     risk = RiskManager(
         config.risk,
         position_tracker=tracker,
-        daily_pnl_provider=perf.realised_pnl,
+        daily_pnl_provider=perf.realised_pnl_since,
     )
     router = OrderRouter(broker, bus, risk_manager=risk)
 

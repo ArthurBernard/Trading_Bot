@@ -348,7 +348,9 @@ async def test_daily_loss_breach_escalates_to_kill_switch_and_cancels_resting() 
     pnl = {"v": money("0")}  # the day's signed realised PnL the provider reads
     risk = RiskManager(
         RiskConfig(max_daily_loss=money("100")),
-        daily_pnl_provider=lambda: pnl["v"],
+        # The provider is now day-scoped: it takes the current UTC day boundary
+        # (ignored by this fake, which returns a fixed day PnL).
+        daily_pnl_provider=lambda _day_start_ms: pnl["v"],
     )
     router = OrderRouter(broker, bus, risk_manager=risk)
 

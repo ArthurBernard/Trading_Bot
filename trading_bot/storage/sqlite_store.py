@@ -55,6 +55,7 @@ from __future__ import annotations
 
 import pathlib
 import sqlite3
+import time
 from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Generator
@@ -63,6 +64,7 @@ from trading_bot.domain.fill import Fill
 from trading_bot.domain.instrument import Instrument, Symbol
 from trading_bot.domain.money import money
 from trading_bot.domain.order import (
+    DEFAULT_FILL_TOLERANCE,
     Order,
     OrderSide,
     OrderStatus,
@@ -95,7 +97,9 @@ CREATE TABLE IF NOT EXISTS orders (
     status          TEXT NOT NULL,
     filled_qty      TEXT NOT NULL,
     avg_fill_price  TEXT,
-    ts              INTEGER
+    ts              INTEGER,
+    reject_reason   TEXT,
+    fill_tolerance  TEXT
 );
 
 CREATE TABLE IF NOT EXISTS fills (
@@ -149,6 +153,16 @@ class StoredFill:
     fill: Fill
     mode: str
     venue: str
+
+
+def _now_ms() -> int:
+    """Current wall-clock time as **ms since the Unix epoch (UTC)**.
+
+    Stamped on an order's ``ts`` column at first persist. :func:`time.time` is
+    UTC-anchored epoch seconds, matching the millisecond convention the domain
+    :class:`~trading_bot.domain.fill.Fill` uses for its own ``ts``.
+    """
+    return int(time.time() * 1000)
 
 
 def _instrument_to_text(instrument: Instrument) -> str:
@@ -217,6 +231,7 @@ class SqliteStore:
         with self._conn() as conn:
             conn.executescript(_SCHEMA)
             _migrate_fills_tags(conn)
+            _migrate_orders_columns(conn)
 
     def set_context(self, *, mode: str, venue: str) -> None:
         """Set the ``mode`` / ``venue`` stamped on subsequently-recorded fills.
@@ -275,8 +290,8 @@ class SqliteStore:
                 INSERT INTO orders (
                     client_order_id, venue_order_id, instrument, side, type,
                     qty, limit_price, stop_price, status, filled_qty,
-                    avg_fill_price, ts
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    avg_fill_price, ts, reject_reason, fill_tolerance
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(client_order_id) DO UPDATE SET
                     venue_order_id = excluded.venue_order_id,
                     instrument     = excluded.instrument,
@@ -288,7 +303,12 @@ class SqliteStore:
                     status         = excluded.status,
                     filled_qty     = excluded.filled_qty,
                     avg_fill_price = excluded.avg_fill_price,
-                    ts             = excluded.ts
+                    reject_reason  = excluded.reject_reason,
+                    fill_tolerance = excluded.fill_tolerance,
+                    -- Keep the first-seen write timestamp: this is the
+                    -- append-only reconciliation source, so the row records when
+                    -- the order was first persisted, not last touched.
+                    ts             = COALESCE(orders.ts, excluded.ts)
                 """,
                 (
                     order.client_order_id,
@@ -304,7 +324,9 @@ class SqliteStore:
                     None
                     if order.avg_fill_price is None
                     else str(order.avg_fill_price),
-                    None,
+                    _now_ms(),
+                    order.reject_reason,
+                    str(order.fill_tolerance),
                 ),
             )
 
@@ -537,6 +559,11 @@ def _row_to_order(row: sqlite3.Row) -> Order:
     limit_raw = row["limit_price"]
     stop_raw = row["stop_price"]
     avg_raw = row["avg_fill_price"]
+    keys = row.keys()
+    # ``fill_tolerance`` is passed at construction (it is a plain field, not a
+    # post-init lifecycle field), so read it first and default to the domain
+    # default when absent (a pre-migration row has no such column).
+    tol_raw = row["fill_tolerance"] if "fill_tolerance" in keys else None
     order = Order(
         client_order_id=str(row["client_order_id"]),
         instrument=_instrument_from_text(str(row["instrument"])),
@@ -545,12 +572,19 @@ def _row_to_order(row: sqlite3.Row) -> Order:
         type=OrderType(row["type"]),
         limit_price=None if limit_raw is None else money(str(limit_raw)),
         stop_price=None if stop_raw is None else money(str(stop_raw)),
+        fill_tolerance=(
+            DEFAULT_FILL_TOLERANCE if tol_raw is None else money(str(tol_raw))
+        ),
     )
     order.filled_qty = money(str(row["filled_qty"]))
     order.avg_fill_price = None if avg_raw is None else money(str(avg_raw))
     order.status = OrderStatus(row["status"])
     venue = row["venue_order_id"]
     order.venue_order_id = None if venue is None else str(venue)
+    # Restore the rejection reason so a reloaded REJECTED order keeps its cause
+    # (a pre-migration row has no column: it reads back None, the field default).
+    reject_raw = row["reject_reason"] if "reject_reason" in keys else None
+    order.reject_reason = None if reject_raw is None else str(reject_raw)
     return order
 
 
@@ -604,3 +638,35 @@ def _migrate_fills_tags(conn: sqlite3.Connection) -> None:
         )
     if "venue" not in columns:
         conn.execute("ALTER TABLE fills ADD COLUMN venue TEXT NOT NULL DEFAULT ''")
+
+
+#: Columns the current ``orders`` schema carries that a pre-migration table may
+#: lack, each with the ``ALTER TABLE ... ADD COLUMN`` type used to backfill it.
+#: All are nullable (no ``NOT NULL``), so existing rows backfill to ``NULL`` — a
+#: valid "unknown, pre-migration" value the read side already tolerates.
+_ORDERS_ADDED_COLUMNS: tuple[tuple[str, str], ...] = (
+    ("ts", "INTEGER"),
+    ("reject_reason", "TEXT"),
+    ("fill_tolerance", "TEXT"),
+)
+
+
+def _migrate_orders_columns(conn: sqlite3.Connection) -> None:
+    """Add any missing later-added columns to a pre-existing ``orders`` table.
+
+    The ``orders`` counterpart of :func:`_migrate_fills_tags`. ``CREATE TABLE IF
+    NOT EXISTS`` (in :data:`_SCHEMA`) already gives a *fresh* database the full
+    column set, but a database created before a column was added has the old
+    ``orders`` shape — and :meth:`SqliteStore.upsert_order` writes every current
+    column, so without this an ``upsert_order`` on an old DB would hard-fail with
+    an ``OperationalError`` (unknown column). This inspects the live columns and
+    ``ALTER TABLE ... ADD COLUMN`` for each of :data:`_ORDERS_ADDED_COLUMNS` that
+    is missing. Every added column is nullable, so SQLite backfills existing rows
+    with ``NULL`` — no row is lost or corrupted and the money columns are
+    untouched. Idempotent and safe on a partially-migrated table: a no-op once
+    all columns exist (a fresh DB, a second open, or a DB missing only some).
+    """
+    columns = {row["name"] for row in conn.execute("PRAGMA table_info(orders)")}
+    for name, coltype in _ORDERS_ADDED_COLUMNS:
+        if name not in columns:
+            conn.execute(f"ALTER TABLE orders ADD COLUMN {name} {coltype}")

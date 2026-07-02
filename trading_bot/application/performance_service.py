@@ -142,6 +142,15 @@ class PerformanceService:
         # Running aggregate realised PnL after each global fill (one entry per
         # fill). Rebuilt incrementally so equity_curve() is O(1) to read.
         self._equity: list[Money] = []
+        # Per-fill checkpoints of (fill ts in ms UTC, cumulative realised PnL
+        # *after* that fill), in arrival order. This is what lets
+        # :meth:`realised_pnl_since` answer "how much realised PnL was locked in
+        # on/after a time bound" exactly: the day's realised PnL is the delta of
+        # the cumulative curve across the boundary (realising PnL depends on the
+        # entry price of exposure opened on prior days, so it is *not*
+        # ``Position.from_fills(only-today's-fills)`` — it is the cumulative
+        # curve's rise over the window).
+        self._pnl_checkpoints: list[tuple[int, Money]] = []
         # Running totals, kept incrementally (each fill's contribution to total
         # realised PnL is the delta of its instrument's position realised PnL).
         self._realised_pnl: Money = _ZERO
@@ -204,6 +213,9 @@ class PerformanceService:
 
         # One new equity point: v0 + total realised PnL through this fill.
         self._equity.append(self._v0 + self._realised_pnl)
+        # Checkpoint the cumulative realised PnL at this fill's timestamp, so a
+        # windowed query (:meth:`realised_pnl_since`) can read the curve's rise.
+        self._pnl_checkpoints.append((fill.ts, self._realised_pnl))
 
     def realised_pnl(self) -> Money:
         """Aggregate realised PnL across all instruments, **net of fees**.
@@ -220,6 +232,48 @@ class PerformanceService:
 
         """
         return self._realised_pnl
+
+    def realised_pnl_since(self, since_ms: int) -> Money:
+        """Realised PnL locked in by fills at/after ``since_ms`` (a time window).
+
+        The **day-scoped** realised-PnL source the daily-loss circuit breaker
+        reads: the rise of the cumulative realised-PnL curve from just *before*
+        ``since_ms`` to now. This is the exact "PnL realised in this window"
+        figure and is **not** ``Position.from_fills(only-window-fills)`` —
+        realising PnL depends on the entry price of exposure opened *before* the
+        window, so a window refold would misattribute prior-day entries. Reading
+        the cumulative curve's delta instead keeps fills the source of truth and
+        matches :meth:`realised_pnl` exactly when ``since_ms`` is at/below the
+        first fill's timestamp.
+
+        Concretely: with ``base`` = the cumulative realised PnL as of the last
+        fill *strictly before* ``since_ms`` (``0`` if no such fill), the result
+        is ``realised_pnl() - base``. Zero when no fill has landed at/after the
+        bound.
+
+        Parameters
+        ----------
+        since_ms : int
+            Inclusive lower time bound, **milliseconds since the Unix epoch
+            (UTC)** — the same unit as :attr:`~trading_bot.domain.fill.Fill.ts`.
+            The daily breaker passes the current UTC day's midnight.
+
+        Returns
+        -------
+        Money
+            The signed realised PnL over ``[since_ms, now]`` (a loss is
+            negative), exact :class:`~decimal.Decimal`. ``0`` when no fill falls
+            in the window.
+
+        """
+        # base = cumulative realised PnL as of the last fill strictly before the
+        # bound; the window's realised PnL is the current cumulative minus base.
+        base = _ZERO
+        for ts, cumulative in self._pnl_checkpoints:
+            if ts >= since_ms:
+                break
+            base = cumulative
+        return self._realised_pnl - base
 
     def fees_paid(self) -> Money:
         """Aggregate fees paid across all instruments and all fills.

@@ -225,10 +225,10 @@ def test_max_daily_loss_profit_never_blocks() -> None:
 
 
 def test_max_daily_loss_via_provider() -> None:
-    """The daily loss can be sourced from an injected zero-arg provider."""
+    """The daily loss can be sourced from an injected day-scoped provider."""
     realised = money("0")
 
-    def provider() -> Money:
+    def provider(_day_start_ms: int) -> Money:
         return realised
 
     rm = RiskManager(
@@ -239,6 +239,91 @@ def test_max_daily_loss_via_provider() -> None:
     realised = money("-150")  # provider now reports a 150 loss
     with pytest.raises(RiskLimitBreached):
         rm.check(_order())
+
+
+def test_daily_loss_provider_is_passed_the_utc_day_boundary() -> None:
+    """The provider receives the current UTC day's midnight (ms since epoch)."""
+    # 2021-01-01 12:00:00 UTC = 1_609_502_400_000 ms; that day's midnight is
+    # 2021-01-01 00:00:00 UTC = 1_609_459_200_000 ms.
+    now_ms = 1_609_502_400_000
+    day_start_ms = 1_609_459_200_000
+    seen: list[int] = []
+
+    def provider(boundary_ms: int) -> Money:
+        seen.append(boundary_ms)
+        return money("0")
+
+    rm = RiskManager(
+        RiskConfig(max_daily_loss=money("100")),
+        daily_pnl_provider=provider,
+        clock=lambda: now_ms,
+    )
+    rm.check(_order())
+    assert seen == [day_start_ms]
+
+
+def test_daily_loss_breaker_resets_at_utc_day_boundary() -> None:
+    """A day that trips the breaker no longer counts once the UTC day rolls over.
+
+    Wires a day-scoped provider (as the service factory does) plus a controllable
+    clock. Day 1's realised loss trips the ``max_daily_loss`` gate; advancing the
+    clock past the next UTC midnight makes the manager ask the provider for *that*
+    day's boundary — where the loss is back to zero — so trading resumes with no
+    manual reset and no scheduler.
+    """
+    # Two adjacent UTC days.
+    day1_noon = 1_609_502_400_000  # 2021-01-01 12:00 UTC
+    day1_start = 1_609_459_200_000  # 2021-01-01 00:00 UTC
+    day2_noon = day1_noon + 86_400_000  # 2021-01-02 12:00 UTC
+    day2_start = day1_start + 86_400_000  # 2021-01-02 00:00 UTC
+
+    now = {"ms": day1_noon}
+    # Signed realised PnL per UTC-day boundary: day 1 lost 200, day 2 is fresh.
+    pnl_by_day = {day1_start: money("-200"), day2_start: money("0")}
+
+    rm = RiskManager(
+        RiskConfig(max_daily_loss=money("100")),
+        daily_pnl_provider=lambda boundary: pnl_by_day[boundary],
+        clock=lambda: now["ms"],
+    )
+
+    # Day 1: the realised loss of 200 >= cap 100 -> the gate refuses.
+    with pytest.raises(RiskLimitBreached) as exc:
+        rm.check(_order())
+    assert exc.value.limit == "max_daily_loss"
+
+    # Cross into the next UTC day: the window rolls over automatically.
+    now["ms"] = day2_noon
+    rm.check(_order())  # day 2's loss is 0 -> trading resumes, no manual reset
+
+
+def test_cumulative_loss_across_days_does_not_latch() -> None:
+    """A loss carried across days never latches the kill-switch by itself.
+
+    The bug A-1 fixes: wiring the breaker to *cumulative* session PnL means a
+    day-1 loss stays counted forever and, once the router escalates to the
+    kill-switch, halts the book permanently. With a day-scoped source the manager
+    only ever sees the *current* day's PnL, so a prior day's loss cannot keep the
+    gate breached — and the kill-switch is never reached on a fresh day.
+    """
+    day1_start = 1_609_459_200_000
+    day2_start = day1_start + 86_400_000
+    now = {"ms": day1_start + 3_600_000}  # day 1, 01:00 UTC
+
+    # Cumulative PnL would be -200 on both days; the *daily* view is -200 then 0.
+    daily_pnl = {day1_start: money("-200"), day2_start: money("0")}
+
+    rm = RiskManager(
+        RiskConfig(max_daily_loss=money("100")),
+        daily_pnl_provider=lambda boundary: daily_pnl[boundary],
+        clock=lambda: now["ms"],
+    )
+    with pytest.raises(RiskLimitBreached):
+        rm.check(_order())  # day 1 breached
+    assert rm.tripped is False, "the gate refusing an order must not itself trip"
+
+    now["ms"] = day2_start + 3_600_000  # day 2, 01:00 UTC
+    rm.check(_order())  # a new day: not latched, trading allowed
 
 
 def test_reset_day_clears_recorded_loss() -> None:
