@@ -6,7 +6,7 @@ rejected approaches as tombstones.
 
 ---
 
-### 2026-07-02 Prime the dccd client for sync reads instead of a lifecycle refactor (PR #PR)  [accepted]
+### 2026-07-02 Prime the dccd client for sync reads instead of a lifecycle refactor (PR #137)  [accepted]
 - **Choice**: `_make_client` builds the dccd `Client`'s read state (`_store` /
   `_registry`, via dccd's public `build_store` / `build_registry`) synchronously —
   the read-only half of dccd's async `__aenter__` — so the engine's synchronous
