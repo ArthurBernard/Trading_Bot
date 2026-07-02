@@ -6,6 +6,20 @@ rejected approaches as tombstones.
 
 ---
 
+### 2026-07-02 True average fill price on partial fills; Kraken WS reconcile-on-gap (PR #PR)  [accepted]
+- **Choice**: `open_orders` computes a partially-filled order's average fill price
+  from the venue's executed fields — Binance `cummulativeQuoteQty / executedQty`,
+  Kraken `cost / vol_exec` (fallback the top-level `price`) — never the resting
+  limit/stop price; zero-executed ⇒ no avg price (`None`). Kraken private-WS tracks
+  the executions `sequence` and reconciles on a gap or (re)connect; a present-but-
+  unparseable `ts` raises rather than silently becoming `0`.
+- **Why**: audit B-8 — using the limit price as the avg fill price is a wrong PnL
+  basis (fills are the source of truth for PnL). B-10 — the WS had no
+  reconcile-on-fill-gap and a bad timestamp silently zeroed (corrupting ordering).
+- **Rejected alternatives**: (a) keep the limit price — wrong basis; (b) treat a
+  per-connection sequence restart as a gap — Kraken resets its counter each connect,
+  so the baseline resets on (re)connect to avoid a false gap.
+
 ### 2026-07-02 Config-driven portfolio data source (resample + store path) (PR #138)  [accepted]
 - **Choice**: add `source_span` and `data_path` to `DataSourceConfig`;
   `build_portfolio_runners` wraps the real dccd client in a `ResamplingDccdClient`
