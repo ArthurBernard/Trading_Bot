@@ -285,6 +285,100 @@ def test_store_key_format_rejects_unknown_value() -> None:
         _one_portfolio_config(store_key_format="concat")
 
 
+def _pf_with_data(data: dict) -> dict:
+    """Serialise config kwargs for a one-portfolio AppConfig with a given data source."""
+    return {
+        "mode": "paper",
+        "portfolios": [
+            {
+                "name": "pf",
+                "universe": ["BTC/USDT", "ETH/USDT"],
+                "signal": {"ref": _FAKE_SIGNAL},
+                "capital": "100000",
+                "store_key_format": "hyphen",
+                "data": data,
+            }
+        ],
+    }
+
+
+def test_source_span_must_be_finer_than_span() -> None:
+    """A ``source_span`` not strictly finer than ``span`` is rejected."""
+    with pytest.raises(ValidationError):
+        AppConfig.model_validate(
+            _pf_with_data(
+                {"exchange": "binance", "span": 86400, "source_span": 86400}
+            )
+        )
+
+
+def test_source_span_must_be_positive() -> None:
+    """A non-positive ``source_span`` is rejected."""
+    with pytest.raises(ValidationError):
+        AppConfig.model_validate(
+            _pf_with_data({"exchange": "binance", "span": 86400, "source_span": 0})
+        )
+
+
+def test_valid_source_span_and_data_path_accepted() -> None:
+    """A finer ``source_span`` + a store ``data_path`` validate and round-trip."""
+    cfg = AppConfig.model_validate(
+        _pf_with_data(
+            {
+                "exchange": "binance",
+                "span": 86400,
+                "source_span": 60,
+                "data_path": "/some/store",
+            }
+        )
+    )
+    assert cfg.portfolios[0].data.source_span == 60
+    assert cfg.portfolios[0].data.data_path == "/some/store"
+
+
+def test_build_wraps_client_in_resampling_when_source_span_set(monkeypatch) -> None:
+    """A daily portfolio over a 1m store is fed via a ``ResamplingDccdClient``.
+
+    When ``data.source_span`` is set and no client is injected,
+    ``build_portfolio_runners`` wraps the (primed) real client in a
+    :class:`ResamplingDccdClient` for ``span`` / ``source_span`` — the seam that
+    lets the dashboard read a 1-minute store as daily bars. Offline: the real
+    ``_make_client`` (which imports dccd) is monkeypatched to a fake.
+    """
+    import importlib
+
+    run_app_mod = importlib.import_module("trading_bot.application.run_app")
+
+    sentinel = _daily_client({"BTC-USDT": [1.0] * 4, "ETH-USDT": [1.0] * 4})
+    seen: dict[str, object] = {}
+
+    def _fake_make_client(data_path: str | None) -> object:
+        seen["data_path"] = data_path
+        return sentinel
+
+    monkeypatch.setattr(run_app_mod, "_make_client", _fake_make_client)
+
+    cfg = AppConfig.model_validate(
+        _pf_with_data(
+            {
+                "exchange": "binance",
+                "span": 86400,
+                "source_span": 60,
+                "data_path": "/synced/store",
+            }
+        )
+    )
+    engine = build_engine(cfg, db_path=None)
+    runners = build_portfolio_runners(cfg, engine, dccd_client=None)
+
+    feed_client = runners[0]._feed._client
+    assert isinstance(feed_client, ResamplingDccdClient)
+    assert feed_client._daily_span == 86400
+    assert feed_client._source_span == 60
+    assert feed_client._inner is sentinel
+    assert seen["data_path"] == "/synced/store"  # per-source store root threaded
+
+
 async def test_portfolio_reads_hyphen_keyed_store_when_configured() -> None:
     """``store_key_format='hyphen'`` reads a hyphen-keyed dccd store (``BTC-USDT``).
 

@@ -427,8 +427,11 @@ def feed_for(
 def _make_client(data_path: str | None) -> DccdClient:
     """Lazily construct a real ``dccd.Client``, primed for reads.
 
-    ``data_path`` is forwarded as the client's ``config_path``. Isolated so the
-    dccd import never runs when a client is injected (the offline-test path).
+    ``data_path`` selects the store: a **directory** is used as the dccd store
+    **root** directly (e.g. a synced ``~/data/<host>``); anything else is treated
+    as a dccd **config path** (its ``settings.data_path`` gives the store root);
+    ``None`` uses dccd's configured default. Isolated so the dccd import never runs
+    when a client is injected (the offline-test path).
 
     dccd's ``Client.read`` requires the store/registry that its async
     ``__aenter__`` builds — but ``__aenter__`` also opens per-adapter HTTP pools
@@ -440,6 +443,8 @@ def _make_client(data_path: str | None) -> DccdClient:
     store. (dccd is the sibling data repo; ``build_store`` / ``build_registry`` are
     its public wiring seam.)
     """
+    import os  # Built-in
+
     from dccd import Client  # local import: dccd only required for the real path
     from dccd.application.config import (
         AppConfig,
@@ -450,13 +455,19 @@ def _make_client(data_path: str | None) -> DccdClient:
 
     # dccd.Client is untyped; it satisfies the DccdClient protocol structurally.
     client = Client(data_path)
-    try:
-        cfg = load_config(resolve_config_path(data_path))
-    except FileNotFoundError:
+    if data_path is not None and os.path.isdir(data_path):
+        # A store root directory — read it directly (the common "synced store" case).
+        store_root: str | None = data_path
         cfg = AppConfig()
+    else:
+        try:
+            cfg = load_config(resolve_config_path(data_path))
+        except FileNotFoundError:
+            cfg = AppConfig()
+        store_root = cfg.settings.data_path
     # Populate the read-only state dccd's __aenter__ would build (store + a
     # non-None registry that read()'s _require_ready() guard checks).
-    client._store = build_store(cfg.settings.data_path)
+    client._store = build_store(store_root)
     client._registry = build_registry()
     client._config = cfg
     typed: DccdClient = client
