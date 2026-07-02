@@ -91,14 +91,32 @@ trades. Two ways to reach it remotely:
 ssh -L 8000:127.0.0.1:8000 your-host    # then open http://localhost:8000
 ```
 
-**2. Direct access with a token (like dccd).** Set a token and bind a reachable
-interface; the dashboard then refuses to bind non-loopback **without** a token:
+**2. Direct access with a token (like dccd) — set it once in the config.** The web
+settings live in the manifest's **`ui:`** section, so a bare `trading-bot dashboard`
+serves the same way every launch (no flags to remember — the dccd model):
+
+```yaml
+# configs/dashboard.yaml (gitignored, local)
+ui:
+  host: 0.0.0.0        # or a Tailscale IP
+  port: 8000
+  token: "…"           # or leave unset and use TRADING_BOT_UI_TOKEN (preferred)
+```
+
+```bash
+trading-bot dashboard          # reads ui: from the manifest — remote, automatic
+```
+
+CLI flags (`--host` / `--port` / `--token`) and `TRADING_BOT_UI_TOKEN` **override**
+the config; the token is best kept in the env var so it never sits in a file:
 
 ```bash
 export TRADING_BOT_UI_TOKEN="$(openssl rand -hex 24)"   # a strong secret
-trading-bot dashboard -c config.yaml \
-    --host 0.0.0.0 --port 8000 --token "$TRADING_BOT_UI_TOKEN"
+trading-bot dashboard --host 0.0.0.0 --port 8000        # token from the env
 ```
+
+Either way, the dashboard **refuses to bind non-loopback without a token** (from the
+config or the flag/env).
 
 With a token set, the dashboard requires a **login**: `/login` exchanges the token
 for an HttpOnly session cookie; every other route is gated (401 for `/api/*`,

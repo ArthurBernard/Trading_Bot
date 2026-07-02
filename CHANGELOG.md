@@ -8,6 +8,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Config-driven dashboard web settings (remote access, the dccd way).** A manifest
+  can carry a **`ui:`** section (`host` / `port` / `token` / `read_only`), and
+  `trading-bot dashboard` reads it — so you set the host + token **once** in
+  `configs/dashboard.yaml` and a bare `dashboard` serves remotely every launch, no
+  flags to remember (mirrors dccd's `ui_host` / `ui_auth_token`). CLI flags (and
+  `TRADING_BOT_UI_TOKEN`) override the config; defaults stay **loopback + no auth**,
+  and a non-loopback host still **requires a token** (from the config or the flag).
+  `doc/dev/10-deploy.md` updated. (#125)
+
 - **Per-strategy store isolation** — a `StrategyConfig` / `PortfolioStrategyConfig`
   may set its own `db_path`, so several strategies in **one** dashboard manifest each
   keep their **own** SQLite store (isolated book, fills and PnL — no commingling). The

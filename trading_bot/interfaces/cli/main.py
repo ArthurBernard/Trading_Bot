@@ -938,27 +938,28 @@ def dashboard(
         "-c",
         help="YAML AppConfig path. Defaults to a paper config (no strategies).",
     ),
-    host: str = typer.Option(
-        "127.0.0.1",
+    host: str | None = typer.Option(
+        None,
         "--host",
-        help="Interface to bind. Defaults to loopback (local-only).",
+        help="Interface to bind. Overrides the manifest's ui.host "
+        "(default 127.0.0.1 — loopback, local-only).",
     ),
-    port: int = typer.Option(
-        8000,
+    port: int | None = typer.Option(
+        None,
         "--port",
-        help="TCP port to listen on.",
+        help="TCP port to listen on. Overrides the manifest's ui.port (default 8000).",
     ),
     token: str | None = typer.Option(
         None,
         "--token",
         envvar="TRADING_BOT_UI_TOKEN",
-        help="Require this token to log in to the dashboard (enables auth). "
-        "Mandatory to bind a non-loopback --host. Reads TRADING_BOT_UI_TOKEN.",
+        help="Login token (enables auth). Overrides the manifest's ui.token. "
+        "Mandatory to bind a non-loopback host. Reads TRADING_BOT_UI_TOKEN.",
     ),
-    read_only: bool = typer.Option(
-        False,
-        "--read-only",
-        help="Advertise a read-only stance (later leaves hide/disable controls).",
+    read_only: bool | None = typer.Option(
+        None,
+        "--read-only/--no-read-only",
+        help="Advertise a read-only stance. Overrides the manifest's ui.read_only.",
     ),
 ) -> None:
     """Serve the **unified dashboard** (Overview / Strategies / Orders / PnL / Logs).
@@ -971,9 +972,13 @@ def dashboard(
     that fails to start (e.g. a live unit lacking credentials) is logged and
     skipped — the others still serve.
 
-    Binds **loopback** by default. Binding a non-loopback ``--host`` requires a
-    ``--token`` (``TRADING_BOT_UI_TOKEN``) — the same guard as ``start`` — since
-    the dashboard is the control surface; otherwise the command refuses.
+    Web settings come from the manifest's ``ui:`` section (``host`` / ``port`` /
+    ``token`` / ``read_only``); the CLI flags (or ``TRADING_BOT_UI_TOKEN``) override
+    them. So set the host + token **once** in the config and a bare ``trading-bot
+    dashboard`` serves the same way every launch — no flags to remember (the dccd
+    model). Binds **loopback** by default; a non-loopback host **requires** a token
+    (from the config or the flag/env) — the dashboard is the control surface, so it
+    refuses to bind wide open with no auth.
 
     Clean shutdown
     --------------
@@ -996,6 +1001,16 @@ def dashboard(
     # declares and persists across restarts.
     manifest_path = config_path if config_path is not None else _DEFAULT_MANIFEST
     config = _load_or_create_manifest(manifest_path)
+
+    # Resolve the web settings: an explicit CLI flag (or TRADING_BOT_UI_TOKEN for the
+    # token) wins; otherwise fall back to the manifest's `ui:` section — the dccd
+    # model, set the host/port/token once in the config and a bare `dashboard` serves
+    # the same way every launch (no flags to remember). Defaults stay loopback + no
+    # auth, so a bare config never exposes the control surface by accident.
+    host = host if host is not None else config.ui.host
+    port = port if port is not None else config.ui.port
+    token = token if token is not None else config.ui.token
+    read_only = read_only if read_only is not None else config.ui.read_only
 
     if host not in ("127.0.0.1", "localhost", "::1") and not token:
         _console.print(

@@ -651,3 +651,34 @@ def test_portfolio_db_path_round_trips_through_yaml(tmp_path) -> None:  # noqa: 
     cfg.to_yaml(path)
     reloaded = AppConfig.from_yaml(path)
     assert reloaded.portfolios[0].db_path == "./var/dashboard/pf.sqlite"
+
+
+# --- UIConfig (config-driven dashboard web settings) ---------------------- #
+
+
+def test_ui_config_defaults_to_loopback_no_auth() -> None:
+    """A bare config's `ui:` is loopback + no token (never exposed by accident)."""
+    cfg = AppConfig.model_validate({"mode": "paper"})
+    assert cfg.ui.host == "127.0.0.1"
+    assert cfg.ui.port == 8000
+    assert cfg.ui.token is None
+    assert cfg.ui.read_only is False
+
+
+def test_ui_config_round_trips_through_yaml(tmp_path) -> None:  # noqa: ANN001
+    """The `ui:` section (host/port/token) persists through `to_yaml`/`from_yaml`."""
+    cfg = AppConfig.model_validate(
+        {"mode": "paper", "ui": {"host": "0.0.0.0", "port": 9000, "token": "t"}}
+    )
+    path = tmp_path / "m.yaml"
+    cfg.to_yaml(path)
+    reloaded = AppConfig.from_yaml(path)
+    assert reloaded.ui.host == "0.0.0.0"
+    assert reloaded.ui.port == 9000
+    assert reloaded.ui.token == "t"
+
+
+def test_ui_config_rejects_a_blank_host() -> None:
+    """A blank `ui.host` is a validation error."""
+    with pytest.raises(ValidationError):
+        AppConfig.model_validate({"mode": "paper", "ui": {"host": "  "}})

@@ -6,6 +6,24 @@ rejected approaches as tombstones.
 
 ---
 
+### 2026-07-02 Config-driven dashboard web settings (a `ui:` section) (PR #125)  [accepted]
+- **Choice**: add a `ui:` section to `AppConfig` (`host` / `port` / `token` /
+  `read_only`); the `dashboard` command reads it as the default, with CLI flags (and
+  `TRADING_BOT_UI_TOKEN`) overriding. Defaults stay loopback + no auth; the
+  non-loopback-requires-a-token guard runs on the *resolved* values.
+- **Why**: the maintainer asked why remote access wasn't "automatic like dccd". It
+  wasn't a capability gap — the dashboard was already loopback+token like dccd — but
+  a *source* gap: dccd reads `ui_host` / `ui_auth_token` from its **persistent
+  config**, so once set it serves remotely with no flags; trading_bot only took CLI
+  flags/env, so they had to be re-passed each launch. Putting the web settings in the
+  manifest matches dccd's "set once, forget" and keeps `trading-bot dashboard` (no
+  args) as the single command.
+- **Rejected alternatives**: (a) CLI-flags only — the status quo that felt manual;
+  (b) a separate settings file distinct from the manifest — dccd keeps them together
+  in one config, and the dashboard already owns a persistent manifest; (c) defaulting
+  the host to `0.0.0.0` — unsafe (the dashboard is the control surface), so loopback
+  stays the default and going wide is an explicit config/flag choice + a token.
+
 ### 2026-07-01 Retire the split web apps onto one dashboard (PR #120)  [accepted]
 - **Choice**: `create_dashboard_app` is now the single web app (monitor + control +
   manage + PnL). `create_control_app` becomes a thin wrapper over it; `trading-bot

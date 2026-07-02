@@ -440,6 +440,45 @@ class RiskConfig(BaseModel):
         return v
 
 
+class UIConfig(BaseModel):
+    """How the dashboard binds + authenticates — the persistent web settings.
+
+    Lets the manifest carry the remote-access settings so ``trading-bot dashboard``
+    serves the same way every launch without CLI flags (the dccd model: set once in
+    the config, forget). CLI flags (``--host`` / ``--port`` / ``--token`` /
+    ``--read-only``) override these. Defaults are **loopback + no auth** — a bare
+    ``dashboard`` stays local-only and never exposes the control surface by accident.
+
+    Parameters
+    ----------
+    host : str, optional
+        Interface to bind (default ``127.0.0.1`` — loopback). A non-loopback host
+        (e.g. ``0.0.0.0`` or a Tailscale IP) **requires** ``token`` — the dashboard
+        is the control surface, so it refuses to bind wide open with no auth.
+    port : int, optional
+        TCP port (default ``8000``).
+    token : str or None, optional
+        Login token enabling auth (``None`` = no auth, loopback-only). Prefer the
+        ``TRADING_BOT_UI_TOKEN`` environment variable so the token never sits in a
+        file; a value here is a convenience for a trusted host.
+    read_only : bool, optional
+        Advertise a read-only stance (controls hidden/refused). Default ``False``.
+    """
+
+    host: str = "127.0.0.1"
+    port: int = 8000
+    token: str | None = None
+    read_only: bool = False
+
+    @field_validator("host")
+    @classmethod
+    def _non_empty_host(cls, v: str) -> str:
+        """Reject a blank ``host``."""
+        if not v or not v.strip():
+            raise ValueError("ui.host must be a non-empty string")
+        return v
+
+
 class AppConfig(BaseModel):
     """Top-level engine configuration — brokers, strategies and risk.
 
@@ -510,6 +549,7 @@ class AppConfig(BaseModel):
     portfolios: list[PortfolioStrategyConfig] = Field(default_factory=list)
     risk: RiskConfig = Field(default_factory=RiskConfig)
     storage: StorageConfig = Field(default_factory=StorageConfig)
+    ui: UIConfig = Field(default_factory=UIConfig)
 
     @field_validator("starting_capital")
     @classmethod
