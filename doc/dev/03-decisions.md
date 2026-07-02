@@ -6,6 +6,23 @@ rejected approaches as tombstones.
 
 ---
 
+### 2026-07-02 SQLite writes off the event loop via a writer thread (PR #PR)  [accepted]
+- **Choice**: the bus handler enqueues a write job (non-blocking) onto a FIFO
+  `queue.Queue`; one daemon writer thread drains it and does the SQLite I/O.
+  `close()` drains + joins the thread on shutdown; `flush()` is the read-side
+  barrier for reconciliation reads. Connections use WAL + explicit `busy_timeout`;
+  fills are keyed `(fill_id, venue, mode)`.
+- **Why**: audit A-2 — a synchronous open→write→commit→close ran inside the async
+  loop on every order/fill (hot path), blocking all runners. `EventBus.emit` is
+  synchronous and called from the loop, so a writer thread + queue (rather than
+  `asyncio.to_thread` per write) gives a non-blocking hand-off with strict FIFO
+  ordering and one place to drain on shutdown. D-9 — a single `fill_id` PK let a
+  paper and a live fill with the same venue id collide (`INSERT OR IGNORE` dropped
+  one), breaking the separate-series / no-double-count guarantee.
+- **Rejected alternatives**: (a) `asyncio.to_thread` per write — no single ordering
+  point / drain seam; (b) an async SQLite lib — a heavier dependency/rewrite for a
+  write path that is already append-only and idempotent.
+
 ### 2026-07-02 Config-driven portfolio data source (resample + store path) (PR #138)  [accepted]
 - **Choice**: add `source_span` and `data_path` to `DataSourceConfig`;
   `build_portfolio_runners` wraps the real dccd client in a `ResamplingDccdClient`
