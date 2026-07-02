@@ -7,6 +7,8 @@ real waits. The opt-in network test (``-m network``) hits Kraken's public API.
 
 from __future__ import annotations
 
+import logging
+
 import httpx
 import pytest
 
@@ -15,6 +17,29 @@ from trading_bot.transport import (
     AsyncHTTPClient,
     HTTPError,
 )
+from trading_bot.transport.http import _redact_url
+
+# --- Fake secrets --------------------------------------------------------- #
+# Synthetic, NOT real credentials. A 64-hex-char stand-in for a Binance
+# HMAC-SHA256 signature and a fake API key. Both must never survive into a log
+# record or an exception message.
+_FAKE_SIGNATURE = "deadbeef" * 8  # 64 hex chars, shaped like a real HMAC
+_FAKE_API_KEY = "FAKEKEY0000000000000000000000000000000000000000000000000000000000"
+# A realistic *signed* Binance-style URL: caller params, then apiKey / timestamp,
+# then the appended signature — exactly the shape ``binance._signed_request``
+# hands to the transport.
+_SIGNED_URL = (
+    "https://api.binance.test/api/v3/order"
+    "?symbol=BTCUSDT&side=BUY&type=LIMIT&quantity=0.01&price=50000"
+    f"&recvWindow=5000&timestamp=1700000000000&apiKey={_FAKE_API_KEY}"
+    f"&signature={_FAKE_SIGNATURE}"
+)
+
+
+def _assert_no_secret(text: str) -> None:
+    """Assert *text* leaks neither the fake signature nor the fake API key."""
+    assert _FAKE_SIGNATURE not in text
+    assert _FAKE_API_KEY not in text
 
 
 class RecordingSleep:
@@ -290,6 +315,190 @@ async def test_limiter_acquired_before_request(httpx_mock) -> None:
         await client.get("https://example.test/data")
 
     assert limiter.acquired == ["kraken"]
+
+
+# --- secret redaction: the helper ----------------------------------------- #
+
+
+def test_redact_url_no_query_unchanged() -> None:
+    """A URL with no query string is returned verbatim."""
+    url = "https://api.binance.test/api/v3/order"
+    assert _redact_url(url) == url
+
+
+def test_redact_url_no_sensitive_params_unchanged() -> None:
+    """A query with only innocuous params is preserved (diagnostics stay useful)."""
+    url = "https://api.binance.test/api/v3/order?symbol=BTCUSDT&side=BUY"
+    assert _redact_url(url) == url
+
+
+def test_redact_url_masks_signature_at_end() -> None:
+    """The trailing ``&signature=`` value is masked; others survive."""
+    url = f"https://x.test/o?symbol=BTCUSDT&signature={_FAKE_SIGNATURE}"
+    out = _redact_url(url)
+    assert "signature=%3Credacted%3E" in out or "signature=<redacted>" in out
+    assert _FAKE_SIGNATURE not in out
+    assert "symbol=BTCUSDT" in out
+
+
+def test_redact_url_masks_param_at_start() -> None:
+    """A sensitive param first in the query is masked."""
+    url = f"https://x.test/o?token={_FAKE_SIGNATURE}&symbol=BTCUSDT"
+    out = _redact_url(url)
+    assert _FAKE_SIGNATURE not in out
+    assert "symbol=BTCUSDT" in out
+
+
+def test_redact_url_masks_param_in_middle() -> None:
+    """A sensitive param sandwiched between innocuous ones is masked."""
+    url = (
+        "https://x.test/o?symbol=BTCUSDT"
+        f"&apiKey={_FAKE_API_KEY}&recvWindow=5000"
+    )
+    out = _redact_url(url)
+    assert _FAKE_API_KEY not in out
+    assert "symbol=BTCUSDT" in out
+    assert "recvWindow=5000" in out
+
+
+def test_redact_url_masks_all_sensitive_keys() -> None:
+    """Every configured sensitive key (any case) has its value masked."""
+    url = (
+        "https://x.test/o?"
+        "signature=AAA&api_key=BBB&apiKey=CCC&token=DDD&nonce=EEE&symbol=BTC"
+    )
+    out = _redact_url(url)
+    for secret in ("AAA", "BBB", "CCC", "DDD", "EEE"):
+        assert f"={secret}" not in out
+    assert "symbol=BTC" in out
+    assert out.count("redacted") == 5
+
+
+def test_redact_url_multiple_params_full_signed_url() -> None:
+    """A full signed Binance-style URL loses only its secrets."""
+    out = _redact_url(_SIGNED_URL)
+    _assert_no_secret(out)
+    # Non-sensitive params are preserved for diagnostics.
+    assert "symbol=BTCUSDT" in out
+    assert "side=BUY" in out
+    assert "redacted" in out
+
+
+# --- secret redaction: exception constructors ----------------------------- #
+
+
+def test_http_error_redacts_url_in_message_and_attr() -> None:
+    """``HTTPError`` stores and renders only the redacted URL."""
+    err = HTTPError(500, _SIGNED_URL, body="upstream down")
+    _assert_no_secret(str(err))
+    _assert_no_secret(err.url)
+    # ``args`` are what a downstream ``logger.error("%s", err)`` would render.
+    _assert_no_secret("".join(str(a) for a in err.args))
+    assert "redacted" in str(err)
+
+
+def test_ambiguous_error_redacts_url_in_message_and_attr() -> None:
+    """``AmbiguousRequestError`` stores and renders only the redacted URL."""
+    err = AmbiguousRequestError(_SIGNED_URL, reason="HTTP 503")
+    _assert_no_secret(str(err))
+    _assert_no_secret(err.url)
+    _assert_no_secret("".join(str(a) for a in err.args))
+    assert "reconcile" in str(err)
+
+
+# --- secret redaction: end-to-end error + logging paths ------------------- #
+
+
+async def test_signed_url_5xx_retries_exhausted_no_secret_leak(
+    httpx_mock, caplog
+) -> None:
+    """A persistent 5xx on a signed URL leaks no secret in logs or the error."""
+    for _ in range(3):
+        httpx_mock.add_response(status_code=503, text="upstream down")
+    sleep = RecordingSleep()
+
+    with caplog.at_level(logging.DEBUG, logger="trading_bot.transport.http"):
+        async with AsyncHTTPClient(max_retries=3, sleep=sleep) as client:
+            with pytest.raises(HTTPError) as exc_info:
+                await client.get(_SIGNED_URL)
+
+    _assert_no_secret(str(exc_info.value))
+    _assert_no_secret(caplog.text)
+    # Prove the redaction fired rather than the URL simply being absent.
+    assert "redacted" in caplog.text
+    assert "redacted" in str(exc_info.value)
+
+
+async def test_signed_url_429_no_secret_leak(httpx_mock, caplog) -> None:
+    """A 429 (rate-limited) log on a signed URL carries no secret."""
+    httpx_mock.add_response(status_code=429, headers={"Retry-After": "1"})
+    httpx_mock.add_response(status_code=200, json={"ok": True})
+    sleep = RecordingSleep()
+
+    with caplog.at_level(logging.WARNING, logger="trading_bot.transport.http"):
+        async with AsyncHTTPClient(sleep=sleep) as client:
+            result = await client.get(_SIGNED_URL)
+
+    assert result == {"ok": True}
+    _assert_no_secret(caplog.text)
+    assert "Rate-limited" in caplog.text
+    assert "redacted" in caplog.text
+
+
+async def test_signed_url_transport_error_no_secret_leak(
+    httpx_mock, caplog
+) -> None:
+    """A transport error whose message embeds the signed URL is scrubbed."""
+    # httpx renders the request URL into the exception; craft one that carries it.
+    request = httpx.Request("GET", _SIGNED_URL)
+    for _ in range(3):
+        httpx_mock.add_exception(
+            httpx.ConnectError("connection failed", request=request)
+        )
+    sleep = RecordingSleep()
+
+    with caplog.at_level(logging.WARNING, logger="trading_bot.transport.http"):
+        async with AsyncHTTPClient(max_retries=3, sleep=sleep) as client:
+            with pytest.raises(httpx.ConnectError):
+                await client.get(_SIGNED_URL)
+
+    _assert_no_secret(caplog.text)
+
+
+async def test_signed_url_no_retry_5xx_ambiguous_no_secret_leak(
+    httpx_mock, caplog
+) -> None:
+    """A ``retry=False`` 5xx on a signed URL → ambiguous error, no secret leak."""
+    httpx_mock.add_response(status_code=503, text="upstream down")
+    sleep = RecordingSleep()
+
+    with caplog.at_level(logging.DEBUG, logger="trading_bot.transport.http"):
+        async with AsyncHTTPClient(sleep=sleep) as client:
+            with pytest.raises(AmbiguousRequestError) as exc_info:
+                await client.request("POST", _SIGNED_URL, retry=False)
+
+    _assert_no_secret(str(exc_info.value))
+    _assert_no_secret(caplog.text)
+    assert "reconcile" in str(exc_info.value)
+
+
+async def test_signed_url_no_retry_transport_error_ambiguous_no_secret_leak(
+    httpx_mock, caplog
+) -> None:
+    """A ``retry=False`` transport error embeds the URL in ``reason``, scrubbed."""
+    request = httpx.Request("POST", _SIGNED_URL)
+    httpx_mock.add_exception(
+        httpx.ConnectError("connection failed", request=request)
+    )
+    sleep = RecordingSleep()
+
+    with caplog.at_level(logging.DEBUG, logger="trading_bot.transport.http"):
+        async with AsyncHTTPClient(sleep=sleep) as client:
+            with pytest.raises(AmbiguousRequestError) as exc_info:
+                await client.request("POST", _SIGNED_URL, retry=False)
+
+    _assert_no_secret(str(exc_info.value))
+    _assert_no_secret(caplog.text)
 
 
 @pytest.mark.network

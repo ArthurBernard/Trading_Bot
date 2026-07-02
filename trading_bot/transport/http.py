@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import urllib.parse
 from typing import TYPE_CHECKING, Any, Protocol
 
 import httpx
@@ -46,6 +47,88 @@ _DEFAULT_BACKOFF_BASE = 0.5
 # never park a request for an unreasonable time.
 _MAX_BACKOFF = 60.0
 
+# Query-string parameters whose *value* is a secret (or a nonce that reveals
+# call ordering) and must never reach a log record or an exception message. The
+# comparison is case-insensitive so both Binance's ``signature`` / ``apiKey``
+# and snake-cased variants (``api_key``) are covered. This is the transport's
+# side of the "secrets never logged" invariant: Binance signs on the query
+# string, so the full signed URL — carrying ``signature`` and ``apiKey`` — flows
+# verbatim into every failure path here unless it is scrubbed first.
+_SENSITIVE_QUERY_KEYS = frozenset(
+    {"signature", "api_key", "apikey", "token", "nonce"}
+)
+_REDACTED = "<redacted>"
+
+
+def _redact_url(url: str) -> str:
+    """Return *url* with the values of sensitive query params masked.
+
+    Masks the value of every query parameter whose name matches (case-
+    insensitively) one of :data:`_SENSITIVE_QUERY_KEYS` — ``signature``,
+    ``api_key`` / ``apiKey``, ``token``, ``nonce`` — replacing it with
+    :data:`_REDACTED` while leaving the URL otherwise intact. A URL with no
+    query string, or no sensitive params, is returned unchanged. Non-sensitive
+    parameters (symbol, side, quantity, …) are preserved so diagnostics stay
+    useful.
+
+    This is a pure string transform (no I/O); it is applied to any URL before it
+    enters a log record or an exception message so a 429 / 5xx / timeout on a
+    signed request can never write the HMAC signature or the API key to a log.
+
+    Parameters
+    ----------
+    url : str
+        The (possibly signed) request URL. May be a full URL or a bare path.
+
+    Returns
+    -------
+    str
+        The URL with sensitive query-parameter values replaced by
+        ``<redacted>``.
+    """
+    split = urllib.parse.urlsplit(url)
+    if not split.query:
+        return url
+    # keep_blank_values so a valueless ``&signature=`` still round-trips.
+    pairs = urllib.parse.parse_qsl(split.query, keep_blank_values=True)
+    redacted = [
+        (key, _REDACTED if key.lower() in _SENSITIVE_QUERY_KEYS else value)
+        for key, value in pairs
+    ]
+    # quote_via=quote keeps ``<redacted>`` readable rather than percent-encoding
+    # the angle brackets, so the marker is easy to grep for in logs.
+    new_query = urllib.parse.urlencode(redacted, quote_via=urllib.parse.quote)
+    return urllib.parse.urlunsplit(split._replace(query=new_query))
+
+
+def _redact_exc(exc: BaseException) -> str:
+    """Return ``str(exc)`` with any embedded signed URL scrubbed of secrets.
+
+    An :class:`httpx.TransportError` renders with the failing request's URL in
+    its message (e.g. ``ConnectError`` for ``GET https://…?…&signature=…``), so
+    the raw ``str(exc)`` would re-leak the signature into a log line. When the
+    exception carries a ``request`` with a URL, its redacted form is substituted
+    for the raw one; otherwise the plain message is returned (transport errors
+    with no request carry no URL to leak).
+
+    Parameters
+    ----------
+    exc : BaseException
+        The transport (or other) exception whose text is about to be logged.
+
+    Returns
+    -------
+    str
+        The exception message, secret-free.
+    """
+    text = str(exc)
+    request = getattr(exc, "request", None)
+    raw_url = getattr(request, "url", None)
+    if raw_url is None:
+        return text
+    raw = str(raw_url)
+    return text.replace(raw, _redact_url(raw))
+
 
 class HTTPError(Exception):
     """Raised when an HTTP request fails (non-retryable, or retries exhausted).
@@ -55,16 +138,20 @@ class HTTPError(Exception):
     status : int
         HTTP status code that triggered the failure.
     url : str
-        Target URL of the failed request.
+        Target URL of the failed request. Sensitive query parameters
+        (``signature``, ``apiKey``, ``token``, ``nonce``) are redacted before
+        the URL is stored or rendered, so re-logging the exception is safe.
     body : str, optional
         Response body (truncated in the message), kept for diagnostics.
     """
 
     def __init__(self, status: int, url: str, body: str = "") -> None:
         self.status = status
-        self.url = url
+        # Store the redacted URL so ``self.url``, ``args`` and ``str(self)`` are
+        # all secret-free — even if the exception is re-logged far from here.
+        self.url = _redact_url(url)
         self.body = body
-        super().__init__(f"HTTP {status} from {url}: {body[:200]}")
+        super().__init__(f"HTTP {status} from {self.url}: {body[:200]}")
 
 
 class AmbiguousRequestError(Exception):
@@ -81,17 +168,21 @@ class AmbiguousRequestError(Exception):
     Parameters
     ----------
     url : str
-        Target URL of the ambiguous request.
+        Target URL of the ambiguous request. Sensitive query parameters
+        (``signature``, ``apiKey``, ``token``, ``nonce``) are redacted before
+        the URL is stored or rendered, so re-logging the exception is safe.
     reason : str
         Human-readable description of the failure that made the outcome
         ambiguous (status code or transport error).
     """
 
     def __init__(self, url: str, reason: str) -> None:
-        self.url = url
+        # Store the redacted URL so ``self.url``, ``args`` and ``str(self)`` are
+        # all secret-free — even if the exception is re-logged far from here.
+        self.url = _redact_url(url)
         self.reason = reason
         super().__init__(
-            f"ambiguous non-idempotent request to {url}: {reason}; "
+            f"ambiguous non-idempotent request to {self.url}: {reason}; "
             "the request may have taken effect — reconcile before retrying "
             "(never blind-retry a non-idempotent request)"
         )
@@ -349,6 +440,12 @@ class AsyncHTTPClient:
         # keeps its bounded-retry budget unchanged.
         max_attempts = self._max_retries if retry else 1
 
+        # Redact once up front: ``url`` may be a signed Binance query string
+        # (``…&signature=<hmac>&apiKey=…``). Only the scrubbed form is ever
+        # logged; the raw ``url`` is used solely for the outbound httpx call and
+        # is passed to the exception constructors, which redact it themselves.
+        safe_url = _redact_url(url)
+
         last_exc: Exception | None = None
         for attempt in range(max_attempts):
             try:
@@ -375,7 +472,7 @@ class AsyncHTTPClient:
                         )
                     wait = self._retry_after(resp, attempt)
                     logger.warning(
-                        "Rate-limited by %s, sleeping %.1fs", url, wait
+                        "Rate-limited by %s, sleeping %.1fs", safe_url, wait
                     )
                     last_exc = HTTPError(resp.status_code, url, resp.text)
                     await self._sleep(wait)
@@ -390,7 +487,7 @@ class AsyncHTTPClient:
                     logger.warning(
                         "HTTP %d from %s, retry in %.1fs",
                         resp.status_code,
-                        url,
+                        safe_url,
                         wait,
                     )
                     last_exc = HTTPError(resp.status_code, url, resp.text)
@@ -406,13 +503,15 @@ class AsyncHTTPClient:
                 if not retry:
                     # The request may have reached the server before the
                     # connection dropped — outcome unknown. Refuse to retry.
+                    # ``_redact_exc`` scrubs any signed URL httpx embeds in the
+                    # transport error's message before it enters ``reason``.
                     raise AmbiguousRequestError(
-                        url, f"transport error: {exc}"
+                        url, f"transport error: {_redact_exc(exc)}"
                     ) from exc
                 wait = self._backoff(attempt)
                 logger.warning(
                     "Transport error %s (attempt %d/%d), retry in %.1fs",
-                    exc,
+                    _redact_exc(exc),
                     attempt + 1,
                     self._max_retries,
                     wait,
@@ -423,7 +522,7 @@ class AsyncHTTPClient:
         if last_exc is not None:
             raise last_exc
         raise RuntimeError(
-            f"{method} {url} failed after {self._max_retries} retries"
+            f"{method} {safe_url} failed after {self._max_retries} retries"
         )
 
     def _retry_after(self, resp: httpx.Response, attempt: int) -> float:
