@@ -1225,6 +1225,83 @@ def test_dashboard_default_config_is_paper(
     assert test_client.get("/api/health").json()["mode"] == "paper"
 
 
+def _write_ui_manifest(tmp_path, ui: dict) -> str:  # noqa: ANN001
+    """A minimal paper manifest carrying a ``ui:`` section, as a file path str."""
+    from trading_bot.application.config import AppConfig
+
+    m = tmp_path / "dash.yaml"
+    AppConfig.model_validate({"mode": "paper", "ui": ui}).to_yaml(m)
+    return str(m)
+
+
+def test_dashboard_reads_ui_settings_from_the_manifest(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:  # noqa: ANN001
+    """A bare `dashboard -c <manifest>` binds host/port/token from the `ui:` section.
+
+    The dccd model: set the web settings **once** in the config and no CLI flags are
+    needed — a non-loopback host + token from the manifest serves remotely on its own.
+    """
+    import uvicorn
+
+    monkeypatch.delenv("TRADING_BOT_UI_TOKEN", raising=False)
+    captured: dict[str, object] = {}
+    monkeypatch.setattr(
+        uvicorn, "run", lambda app, **kw: captured.update(app=app, kwargs=kw)
+    )
+    manifest = _write_ui_manifest(
+        tmp_path, {"host": "0.0.0.0", "port": 9200, "token": "cfg-tok"}
+    )
+
+    result = runner.invoke(cli_app, ["dashboard", "-c", manifest])
+
+    assert result.exit_code == 0, result.output  # non-loopback allowed (config token)
+    assert captured["kwargs"]["host"] == "0.0.0.0"
+    assert captured["kwargs"]["port"] == 9200
+    # the config token enabled auth on the served app.
+    resp = TestClient(captured["app"]).get("/", follow_redirects=False)
+    assert resp.status_code == 303  # → /login
+
+
+def test_dashboard_cli_flags_override_the_ui_config(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:  # noqa: ANN001
+    """Explicit `--host` / `--port` win over the manifest's `ui:` section."""
+    import uvicorn
+
+    captured: dict[str, object] = {}
+    monkeypatch.setattr(
+        uvicorn, "run", lambda app, **kw: captured.update(kwargs=kw)
+    )
+    manifest = _write_ui_manifest(
+        tmp_path, {"host": "0.0.0.0", "port": 9200, "token": "cfg-tok"}
+    )
+
+    result = runner.invoke(
+        cli_app, ["dashboard", "-c", manifest, "--host", "127.0.0.1", "--port", "9300"]
+    )
+    assert result.exit_code == 0, result.output
+    assert captured["kwargs"]["host"] == "127.0.0.1"  # flag overrode config
+    assert captured["kwargs"]["port"] == 9300
+
+
+def test_dashboard_non_loopback_ui_config_without_token_refuses(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:  # noqa: ANN001
+    """A non-loopback `ui.host` in the config with no token is refused (like the flag)."""
+    import uvicorn
+
+    monkeypatch.delenv("TRADING_BOT_UI_TOKEN", raising=False)
+    called = {"run": False}
+    monkeypatch.setattr(uvicorn, "run", lambda *a, **k: called.update(run=True))
+    manifest = _write_ui_manifest(tmp_path, {"host": "0.0.0.0"})  # no token
+
+    result = runner.invoke(cli_app, ["dashboard", "-c", manifest])
+    assert result.exit_code == 1
+    assert called["run"] is False
+    assert "token" in result.output.lower()
+
+
 def test_dashboard_non_loopback_without_token_refuses(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
