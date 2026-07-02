@@ -205,6 +205,89 @@ def test_order_stop_loss_round_trip(tmp_path) -> None:
     assert got.limit_price is None
 
 
+# --- orders: ts / reject_reason / fill_tolerance persistence --------------- #
+
+
+def test_order_ts_is_persisted_not_null(tmp_path) -> None:
+    """upsert_order stamps the write timestamp on orders.ts (no longer NULL)."""
+    db = tmp_path / "engine.db"
+    store = SqliteStore(db)
+    store.upsert_order(_order(cid="ts-1"))
+
+    raw = sqlite3.connect(str(db))
+    try:
+        (ts,) = raw.execute(
+            "SELECT ts FROM orders WHERE client_order_id='ts-1'"
+        ).fetchone()
+    finally:
+        raw.close()
+    assert ts is not None
+    assert isinstance(ts, int) and ts > 0
+
+
+def test_order_ts_is_stable_across_re_upserts(tmp_path) -> None:
+    """The first-seen ts is preserved when the same order is re-upserted."""
+    db = tmp_path / "engine.db"
+    store = SqliteStore(db)
+    order = _order(cid="ts-2")
+    store.upsert_order(order)  # first write stamps ts
+
+    raw = sqlite3.connect(str(db))
+    try:
+        (first_ts,) = raw.execute(
+            "SELECT ts FROM orders WHERE client_order_id='ts-2'"
+        ).fetchone()
+    finally:
+        raw.close()
+
+    order.submit()
+    order.open("VID-1")
+    store.upsert_order(order)  # update: ts must not move
+
+    raw = sqlite3.connect(str(db))
+    try:
+        (second_ts,) = raw.execute(
+            "SELECT ts FROM orders WHERE client_order_id='ts-2'"
+        ).fetchone()
+    finally:
+        raw.close()
+    assert second_ts == first_ts
+
+
+def test_rejected_order_keeps_reject_reason_and_fill_tolerance(tmp_path) -> None:
+    """A reloaded REJECTED order restores reject_reason and a custom fill_tolerance."""
+    store = _store(tmp_path)
+    order = Order(
+        client_order_id="rej-1",
+        instrument=BTC_USD,
+        side=OrderSide.BUY,
+        qty=money("2"),
+        type=OrderType.LIMIT,
+        limit_price=money("30000"),
+        fill_tolerance=money("0.005"),  # non-default, must round-trip
+    )
+    order.submit()
+    order.reject("insufficient funds")
+    store.upsert_order(order)
+
+    got = store.get_order("rej-1")
+    assert got is not None
+    assert got.status is OrderStatus.REJECTED
+    assert got.reject_reason == "insufficient funds"
+    assert got.fill_tolerance == money("0.005")
+
+
+def test_default_fill_tolerance_round_trips(tmp_path) -> None:
+    """An order with the default fill_tolerance reloads to the same default."""
+    from trading_bot.domain.order import DEFAULT_FILL_TOLERANCE
+
+    store = _store(tmp_path)
+    store.upsert_order(_order(cid="tol-default"))
+    got = store.get_order("tol-default")
+    assert got is not None
+    assert got.fill_tolerance == DEFAULT_FILL_TOLERANCE
+
+
 # --- fills: append-only + filter ------------------------------------------- #
 
 
@@ -364,6 +447,130 @@ def test_migration_is_idempotent_and_preserves_new_schema(tmp_path) -> None:
     reopened = SqliteStore(db)  # second open: migration finds both columns present
     [rec] = reopened.stored_fills()
     assert (rec.mode, rec.venue) == ("paper", "kraken")
+
+
+# --- orders: schema migration (add ts/reject_reason/fill_tolerance) --------- #
+
+
+def _legacy_orders_db(db, *, with_ts: bool = False) -> None:
+    """Create an OLD-schema `orders` table (no reject_reason/fill_tolerance).
+
+    Mirrors a pre-migration database: an `orders` table without the later-added
+    columns, holding one row. With ``with_ts=False`` the `ts` column is also
+    absent (a v0 table), so opening it must add all three columns.
+    """
+    cols = [
+        "client_order_id TEXT PRIMARY KEY",
+        "venue_order_id  TEXT",
+        "instrument      TEXT NOT NULL",
+        "side            TEXT NOT NULL",
+        "type            TEXT NOT NULL",
+        "qty             TEXT NOT NULL",
+        "limit_price     TEXT",
+        "stop_price      TEXT",
+        "status          TEXT NOT NULL",
+        "filled_qty      TEXT NOT NULL",
+        "avg_fill_price  TEXT",
+    ]
+    if with_ts:
+        cols.append("ts INTEGER")
+    legacy = sqlite3.connect(str(db))
+    try:
+        legacy.execute(f"CREATE TABLE orders ({', '.join(cols)})")
+        ncols = len(cols)
+        values = [
+            "OLD1", None, "BTC/USD", "buy", "limit", "0.5", "30000.5", None,
+            "rejected", "0", None,
+        ]
+        if with_ts:
+            values.append(1_700)
+        placeholders = ", ".join(["?"] * ncols)
+        legacy.execute(f"INSERT INTO orders VALUES ({placeholders})", values)
+        legacy.commit()
+    finally:
+        legacy.close()
+
+
+def test_orders_migration_upgrades_old_schema_and_upsert_succeeds(tmp_path) -> None:
+    """An old-schema orders DB migrates; upsert_order then succeeds (no OperationalError).
+
+    Simulates a database written before ts/reject_reason/fill_tolerance existed.
+    Without the migration, upsert_order (which writes every current column) would
+    hard-fail with an OperationalError on the unknown columns. After the store
+    opens (running the migration), the pre-existing row survives and a new
+    upsert works.
+    """
+    db = tmp_path / "legacy.db"
+    _legacy_orders_db(db)  # v0 table: no ts, no reject_reason, no fill_tolerance
+
+    # Opening through the store runs the orders migration.
+    store = SqliteStore(db)
+
+    # The pre-existing row survived, money intact; missing columns read as their
+    # defaults (reject_reason None, fill_tolerance -> domain default).
+    from trading_bot.domain.order import DEFAULT_FILL_TOLERANCE
+
+    old = store.get_order("OLD1")
+    assert old is not None
+    assert old.qty == money("0.5")
+    assert old.limit_price == money("30000.5")
+    assert old.status is OrderStatus.REJECTED
+    assert old.reject_reason is None  # backfilled NULL
+    assert old.fill_tolerance == DEFAULT_FILL_TOLERANCE
+
+    # upsert_order now succeeds against the migrated table (would have raised
+    # OperationalError before the migration added the columns).
+    store.upsert_order(_order(cid="NEW1"))
+    got = store.get_order("NEW1")
+    assert got is not None
+    assert got.qty == money("2")
+
+    # The columns really exist on the table now.
+    cols = {
+        row[1]
+        for row in sqlite3.connect(str(db)).execute("PRAGMA table_info(orders)")
+    }
+    assert {"ts", "reject_reason", "fill_tolerance"} <= cols
+
+
+def test_orders_migration_is_idempotent(tmp_path) -> None:
+    """Re-opening a migrated orders DB is a no-op (safe to re-run)."""
+    db = tmp_path / "legacy.db"
+    _legacy_orders_db(db)
+    SqliteStore(db)  # first open migrates
+    # Second open: the migration finds every column present and does nothing.
+    reopened = SqliteStore(db)
+    assert reopened.get_order("OLD1") is not None
+    reopened.upsert_order(_order(cid="AFTER"))
+    assert reopened.get_order("AFTER") is not None
+
+
+def test_orders_migration_partial_schema_only_adds_missing(tmp_path) -> None:
+    """A partially-migrated table (has ts, lacks the rest) gains only what it misses."""
+    db = tmp_path / "legacy.db"
+    _legacy_orders_db(db, with_ts=True)  # has ts, lacks reject_reason/fill_tolerance
+    store = SqliteStore(db)
+    # The pre-existing ts is preserved (migration did not touch it).
+    raw = sqlite3.connect(str(db))
+    try:
+        (ts,) = raw.execute(
+            "SELECT ts FROM orders WHERE client_order_id='OLD1'"
+        ).fetchone()
+    finally:
+        raw.close()
+    assert ts == 1_700
+    # And the missing columns were added, so upsert works.
+    store.upsert_order(_order(cid="NEW1"))
+    assert store.get_order("NEW1") is not None
+
+
+def test_orders_migration_noop_on_fresh_db(tmp_path) -> None:
+    """A fresh DB already has every column; the migration is a harmless no-op."""
+    db = tmp_path / "engine.db"
+    store = SqliteStore(db)  # CREATE TABLE gives the full schema
+    store.upsert_order(_order(cid="fresh"))
+    reopened = SqliteStore(db)  # migration finds all columns present
+    assert reopened.get_order("fresh") is not None
 
 
 # --- state ----------------------------------------------------------------- #

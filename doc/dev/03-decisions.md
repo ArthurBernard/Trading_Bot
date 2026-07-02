@@ -72,6 +72,18 @@ rejected approaches as tombstones.
   sanitising only the auto-derived `db_path` (the explicit one bypassed it). Residual
   blast radius documented in code: allow-listed modules still run import-time code — the
   auth token remains the real trust boundary.
+### 2026-07-02 Daily-loss breaker is UTC-day-scoped; orders table gets a migration (PR #PR)  [accepted]
+- **Choice**: wire `max_daily_loss` to realised PnL **since UTC midnight** via an
+  injectable clock, so the breaker resets automatically at the day boundary; add an
+  idempotent `orders`-table column migration mirroring `_migrate_fills_tags`.
+- **Why**: audit A-1 (High) — the "daily" breaker read cumulative *session* PnL and
+  `reset_day` was dead, so once tripped it escalated to the kill-switch and halted the
+  book permanently. D-2 (High) — only `fills` had a migration, so any `orders` schema
+  drift hard-failed `upsert_order` with `OperationalError`.
+- **Rejected alternatives**: (a) a scheduler-driven midnight reset — a needless moving
+  part; the clock-derived UTC-day-start is self-resetting; (b) a windowed PnL refold —
+  realised PnL depends on prior-day entry prices, so "PnL since midnight" is read as the
+  rise of the cumulative realised curve, not a refold.
 
 ### 2026-07-02 Config-driven dashboard web settings (a `ui:` section) (PR #125)  [accepted]
 - **Choice**: add a `ui:` section to `AppConfig` (`host` / `port` / `token` /

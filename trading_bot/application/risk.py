@@ -37,31 +37,46 @@ Each limit is independent and optional: a ``None`` limit (the
 and its check is skipped. An all-``None`` config + an un-tripped switch passes
 everything.
 
-Daily-loss sourcing & reset (carried into the ADR)
---------------------------------------------------
+Daily-loss sourcing & the UTC-day reset (carried into the ADR)
+--------------------------------------------------------------
+"Daily" is defined explicitly as a **calendar day in UTC**: the window runs from
+``00:00:00 UTC`` of the current day to now. UTC (not local time, not the run's
+start) is the boundary so the breaker is deterministic across timezones, DST and
+restarts — the same wall-clock instant always maps to the same trading day.
+
 The risk manager must not realise PnL itself (that is the
 :class:`~trading_bot.application.position_tracker.PositionTracker` /
 :class:`~trading_bot.application.performance_service.PerformanceService` job), so
-the coupling is kept **thin**: the day's realised PnL is read through an injected
-zero-arg callable, ``daily_pnl_provider: Callable[[], Money]``, returning the
-**signed realised PnL for the current day** (a *loss* is negative). The manager
+the coupling is kept **thin**: the *current day's* realised PnL is read through an
+injected callable, ``daily_pnl_provider: Callable[[int], Money]``, given the
+current UTC day's **midnight in ms since the Unix epoch** and returning the
+**signed realised PnL since that boundary** (a *loss* is negative). The manager
 turns it into a loss as ``loss = -daily_pnl`` and breaches when
-``loss >= max_daily_loss``. The wiring layer (the service factory) typically
-passes ``lambda: perf.realised_pnl()`` for a per-day ``PerformanceService``, or
-any equivalent.
+``loss >= max_daily_loss``. The wiring layer (the service factory) passes
+``perf.realised_pnl_since`` for a live ``PerformanceService`` — a day-scoped
+source that folds the cumulative realised-PnL curve's rise since the boundary.
+
+The manager owns a **clock** (``clock: Callable[[], int]``, default a real
+``time.time``-based UTC wall clock in ms) purely to compute *which* day it is; it
+never realises PnL. Because the provider is asked for "PnL since **today's** UTC
+midnight", the daily window **resets automatically** at the UTC day boundary: once
+the wall clock crosses midnight the boundary the manager passes advances by a day,
+so yesterday's realised loss no longer counts and the breaker re-arms with no
+scheduler and no manual call. This is what makes ``max_daily_loss`` genuinely
+*daily* — a loss that tripped the gate yesterday does not latch the book shut
+forever. The kill-switch still trips *within* a day exactly as before: the router
+escalates a ``max_daily_loss`` breach to :meth:`trip`, halting the rest of that
+day; a new UTC day clears the daily loss but a tripped kill-switch is cleared only
+by :meth:`reset` (a deliberate human action after a halt).
 
 For callers that do not want to wire a provider, :meth:`record_daily_pnl` is a
 built-in thin setter: feed it the running daily realised PnL and the manager
 reads back from its own store. When **neither** a provider nor a recorded value
 is available the daily-loss check is treated as *no loss yet* (``0``) — i.e. it
-never blocks on missing data; it only ever halts on an **observed** loss.
-
-"Daily" is an explicit, caller-driven reset: :meth:`reset_day` zeroes the
-recorded daily PnL (the simplest correct choice — the manager owns no clock). A
-scheduler calls it at the day boundary; a provider-backed manager resets its day
-by resetting the *provider's* source. There is deliberately no date-keyed magic
-inside the manager: the engine already owns scheduling, and an implicit clock
-inside a pure-ish gate would be a hidden, hard-to-test dependency.
+never blocks on missing data; it only ever halts on an **observed** loss. For the
+recorded-value path there is no clock-derived reset (the recorded scalar carries
+no timestamps), so :meth:`reset_day` remains the explicit "new day" hook a
+scheduler can call to zero it at the boundary.
 
 The module is part of the application layer: it imports the pure domain and the
 event/position primitives, holds money as :class:`~decimal.Decimal` end to end,
@@ -71,6 +86,7 @@ and performs no I/O.
 from __future__ import annotations
 
 import logging
+import time
 from collections.abc import Callable
 from typing import TYPE_CHECKING
 
@@ -93,6 +109,30 @@ _ZERO: Money = money("0")
 #: The synthetic ``threshold`` reported in a :class:`RiskLimitBreached` raised by
 #: the kill-switch (which has no numeric threshold of its own).
 _KILL_SWITCH_LIMIT = "kill_switch"
+
+#: Milliseconds in one calendar day (24h) — the length of the UTC day window the
+#: daily-loss breaker measures against.
+_MS_PER_DAY = 86_400_000
+
+
+def _utc_wall_clock_ms() -> int:
+    """Current wall-clock time as **ms since the Unix epoch (UTC)**.
+
+    The default :class:`RiskManager` clock. :func:`time.time` is already
+    UTC-based (epoch seconds), so this is timezone-independent; tests inject a
+    fake clock instead.
+    """
+    return int(time.time() * 1000)
+
+
+def _utc_day_start_ms(now_ms: int) -> int:
+    """The UTC midnight (``00:00:00``) of the day containing ``now_ms``.
+
+    Floors an epoch-ms instant to the start of its UTC calendar day by integer
+    day division — no ``datetime``/``tzinfo`` needed, since epoch ms is already
+    UTC-anchored and the day grid is a fixed 86 400 000 ms.
+    """
+    return now_ms - (now_ms % _MS_PER_DAY)
 
 
 class RiskManager:
@@ -118,11 +158,20 @@ class RiskManager:
         it then gates purely on the order's own signed quantity. Wire the tracker
         whenever ``max_position`` is set.
     daily_pnl_provider : callable, optional
-        Zero-arg callable returning the **signed realised PnL for the current
-        day** as :class:`~decimal.Decimal` (a loss is negative); the manager
-        derives the day's loss as its negation. If ``None``, the manager reads
-        the value last given to :meth:`record_daily_pnl` (default ``0`` until
-        set) — so the daily-loss check only ever halts on an *observed* loss.
+        Callable ``(day_start_ms) -> Money`` returning the **signed realised PnL
+        since the current UTC day's midnight** (a loss is negative); the manager
+        derives the day's loss as its negation. It is passed the current UTC day
+        boundary (ms since the epoch) so the window resets automatically at
+        midnight — the service factory wires
+        :meth:`~trading_bot.application.performance_service.PerformanceService.
+        realised_pnl_since`. If ``None``, the manager reads the value last given
+        to :meth:`record_daily_pnl` (default ``0`` until set) — so the daily-loss
+        check only ever halts on an *observed* loss.
+    clock : callable, optional
+        Zero-arg callable returning the current wall-clock time as **ms since the
+        Unix epoch (UTC)**, used only to compute *which* UTC day it is (so the
+        daily window resets at the boundary). Defaults to a real ``time.time``
+        UTC clock; tests inject a controllable one.
 
     Attributes
     ----------
@@ -144,11 +193,15 @@ class RiskManager:
         config: RiskConfig,
         *,
         position_tracker: PositionTracker | None = None,
-        daily_pnl_provider: Callable[[], Money] | None = None,
+        daily_pnl_provider: Callable[[int], Money] | None = None,
+        clock: Callable[[], int] = _utc_wall_clock_ms,
     ) -> None:
         self._config = config
         self._positions = position_tracker
         self._daily_pnl_provider = daily_pnl_provider
+        # UTC wall clock (ms since epoch) — used only to derive the current UTC
+        # day boundary so the daily-loss window resets at midnight.
+        self._clock = clock
         # The locally-recorded daily realised PnL, used when no provider is
         # injected. Reset to zero by ``reset_day``.
         self._recorded_daily_pnl: Money = _ZERO
@@ -240,9 +293,16 @@ class RiskManager:
         return order.qty if order.side is OrderSide.BUY else -order.qty
 
     def _daily_pnl(self) -> Money:
-        """The current day's signed realised PnL (provider, else recorded)."""
+        """The current UTC day's signed realised PnL (provider, else recorded).
+
+        When a provider is wired it is asked for the realised PnL since *today's*
+        UTC midnight (derived from the injected clock), so the window resets
+        automatically at the day boundary. Otherwise the locally-recorded scalar
+        is returned (reset only by :meth:`reset_day`).
+        """
         if self._daily_pnl_provider is not None:
-            return self._daily_pnl_provider()
+            day_start_ms = _utc_day_start_ms(self._clock())
+            return self._daily_pnl_provider(day_start_ms)
         return self._recorded_daily_pnl
 
     # --- daily-loss feed --------------------------------------------------- #
@@ -266,13 +326,15 @@ class RiskManager:
         self._recorded_daily_pnl = daily_pnl
 
     def reset_day(self) -> None:
-        """Reset the recorded daily PnL to zero — the day-boundary roll-over.
+        """Reset the recorded daily PnL to zero — the manual day-boundary hook.
 
-        The explicit, caller-driven "new day" hook (the manager owns no clock):
-        a scheduler calls it at the day boundary so the ``max_daily_loss`` check
-        starts the day fresh. Only affects the *recorded* value (:meth:`record_daily_pnl`);
-        a provider-backed manager resets its day by resetting the provider's
-        source.
+        The explicit "new day" hook for the **recorded-value** path
+        (:meth:`record_daily_pnl`), which carries no timestamps and so cannot
+        reset itself: a scheduler calls it at the UTC day boundary to start the
+        day fresh. The **provider-backed** path does *not* need this — it resets
+        automatically because the manager asks the provider for the PnL since
+        *today's* UTC midnight (see :meth:`_daily_pnl`), so once the clock crosses
+        the boundary the window rolls over on its own.
         """
         self._recorded_daily_pnl = _ZERO
 
