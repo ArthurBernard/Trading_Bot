@@ -125,7 +125,13 @@ class PerformanceDependencyError(TradingBotError):
 
 
 def _check_aligned(fills: Sequence[Fill], prices: Sequence[Money]) -> None:
-    """Require a non-empty fill series and a price series of equal length."""
+    """Require a price series of equal length to the fills (empty is allowed).
+
+    The only contract is that ``prices`` and ``fills`` share one index. An empty
+    pair is deliberately valid — the PnL functions return an empty tuple for it
+    (a strategy with no fills has a flat, empty curve) — so only a *length
+    mismatch* is rejected, never emptiness.
+    """
     if len(fills) != len(prices):
         raise ValueError(
             f"prices and fills must have equal length, "

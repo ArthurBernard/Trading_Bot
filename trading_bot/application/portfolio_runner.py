@@ -87,7 +87,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING
 
 from trading_bot.application.events import EventBus, LogEvent
@@ -471,11 +471,15 @@ class PortfolioRunner:
         ``f"{strategy.name}-{symbol}-{step}"`` — symbol-namespaced so the N legs
         of one tick never collide and a re-run dedups per coin at the router.
         """
-        order = self._order_factory(self._strategy, instrument, delta, close)
-        # The runner owns idempotency, not the factory: stamp the per-coin,
-        # per-step id regardless of what the factory chose.
-        order.client_order_id = f"{self._strategy.name}-{symbol}-{step}"
-        return order
+        built = self._order_factory(self._strategy, instrument, delta, close)
+        # The runner owns idempotency, not the factory: build the final Order
+        # with the deterministic, symbol-namespaced per-step id set *at
+        # construction* (via dataclasses.replace, which re-runs validation)
+        # rather than mutating the client_order_id afterwards — the id is the
+        # aggregate's identity and must not change once the Order exists.
+        return replace(
+            built, client_order_id=f"{self._strategy.name}-{symbol}-{step}"
+        )
 
     def _asof_ms(self, frames: Mapping[Symbol, pl.DataFrame]) -> int:
         """Resolve the as-of timestamp (ms) for this tick.

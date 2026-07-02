@@ -189,6 +189,48 @@ class TestMoneyFieldGuard:
             o.apply_fill(money("1"), Decimal("Infinity"))
 
 
+class TestClientOrderIdIdentity:
+    """A-12: the identity is set at construction; the runner rebuilds, not mutates."""
+
+    def test_client_order_id_set_at_construction(self) -> None:
+        o = make_order()
+        assert o.client_order_id == "cid-1"
+
+    def test_replace_stamps_a_new_id_at_construction(self) -> None:
+        # The runner's factory path replaces (rebuilds) the Order with the
+        # deterministic id set *at construction* rather than mutating the id
+        # after the fact. replace re-runs validation and yields a fresh, distinct
+        # aggregate that shares the factory's shape but owns the runner's id.
+        from dataclasses import replace
+
+        built = Order(
+            client_order_id="pending",
+            instrument=INSTRUMENT,
+            side=OrderSide.BUY,
+            qty=money("2"),
+            type=OrderType.LIMIT,
+            limit_price=money("30000"),
+        )
+        stamped = replace(built, client_order_id="strat-7")
+        assert stamped.client_order_id == "strat-7"
+        # Same shape, distinct instance, and the original is untouched.
+        assert stamped.qty == built.qty
+        assert stamped.limit_price == built.limit_price
+        assert stamped.side is built.side
+        assert stamped.type is built.type
+        assert stamped is not built
+        assert built.client_order_id == "pending"
+
+    def test_replace_reruns_construction_validation(self) -> None:
+        # Because the id is stamped at construction (via replace), the empty-id
+        # guard fires there too — you cannot rebuild into an invalid identity.
+        built = make_order()
+        from dataclasses import replace
+
+        with pytest.raises(OrderError, match="client_order_id is mandatory"):
+            replace(built, client_order_id="")
+
+
 class TestAvgFillPriceDeterminism:
     """D-4: the average fill price is deterministic across global contexts."""
 
@@ -437,6 +479,80 @@ class TestFillTolerance:
         o.open("VID-1")
         o.apply_fill(money("999.99"), money("30000"))
         assert o.status is OrderStatus.PARTIALLY_FILLED
+
+
+class TestOverFillTolerance:
+    """D-6: a market over-delivery within tolerance closes; beyond it raises."""
+
+    def test_over_fill_within_tolerance_closes_to_filled(self) -> None:
+        # Default tol 0.1%. Fill qty * (1 + tol/2) -> 0.05% over -> within tol.
+        o = make_order(qty="1000", otype=OrderType.MARKET, limit_price=None)
+        o.submit()
+        o.open("VID-1")
+        excess = money("1000") * (DEFAULT_FILL_TOLERANCE / money("2"))
+        assert (excess / money("1000")) < DEFAULT_FILL_TOLERANCE
+        o.apply_fill(money("1000") + excess, money("30000"))
+        # Closes rather than raising; filled_qty is clamped to the order qty.
+        assert o.status is OrderStatus.FILLED
+        assert o.filled_qty == money("1000")
+        # remaining is exactly zero (not negative).
+        assert o.remaining_qty == money("0")
+
+    def test_over_fill_after_partial_within_tolerance_closes(self) -> None:
+        # A partial fill then a slight over-delivery of the remainder.
+        o = make_order(qty="2", otype=OrderType.MARKET, limit_price=None)
+        o.submit()
+        o.open("VID-1")
+        o.apply_fill(money("1.5"), money("30000"))
+        assert o.status is OrderStatus.PARTIALLY_FILLED
+        # Remaining 0.5; deliver 0.5008 -> excess 0.0008 -> 0.04% of 2 < 0.1%.
+        o.apply_fill(money("0.5008"), money("30000"))
+        assert o.status is OrderStatus.FILLED
+        assert o.filled_qty == money("2")
+
+    def test_over_fill_records_actual_price_in_average(self) -> None:
+        # The within-tolerance over-fill's real qty/price must weight the average
+        # (what we actually paid), even though filled_qty is clamped to qty.
+        o = make_order(qty="1000", otype=OrderType.MARKET, limit_price=None)
+        o.submit()
+        o.open("VID-1")
+        excess = money("0.4")  # 0.04% of 1000 -> within 0.1% tolerance
+        o.apply_fill(money("1000") + excess, money("30000"))
+        # Single fill at a flat price -> average is that price regardless of clamp.
+        assert o.avg_fill_price == money("30000")
+        assert o.status is OrderStatus.FILLED
+
+    def test_material_over_fill_still_rejected(self) -> None:
+        # 1% over -> well beyond the 0.1% tolerance -> hard error, state intact.
+        o = make_order(qty="1000", otype=OrderType.MARKET, limit_price=None)
+        o.submit()
+        o.open("VID-1")
+        with pytest.raises(OrderError, match="over-fill"):
+            o.apply_fill(money("1010"), money("30000"))
+        assert o.filled_qty == money("0")
+        assert o.status is OrderStatus.OPEN
+
+    def test_over_fill_at_tolerance_boundary_is_rejected(self) -> None:
+        # Excess fraction == tol exactly is NOT strictly below -> rejected.
+        o = make_order(
+            qty="1000", otype=OrderType.MARKET, limit_price=None,
+            fill_tolerance="0.001",
+        )
+        o.submit()
+        o.open("VID-1")
+        # Excess 1.0 -> 0.1% of 1000 == tol exactly -> material.
+        with pytest.raises(OrderError, match="over-fill"):
+            o.apply_fill(money("1001"), money("30000"))
+
+    def test_zero_tolerance_rejects_any_over_fill(self) -> None:
+        o = make_order(
+            qty="1000", otype=OrderType.MARKET, limit_price=None,
+            fill_tolerance="0",
+        )
+        o.submit()
+        o.open("VID-1")
+        with pytest.raises(OrderError, match="over-fill"):
+            o.apply_fill(money("1000.0001"), money("30000"))
 
 
 class TestRealisticPartialFillReplay:

@@ -121,6 +121,24 @@ class TestMoneyFieldGuard:
         with pytest.raises(MoneyError, match="finite"):
             Signal.exposure(BTCUSD, Decimal("NaN"), ts=1)
 
+    def test_nan_exposure_raises_domain_error_not_invalid_operation(self) -> None:
+        # D-12: the [-1, 1] bound on a NaN used to raise a bare
+        # decimal.InvalidOperation; it must now be a domain TradingBotError so a
+        # caller catching the taxonomy sees no stdlib exception leak.
+        from decimal import InvalidOperation
+
+        from trading_bot.domain.errors import TradingBotError
+
+        with pytest.raises(TradingBotError):
+            Signal.exposure(BTCUSD, Decimal("NaN"), ts=1)
+        # And specifically NOT the stdlib decimal error.
+        try:
+            Signal.exposure(BTCUSD, Decimal("NaN"), ts=1)
+        except InvalidOperation:  # pragma: no cover - must not happen
+            pytest.fail("decimal.InvalidOperation leaked out of the domain")
+        except MoneyError:
+            pass
+
 
 class TestDeltaToExplicitQty:
     def test_long_target_from_flat(self) -> None:

@@ -22,7 +22,6 @@ __all__ = [
     "OrderStatusError",
     "MissingOrder",
     "InstrumentMismatch",
-    "InsufficientFunds",
     "RiskLimitBreached",
     "NoCapability",
     "BrokerError",
@@ -92,11 +91,11 @@ class InsufficientBalance(BrokerError):
 
     The venue-neutral mapping of an *insufficient funds* rejection reported by a
     venue's order endpoint (Kraken ``EOrder:Insufficient funds``; Binance
-    ``-2010`` naming an insufficient balance). Distinct from the structured
-    :class:`InsufficientFunds` — a venue rejection string carries no reliable
-    asset/required/available breakdown, so this subclass of :class:`BrokerError`
-    carries only the venue detail and, being a ``BrokerError``, stays catchable by
-    the order router's ``except BrokerError`` reject path.
+    ``-2010`` naming an insufficient balance). A venue rejection string carries
+    no reliable asset/required/available breakdown, so this subclass of
+    :class:`BrokerError` carries only the venue detail and, being a
+    ``BrokerError``, stays catchable by the order router's ``except BrokerError``
+    reject path.
 
     Parameters
     ----------
@@ -269,29 +268,6 @@ class InstrumentMismatch(TradingBotError):
         self.actual = actual
         super().__init__(
             f"instrument mismatch: expected {expected}, got {actual}"
-        )
-
-
-class InsufficientFunds(TradingBotError):
-    """The available balance cannot cover the requested operation.
-
-    Parameters
-    ----------
-    asset : str
-        The asset that is short (canonical code, e.g. ``"USD"``).
-    required : Decimal
-        Amount needed to perform the operation.
-    available : Decimal
-        Amount actually available.
-
-    """
-
-    def __init__(self, asset: str, required: Decimal, available: Decimal) -> None:
-        self.asset = asset
-        self.required = required
-        self.available = available
-        super().__init__(
-            f"insufficient {asset}: need {required}, only {available} available"
         )
 
 

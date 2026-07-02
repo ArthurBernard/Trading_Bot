@@ -17,12 +17,17 @@ Design choices (carried into the ADR):
   guarded methods, never by reaching into the fields, so the machine stays the
   single source of truth.
 * **Tolerance rule (ported from legacy ``check_vol_exec``).** The default
-  tolerance is ``0.1%`` (legacy ``tol=0.001``). After a fill, if the *unfilled*
-  fraction ``(qty - filled_qty) / qty`` is strictly below ``tol``, the order is
-  treated as fully :data:`OrderStatus.FILLED` even though a dust amount is
-  technically outstanding — venues routinely leave sub-tick remainders. An
-  exact fill (``filled_qty == qty``) always closes to ``FILLED``. Over-filling
-  (``filled_qty > qty``) is rejected with
+  tolerance is ``0.1%`` (legacy ``tol=0.001``), applied **symmetrically**. After
+  a fill, if the *unfilled* fraction ``(qty - filled_qty) / qty`` is strictly
+  below ``tol``, the order is treated as fully :data:`OrderStatus.FILLED` even
+  though a dust amount is technically outstanding — venues routinely leave
+  sub-tick remainders. An exact fill (``filled_qty == qty``) always closes to
+  ``FILLED``. An **over-fill within tolerance** — an *excess* fraction
+  ``(filled_qty - qty) / qty`` strictly below ``tol`` — is dust on the other
+  side (a market order the venue rounded up), so it too closes to ``FILLED``:
+  the reported ``filled_qty`` is clamped to ``qty`` while the actually-executed
+  price still weights the average. Only a **material over-fill** (excess at or
+  beyond ``tol``) is rejected with
   :class:`~trading_bot.domain.errors.OrderError`.
 * **Order-type price invariants.** ``MARKET`` forbids both prices. ``LIMIT``
   requires ``limit_price`` and forbids ``stop_price``. ``STOP_LOSS`` requires
@@ -324,7 +329,10 @@ class Order:
         the exact quantity-weighted average across all fills so far. The status
         moves to :data:`OrderStatus.PARTIALLY_FILLED`, or to
         :data:`OrderStatus.FILLED` once the order is filled within tolerance
-        (see :data:`DEFAULT_FILL_TOLERANCE`).
+        (see :data:`DEFAULT_FILL_TOLERANCE`). A small **over-fill within
+        tolerance** (a market order the venue rounded up) closes to ``FILLED``
+        with :attr:`filled_qty` clamped to :attr:`qty`; only a *material*
+        over-fill (excess at or beyond ``fill_tolerance``) raises.
 
         Parameters
         ----------
@@ -339,7 +347,9 @@ class Order:
             If the order is not live (must be ``OPEN`` or ``PARTIALLY_FILLED``).
         OrderError
             If ``qty``/``price`` are not positive, or the fill would push
-            :attr:`filled_qty` beyond :attr:`qty` (over-fill).
+            :attr:`filled_qty` *materially* beyond :attr:`qty` — an over-fill
+            whose excess fraction is at or beyond :attr:`fill_tolerance` (a
+            within-tolerance over-fill is absorbed, not raised).
 
         """
         if self.status not in _FILLABLE:
@@ -360,7 +370,20 @@ class Order:
             )
 
         new_filled = self.filled_qty + qty
-        if new_filled > self.qty:
+        # An over-fill within tolerance is dust, not an error: venues routinely
+        # deliver marginally more than requested on a market order (lot-size
+        # rounding). Symmetrically to the under-fill rule, if the *excess*
+        # fraction ``(new_filled - qty) / qty`` is strictly below
+        # ``fill_tolerance`` the order simply closes — a *material* over-fill
+        # (excess at or beyond tolerance) is still rejected. The executed
+        # ``qty``/``price`` are kept intact in the running average (what we
+        # actually paid); only the reported ``filled_qty`` is clamped to the
+        # order ``qty`` so the order reads as fully — not over — filled and its
+        # remaining quantity is zero. No fill is dropped or double-counted: the
+        # dust residual is absorbed into the close, exactly as the under-fill
+        # case leaves a sub-tick remainder outstanding.
+        over_fill = new_filled - self.qty
+        if over_fill > 0 and not self._over_fill_within_tolerance(over_fill):
             raise OrderError(
                 self.client_order_id,
                 f"over-fill: {new_filled} exceeds order qty {self.qty}",
@@ -368,13 +391,16 @@ class Order:
 
         prior_avg = self.avg_fill_price
         prior_filled = self.filled_qty
-        self.filled_qty = new_filled
+        self.filled_qty = new_filled if over_fill <= 0 else self.qty
         # Compute the quantity-weighted average ((sum of qty*price) / sum of qty)
         # entirely inside an explicit, pinned Decimal context: not just the
         # division but the notional accumulation too, so neither the repeating
         # quotient nor the running sum inherits (and can be corrupted by) the
         # mutable process-global context. Rounding is deterministic and
-        # documented at AVG_PRICE_PRECISION significant digits.
+        # documented at AVG_PRICE_PRECISION significant digits. The divisor is
+        # the *actually executed* total (``new_filled``), so a within-tolerance
+        # over-fill's real price still weights the average even though the
+        # reported ``filled_qty`` is clamped to ``qty``.
         with localcontext() as ctx:
             ctx.prec = AVG_PRICE_PRECISION
             prior_notional = (
@@ -383,7 +409,7 @@ class Order:
             notional = prior_notional + qty * price
             self.avg_fill_price = notional / new_filled
 
-        if self._is_filled_within_tolerance():
+        if over_fill > 0 or self._is_filled_within_tolerance():
             self.status = OrderStatus.FILLED
         else:
             self.status = OrderStatus.PARTIALLY_FILLED
@@ -399,6 +425,29 @@ class Order:
             return True
         unfilled_fraction = (self.qty - self.filled_qty) / self.qty
         return unfilled_fraction < self.fill_tolerance
+
+    def _over_fill_within_tolerance(self, over_fill: Money) -> bool:
+        """Whether an over-fill of ``over_fill`` base units is dust within tolerance.
+
+        The symmetric counterpart of :meth:`_is_filled_within_tolerance`: an
+        *excess* fraction ``over_fill / qty`` strictly below
+        :attr:`fill_tolerance` is treated as a full (not over-) fill — venues
+        leave sub-tick dust on both sides. At a zero tolerance any excess is
+        material, so this returns ``False`` and the over-fill is rejected.
+
+        Parameters
+        ----------
+        over_fill : Money
+            The positive excess (``filled + qty - order_qty``) to test.
+
+        Returns
+        -------
+        bool
+            ``True`` if the excess fraction is strictly below the tolerance.
+
+        """
+        excess_fraction = over_fill / self.qty
+        return excess_fraction < self.fill_tolerance
 
     def cancel(self) -> None:
         """Cancel a live order (from ``SUBMITTED``, ``OPEN`` or partially filled).
