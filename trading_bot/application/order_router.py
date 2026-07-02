@@ -146,6 +146,10 @@ class OrderRouter:
         self._orders: dict[str, Order] = {}
         # Per-id in-flight submissions, the concurrency guard (see module doc).
         self._inflight: dict[str, asyncio.Future[Order]] = {}
+        # Per-id in-flight cancels, the cancel concurrency guard (symmetric with
+        # ``_inflight``): a second cancel of an id already being cancelled awaits
+        # the first rather than re-hitting the venue (see :meth:`cancel`).
+        self._inflight_cancel: dict[str, asyncio.Future[Order]] = {}
 
     async def submit(self, order: Order) -> Order:
         """Submit ``order`` to the broker idempotently and drive its lifecycle.
@@ -323,6 +327,20 @@ class OrderRouter:
         the order's ``venue_order_id``, drives :meth:`Order.cancel`, and emits an
         :class:`~trading_bot.application.events.OrderEvent`.
 
+        Idempotent + concurrency-guarded (carried into the ADR)
+        -------------------------------------------------------
+        Cancel is a *reducing* action and is safe to repeat. A cancel of an order
+        that is **already terminal** (``FILLED``/``CANCELLED``/``REJECTED``) is a
+        **no-op** that returns the tracked order without touching the venue and
+        without emitting an event — a second (or racing) cancel never re-hits the
+        venue nor raises on the local terminal transition. Two *concurrent* cancels
+        of the same still-live id are serialised by a per-id in-flight future
+        (symmetric with :meth:`submit`'s guard): the first does the real venue
+        cancel; any concurrent one awaits its result. Because asyncio is
+        single-threaded and the terminal check + in-flight install run
+        synchronously (no ``await`` between them), exactly one venue cancel per id
+        ever reaches the broker.
+
         Parameters
         ----------
         order_or_id : Order or str
@@ -331,26 +349,59 @@ class OrderRouter:
         Returns
         -------
         Order
-            The now-cancelled tracked order.
+            The now-cancelled (or already-terminal) tracked order.
 
         Raises
         ------
         MissingOrder
-            If no order is tracked under that id (it was never submitted here).
+            If no order is tracked under that id (it was never submitted here), or
+            it was tracked but never reached the venue (no ``venue_order_id``).
         BrokerError
             If the broker fails the cancellation. The order's local state is left
             untouched (the cancel is driven only after the broker confirms).
 
         """
         order = self._resolve(order_or_id)
+        cid = order.client_order_id
+
+        # Already terminal (filled, cancelled, or rejected): cancel is a no-op.
+        # A second/racing cancel must not re-hit the venue nor raise on the local
+        # terminal transition — the reducing action already completed.
+        if order.is_terminal:
+            return order
+
+        # A concurrent cancel of this id is running: await its result instead of
+        # starting a second venue cancel. The concurrency guard.
+        inflight = self._inflight_cancel.get(cid)
+        if inflight is not None:
+            return await inflight
+
         if order.venue_order_id is None:
-            raise MissingOrder(order.client_order_id)
-        await self._broker.cancel_order(order.venue_order_id)
-        # The broker only cancels its own venue record (it never touches our
-        # Order); the router drives the local CANCELLED transition.
-        order.cancel()
-        self._bus.emit(OrderEvent(order))
-        return order
+            raise MissingOrder(cid)
+
+        # We are the first canceller of this id. Install the in-flight future
+        # *synchronously* (no await since the terminal check + lookup), so a
+        # concurrently-scheduled cancel of the same id finds it above.
+        loop = asyncio.get_running_loop()
+        future: asyncio.Future[Order] = loop.create_future()
+        future.add_done_callback(_consume_exception)
+        self._inflight_cancel[cid] = future
+        try:
+            await self._broker.cancel_order(order.venue_order_id)
+            # The broker only cancels its own venue record (it never touches our
+            # Order); the router drives the local CANCELLED transition.
+            order.cancel()
+            self._bus.emit(OrderEvent(order))
+        except BaseException as exc:
+            if not future.done():
+                future.set_exception(exc)
+            raise
+        else:
+            if not future.done():
+                future.set_result(order)
+            return order
+        finally:
+            self._inflight_cancel.pop(cid, None)
 
     def _resolve(self, order_or_id: Order | str) -> Order:
         """Resolve an :class:`Order` or a client-order-id to the tracked order."""
@@ -429,7 +480,7 @@ class OrderRouter:
         return self._orders.pop(client_order_id, None)
 
     def restore(self, orders: Iterable[Order]) -> int:
-        """Seed the dedup map from persisted orders after a restart — **no events**.
+        """Seed the dedup map (and in-flight guard) from persisted orders — **no events**.
 
         Recovers the router's idempotency state from the append-only store
         (:meth:`~trading_bot.storage.sqlite_store.SqliteStore.orders`) on startup:
@@ -438,6 +489,39 @@ class OrderRouter:
         order and never re-calls the broker). This closes the **crash-restart
         double-submit window** for ids the in-memory map lost — the residual gap
         for a venue like Kraken that issues no venue-side idempotency token.
+
+        In-flight recovery — what the store can and cannot restore
+        ----------------------------------------------------------
+        :meth:`submit`'s live concurrency guard is a **per-id in-flight future**
+        (``_inflight``): a transient, event-loop-bound object that exists *only
+        while a submit is awaiting the broker*. It is intentionally **not**
+        persisted — a future cannot be serialised, and a crash tears down the loop
+        it belonged to. So on restart there is no stored "in-flight future" to
+        rebuild; the store only holds *settled* orders (an order reaches it after
+        ``broker.place_order`` succeeds and ``submit()``/``open()`` run — see
+        :meth:`_do_submit`). What :meth:`restore` recovers instead is the
+        **durable** half of the same guarantee: seeding the dedup map with every
+        recovered id gives "exactly one venue order per id" across the restart
+        boundary, because the *first* post-restart :meth:`submit` of a recovered id
+        short-circuits on the dedup map (its synchronous ``self._orders.get(cid)``)
+        before installing any new ``_inflight`` future — so no second broker call
+        happens and no live in-flight future is even needed. The recovered map is
+        therefore the restart-time equivalent of the in-flight guard.
+
+        Residual window (documented, deferred)
+        ---------------------------------------
+        The store only records an order **after** ``broker.place_order`` succeeds
+        and the local ``submit()``/``open()`` transitions run. A crash *between*
+        the venue accepting an order and the store write leaves the id on the venue
+        but **absent from the store**, so this method cannot recover it — only the
+        startup :func:`~trading_bot.application.reconcile.reconcile` (which ingests
+        venue-open orders) closes that gap, and it runs before the first fresh
+        order so the strategy-runner deterministic id scheme (``f"{name}-{step}"``)
+        does not double-submit in practice. Fully closing it requires a
+        **venue-side idempotency token** (a Kraken ``AddOrder`` dedup key persisted
+        *before* the broker call) — a deferred go-live item (see
+        ``doc/dev/06-status.md``); this method is the engine-side best effort until
+        then.
 
         Unlike :meth:`ingest`, this emits **no** :class:`~trading_bot.application.
         events.OrderEvent` (these are *historical* records, not fresh order

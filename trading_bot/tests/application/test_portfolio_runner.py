@@ -506,3 +506,76 @@ async def test_rebalance_latest_returns_none_on_empty_feed() -> None:
     )
 
     assert await runner.rebalance_latest() is None
+
+
+# --- rebalance_latest: bounded reads via feed.latest() (A-7) --------------- #
+
+
+class _LatestFeed:
+    """A feed exposing ``latest()`` + a counting ``__iter__`` (the real-feed shape).
+
+    Mirrors :class:`~trading_bot.application.portfolio_feed.PortfolioFeed`, which
+    exposes ``latest()`` (the full aligned cross-section, one store read) *and*
+    ``asof_ms()``. Counts both ``latest()`` calls and how many bars ``__iter__``
+    would walk, so a test can assert ``rebalance_latest`` reads the latest window
+    directly and does **not** drain the whole feed (O(total bars)).
+    """
+
+    def __init__(
+        self, window: Mapping[Symbol, pl.DataFrame], *, n_bars: int, asof: int
+    ) -> None:
+        self._window = window
+        self._n_bars = n_bars  # how many growing prefixes a full drain would yield
+        self._asof = asof
+        self.latest_calls = 0
+        self.bars_iterated = 0
+
+    def latest(self) -> Mapping[Symbol, pl.DataFrame]:
+        self.latest_calls += 1
+        return self._window
+
+    def __iter__(self):  # type: ignore[no-untyped-def]
+        # A full drain would yield ``n_bars`` growing causal prefixes — count each
+        # so a test can prove ``rebalance_latest`` did NOT take this path.
+        for _ in range(self._n_bars):
+            self.bars_iterated += 1
+            yield self._window
+
+    def asof_ms(self) -> int:
+        return self._asof
+
+
+async def test_rebalance_latest_reads_latest_window_once_not_whole_feed() -> None:
+    """`rebalance_latest` uses `feed.latest()` once and never drains O(n) bars."""
+    weights = {BTC: money("0.5"), ETH: money("-0.25")}
+    router, tracker, bus, _broker = _engine()
+    feed = _LatestFeed(_frames(), n_bars=10_000, asof=1_700)
+    runner = PortfolioRunner(
+        _strategy(_weights_signal(weights)), feed, router, tracker, event_bus=bus
+    )
+
+    result = await runner.rebalance_latest()
+
+    assert result is not None
+    assert result.submitted == 2  # one leg per coin, from flat
+    # Bounded read: exactly one latest() call and NOT a single bar iterated — the
+    # O(total bars) per-tick drain is gone.
+    assert feed.latest_calls == 1
+    assert feed.bars_iterated == 0, "rebalance_latest must not drain the whole feed"
+
+
+async def test_rebalance_latest_returns_none_when_latest_window_is_empty() -> None:
+    """A `latest()`-capable feed with an empty window yields None (no rebalance)."""
+    router, tracker, bus, _broker = _engine()
+    feed = _LatestFeed({}, n_bars=0, asof=1_700)
+    runner = PortfolioRunner(
+        _strategy(_weights_signal({BTC: money("0.5")})),
+        feed,
+        router,
+        tracker,
+        event_bus=bus,
+    )
+
+    assert await runner.rebalance_latest() is None
+    assert feed.latest_calls == 1
+    assert feed.bars_iterated == 0

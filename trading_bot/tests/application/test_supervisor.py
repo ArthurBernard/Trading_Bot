@@ -770,6 +770,79 @@ async def test_combined_equity_series_sums_v0_and_merges_fills(tmp_path) -> None
     assert combined[-1][2] == v0 + money("10")
 
 
+async def test_combined_equity_series_ignores_zero_fill_in_mode_units(  # noqa: ANN001
+    tmp_path,
+) -> None:
+    """A unit with no fills in the mode contributes neither fills nor v0 (A-6).
+
+    Two stopped paper units: 'traded' has a paper round trip persisted; 'idle' has
+    an empty store. The combined equity anchor and returns path must reflect ONLY
+    the traded unit's v0 — anchoring on the idle unit's capital would inflate the
+    base and skew the aggregate KPI ratios.
+    """
+    from trading_bot.storage.sqlite_store import SqliteStore
+
+    inst = Instrument(Symbol("BTC", "USD"))
+    db_traded = str(tmp_path / "traded.sqlite")
+    db_idle = str(tmp_path / "idle.sqlite")
+    # 'traded': a +10 paper round trip. 'idle': an empty store (no fills at all).
+    store = SqliteStore(db_traded, mode="paper", venue="kraken")
+    store.record_fill(
+        Fill("F1", "c1", inst, OrderSide.BUY,
+             money("1"), money("100"), money("0"), 1)
+    )
+    store.record_fill(
+        Fill("F2", "c2", inst, OrderSide.SELL,
+             money("1"), money("110"), money("0"), 2)
+    )
+    SqliteStore(db_idle, mode="paper", venue="kraken")  # created empty
+
+    cfg = AppConfig.model_validate(
+        {
+            "mode": "paper",
+            "starting_capital": "1000",  # each unit's equity anchor
+            "brokers": [{"name": "kraken", "exchange": "kraken"}],
+            "strategies": [
+                {
+                    "name": "traded",
+                    "symbol": "BTC/USD",
+                    "db_path": db_traded,  # per-unit isolated store (has fills)
+                    "data": {"exchange": "kraken", "span": 60},
+                    "signal": {"ref": "ma_crossover", "params": {"fast": 3, "slow": 6}},
+                    "reference_qty": "2",
+                    "lookback": 6,
+                },
+                {
+                    "name": "idle",
+                    "symbol": "BTC/USD",
+                    "db_path": db_idle,  # per-unit isolated store (empty)
+                    "data": {"exchange": "kraken", "span": 60},
+                    "signal": {"ref": "ma_crossover", "params": {"fast": 3, "slow": 6}},
+                    "reference_qty": "2",
+                    "lookback": 6,
+                },
+            ],
+            "storage": {"db_path": db_traded},
+        }
+    )
+    sup = StrategySupervisor(
+        cfg, dccd_client=_FakeDccdClient({"BTC/USD": _dccd_ohlc(_trend())})
+    )
+
+    combined = sup.combined_equity_series(["traded", "idle"], mode="paper")
+
+    assert combined  # the traded unit produced a curve
+    v0_traded = sup._units["traded"].config.starting_capital  # noqa: SLF001
+    # Anchor = ONLY the traded unit's v0 (1000), not the sum of both units' v0
+    # (2000). Final equity is v0 + 10 gross; the idle unit's v0 never enters the
+    # base. Pre-fix, the aggregate anchored at 2000 (both v0s), inflating the base.
+    assert combined[0][2] == v0_traded  # first point anchors on one v0, not two
+    assert combined[-1][2] == v0_traded + money("10")
+
+    # Regression guard: the idle unit alone yields an empty curve (nothing to fold).
+    assert sup.combined_equity_series(["idle"], mode="paper") == []
+
+
 # --- aggregate ratio KPIs (exchange / total on the combined curve) --------- #
 
 

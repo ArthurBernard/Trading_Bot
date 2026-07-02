@@ -270,6 +270,70 @@ async def test_cancel_unknown_id_raises_missing_order() -> None:
         await router.cancel("never-seen")
 
 
+# --- cancel idempotency + concurrency guard (A-8) -------------------------- #
+
+
+async def test_repeated_cancel_is_a_noop_no_venue_rehit_no_raise() -> None:
+    """A second cancel of the same order is a safe no-op: no venue call, no raise."""
+    broker = _SpyBroker()
+    bus = EventBus()
+    seen = _capture(bus)
+    # Route to OPEN via the counting spy (place_order returns a venue id).
+    router = OrderRouter(broker, bus)
+    order = await router.submit(_order(cid="dbl-cancel"))
+    assert order.status is OrderStatus.OPEN
+
+    first = await router.cancel("dbl-cancel")
+    assert first is order
+    assert order.status is OrderStatus.CANCELLED
+    assert broker.cancel_calls == 1
+    events_after_first = len(seen)
+
+    # A second cancel of the now-terminal order must NOT re-hit the venue and must
+    # NOT raise on the local terminal transition — it is a reducing no-op.
+    second = await router.cancel("dbl-cancel")
+    assert second is order
+    assert order.status is OrderStatus.CANCELLED
+    assert broker.cancel_calls == 1, "terminal cancel must not re-hit the venue"
+    # No duplicate OrderEvent for the no-op cancel.
+    assert len(seen) == events_after_first
+
+
+async def test_concurrent_cancel_hits_venue_once() -> None:
+    """Two concurrent cancels of one live order call the venue exactly once."""
+    # ``slow`` yields inside cancel_order so the two coroutines genuinely interleave
+    # at the first await: a broken guard would let both increment cancel_calls.
+    broker = _SpyBroker(slow=True)
+    router = OrderRouter(broker, EventBus())
+    order = await router.submit(_order(cid="race-cancel"))
+    assert order.status is OrderStatus.OPEN
+
+    a, b = await asyncio.gather(
+        router.cancel("race-cancel"), router.cancel("race-cancel")
+    )
+
+    assert a is order and b is order
+    assert order.status is OrderStatus.CANCELLED
+    assert broker.cancel_calls == 1, "concurrent cancels must hit the venue once"
+
+
+async def test_cancel_of_filled_order_is_a_noop() -> None:
+    """Cancelling an order that already reached FILLED is a no-op, not an error."""
+    # The router tracks an OPEN order; a confirmed fill (applied by the tracker,
+    # here simulated on the tracked object) drives it terminal FILLED. A cancel
+    # must then recognise the terminal state and not raise / not call the venue.
+    broker = _SpyBroker()
+    router = OrderRouter(broker, EventBus())
+    order = await router.submit(_order(cid="already-filled"))
+    order.apply_fill(order.qty, money("30000"))  # fully filled → terminal
+    assert order.status is OrderStatus.FILLED
+
+    returned = await router.cancel("already-filled")
+    assert returned is order
+    assert order.status is OrderStatus.FILLED  # unchanged
+    assert broker.cancel_calls == 0, "a filled order must not be cancelled at the venue"
+
+
 # --- verification on real data (PaperBroker) ------------------------------- #
 
 
@@ -419,3 +483,47 @@ def test_restore_emits_no_events_and_never_clobbers_a_tracked_id() -> None:
     # Re-restoring the same id is a no-op (count 0) and does not replace the object.
     assert router.restore([_order("a")]) == 0
     assert router.get("a") is a  # original kept, not clobbered
+
+
+async def test_mid_submit_restart_converges_without_a_duplicate_order(
+    tmp_path,  # type: ignore[no-untyped-def]
+) -> None:
+    """A restart mid-run recovers from the store and a re-submit dedups — no duplicate.
+
+    Faithful to the crash-restart path: a first router submits an order that the
+    store (attached to the bus) persists; the process "restarts" (a fresh router,
+    empty in-memory dedup map); :meth:`restore` re-seeds it from ``store.orders()``;
+    and a re-submit of the SAME deterministic id (what a runner would regenerate)
+    is deduped — the broker is never called a second time, so no duplicate venue
+    order is produced.
+    """
+    from trading_bot.storage.sqlite_store import SqliteStore
+
+    db = tmp_path / "orders.db"
+    store = SqliteStore(db)
+    bus = EventBus()
+    store.attach(bus)  # persist every OrderEvent the router emits
+    broker = _SpyBroker()
+    router = OrderRouter(broker, bus)
+
+    # Pre-restart: submit and let the store persist the OrderEvent.
+    await router.submit(_order(cid="runner-1-7"))
+    assert broker.place_calls == 1
+    store.flush()  # drain the off-loop writer so the row is durable
+
+    persisted = store.orders()
+    assert [o.client_order_id for o in persisted] == ["runner-1-7"]
+
+    # --- restart: fresh router, empty dedup map, same broker/venue state ---
+    broker2 = _SpyBroker()
+    router2 = OrderRouter(broker2, EventBus())
+    assert router2.restore(persisted) == 1
+
+    # A re-submit of the same deterministic id converges to the recovered order and
+    # never re-hits the venue — the mid-submit restart produced no duplicate order.
+    recovered = router2.get("runner-1-7")
+    returned = await router2.submit(_order(cid="runner-1-7"))
+    assert returned is recovered
+    assert broker2.place_calls == 0, "restart re-submit must not double-submit"
+
+    store.close()
