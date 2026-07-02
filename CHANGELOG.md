@@ -127,7 +127,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **Broker order-path live-readiness.** Order qty/price are quantized to the venue lot/tick (round-down, sub-min rejected) before submit, Kraken uses a monotonic lock-guarded nonce, venue error codes map to domain errors (retriable Kraken HTTP-200 errors retried; `AddOrder` never blind-retried), and the client-order-id is forwarded to both venues so reconcile matches on the value sent (audit B-2/B-3/B-4/B-5/B-15). (#PR)
+- **Broker order-path live-readiness.** Order qty/price are quantized to the venue lot/tick (round-down, sub-min rejected) before submit, Kraken uses a monotonic lock-guarded nonce, venue error codes map to domain errors (retriable Kraken HTTP-200 errors retried; `AddOrder` never blind-retried), and the client-order-id is forwarded to both venues so reconcile matches on the value sent (audit B-2/B-3/B-4/B-5/B-15). (#129)
 - **A paper unit's book no longer commingles testnet/live fills.** `start()`'s
   paper-book replay folded **all** stored fills into the paper simulator; once a store
   held fills from a different deployment mode (a strategy run testnet/live, then
