@@ -10,7 +10,9 @@ that invariant enforceable:
   baked into the bits before we ever saw the value. A caller that genuinely
   starts from a ``float`` (e.g. a number off the wire) must opt in explicitly
   via :func:`from_float`, which routes through ``str`` so the *shortest*
-  round-tripping decimal is taken.
+  round-tripping decimal is taken. It also **rejects non-finite** amounts
+  (``NaN``, ``±Inf``) with a :class:`~trading_bot.domain.errors.MoneyError`, so
+  a poisoned value can never reach the PnL path.
 * :func:`quantize` snaps a value to a venue tick / lot size, defaulting to
   banker's-unsafe-free ``ROUND_DOWN`` (never hand a venue more size/price than
   intended).
@@ -20,7 +22,9 @@ The public API takes and returns ``Decimal`` exclusively — no ``float`` leaks.
 
 from __future__ import annotations
 
-from decimal import ROUND_DOWN, ROUND_HALF_EVEN, Decimal
+from decimal import ROUND_DOWN, ROUND_HALF_EVEN, Decimal, InvalidOperation
+
+from trading_bot.domain.errors import MoneyError
 
 __all__ = [
     "Money",
@@ -60,8 +64,12 @@ def money(value: _Exact) -> Money:
         If ``value`` is a ``float`` (or ``bool``), or any other unsupported
         type. Floats are refused because the binary rounding error is already
         present in the bits.
-    decimal.InvalidOperation
-        If a ``str`` does not parse as a number.
+    MoneyError
+        If ``value`` is a non-finite ``Decimal`` (``NaN``, ``sNaN`` or
+        ``±Inf``), or a ``str`` that parses to one (``"nan"``, ``"inf"``). A
+        non-finite amount would poison the PnL source of truth, so it is
+        rejected here rather than surfacing as a bare
+        :class:`decimal.InvalidOperation` from later arithmetic.
 
     Examples
     --------
@@ -79,10 +87,28 @@ def money(value: _Exact) -> Money:
             "pass a str/int/Decimal, or use from_float() to opt in explicitly"
         )
     if isinstance(value, Decimal):
-        return value
+        return _require_finite(value)
     if isinstance(value, (str, int)):
-        return Decimal(value)
+        try:
+            parsed = Decimal(value)
+        except InvalidOperation as exc:
+            raise MoneyError(f"cannot parse {value!r} as a money amount") from exc
+        return _require_finite(parsed)
     raise TypeError(f"cannot build Money from {type(value).__name__}")
+
+
+def _require_finite(value: Decimal) -> Money:
+    """Return ``value`` unchanged, or raise :class:`MoneyError` if non-finite.
+
+    ``Decimal`` admits ``NaN``, ``sNaN`` and ``±Inf`` — none of which are valid
+    money. A ``NaN`` in particular is silently poisonous: it compares ``False``
+    to everything (so range guards like ``qty <= 0`` pass) and propagates
+    through every fold it touches, corrupting positions and PnL. Reject it at
+    the money boundary so it can never enter the PnL path.
+    """
+    if not value.is_finite():
+        raise MoneyError(f"money must be a finite amount, got {value}")
+    return value
 
 
 def from_float(value: float) -> Money:

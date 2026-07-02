@@ -36,6 +36,7 @@ The module is pure: no I/O, no async, money as :class:`~decimal.Decimal`.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from decimal import localcontext
 from enum import Enum
 
 from trading_bot.domain.errors import OrderError, OrderStatusError
@@ -48,7 +49,17 @@ __all__ = [
     "OrderStatus",
     "Order",
     "DEFAULT_FILL_TOLERANCE",
+    "AVG_PRICE_PRECISION",
 ]
+
+#: Precision (significant digits) of the explicit :class:`~decimal.Decimal`
+#: context under which the quantity-weighted average fill price is divided. A
+#: pinned precision makes the rounding of a repeating quotient **deterministic
+#: and documented**, instead of inheriting the process-global 28-digit context
+#: (which any caller could have mutated). 34 digits is IEEE-754 ``decimal128``
+#: — ample for a venue price yet bounded, so the average never grows an
+#: unbounded repeating tail.
+AVG_PRICE_PRECISION: int = 34
 
 #: Default unfilled-fraction tolerance below which an order is treated as fully
 #: filled. Ported from the legacy ``_BasisOrder.tol`` default of ``0.001``
@@ -210,11 +221,27 @@ class Order:
     reject_reason: str | None = None
 
     def __post_init__(self) -> None:
-        """Validate construction invariants (identity, qty, price/type rules)."""
+        """Validate construction invariants (identity, qty, price/type rules).
+
+        Every money field is routed through :func:`~trading_bot.domain.money.
+        money` first: it **rejects a raw ``float``** (``TypeError``) and any
+        non-finite ``Decimal`` (``MoneyError``) before the range guards below
+        run, so a float price/qty can never silently enter the PnL source of
+        truth. Callers already hold :class:`~decimal.Decimal` amounts (built via
+        ``money()`` at the venue boundary); this is a fail-fast backstop, not a
+        coercion — floats are refused, never converted.
+        """
         if not self.client_order_id:
             raise OrderError(
                 self.client_order_id, "client_order_id is mandatory and non-empty"
             )
+        # Guard every money field through money(): reject float / non-finite.
+        self.qty = money(self.qty)
+        if self.limit_price is not None:
+            self.limit_price = money(self.limit_price)
+        if self.stop_price is not None:
+            self.stop_price = money(self.stop_price)
+        self.fill_tolerance = money(self.fill_tolerance)
         if self.qty <= 0:
             raise OrderError(
                 self.client_order_id, f"qty must be positive, got {self.qty}"
@@ -319,6 +346,10 @@ class Order:
             raise OrderStatusError(
                 self.client_order_id, self.status.value, "apply_fill"
             )
+        # Guard the fill amounts through money(): reject float / non-finite
+        # before they touch the running average (the PnL source of truth).
+        qty = money(qty)
+        price = money(price)
         if qty <= 0:
             raise OrderError(
                 self.client_order_id, f"fill qty must be positive, got {qty}"
@@ -335,15 +366,22 @@ class Order:
                 f"over-fill: {new_filled} exceeds order qty {self.qty}",
             )
 
-        # Exact quantity-weighted average: (sum of qty*price) / sum of qty.
-        prior_notional = (
-            self.avg_fill_price * self.filled_qty
-            if self.avg_fill_price is not None
-            else money("0")
-        )
-        notional = prior_notional + qty * price
+        prior_avg = self.avg_fill_price
+        prior_filled = self.filled_qty
         self.filled_qty = new_filled
-        self.avg_fill_price = notional / new_filled
+        # Compute the quantity-weighted average ((sum of qty*price) / sum of qty)
+        # entirely inside an explicit, pinned Decimal context: not just the
+        # division but the notional accumulation too, so neither the repeating
+        # quotient nor the running sum inherits (and can be corrupted by) the
+        # mutable process-global context. Rounding is deterministic and
+        # documented at AVG_PRICE_PRECISION significant digits.
+        with localcontext() as ctx:
+            ctx.prec = AVG_PRICE_PRECISION
+            prior_notional = (
+                prior_avg * prior_filled if prior_avg is not None else money("0")
+            )
+            notional = prior_notional + qty * price
+            self.avg_fill_price = notional / new_filled
 
         if self._is_filled_within_tolerance():
             self.status = OrderStatus.FILLED

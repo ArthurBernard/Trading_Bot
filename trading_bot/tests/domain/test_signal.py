@@ -6,7 +6,7 @@ from decimal import Decimal
 
 import pytest
 
-from trading_bot.domain.errors import SignalError
+from trading_bot.domain.errors import MoneyError, SignalError
 from trading_bot.domain.fill import Fill
 from trading_bot.domain.instrument import Instrument, Symbol
 from trading_bot.domain.money import Money, money
@@ -87,6 +87,39 @@ class TestTargetValidation:
     def test_strength_negative_rejected(self) -> None:
         with pytest.raises(SignalError, match="strength"):
             Signal.target_qty(BTCUSD, money("1"), ts=1, strength=money("-0.1"))
+
+
+class TestMoneyFieldGuard:
+    """D-1/D-7: target/strength routed through money() at construction."""
+
+    def test_float_target_qty_rejected(self) -> None:
+        with pytest.raises(TypeError, match="float"):
+            Signal.target_qty(BTCUSD, 2.5, ts=1)  # type: ignore[arg-type]
+
+    def test_float_exposure_rejected(self) -> None:
+        with pytest.raises(TypeError, match="float"):
+            Signal.exposure(BTCUSD, 0.5, ts=1)  # type: ignore[arg-type]
+
+    def test_float_strength_rejected(self) -> None:
+        with pytest.raises(TypeError, match="float"):
+            Signal.target_qty(
+                BTCUSD, money("1"), ts=1, strength=0.5  # type: ignore[arg-type]
+            )
+
+    def test_nan_target_qty_rejected(self) -> None:
+        # An unbounded TARGET_QTY target must still reject NaN/Inf (D-7): a NaN
+        # would otherwise flow straight into delta_to and the order size.
+        with pytest.raises(MoneyError, match="finite"):
+            Signal.target_qty(BTCUSD, Decimal("NaN"), ts=1)
+
+    def test_inf_target_qty_rejected(self) -> None:
+        with pytest.raises(MoneyError, match="finite"):
+            Signal.target_qty(BTCUSD, Decimal("Infinity"), ts=1)
+
+    def test_nan_exposure_rejected(self) -> None:
+        # Rejected as non-finite before the [-1, 1] range check runs.
+        with pytest.raises(MoneyError, match="finite"):
+            Signal.exposure(BTCUSD, Decimal("NaN"), ts=1)
 
 
 class TestDeltaToExplicitQty:

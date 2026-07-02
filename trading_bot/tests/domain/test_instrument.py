@@ -23,6 +23,32 @@ REAL_KRAKEN_PAIRS = [
     ("XETHXXBT", "ETH", "BTC"),
 ]
 
+# Real Kraken **altname** pair strings (modern, no X/Z-prefix on the base) and
+# their true venue meaning. The X/Z-prefixed altnames (XTZ = Tezos, XLM, XMR,
+# XRP) are the regression guard for D-3: a naive "trailing ZUSD is legacy fiat"
+# split turns ``XTZUSD`` into the wrong market ``XT/USD``.
+REAL_KRAKEN_ALTNAME_PAIRS = [
+    ("XTZUSD", "XTZ", "USD"),  # Tezos — the D-3 wrong-market bug
+    ("XTZEUR", "XTZ", "EUR"),
+    ("XTZXBT", "XTZ", "BTC"),
+    ("XLMUSD", "XLM", "USD"),
+    ("XMRUSD", "XMR", "USD"),
+    ("XRPUSD", "XRP", "USD"),
+    ("XBTUSD", "BTC", "USD"),
+    ("ETHUSD", "ETH", "USD"),
+    ("ETHUSDT", "ETH", "USDT"),
+    ("ETHXBT", "ETH", "BTC"),
+    ("ADAUSD", "ADA", "USD"),
+    ("ADAUSDT", "ADA", "USDT"),
+    ("DOTUSD", "DOT", "USD"),
+    ("SOLUSD", "SOL", "USD"),
+    ("LINKUSD", "LINK", "USD"),
+    ("ALGOUSD", "ALGO", "USD"),
+    ("MATICUSD", "MATIC", "USD"),
+    ("DOGEUSD", "DOGE", "USD"),
+    ("DOTXBT", "DOT", "BTC"),
+]
+
 
 class TestNormalise:
     def test_xbt_alias(self) -> None:
@@ -52,6 +78,26 @@ class TestNormalise:
         assert normalise("  xxbt ") == "BTC"
         assert normalise("zusd") == "USD"
 
+    # --- D-10: only genuine legacy X/Z codes get their prefix stripped ------ #
+
+    def test_tezos_xtz_is_not_stripped(self) -> None:
+        # XTZ is Tezos, not an X-prefixed "TZ" — it must pass through intact.
+        assert normalise("XTZ") == "XTZ"
+
+    def test_non_legacy_four_char_x_code_is_left_intact(self) -> None:
+        # A 4-char code starting with X that is NOT a genuine Kraken legacy code
+        # must not have its leading X stripped (the D-10 over-eager rule bug).
+        assert normalise("XRPX") == "XRPX"
+        assert normalise("XYZW") == "XYZW"
+
+    def test_non_legacy_four_char_z_code_is_left_intact(self) -> None:
+        # ZABC is not a Z-fiat legacy code (ABC is not a known fiat).
+        assert normalise("ZABC") == "ZABC"
+
+    def test_tezos_legacy_xxtz_is_stripped(self) -> None:
+        # The genuine legacy form XXTZ does collapse to XTZ.
+        assert normalise("XXTZ") == "XTZ"
+
 
 class TestParseKrakenPair:
     @pytest.mark.parametrize("pair,base,quote", REAL_KRAKEN_PAIRS)
@@ -64,6 +110,21 @@ class TestParseKrakenPair:
         assert parse_kraken_pair("ETHUSD") == Symbol("ETH", "USD")
         assert parse_kraken_pair("XBTUSD") == Symbol("BTC", "USD")
         assert parse_kraken_pair("ETHXBT") == Symbol("ETH", "BTC")
+
+    @pytest.mark.parametrize("pair,base,quote", REAL_KRAKEN_ALTNAME_PAIRS)
+    def test_real_altname_pairs(self, pair: str, base: str, quote: str) -> None:
+        # Verification on real Kraken altnames: the split must match the venue's
+        # true base/quote, including the X/Z-prefixed altnames (XTZ, XLM, XMR).
+        sym = parse_kraken_pair(pair)
+        assert sym == Symbol(base, quote)
+        assert str(sym) == f"{base}/{quote}"
+
+    def test_xtz_altname_is_tezos_not_xt(self) -> None:
+        # D-3 regression: XTZUSD is Tezos (XTZ/USD), never the wrong XT/USD.
+        sym = parse_kraken_pair("XTZUSD")
+        assert sym == Symbol("XTZ", "USD")
+        assert sym.base == "XTZ"
+        assert sym.quote == "USD"
 
     def test_explicit_separator(self) -> None:
         assert parse_kraken_pair("BTC/USD") == Symbol("BTC", "USD")

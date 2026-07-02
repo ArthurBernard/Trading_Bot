@@ -32,7 +32,7 @@ from dataclasses import dataclass
 
 from trading_bot.domain.errors import OrderError
 from trading_bot.domain.instrument import Instrument
-from trading_bot.domain.money import Money
+from trading_bot.domain.money import Money, money
 from trading_bot.domain.order import OrderSide
 
 __all__ = [
@@ -98,7 +98,17 @@ class Fill:
     ts: int
 
     def __post_init__(self) -> None:
-        """Validate construction invariants (ids non-empty, amounts in range)."""
+        """Validate construction invariants (ids non-empty, amounts in range).
+
+        Every money field (``qty``, ``price``, ``fee``) is routed through
+        :func:`~trading_bot.domain.money.money` first: it **rejects a raw
+        ``float``** (``TypeError``) and any non-finite ``Decimal``
+        (``MoneyError``) before the range guards below. A :class:`Fill` is the
+        PnL source of truth, so a float amount must never reach it; this is a
+        fail-fast backstop (reject, never coerce), since callers already build
+        the amounts via ``money()`` at the venue boundary. The dataclass is
+        frozen, so the guarded values are written back via ``object.__setattr__``.
+        """
         if not self.fill_id:
             raise OrderError(
                 self.client_order_id, "fill_id is mandatory and non-empty"
@@ -107,6 +117,10 @@ class Fill:
             raise OrderError(
                 self.client_order_id, "client_order_id is mandatory and non-empty"
             )
+        # Guard every money field through money(): reject float / non-finite.
+        object.__setattr__(self, "qty", money(self.qty))
+        object.__setattr__(self, "price", money(self.price))
+        object.__setattr__(self, "fee", money(self.fee))
         if self.qty <= 0:
             raise OrderError(
                 self.client_order_id, f"fill qty must be positive, got {self.qty}"
