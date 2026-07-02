@@ -6,6 +6,23 @@ rejected approaches as tombstones.
 
 ---
 
+### 2026-07-02 Prime the dccd client for sync reads instead of a lifecycle refactor (PR #137)  [accepted]
+- **Choice**: `_make_client` builds the dccd `Client`'s read state (`_store` /
+  `_registry`, via dccd's public `build_store` / `build_registry`) synchronously —
+  the read-only half of dccd's async `__aenter__` — so the engine's synchronous
+  feed `read()` works without an `async with Client()` block.
+- **Why**: dccd drifted to require `async with Client()` (whose `__aenter__` builds
+  the store/registry AND opens per-adapter HTTP pools). The engine only *reads*
+  stored parquet (never collects), and reads happen synchronously inside the async
+  step, so a full async-context lifecycle (enter/exit at engine start/shutdown,
+  threaded through the sync feed) is a large refactor for HTTP pools reads never
+  use. Priming just the read state is contained and correct for read-only use.
+- **Rejected alternatives**: (a) a full async-context lifecycle refactor of the
+  feed/engine — large, and opens collection-only pools; (b) keeping the local
+  `_ParquetSource` workaround — it bypasses dccd and isn't in the engine.
+- **Note**: reaches dccd's private `_store`/`_registry` — a sibling-repo seam; a
+  clean long-term fix is a public read-only entry on dccd's `Client`.
+
 ### 2026-07-02 Resolve local strategy signal refs by putting the CWD on sys.path (PR #135)  [accepted]
 - **Choice**: the CLI group callback runs `_ensure_cwd_importable()` before every
   command, inserting the current working directory into `sys.path` so a manifest's

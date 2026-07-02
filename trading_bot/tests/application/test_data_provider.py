@@ -282,6 +282,24 @@ def test_feed_for_requires_data_source() -> None:
 # --- Verification on real data (opt-in) ------------------------------------ #
 
 
+def test_make_client_is_primed_for_read_without_async_with() -> None:
+    """Regression: ``_make_client`` returns a client whose **sync** ``read`` works
+    without entering ``async with Client()``.
+
+    The engine reads the store from inside its synchronous feed iteration; dccd's
+    ``Client.read`` needs the store/registry its async ``__aenter__`` builds. Before
+    the prime, ``read`` raised ``RuntimeError("Client must be used inside 'async
+    with Client() as c:'")``. dccd-gated (skips without dccd); no network — a bare
+    local read against the default store (empty is fine, it just must not raise).
+    """
+    pytest.importorskip("dccd")
+    from trading_bot.application.data_provider import _make_client
+
+    client = _make_client(None)
+    df = client.read(exchange="binance", symbol="BTC/USDT", span=60, data_type="ohlc")
+    assert hasattr(df, "height")  # a polars DataFrame, not a raised context error
+
+
 @pytest.mark.network
 async def test_feed_for_real_inventory_causal_replay() -> None:
     """Real dccd: feed_for over a stored OHLC dataset replays with no lookahead.

@@ -425,13 +425,39 @@ def feed_for(
 
 
 def _make_client(data_path: str | None) -> DccdClient:
-    """Lazily construct a real ``dccd.Client`` (importing dccd only here).
+    """Lazily construct a real ``dccd.Client``, primed for reads.
 
     ``data_path`` is forwarded as the client's ``config_path``. Isolated so the
     dccd import never runs when a client is injected (the offline-test path).
+
+    dccd's ``Client.read`` requires the store/registry that its async
+    ``__aenter__`` builds — but ``__aenter__`` also opens per-adapter HTTP pools
+    used only for **collection**. The engine only ever *reads* the stored parquet
+    (it never collects/backfills through this client), and the feed reads
+    synchronously from inside the async step. So we prime just the read state
+    synchronously, mirroring the sync half of dccd's ``__aenter__`` via dccd's own
+    service-factory builders — letting a bare (non ``async with``) client read the
+    store. (dccd is the sibling data repo; ``build_store`` / ``build_registry`` are
+    its public wiring seam.)
     """
     from dccd import Client  # local import: dccd only required for the real path
+    from dccd.application.config import (
+        AppConfig,
+        load_config,
+        resolve_config_path,
+    )
+    from dccd.application.service_factory import build_registry, build_store
 
     # dccd.Client is untyped; it satisfies the DccdClient protocol structurally.
-    client: DccdClient = Client(data_path)
-    return client
+    client = Client(data_path)
+    try:
+        cfg = load_config(resolve_config_path(data_path))
+    except FileNotFoundError:
+        cfg = AppConfig()
+    # Populate the read-only state dccd's __aenter__ would build (store + a
+    # non-None registry that read()'s _require_ready() guard checks).
+    client._store = build_store(cfg.settings.data_path)
+    client._registry = build_registry()
+    client._config = cfg
+    typed: DccdClient = client
+    return typed
