@@ -407,9 +407,7 @@ def _build_testnet_venue(venue: str) -> _LiveBroker:
         # feed it the *testnet* credentials (not the mainnet key, which testnet
         # rejects with -2015).
         key, secret = _binance_testnet_credentials()
-        return BinanceBroker(
-            api_key=key, api_secret=secret, base_url=TESTNET_API_BASE
-        )
+        return BinanceBroker(api_key=key, api_secret=secret, base_url=TESTNET_API_BASE)
     raise BrokerError(
         f"venue {venue!r} has no testnet/sandbox; testnet is available for "
         f"{sorted(_TESTNET_VENUES)!r} only (Kraken has no public spot testnet — "

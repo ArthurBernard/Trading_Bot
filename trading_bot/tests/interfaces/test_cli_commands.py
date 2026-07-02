@@ -72,6 +72,7 @@ def test_cli_callback_puts_cwd_on_syspath(monkeypatch):
     assert result.exit_code == 0
     assert cwd in sys.path
 
+
 _BTC_USD = Instrument(Symbol("BTC", "USD"))
 
 
@@ -84,8 +85,22 @@ def _ohlc_fixture(path: pathlib.Path) -> pl.DataFrame:
     deterministically. ``o/h/l`` track ``c`` (only ``c`` drives the signal).
     """
     closes = [
-        100.0, 101.0, 102.0, 104.0, 107.0, 111.0, 116.0, 120.0,
-        119.0, 116.0, 112.0, 107.0, 101.0, 95.0, 90.0, 86.0,
+        100.0,
+        101.0,
+        102.0,
+        104.0,
+        107.0,
+        111.0,
+        116.0,
+        120.0,
+        119.0,
+        116.0,
+        112.0,
+        107.0,
+        101.0,
+        95.0,
+        90.0,
+        86.0,
     ]
     times = list(range(len(closes)))
     frame = pl.DataFrame(
@@ -121,11 +136,16 @@ def test_run_over_fixture_paper_moves_position(tmp_path: pathlib.Path) -> None:
         app,
         [
             "run",
-            "--bars", str(bars),
-            "--db", str(db),
-            "--fast", "2",
-            "--slow", "4",
-            "--qty", "1",
+            "--bars",
+            str(bars),
+            "--db",
+            str(db),
+            "--fast",
+            "2",
+            "--slow",
+            "4",
+            "--qty",
+            "1",
         ],
     )
 
@@ -162,6 +182,57 @@ def test_run_synthetic_feed_default(tmp_path: pathlib.Path) -> None:
     assert "orders submitted" in result.output
 
 
+# --- run --serve guard (I-5) ----------------------------------------------- #
+
+
+def test_run_serve_non_loopback_host_is_refused(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """I-5: `run --serve --serve-host 0.0.0.0` refuses (the read-only view has no auth).
+
+    The run dashboard is GET-only (it cannot trade), but a non-loopback bind would
+    leak the live book to the network. Unlike `dashboard`/`start --serve` it has no
+    token login, so a non-loopback `--serve-host` is refused outright — never
+    building the system, never binding a socket.
+    """
+    import uvicorn
+
+    called = {"server": False}
+
+    def _fake_server(*a: object, **k: object) -> object:  # pragma: no cover
+        called["server"] = True
+        return object()
+
+    monkeypatch.setattr(uvicorn, "Server", _fake_server)
+
+    result = runner.invoke(app, ["run", "--serve", "--serve-host", "0.0.0.0"])
+
+    assert result.exit_code == 1
+    assert "refusing to bind" in result.output
+    assert called["server"] is False  # never reached uvicorn
+
+
+def test_run_serve_loopback_host_is_allowed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """I-5: a loopback `--serve-host` passes the guard (builds the read-only app)."""
+    pytest.importorskip("fynance")
+    import trading_bot.interfaces.cli.main as climain
+
+    built = {"served": False}
+
+    def _fake_run_and_serve(config: object, *, host: str, port: int) -> None:
+        built["served"] = True
+        built["host"] = host
+
+    monkeypatch.setattr(climain, "_run_and_serve", _fake_run_and_serve)
+
+    result = runner.invoke(app, ["run", "--serve", "--serve-host", "127.0.0.1"])
+    assert result.exit_code == 0, result.output
+    assert built["served"] is True
+    assert built["host"] == "127.0.0.1"  # loopback passed the guard
+
+
 # --- --live guard ---------------------------------------------------------- #
 
 
@@ -190,9 +261,7 @@ def test_run_live_without_opt_in_refuses_no_order(
     """
     cfg = tmp_path / "live.yaml"
     # mode flipped to live by --live, but live_enabled omitted (defaults False).
-    cfg.write_text(
-        "mode: paper\nbrokers:\n  - name: k\n    exchange: kraken\n"
-    )
+    cfg.write_text("mode: paper\nbrokers:\n  - name: k\n    exchange: kraken\n")
 
     result = runner.invoke(
         app,
@@ -220,8 +289,7 @@ def test_run_live_acknowledged_opted_in_without_credentials_refuses(
 
     cfg = tmp_path / "live.yaml"
     cfg.write_text(
-        "mode: live\nlive_enabled: true\n"
-        "brokers:\n  - name: k\n    exchange: kraken\n"
+        "mode: live\nlive_enabled: true\nbrokers:\n  - name: k\n    exchange: kraken\n"
     )
 
     result = runner.invoke(
@@ -265,12 +333,28 @@ def _seed_store(path: pathlib.Path) -> None:
 
     # Fills that leave a net long position of 1 BTC with some realised PnL.
     store.record_fill(
-        Fill("F1", "cid-0", _BTC_USD, OrderSide.BUY, money("2"),
-             money("30000"), money("0"), 1)
+        Fill(
+            "F1",
+            "cid-0",
+            _BTC_USD,
+            OrderSide.BUY,
+            money("2"),
+            money("30000"),
+            money("0"),
+            1,
+        )
     )
     store.record_fill(
-        Fill("F2", "cid-1", _BTC_USD, OrderSide.SELL, money("1"),
-             money("31000"), money("0"), 2)
+        Fill(
+            "F2",
+            "cid-1",
+            _BTC_USD,
+            OrderSide.SELL,
+            money("1"),
+            money("31000"),
+            money("0"),
+            2,
+        )
     )
 
 
@@ -307,7 +391,9 @@ def test_kpi_renders_realised_pnl(tmp_path: pathlib.Path) -> None:
     A known two-fill sequence (buy 2 @ 30000, sell 1 @ 31000, no fees) realises
     exactly 1000 on the closed unit; the table must show that figure.
     """
-    pytest.importorskip("fynance")  # the KPI table computes fynance ratios over the curve
+    pytest.importorskip(
+        "fynance"
+    )  # the KPI table computes fynance ratios over the curve
     db = tmp_path / "kpi.db"
     _seed_store(db)
 
@@ -327,7 +413,9 @@ def test_kpi_default_capital_anchors_equity_endpoint(
     The realised PnL is 1000 (buy 2 @ 30000, sell 1 @ 31000), so the equity
     endpoint is ``100000 + 1000 = 101000``.
     """
-    pytest.importorskip("fynance")  # the KPI table computes fynance ratios over the curve
+    pytest.importorskip(
+        "fynance"
+    )  # the KPI table computes fynance ratios over the curve
     db = tmp_path / "kpi.db"
     _seed_store(db)
 
@@ -339,7 +427,9 @@ def test_kpi_default_capital_anchors_equity_endpoint(
 
 def test_kpi_explicit_capital_overrides_default(tmp_path: pathlib.Path) -> None:
     """`--capital` wins: equity endpoint anchors to the flag, not the default."""
-    pytest.importorskip("fynance")  # the KPI table computes fynance ratios over the curve
+    pytest.importorskip(
+        "fynance"
+    )  # the KPI table computes fynance ratios over the curve
     db = tmp_path / "kpi.db"
     _seed_store(db)
 
@@ -354,11 +444,13 @@ def test_kpi_config_starting_capital_used_when_no_capital_flag(
     tmp_path: pathlib.Path,
 ) -> None:
     """A ``--config`` ``starting_capital`` anchors the curve absent ``--capital``."""
-    pytest.importorskip("fynance")  # the KPI table computes fynance ratios over the curve
+    pytest.importorskip(
+        "fynance"
+    )  # the KPI table computes fynance ratios over the curve
     db = tmp_path / "kpi.db"
     _seed_store(db)
     cfg = tmp_path / "cfg.yml"
-    cfg.write_text("starting_capital: \"200000\"\n")
+    cfg.write_text('starting_capital: "200000"\n')
 
     result = runner.invoke(app, ["kpi", "--db", str(db), "--config", str(cfg)])
 
@@ -370,11 +462,13 @@ def test_kpi_capital_flag_beats_config_starting_capital(
     tmp_path: pathlib.Path,
 ) -> None:
     """Precedence: explicit ``--capital`` > config ``starting_capital``."""
-    pytest.importorskip("fynance")  # the KPI table computes fynance ratios over the curve
+    pytest.importorskip(
+        "fynance"
+    )  # the KPI table computes fynance ratios over the curve
     db = tmp_path / "kpi.db"
     _seed_store(db)
     cfg = tmp_path / "cfg.yml"
-    cfg.write_text("starting_capital: \"200000\"\n")
+    cfg.write_text('starting_capital: "200000"\n')
 
     result = runner.invoke(
         app, ["kpi", "--db", str(db), "--config", str(cfg), "--capital", "5000"]
@@ -391,10 +485,26 @@ def test_kpi_capital_flag_beats_config_starting_capital(
 def test_positions_table_contains_formatted_values() -> None:
     """`positions_table` renders net qty / avg entry / realised PnL exactly."""
     fills = [
-        Fill("F1", "c-0", _BTC_USD, OrderSide.BUY, money("2"),
-             money("30000"), money("0"), 1),
-        Fill("F2", "c-1", _BTC_USD, OrderSide.SELL, money("1"),
-             money("31000"), money("0"), 2),
+        Fill(
+            "F1",
+            "c-0",
+            _BTC_USD,
+            OrderSide.BUY,
+            money("2"),
+            money("30000"),
+            money("0"),
+            1,
+        ),
+        Fill(
+            "F2",
+            "c-1",
+            _BTC_USD,
+            OrderSide.SELL,
+            money("1"),
+            money("31000"),
+            money("0"),
+            2,
+        ),
     ]
     pos = Position.from_fills(fills)
     table = _render.positions_table({_BTC_USD: pos})
@@ -410,12 +520,28 @@ def test_kpi_table_contains_realised_pnl_and_ratios() -> None:
     pytest.importorskip("fynance")  # kpi_table computes fynance ratios over the curve
     perf = PerformanceService(v0=money("100000"))
     perf.apply(
-        Fill("F1", "c-0", _BTC_USD, OrderSide.BUY, money("2"),
-             money("30000"), money("0"), 1)
+        Fill(
+            "F1",
+            "c-0",
+            _BTC_USD,
+            OrderSide.BUY,
+            money("2"),
+            money("30000"),
+            money("0"),
+            1,
+        )
     )
     perf.apply(
-        Fill("F2", "c-1", _BTC_USD, OrderSide.SELL, money("1"),
-             money("31000"), money("0"), 2)
+        Fill(
+            "F2",
+            "c-1",
+            _BTC_USD,
+            OrderSide.SELL,
+            money("1"),
+            money("31000"),
+            money("0"),
+            2,
+        )
     )
     table = _render.kpi_table(perf)
 
@@ -447,22 +573,41 @@ def _render_to_text(renderable: object) -> str:
 # --- daemon (`start`) smoke ------------------------------------------------- #
 
 
-async def test_daemon_starts_ticks_and_stops_cleanly() -> None:
+async def test_daemon_starts_ticks_and_stops_cleanly(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """`_run_daemon` builds the supervisor, schedules ticks, and tears down on cancel.
 
     Drives the daemon coroutine over an empty paper config (no strategies): it must
     start the scheduler, tick (a no-op with zero units), and shut down cleanly when
     cancelled — no exception leaks. Proves the daemon loop is wired without binding a
     real signal/port.
+
+    Deterministic (T-9): instead of a wall-clock ``sleep`` racing the scheduler,
+    patch ``StrategySupervisor.step_all`` to set an :class:`asyncio.Event` on the
+    first real scheduled tick and wait (bounded) on that event.
     """
     import asyncio
     import contextlib
 
     from trading_bot.application.config import AppConfig
+    from trading_bot.application.supervisor import StrategySupervisor
     from trading_bot.interfaces.cli.main import _run_daemon
 
-    task = asyncio.create_task(_run_daemon(AppConfig(), interval=0.05, cron=None))
-    await asyncio.sleep(0.12)  # let it start + tick a couple of times
+    ticked = asyncio.Event()
+    original_step_all = StrategySupervisor.step_all
+
+    async def _step_all_signalling(self: StrategySupervisor) -> int:
+        stepped = await original_step_all(self)
+        ticked.set()
+        return stepped
+
+    monkeypatch.setattr(StrategySupervisor, "step_all", _step_all_signalling)
+
+    task = asyncio.create_task(_run_daemon(AppConfig(), interval=0.01, cron=None))
+    # Wait for a real scheduled tick (not a fixed sleep); bounded so a wiring bug
+    # fails fast rather than hanging.
+    await asyncio.wait_for(ticked.wait(), timeout=5.0)
     assert not task.done()  # the daemon stays up until stopped
     task.cancel()
     with contextlib.suppress(asyncio.CancelledError):

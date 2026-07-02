@@ -194,7 +194,9 @@ def test_api_endpoints_back_the_dashboard_with_real_state(
     positions/KPI endpoints report it as exact Decimal strings — the verbatim
     money the JS renders.
     """
-    pytest.importorskip("fynance")  # the seeded curve makes /api/kpi compute fynance ratios
+    pytest.importorskip(
+        "fynance"
+    )  # the seeded curve makes /api/kpi compute fynance ratios
     positions = client.get("/api/positions").json()
     assert positions, "engine should hold a position"
     btc = next(p for p in positions if p["instrument"] == "BTC/USD")
@@ -246,9 +248,7 @@ def test_serve_builds_app_and_calls_uvicorn(
 
     monkeypatch.setattr(uvicorn, "run", _fake_run)
 
-    result = runner.invoke(
-        cli_app, ["serve", "--host", "0.0.0.0", "--port", "9123"]
-    )
+    result = runner.invoke(cli_app, ["serve", "--host", "0.0.0.0", "--port", "9123"])
 
     assert result.exit_code == 0, result.output
     assert isinstance(captured["app"], FastAPI)

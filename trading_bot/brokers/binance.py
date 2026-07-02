@@ -241,9 +241,7 @@ def _sign(query: str, secret: str) -> str:
         The hex-encoded HMAC-SHA256 signature.
 
     """
-    return hmac.new(
-        secret.encode(), query.encode(), hashlib.sha256
-    ).hexdigest()
+    return hmac.new(secret.encode(), query.encode(), hashlib.sha256).hexdigest()
 
 
 def _is_valid_new_client_order_id(client_order_id: str) -> bool:
@@ -349,9 +347,7 @@ class BinanceBroker(Broker):
             else os.environ.get("BINANCE_API_BASE", _DEFAULT_API_BASE)
         ).rstrip("/")
         self._symbols = tuple(symbols) if symbols is not None else ()
-        self._http = http or AsyncHTTPClient(
-            exchange=self.name, limiter=RateLimiter()
-        )
+        self._http = http or AsyncHTTPClient(exchange=self.name, limiter=RateLimiter())
         self._recv_window = recv_window
 
     # --- capability declaration -------------------------------------------- #
@@ -469,9 +465,7 @@ class BinanceBroker(Broker):
         """
         return _ENDPOINT_WEIGHTS.get(endpoint, _DEFAULT_ENDPOINT_WEIGHT)
 
-    async def _public_get(
-        self, endpoint: str, params: Mapping[str, Any]
-    ) -> Any:
+    async def _public_get(self, endpoint: str, params: Mapping[str, Any]) -> Any:
         """GET a public endpoint and return its parsed JSON (or raise)."""
         url = f"{self._base_url}{_API_PREFIX}/{endpoint}"
         async with self._http as client:
@@ -520,10 +514,7 @@ class BinanceBroker(Broker):
         }
         query = urllib.parse.urlencode(signed)
         signature = _sign(query, self._api_secret)
-        url = (
-            f"{self._base_url}{_API_PREFIX}/{endpoint}"
-            f"?{query}&signature={signature}"
-        )
+        url = f"{self._base_url}{_API_PREFIX}/{endpoint}?{query}&signature={signature}"
         headers = {"X-MBX-APIKEY": self._api_key}
 
         async with self._http as client:
@@ -563,18 +554,12 @@ class BinanceBroker(Broker):
 
         """
         venue_symbol = symbol.to_venue_symbol(self.name)
-        payload = await self._public_get(
-            "exchangeInfo", {"symbol": venue_symbol}
-        )
+        payload = await self._public_get("exchangeInfo", {"symbol": venue_symbol})
         symbols = payload.get("symbols") if isinstance(payload, dict) else None
         if not symbols:
-            raise BrokerError(
-                f"Binance exchangeInfo: no entry for {venue_symbol!r}"
-            )
+            raise BrokerError(f"Binance exchangeInfo: no entry for {venue_symbol!r}")
         entry = symbols[0]
-        filters = {
-            f.get("filterType"): f for f in entry.get("filters", [])
-        }
+        filters = {f.get("filterType"): f for f in entry.get("filters", [])}
         price_step = filters.get("PRICE_FILTER", {}).get("tickSize")
         qty_step = filters.get("LOT_SIZE", {}).get("stepSize")
         price_precision = _precision_from_step(price_step)
@@ -597,9 +582,7 @@ class BinanceBroker(Broker):
             qty_precision=qty_precision,
             min_qty=money(str(min_qty_str)) if min_qty_str is not None else None,
             min_notional=(
-                money(str(min_notional_str))
-                if min_notional_str is not None
-                else None
+                money(str(min_notional_str)) if min_notional_str is not None else None
             ),
         )
 
@@ -624,14 +607,10 @@ class BinanceBroker(Broker):
 
         """
         venue_symbol = instrument.symbol.to_venue_symbol(self.name)
-        payload = await self._public_get(
-            "ticker/price", {"symbol": venue_symbol}
-        )
+        payload = await self._public_get("ticker/price", {"symbol": venue_symbol})
         price = payload.get("price") if isinstance(payload, dict) else None
         if price is None:
-            raise BrokerError(
-                f"Binance ticker/price: no price for {venue_symbol!r}"
-            )
+            raise BrokerError(f"Binance ticker/price: no price for {venue_symbol!r}")
         return money(str(price))
 
     # --- private endpoints ------------------------------------------------- #
@@ -708,9 +687,7 @@ class BinanceBroker(Broker):
 
         """
         params = self._order_params(order)
-        payload = await self._signed_request(
-            "POST", "order", params, retry=False
-        )
+        payload = await self._signed_request("POST", "order", params, retry=False)
         order_id = payload.get("orderId")
         if order_id is None:
             raise BrokerError(
@@ -761,7 +738,9 @@ class BinanceBroker(Broker):
             # Binance also wants a working ``price`` + ``timeInForce`` for the
             # resting limit. With no explicit limit, rest at the stop price.
             params["stopPrice"] = str(stop_price)
-            params["price"] = str(limit_price if limit_price is not None else stop_price)
+            params["price"] = str(
+                limit_price if limit_price is not None else stop_price
+            )
             params["timeInForce"] = "GTC"
         elif order.type in (OrderType.LIMIT, OrderType.BEST_LIMIT):
             if limit_price is not None:
@@ -824,9 +803,19 @@ class BinanceBroker(Broker):
         venue_symbol = str(info.get("symbol", ""))
         symbol = parse_binance_symbol(venue_symbol)
         side = OrderSide(str(info.get("side", "BUY")).lower())
-        otype = _BINANCE_TO_ORDERTYPE.get(
-            str(info.get("type", "")), OrderType.LIMIT
-        )
+        # B-12: never silently coerce an unrecognised venue order-type to LIMIT —
+        # a wrong type is a wrong order. Reject it so ``reconcile`` surfaces the
+        # unmapped type instead of adopting a mislabelled order (e.g. a Binance
+        # ``TAKE_PROFIT_LIMIT`` rebuilt as a plain LIMIT).
+        raw_type = str(info.get("type", ""))
+        try:
+            otype = _BINANCE_TO_ORDERTYPE[raw_type]
+        except KeyError:
+            raise BrokerError(
+                f"Binance open order {info.get('orderId')}: unknown type "
+                f"{raw_type!r} (not one of {sorted(_BINANCE_TO_ORDERTYPE)}); "
+                "refusing to guess"
+            ) from None
         qty = money(str(info.get("origQty", "0")))
         price = info.get("price")
         limit_price = (

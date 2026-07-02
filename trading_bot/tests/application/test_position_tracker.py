@@ -162,14 +162,35 @@ def test_subscribed_tracker_ignores_non_fill_events() -> None:
 def test_multiple_instruments_tracked_independently() -> None:
     """Each instrument folds its *own* fills; the buckets do not bleed."""
     btc = [
-        _fill(fill_id="B1", side=OrderSide.BUY, qty="2", price="30000", fee="6",
-              instrument=BTC_USD, cid="btc"),
-        _fill(fill_id="B2", side=OrderSide.SELL, qty="1", price="31000", fee="3.1",
-              instrument=BTC_USD, cid="btc"),
+        _fill(
+            fill_id="B1",
+            side=OrderSide.BUY,
+            qty="2",
+            price="30000",
+            fee="6",
+            instrument=BTC_USD,
+            cid="btc",
+        ),
+        _fill(
+            fill_id="B2",
+            side=OrderSide.SELL,
+            qty="1",
+            price="31000",
+            fee="3.1",
+            instrument=BTC_USD,
+            cid="btc",
+        ),
     ]
     eth = [
-        _fill(fill_id="E1", side=OrderSide.BUY, qty="10", price="2000", fee="2",
-              instrument=ETH_USD, cid="eth"),
+        _fill(
+            fill_id="E1",
+            side=OrderSide.BUY,
+            qty="10",
+            price="2000",
+            fee="2",
+            instrument=ETH_USD,
+            cid="eth",
+        ),
     ]
     tracker = PositionTracker()
     # Interleave to prove arrival order per instrument is what is folded.

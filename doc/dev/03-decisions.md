@@ -6,6 +6,100 @@ rejected approaches as tombstones.
 
 ---
 
+### 2026-07-02 Tooling/CI parity + format-the-tree (PR #152)  [accepted]
+- **Choice**: CI runs `ruff check` + `ruff format --check` + `mypy` + `interrogate`
+  + pytest (actions SHA-pinned); pre-commit mirrors it; ruff pinned to a fixed
+  version so formatting is byte-reproducible; pytest gains `filterwarnings=error`
+  (one benign Starlette warning allow-listed) + a pinned asyncio loop scope; the
+  whole tree is `ruff format`-clean (one mechanical reformat commit).
+- **Why**: audit T-5 (CI ran only `ruff check`, so a format drift could wedge CI),
+  T-6/T-7/T-8/T-10/T-11/G-13 hygiene, T-9 (a wall-clock-sleep test was flaky). The
+  reformat is the one-time cost of making `ruff format --check` an enforceable gate.
+- **Rejected alternatives**: adding `format --check` without formatting the tree
+  (CI would fail immediately); deferring the reformat (the gate can't be enforced).
+- **Note**: applied on the integrated tree (post wave-3) so the mechanical reformat
+  never conflicted with the substantive fixes.
+
+### 2026-07-02 Dashboard web-surface hardening posture (PR #147)  [accepted]
+- **Choice**: enforce "non-loopback host requires a token" in `UIConfig` itself (a
+  validator); give `run --serve` the same bind guard as `dashboard`; cap request
+  bodies; prune/bound the session + rate-limit maps; key the login limiter on the
+  real peer; add `Cache-Control: no-store` + `X-Content-Type-Options`/frame/referrer
+  headers; CSRF double-submit + `SameSite=strict` on login; do **not** trust a
+  client `X-Forwarded-Proto` for the `Secure` cookie unless a trusted proxy is
+  configured; reject a deploy `mode` the supervisor would silently discard.
+- **Why**: audit I-4…I-13 + A-4 — the dashboard is a control plane bound to
+  `0.0.0.0` behind a token on the tailnet; these were lower-severity but real
+  web-surface gaps (unbounded maps, no body cap, proxy-spoofable bits, missing
+  headers, a config that could encode a wide-open surface).
+- **Rejected alternatives**: honouring a per-deploy `mode` seed (threads a
+  money-adjacent live seed through `add_unit`) — rejected in favour of a clear 422.
+### 2026-07-02 Engine/order robustness: idempotent cancel, bounded feed, honest KPI anchor (PR #148)  [accepted]
+- **Choice**: `cancel` is idempotent (a terminal-order cancel is a no-op; concurrent
+  cancels serialised by a per-id in-flight future, no venue re-hit); `rebalance_latest`
+  reads only the latest aligned window (one store read) instead of draining the whole
+  feed each tick; `combined_equity_series` anchors `v0` only for units that have fills
+  in the requested mode.
+- **Why**: audit A-8 (double/concurrent cancel re-hit the venue and could raise),
+  A-7 (O(total-bars) drain every tick), A-6 (idle units inflated the aggregate equity
+  anchor, skewing exchange/total KPI ratios). A-9: `restore` seeds the dedup map (the
+  restart-time idempotency guard); the crash-before-persist residual is closed by
+  reconcile pending a venue idempotency token (documented).
+- **Rejected alternatives**: persisting the transient in-flight future (A-9) — the
+  dedup map already covers restart; the venue token is the real fix, deferred.
+### 2026-07-02 Transport hardening + optional strict PaperBroker (PR #149)  [accepted]
+- **Choice**: the async HTTP client gets connection-pool limits, distinct
+  connect/read/write timeouts, `trust_env=False` + no-redirects, and a response-size
+  cap (`ResponseTooLargeError`); an unknown venue order-type raises on rebuild instead
+  of coercing to `LIMIT`; the PaperBroker gains an opt-in `strict=True` mode that
+  rejects sub-min-notional / over-precise sizes and dedups a retried client-order-id.
+- **Why**: audit B-11 (no pool/timeout/cap; connect vs read undistinguished),
+  B-12 (silent order-type coercion = wrong order), B-13 (paper diverged from live so a
+  paper-validated strategy could behave differently live). A read-timeout on a submit
+  stays ambiguous → reconcile (never auto-retried), preserving idempotency.
+- **Rejected alternatives**: making connect-timeouts retryable on a submit — kept
+  conservative (both ambiguous) to protect the never-blind-retry-a-submit rule;
+  making strict paper the default — gated opt-in so the deterministic paper suite stays green.
+### 2026-07-02 Domain hygiene: over-fill tolerance, immutable order id, dead-error removal (PR #150)  [accepted]
+- **Choice**: an over-fill strictly within `fill_tolerance` now clamps-and-closes
+  (symmetric with the under-fill rule; the real executed qty/price still weight the
+  average — nothing dropped/double-counted); a material over-fill still raises. The
+  order factories set `client_order_id` at construction (`dataclasses.replace`) instead
+  of mutating it after (truly immutable identity). Removed the dead `InsufficientFunds`
+  error; fixed the `_check_aligned` docstring.
+- **Why**: audit D-6 (a market order that slightly over-delivers should close, not
+  raise), A-12 (the "frozen" aggregate's idempotency key was mutated post-construction),
+  D-13/D-11 hygiene. D-12 was already covered by the wave-1 `money()` guard (added a
+  regression test).
+- **Rejected alternatives**: wiring `InsufficientFunds` — its venue role is covered by
+  `InsufficientBalance`, and no client-side pre-trade balance gate exists to populate it.
+### 2026-07-02 Cover money-critical error branches; collapse the daily-loss breaker; drop dead code (PR #151)  [accepted]
+- **Choice**: add tests for the previously-uncovered money-critical error branches
+  (kill-switch cancel-failure, order-router forbidden reject transition, reconcile
+  divergence, WS reconnect), taking `risk.py`/`order_router.py`/`reconcile.py` to 100%.
+  Remove the dead recorded-value daily-PnL path (`record_daily_pnl`/`reset_day`) — the
+  breaker now uses only the injected day-scoped provider ("no provider" = "no loss").
+  Remove the dead legacy dashboard assets (`control.js`/`control.html`) and pre-rewrite
+  tracked artifacts (`data_base/`, `execution_scripts/`, `general_config_example.yaml`).
+  De-couple impl-detail-coupled tests via a public `PaperBroker.seed_fills` seam.
+- **Why**: audit T-4 (money-critical branches uncovered), A-11 (dead breaker path — a
+  silent footgun), I-12/G-14 (dead assets/artifacts), T-12 (tests coupled to privates).
+- **Rejected alternatives**: keeping the recorded daily-PnL path — dead since wave 2's
+  clock-driven provider became canonical.
+
+### 2026-07-02 Bounded uvicorn graceful-shutdown so Ctrl-C quits promptly (PR #145)  [accepted]
+- **Choice**: every uvicorn serve path (`dashboard`, `serve`, `run --serve`,
+  `start --serve`) sets `timeout_graceful_shutdown=_SHUTDOWN_GRACE_SECONDS` (3s).
+- **Why**: the dashboard's `/api/events` **SSE** stream is a long-lived request that
+  ends only when the *client* disconnects. uvicorn's default graceful shutdown is
+  **unbounded** — on Ctrl-C it waits for active connections to close, so a browser
+  tab holding the SSE open pinned it forever; the server hung on the first SIGINT
+  and needed a second. Reproduced: 20 s+ hang → clean 3.6 s exit with the timeout.
+- **Rejected alternatives**: (a) make the SSE generator watch a server-shutdown
+  event — uvicorn doesn't cleanly expose that to endpoints, and the timeout covers
+  *all* long-lived connections; (b) a competing `loop.add_signal_handler(SIGINT)` —
+  the very override the earlier fix removed for feeling unquittable.
+
 ### 2026-07-02 Per-unit lock serialises supervisor lifecycle vs stepping (PR #141)  [accepted]
 - **Choice**: each `_Unit` gets its own `asyncio.Lock`. `start`/`stop`/`set_mode`/
   `remove` mutate unit state only under that lock (`set_mode`'s stop→re-slice→start

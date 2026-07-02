@@ -12,6 +12,7 @@ deny, so a genuinely decision-free PR isn't deterministically blocked. No-op for
 any command other than `gh pr create`, or if the project doesn't declare both a
 `package_dir` and a `decisions` path in .claude/workflow.json.
 """
+
 from __future__ import annotations
 
 import json
@@ -51,7 +52,10 @@ def main() -> None:
     try:
         changed = subprocess.run(
             ["git", "diff", f"{base}...HEAD", "--name-only"],
-            cwd=ROOT, capture_output=True, text=True, timeout=10,
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            timeout=10,
         ).stdout.split()
     except Exception:
         _allow()
@@ -73,13 +77,17 @@ def main() -> None:
             f"before opening the PR — or confirm this PR genuinely needs no "
             f"decision entry."
         )
-        print(json.dumps({
-            "hookSpecificOutput": {
-                "hookEventName": "PreToolUse",
-                "permissionDecision": "ask",
-                "permissionDecisionReason": reason,
-            }
-        }))
+        print(
+            json.dumps(
+                {
+                    "hookSpecificOutput": {
+                        "hookEventName": "PreToolUse",
+                        "permissionDecision": "ask",
+                        "permissionDecisionReason": reason,
+                    }
+                }
+            )
+        )
         sys.exit(0)
 
     _allow()

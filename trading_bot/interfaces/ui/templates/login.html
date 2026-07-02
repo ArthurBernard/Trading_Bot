@@ -14,6 +14,7 @@
     </div>
     <h2>Control — sign in</h2>
     <input type="hidden" name="next" value="{{ next }}">
+    <input type="hidden" name="{{ csrf_field }}" value="{{ csrf }}">
     <label for="token">Access token</label>
     <input id="token" name="token" type="password" autocomplete="current-password" autofocus spellcheck="false">
     <button class="btn-primary" type="submit" style="width: 100%; margin-top: .9rem;">Sign in</button>

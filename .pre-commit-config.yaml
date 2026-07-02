@@ -1,7 +1,21 @@
 repos:
+  # Pin the ruff hook `rev` to the exact same version as the `ruff==` pin in
+  # pyproject.toml's [dev] extra, so `ruff format` produces byte-identical output
+  # in the hook, in CI (`ruff format --check`) and locally (T-5/T-7 parity).
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.4.0
+    rev: v0.15.20
     hooks:
       - id: ruff
         args: [--fix]
       - id: ruff-format
+  # Enforce the docstring-coverage floor the [tool.interrogate] config declares
+  # (fail-under=80) — previously configured but run by nothing (T-10). Uses the
+  # locally-installed interrogate so the hook and CI share one config.
+  - repo: local
+    hooks:
+      - id: interrogate
+        name: interrogate (docstring coverage)
+        entry: interrogate
+        language: system
+        args: [trading_bot/]
+        pass_filenames: false

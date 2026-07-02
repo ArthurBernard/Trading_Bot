@@ -157,7 +157,9 @@ def _map_kraken_error(errors: list[str], *, context: str) -> BrokerError:
         return InvalidInstrument(context, joined)
     if "INVALID NONCE" in upper:
         return InvalidNonce(detail)
-    if any(marker in upper for marker in ("ERATE", "EAPI:RATE LIMIT", "EGENERAL:TOO MANY")):
+    if any(
+        marker in upper for marker in ("ERATE", "EAPI:RATE LIMIT", "EGENERAL:TOO MANY")
+    ):
         return RateLimited(detail)
     if "ESERVICE:UNAVAILABLE" in upper or "ESERVICE:BUSY" in upper:
         return ServiceUnavailable(detail)
@@ -271,17 +273,15 @@ class KrakenBroker(Broker):
     ) -> None:
         # Credentials are env-sourced by default and never logged. An empty
         # string is treated as "absent" so a blank env var stays public-only.
-        self._api_key = api_key if api_key is not None else os.environ.get(
-            "KRAKEN_API_KEY", ""
+        self._api_key = (
+            api_key if api_key is not None else os.environ.get("KRAKEN_API_KEY", "")
         )
         self._api_secret = (
             api_secret
             if api_secret is not None
             else os.environ.get("KRAKEN_API_SECRET", "")
         )
-        self._http = http or AsyncHTTPClient(
-            exchange=self.name, limiter=RateLimiter()
-        )
+        self._http = http or AsyncHTTPClient(exchange=self.name, limiter=RateLimiter())
         self._counter = call_counter or KrakenCallCounter.for_tier("starter")
         # Monotonic nonce state (B-3): a counter seeded from the current time in
         # microseconds, advanced under a lock so it is strictly increasing across
@@ -367,9 +367,7 @@ class KrakenBroker(Broker):
         if result is None:
             raise BrokerError(f"Kraken {context}: missing result")
         if not isinstance(result, dict):
-            raise BrokerError(
-                f"Kraken {context}: unexpected result {result!r}"
-            )
+            raise BrokerError(f"Kraken {context}: unexpected result {result!r}")
         return result
 
     async def _public_get(
@@ -460,9 +458,7 @@ class KrakenBroker(Broker):
         await self._counter.acquire_method(endpoint)
         url = f"{_API_BASE}{path}"
         async with self._http as client:
-            return await client.post(
-                url, data=body, headers=headers, retry=retry
-            )
+            return await client.post(url, data=body, headers=headers, retry=retry)
 
     # --- public endpoints -------------------------------------------------- #
 
@@ -504,9 +500,7 @@ class KrakenBroker(Broker):
             price_precision=(
                 int(price_precision) if price_precision is not None else None
             ),
-            qty_precision=(
-                int(qty_precision) if qty_precision is not None else None
-            ),
+            qty_precision=(int(qty_precision) if qty_precision is not None else None),
             # Kraken ``ordermin`` is the minimum order volume; ``costmin`` the
             # minimum order cost (notional). Both are decimal strings.
             min_qty=money(str(ordermin)) if ordermin is not None else None,
@@ -564,8 +558,7 @@ class KrakenBroker(Broker):
         # Kraken keys balances by venue asset code (ZUSD, XXBT, ...). Normalise
         # to canonical codes; amounts are exact decimal strings.
         return {
-            normalise(asset): money(str(amount))
-            for asset, amount in result.items()
+            normalise(asset): money(str(amount)) for asset, amount in result.items()
         }
 
     async def place_order(self, order: Order) -> str:
@@ -725,9 +718,19 @@ class KrakenBroker(Broker):
         descr = info.get("descr", {})
         symbol = parse_kraken_pair(str(descr.get("pair", "")))
         side = OrderSide(descr.get("type", "buy"))
-        otype = _KRAKEN_TO_ORDERTYPE.get(
-            str(descr.get("ordertype", "")), OrderType.LIMIT
-        )
+        # B-12: never silently coerce an unrecognised venue order-type to LIMIT —
+        # a wrong type is a wrong order. Reject it so ``reconcile`` surfaces the
+        # unmapped type instead of adopting a mislabelled order (e.g. a Kraken
+        # ``take-profit`` / ``trailing-stop`` rebuilt as a plain LIMIT).
+        raw_ordertype = str(descr.get("ordertype", ""))
+        try:
+            otype = _KRAKEN_TO_ORDERTYPE[raw_ordertype]
+        except KeyError:
+            raise BrokerError(
+                f"Kraken open order {txid}: unknown ordertype "
+                f"{raw_ordertype!r} (not one of "
+                f"{sorted(_KRAKEN_TO_ORDERTYPE)}); refusing to guess"
+            ) from None
         qty = money(str(info.get("vol", "0")))
         price_str = descr.get("price")
         limit_price = (

@@ -36,7 +36,9 @@ from trading_bot.domain.instrument import Symbol
 _DAY_NS = 86_400 * 1_000_000_000
 
 
-def _dccd_ohlc(closes: list[float], *, start_ns: int, span_ns: int = _DAY_NS) -> pl.DataFrame:
+def _dccd_ohlc(
+    closes: list[float], *, start_ns: int, span_ns: int = _DAY_NS
+) -> pl.DataFrame:
     """A frame mimicking ``dccd.Client.read(..., 'ohlc')`` (dccd's column names)."""
     n = len(closes)
     return pl.DataFrame(
@@ -149,7 +151,9 @@ def test_aligns_on_intersection_of_dates() -> None:
         btc: _dccd_ohlc([1.0, 2, 3, 4, 5], start_ns=0),
         eth: _dccd_ohlc([10.0, 20, 30, 40, 50], start_ns=2 * _DAY_NS),
     }
-    feed = PortfolioFeed(universe, exchange="binance", client=_client_for(universe, frames))
+    feed = PortfolioFeed(
+        universe, exchange="binance", client=_client_for(universe, frames)
+    )
 
     latest = feed.latest()
     assert latest[btc].height == 3
@@ -172,7 +176,9 @@ def test_coin_missing_latest_day_not_emitted() -> None:
         btc: _dccd_ohlc([1.0, 2, 3, 4, 5], start_ns=0),
         eth: _dccd_ohlc([10.0, 20, 30, 40], start_ns=0),
     }
-    feed = PortfolioFeed(universe, exchange="binance", client=_client_for(universe, frames))
+    feed = PortfolioFeed(
+        universe, exchange="binance", client=_client_for(universe, frames)
+    )
 
     windows = list(feed)
     # Day 4 is BTC-only -> dropped. Only the 4 common days (0..3) are emitted.
@@ -193,9 +199,13 @@ def test_lagging_coin_logs_not_raises(caplog: pytest.LogCaptureFixture) -> None:
         btc: _dccd_ohlc([1.0, 2, 3, 4, 5], start_ns=0),  # to day 4
         eth: _dccd_ohlc([10.0, 20, 30], start_ns=0),  # to day 2 (lags)
     }
-    feed = PortfolioFeed(universe, exchange="binance", client=_client_for(universe, frames))
+    feed = PortfolioFeed(
+        universe, exchange="binance", client=_client_for(universe, frames)
+    )
 
-    with caplog.at_level(logging.WARNING, logger="trading_bot.application.portfolio_feed"):
+    with caplog.at_level(
+        logging.WARNING, logger="trading_bot.application.portfolio_feed"
+    ):
         windows = list(feed)  # does not raise
 
     assert len(windows) == 3  # common days 0..2
@@ -210,7 +220,9 @@ def test_no_common_dates_yields_nothing() -> None:
         btc: _dccd_ohlc([1.0, 2], start_ns=0),  # days 0,1
         eth: _dccd_ohlc([10.0, 20], start_ns=10 * _DAY_NS),  # days 10,11
     }
-    feed = PortfolioFeed(universe, exchange="binance", client=_client_for(universe, frames))
+    feed = PortfolioFeed(
+        universe, exchange="binance", client=_client_for(universe, frames)
+    )
 
     assert list(feed) == []
     assert feed.asof_ms() is None
@@ -229,7 +241,9 @@ def test_windows_are_causal_and_grow_monotonically() -> None:
         eth: _dccd_ohlc([float(i) for i in range(8)], start_ns=0),  # extra tail
         ltc: _dccd_ohlc([float(i) for i in range(6)], start_ns=0),
     }
-    feed = PortfolioFeed(universe, exchange="binance", client=_client_for(universe, frames))
+    feed = PortfolioFeed(
+        universe, exchange="binance", client=_client_for(universe, frames)
+    )
 
     common = sorted({0 * _DAY_NS + _DAY_NS * i for i in range(6)})  # days 0..5
     windows = list(feed)
@@ -259,7 +273,9 @@ def test_final_window_has_at_least_lookback_rows() -> None:
         btc: _dccd_ohlc([float(i) for i in range(n)], start_ns=0),
         eth: _dccd_ohlc([float(i) for i in range(n)], start_ns=0),
     }
-    feed = PortfolioFeed(universe, exchange="binance", client=_client_for(universe, frames))
+    feed = PortfolioFeed(
+        universe, exchange="binance", client=_client_for(universe, frames)
+    )
 
     final = list(feed)[-1]
     for sym in universe:
@@ -277,7 +293,9 @@ def test_asof_ms_is_latest_common_date_in_ms() -> None:
         btc: _dccd_ohlc([1.0, 2, 3, 4], start_ns=0),  # days 0..3
         eth: _dccd_ohlc([10.0, 20, 30], start_ns=0),  # days 0..2 (lags one)
     }
-    feed = PortfolioFeed(universe, exchange="binance", client=_client_for(universe, frames))
+    feed = PortfolioFeed(
+        universe, exchange="binance", client=_client_for(universe, frames)
+    )
 
     # Latest common date is day 2 (ETH stops there). asof = its ns // 1e6.
     expected_ms = (2 * _DAY_NS) // 1_000_000
@@ -409,8 +427,14 @@ def test_real_binance_daily_portfolio_feed_is_causal_and_gated() -> None:
                     ]
                 )
                 .select(
-                    "TS", "open", "high", "low", "close", "volume",
-                    "quote_volume", "trades",
+                    "TS",
+                    "open",
+                    "high",
+                    "low",
+                    "close",
+                    "volume",
+                    "quote_volume",
+                    "trades",
                 )
             )
             if end_ns is not None:
@@ -442,9 +466,7 @@ def test_real_binance_daily_portfolio_feed_is_causal_and_gated() -> None:
     windows = list(feed)
     assert len(windows) == len(common_dates)
     sorted_common = sorted(common_dates)
-    step_indices = sorted(
-        {0, 1, len(windows) // 2, len(windows) - 2, len(windows) - 1}
-    )
+    step_indices = sorted({0, 1, len(windows) // 2, len(windows) - 2, len(windows) - 1})
     for t in step_indices:
         window = windows[t]
         for sym in universe:

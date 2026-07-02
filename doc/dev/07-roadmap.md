@@ -37,11 +37,13 @@ supervisor lock (`A-3`/`A-10`), weight-aware Binance limiter (`B-6`/`B-9`/`B-7`)
 true avg fill price + Kraken WS reconcile-on-gap (`B-8`/`B-10`) (see `CHANGELOG.md`;
 plan tree archived).
 
-- [ ] **Audit remediation — long tail (Medium/Low).** The remaining lower-severity
-  robustness items from the audit: dashboard `X-Forwarded-Proto`/body-cap/unbounded
-  maps (`I-4`/`I-6`/`I-7`), tooling parity + dep pinning + `MANIFEST`/`filterwarnings`
-  (`T-5`/`T-6`/`T-7`/`T-8`), `fill_tolerance` over-fill (`D-6`), cancel idempotency
-  (`A-8`), and the rest. Tracked per-finding in `doc/dev/audit/`.
+**Wave 3 (the long tail — remaining Medium/Low) shipped in v0.10.0** — dashboard
+web-surface hardening (`I-4`…`I-13`, `A-4`), engine/order robustness
+(`A-6`…`A-9`), transport hardening + strict PaperBroker (`B-11`…`B-13`), domain
+hygiene (`D-6`/`D-11`/`D-12`/`D-13`/`A-12`), tooling/CI/packaging parity
+(`T-5`…`T-11`, `G-13`), and money-critical error-branch coverage + dead-code
+removal (`T-4`/`T-12`/`I-12`/`A-11`/`G-14`) (see `CHANGELOG.md`). **The audit is
+fully remediated** — only pure Info observations remain in `doc/dev/audit/`.
 
 ## Known issues / follow-ups
 

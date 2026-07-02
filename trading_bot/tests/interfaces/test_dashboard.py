@@ -42,6 +42,7 @@ def _FakeStartClient() -> _FakeDccdClient:  # noqa: N802 — factory named like 
     """An offline dccd client for the single BTC/USD strategy (start() never imports dccd)."""
     return _FakeDccdClient({"BTC/USD": _dccd_ohlc(_trend())})
 
+
 #: The five page routes the shared nav links to (Overview at ``/``).
 _PAGES = ("/", "/strategies", "/orders", "/pnl", "/logs")
 
@@ -155,11 +156,17 @@ def test_auth_api_requires_a_token() -> None:
 
 
 def test_auth_login_flow_authenticates() -> None:
-    """A correct token at /login mints a session cookie that authenticates."""
+    """A correct token + CSRF at /login mints a session cookie that authenticates."""
     client, token = _auth_client()
-    assert client.get("/login").status_code == 200  # the form is open
+    assert (
+        client.get("/login").status_code == 200
+    )  # the form is open + sets CSRF cookie
+    csrf = client.cookies.get("tb_csrf", "")
+    assert csrf
     ok = client.post(
-        "/login", data={"token": token, "next": "/"}, follow_redirects=False
+        "/login",
+        data={"token": token, "next": "/", "csrf": csrf},
+        follow_redirects=False,
     )
     assert ok.status_code == 303
     assert client.get("/api/health").status_code == 200  # session cookie works
@@ -203,10 +210,34 @@ def _seed(sup: StrategySupervisor, name: str, sym: Symbol) -> None:
     """Emit a buy→sell round trip on the running unit's engine bus (+8 realised)."""
     inst = Instrument(sym)
     bus = sup._units[name].engine.bus  # noqa: SLF001 — seed the wired bus
-    bus.emit(FillEvent(Fill(f"{name}1", f"{name}c1", inst, OrderSide.BUY,
-                            money("1"), money("100"), money("1"), 1)))
-    bus.emit(FillEvent(Fill(f"{name}2", f"{name}c2", inst, OrderSide.SELL,
-                            money("1"), money("110"), money("1"), 2)))
+    bus.emit(
+        FillEvent(
+            Fill(
+                f"{name}1",
+                f"{name}c1",
+                inst,
+                OrderSide.BUY,
+                money("1"),
+                money("100"),
+                money("1"),
+                1,
+            )
+        )
+    )
+    bus.emit(
+        FillEvent(
+            Fill(
+                f"{name}2",
+                f"{name}c2",
+                inst,
+                OrderSide.SELL,
+                money("1"),
+                money("110"),
+                money("1"),
+                2,
+            )
+        )
+    )
 
 
 async def _seeded_client() -> TestClient:
@@ -295,7 +326,9 @@ def test_pnl_endpoint_returns_the_paper_series(tmp_path) -> None:  # noqa: ANN00
         Fill("SF1", "sc1", inst, OrderSide.BUY, money("1"), money("100"), money("1"), 1)
     )
     store.record_fill(
-        Fill("SF2", "sc2", inst, OrderSide.SELL, money("1"), money("110"), money("1"), 2)
+        Fill(
+            "SF2", "sc2", inst, OrderSide.SELL, money("1"), money("110"), money("1"), 2
+        )
     )
 
     sup = StrategySupervisor(_pnl_config_with_store(db), dccd_client=_FakeStartClient())
@@ -452,12 +485,28 @@ def test_api_kpi_total_ratios_non_null_on_a_combined_curve(tmp_path) -> None:  #
     prices = [(100, 108), (108, 104), (104, 112), (112, 106), (106, 115)]
     for i, (buy_px, sell_px) in enumerate(prices):
         store.record_fill(
-            Fill(f"B{i}", f"cB{i}", inst, OrderSide.BUY,
-                 money("1"), money(str(buy_px)), money("0"), 2 * i + 1)
+            Fill(
+                f"B{i}",
+                f"cB{i}",
+                inst,
+                OrderSide.BUY,
+                money("1"),
+                money(str(buy_px)),
+                money("0"),
+                2 * i + 1,
+            )
         )
         store.record_fill(
-            Fill(f"S{i}", f"cS{i}", inst, OrderSide.SELL,
-                 money("1"), money(str(sell_px)), money("0"), 2 * i + 2)
+            Fill(
+                f"S{i}",
+                f"cS{i}",
+                inst,
+                OrderSide.SELL,
+                money("1"),
+                money(str(sell_px)),
+                money("0"),
+                2 * i + 2,
+            )
         )
 
     sup = StrategySupervisor(_kpi_ratio_config(db), dccd_client=_FakeStartClient())
@@ -480,12 +529,24 @@ async def test_positions_group_by_exchange() -> None:
     await sup.start("btc-kraken")
     await sup.start("eth-binance")
     # Net-long books (buys only) on each venue so positions are non-flat.
-    for name, sym in (("btc-kraken", Symbol("BTC", "USD")),
-                      ("eth-binance", Symbol("ETH", "USDT"))):
+    for name, sym in (
+        ("btc-kraken", Symbol("BTC", "USD")),
+        ("eth-binance", Symbol("ETH", "USDT")),
+    ):
         inst = Instrument(sym)
         sup._units[name].engine.bus.emit(  # noqa: SLF001
-            FillEvent(Fill(f"{name}b", f"{name}cb", inst, OrderSide.BUY,
-                           money("2"), money("100"), money("1"), 1))
+            FillEvent(
+                Fill(
+                    f"{name}b",
+                    f"{name}cb",
+                    inst,
+                    OrderSide.BUY,
+                    money("2"),
+                    money("100"),
+                    money("1"),
+                    1,
+                )
+            )
         )
     client = TestClient(create_dashboard_app(sup))
     groups = client.get("/api/positions?group_by=exchange").json()
@@ -501,8 +562,11 @@ async def test_positions_group_by_crypto() -> None:
     await sup.start("btc-kraken")
     inst = Instrument(Symbol("BTC", "USD"))
     sup._units["btc-kraken"].engine.bus.emit(  # noqa: SLF001
-        FillEvent(Fill("b", "cb", inst, OrderSide.BUY,
-                       money("2"), money("100"), money("1"), 1))
+        FillEvent(
+            Fill(
+                "b", "cb", inst, OrderSide.BUY, money("2"), money("100"), money("1"), 1
+            )
+        )
     )
     client = TestClient(create_dashboard_app(sup))
     groups = client.get("/api/positions?group_by=crypto").json()
@@ -591,7 +655,9 @@ def test_fills_endpoint_lists_tagged_fills(tmp_path) -> None:  # noqa: ANN001
     db = str(tmp_path / "book.sqlite")
     _seed_store(db)
     # Units stopped → each reads the shared store at its configured db_path.
-    sup = StrategySupervisor(_fills_config_with_store(db), dccd_client=_two_venue_client())
+    sup = StrategySupervisor(
+        _fills_config_with_store(db), dccd_client=_two_venue_client()
+    )
     client = TestClient(create_dashboard_app(sup))
 
     rows = client.get("/api/fills").json()
@@ -610,7 +676,9 @@ def test_fills_endpoint_filters(tmp_path) -> None:  # noqa: ANN001
     """`/api/fills` narrows by ?crypto=, ?exchange= and ?strategy= (AND, exact)."""
     db = str(tmp_path / "book.sqlite")
     _seed_store(db)
-    sup = StrategySupervisor(_fills_config_with_store(db), dccd_client=_two_venue_client())
+    sup = StrategySupervisor(
+        _fills_config_with_store(db), dccd_client=_two_venue_client()
+    )
     client = TestClient(create_dashboard_app(sup))
 
     by_exchange = client.get("/api/fills?exchange=binance").json()
@@ -628,7 +696,9 @@ def test_fills_endpoint_limit_and_group_by(tmp_path) -> None:  # noqa: ANN001
     """`/api/fills` honours ?limit= and ?group_by=."""
     db = str(tmp_path / "book.sqlite")
     _seed_store(db)
-    sup = StrategySupervisor(_fills_config_with_store(db), dccd_client=_two_venue_client())
+    sup = StrategySupervisor(
+        _fills_config_with_store(db), dccd_client=_two_venue_client()
+    )
     client = TestClient(create_dashboard_app(sup))
 
     all_rows = client.get("/api/fills").json()
@@ -652,13 +722,16 @@ def test_orders_history_reads_stored_orders(tmp_path) -> None:  # noqa: ANN001
     btc = Instrument(Symbol("BTC", "USD"))
     store = SqliteStore(db)
     # A terminal (filled) order — history includes it; the open-orders view excludes it.
-    order = Order("oc1", btc, OrderSide.BUY, money("1"), OrderType.LIMIT,
-                  limit_price=money("100"))
+    order = Order(
+        "oc1", btc, OrderSide.BUY, money("1"), OrderType.LIMIT, limit_price=money("100")
+    )
     order.status = OrderStatus.FILLED
     order.filled_qty = money("1")
     store.upsert_order(order)
 
-    sup = StrategySupervisor(_fills_config_with_store(db), dccd_client=_two_venue_client())
+    sup = StrategySupervisor(
+        _fills_config_with_store(db), dccd_client=_two_venue_client()
+    )
     client = TestClient(create_dashboard_app(sup))
 
     # Default (open only) — no non-terminal orders on the stopped units.
@@ -754,8 +827,12 @@ async def test_events_stream_merges_and_yields_a_fill() -> None:
     before = [len(b._queues) for b in buses]  # noqa: SLF001
 
     scope = {
-        "type": "http", "method": "GET", "path": "/api/events",
-        "headers": [], "query_string": b"", "app": app,
+        "type": "http",
+        "method": "GET",
+        "path": "/api/events",
+        "headers": [],
+        "query_string": b"",
+        "app": app,
     }
     request = Request(scope, _never_disconnect)
     response = await _events_route(app)(request)  # type: ignore[operator]
@@ -769,11 +846,23 @@ async def test_events_stream_merges_and_yields_a_fill() -> None:
         # A queue is registered on EACH running unit's bus (the merge).
         assert [len(b._queues) for b in buses] == [n + 1 for n in before]  # noqa: SLF001
         # Emit a fill on the second unit's bus; it must arrive as a data frame.
-        buses[1].emit(FillEvent(Fill("SF1", "sc1", inst, OrderSide.BUY,
-                                     money("1"), money("100"), money("1"), 1)))
+        buses[1].emit(
+            FillEvent(
+                Fill(
+                    "SF1",
+                    "sc1",
+                    inst,
+                    OrderSide.BUY,
+                    money("1"),
+                    money("100"),
+                    money("1"),
+                    1,
+                )
+            )
+        )
         frame = await frames.__anext__()
         assert frame.startswith("data:")
-        payload = json.loads(frame[len("data:"):].strip())
+        payload = json.loads(frame[len("data:") :].strip())
         assert payload["type"] == "fill"
         assert payload["fill"]["fill_id"] == "SF1"
     finally:
@@ -840,9 +929,7 @@ def test_start_then_stop_toggles_running() -> None:
     pytest.importorskip("fynance")  # ma_crossover evaluates fynance.sma
     client = TestClient(
         create_dashboard_app(
-            StrategySupervisor(
-                _config(), dccd_client=_FakeStartClient()
-            )
+            StrategySupervisor(_config(), dccd_client=_FakeStartClient())
         )
     )
     r = client.post("/api/strategies/btc-ma/start")
@@ -979,9 +1066,9 @@ def test_signals_endpoint_lists_builtins_and_discovered() -> None:
     try:
         body = _client().get("/api/signals").json()
         assert "ma_crossover" in body["builtins"]
-        assert (
-            f"strategies.{pkg}.signal:probe_signal" in body["discovered"]
-        ), body["discovered"]
+        assert f"strategies.{pkg}.signal:probe_signal" in body["discovered"], body[
+            "discovered"
+        ]
         # A re-exported helper (as_portfolio_signal) / a private closure is NOT a ref.
         assert not any(
             ref.endswith(":as_portfolio_signal") for ref in body["discovered"]
@@ -1162,8 +1249,7 @@ def test_deployment_crud_is_403_under_read_only() -> None:
     """Under `read_only`, POST/DELETE are 403 and never touch the supervisor."""
     client = _client(read_only=True)
     assert (
-        client.post("/api/strategies", json=_portfolio_deploy_body()).status_code
-        == 403
+        client.post("/api/strategies", json=_portfolio_deploy_body()).status_code == 403
     )
     assert client.delete("/api/strategies/btc-ma").status_code == 403
     # Nothing changed — the one declared unit is still there, unremoved.
@@ -1370,6 +1456,12 @@ def test_dashboard_builds_app_and_calls_uvicorn(
     assert isinstance(kwargs, dict)
     assert kwargs["host"] == "127.0.0.1"
     assert kwargs["port"] == 9137
+    # A bounded graceful-shutdown timeout so Ctrl-C quits promptly even when a
+    # browser holds the /api/events SSE stream open — uvicorn's default graceful
+    # shutdown is unbounded and waits for that never-ending stream forever, which
+    # made the server feel unquittable on the first SIGINT.
+    grace = kwargs["timeout_graceful_shutdown"]
+    assert isinstance(grace, int) and grace > 0
 
     test_client = TestClient(captured["app"])
     resp = test_client.get("/")
@@ -1503,9 +1595,7 @@ def test_dashboard_cli_flags_override_the_ui_config(
     import uvicorn
 
     captured: dict[str, object] = {}
-    monkeypatch.setattr(
-        uvicorn, "run", lambda app, **kw: captured.update(kwargs=kw)
-    )
+    monkeypatch.setattr(uvicorn, "run", lambda app, **kw: captured.update(kwargs=kw))
     manifest = _write_ui_manifest(
         tmp_path, {"host": "0.0.0.0", "port": 9200, "token": "cfg-tok"}
     )
@@ -1521,15 +1611,23 @@ def test_dashboard_cli_flags_override_the_ui_config(
 def test_dashboard_non_loopback_ui_config_without_token_refuses(
     monkeypatch: pytest.MonkeyPatch, tmp_path
 ) -> None:  # noqa: ANN001
-    """A non-loopback `ui.host` in the config with no token is refused (like the flag)."""
+    """A hand-edited manifest binding non-loopback with no token is refused (A-4).
+
+    Written as raw YAML (bypassing ``model_validate``) precisely because
+    ``UIConfig`` now **rejects** a non-loopback host + no token at validation — so a
+    persisted / hand-edited manifest can never even load, and the CLI surfaces the
+    refusal cleanly (never reaching uvicorn, never binding wide open with no auth).
+    """
     import uvicorn
 
     monkeypatch.delenv("TRADING_BOT_UI_TOKEN", raising=False)
     called = {"run": False}
     monkeypatch.setattr(uvicorn, "run", lambda *a, **k: called.update(run=True))
-    manifest = _write_ui_manifest(tmp_path, {"host": "0.0.0.0"})  # no token
+    # Raw YAML — a hand-edited wide-open-no-auth manifest the model would reject.
+    manifest = tmp_path / "dash.yaml"
+    manifest.write_text("mode: paper\nui:\n  host: 0.0.0.0\n")
 
-    result = runner.invoke(cli_app, ["dashboard", "-c", manifest])
+    result = runner.invoke(cli_app, ["dashboard", "-c", str(manifest)])
     assert result.exit_code == 1
     assert called["run"] is False
     assert "token" in result.output.lower()
@@ -1552,9 +1650,13 @@ def test_dashboard_non_loopback_without_token_refuses(
 
     result = runner.invoke(cli_app, ["dashboard", "--host", "0.0.0.0"])
 
+    # Behaviour, not prose: the command fails (non-zero) and never serves. The
+    # refusal must point the user at the missing auth token (the load-bearing
+    # remedy), asserted as a stable keyword rather than the exact sentence — which
+    # is free to be reworded without breaking this test.
     assert result.exit_code != 0
-    assert "refusing to bind" in result.output
     assert called["run"] is False  # never reached uvicorn
+    assert "token" in result.output.lower()  # names the missing credential
 
 
 def test_dashboard_read_only_flag(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1660,9 +1762,7 @@ def test_dashboard_reads_an_existing_default_manifest(
     import uvicorn
 
     captured: dict[str, object] = {}
-    monkeypatch.setattr(
-        uvicorn, "run", lambda app, **kw: captured.update(app=app)
-    )
+    monkeypatch.setattr(uvicorn, "run", lambda app, **kw: captured.update(app=app))
 
     configs = tmp_path / "configs"
     configs.mkdir()
@@ -1803,10 +1903,173 @@ def test_start_serve_folds_onto_create_dashboard_app(
     from trading_bot.interfaces.cli.main import _run_daemon
 
     # An empty paper config (no units) so start_all/shutdown are trivial + dccd-free.
-    asyncio.run(
-        _run_daemon(AppConfig(), interval=0.05, cron=None, serve=True)
-    )
+    asyncio.run(_run_daemon(AppConfig(), interval=0.05, cron=None, serve=True))
 
     assert "app" in built  # the unified dashboard was built for --serve
     client = TestClient(built["app"])
     assert "Overview" in client.get("/").text  # the unified shell
+
+
+# --- web hardening (audit wave 3: I-4, I-6, I-7, I-9, I-10, I-11, I-13) ----- #
+
+
+def test_security_headers_on_authed_json() -> None:
+    """I-11: `/api/*` JSON carries nosniff + anti-clickjacking + no-store headers."""
+    resp = _client().get("/api/health")
+    assert resp.status_code == 200
+    assert resp.headers["x-content-type-options"] == "nosniff"
+    assert resp.headers["x-frame-options"] == "DENY"
+    assert "frame-ancestors 'none'" in resp.headers["content-security-policy"]
+    assert resp.headers["referrer-policy"] == "no-referrer"
+    # The live book must never be cached by a browser / intermediary.
+    assert resp.headers["cache-control"] == "no-store"
+
+
+def test_security_headers_on_html_pages() -> None:
+    """I-11: the HTML shell carries the security headers too (no no-store — no book)."""
+    resp = _client().get("/")
+    assert resp.status_code == 200
+    assert resp.headers["x-content-type-options"] == "nosniff"
+    assert resp.headers["x-frame-options"] == "DENY"
+    # A page is not under /api/, so no forced no-store (it carries no engine data).
+    assert resp.headers.get("cache-control") != "no-store"
+
+
+def test_oversized_deploy_body_is_rejected() -> None:
+    """I-6: a request body over the size cap is refused 413 (memory/disk-amp guard)."""
+    sup = StrategySupervisor(AppConfig())
+    client = TestClient(create_dashboard_app(sup))
+    # A >64 KiB body via a giant `params` blob — over the middleware cap.
+    body = {**_portfolio_deploy_body("big"), "params": {"x": "A" * 70_000}}
+    r = client.post("/api/strategies", json=body)
+    assert r.status_code == 413, r.status_code
+    # Nothing was deployed.
+    assert client.get("/api/strategies").json() == []
+
+
+def test_oversized_name_field_is_rejected() -> None:
+    """I-6: a giant `name` field is rejected (per-field max_length, defence in depth)."""
+    sup = StrategySupervisor(AppConfig())
+    client = TestClient(create_dashboard_app(sup))
+    body = {**_portfolio_deploy_body(), "name": "n" * 1000}  # over max_length=128
+    r = client.post("/api/strategies", json=body)
+    assert r.status_code == 422, r.text  # pydantic rejects before any add
+    assert client.get("/api/strategies").json() == []
+
+
+def test_deploy_mode_mismatch_is_rejected() -> None:
+    """I-9: a deploy `mode` that the manifest would not seed is refused 422 (honest API)."""
+    sup = StrategySupervisor(AppConfig())  # paper manifest → seeds paper
+    client = TestClient(create_dashboard_app(sup))
+    body = {**_portfolio_deploy_body("wants-live"), "mode": "live"}
+    r = client.post("/api/strategies", json=body)
+    assert r.status_code == 422, r.text
+    assert "paper" in r.json()["detail"]
+    # Rolled back — nothing left added.
+    assert client.get("/api/strategies").json() == []
+
+
+def test_deploy_mode_matching_manifest_is_accepted() -> None:
+    """I-9: a deploy `mode` equal to the manifest seed (paper) is accepted."""
+    sup = StrategySupervisor(AppConfig())
+    client = TestClient(create_dashboard_app(sup))
+    r = client.post("/api/strategies", json=_portfolio_deploy_body("ok"))  # mode=paper
+    assert r.status_code == 200, r.text
+    assert client.get("/api/strategies").json()[0]["mode"] == "paper"
+
+
+def test_session_and_rate_maps_are_pruned() -> None:
+    """I-7: expired sessions AND idle rate-buckets are swept — no unbounded growth."""
+    import trading_bot.interfaces.api.app as appmod
+
+    token = "secret-token"
+    app = create_dashboard_app(_supervisor(), auth_token=token)
+    client = TestClient(app)
+
+    # A login to seed both maps: a rate-bucket (this peer) + a session.
+    csrf = (client.get("/login"), client.cookies.get("tb_csrf", ""))[1]
+    client.post(
+        "/login",
+        data={"token": token, "next": "/", "csrf": csrf},
+        follow_redirects=False,
+    )
+    assert len(app.state.sessions) == 1
+    assert len(app.state.login_buckets) >= 1
+
+    # Force both entries "old": backdate the session timestamp beyond its TTL and the
+    # rate bucket beyond its idle window, then a fresh valid_session call prunes.
+    old_ns = 0  # epoch — far past any TTL cutoff
+    app.state.sessions = {sid: old_ns for sid in app.state.sessions}
+    stale_key = next(iter(app.state.login_buckets))
+    app.state.login_buckets[stale_key] = (float(appmod._LOGIN_RATE_PER_MIN), 0.0)
+
+    # Any auth check runs the prune sweep (session gone → 401; bucket swept).
+    assert client.get("/api/health").status_code == 401
+    assert app.state.sessions == {}  # expired session pruned
+    assert stale_key not in app.state.login_buckets  # idle bucket pruned
+
+
+def test_session_map_is_capped() -> None:
+    """I-7: the session map never exceeds the hard cap (oldest evicted on overflow)."""
+    import trading_bot.interfaces.api.app as appmod
+
+    app = create_dashboard_app(_supervisor(), auth_token="t")
+    # Fill the map to the cap with dummy sessions, then a new login evicts the oldest.
+    for i in range(appmod._MAX_SESSIONS):
+        app.state.sessions[f"sid-{i}"] = i  # ascending timestamps
+    client = TestClient(app)
+    csrf = (client.get("/login"), client.cookies.get("tb_csrf", ""))[1]
+    client.post(
+        "/login",
+        data={"token": "t", "next": "/", "csrf": csrf},
+        follow_redirects=False,
+    )
+    assert len(app.state.sessions) <= appmod._MAX_SESSIONS
+    assert "sid-0" not in app.state.sessions  # the oldest was evicted
+
+
+def test_login_without_csrf_is_403_and_mints_no_session() -> None:
+    """I-13: a login POST with the correct token but no CSRF field is refused 403."""
+    client, token = _auth_client()
+    client.get("/login")  # sets the CSRF cookie
+    r = client.post(
+        "/login", data={"token": token, "next": "/"}, follow_redirects=False
+    )
+    assert r.status_code == 403
+    assert client.get("/api/health").status_code == 401  # no session minted
+
+
+def test_login_session_cookie_is_samesite_strict() -> None:
+    """I-13: the session cookie is SameSite=strict (blocks cross-site cookie carry)."""
+    client, token = _auth_client()
+    client.get("/login")
+    csrf = client.cookies.get("tb_csrf", "")
+    ok = client.post(
+        "/login",
+        data={"token": token, "next": "/", "csrf": csrf},
+        follow_redirects=False,
+    )
+    set_cookie = ok.headers.get("set-cookie", "")
+    assert "tb_session=" in set_cookie
+    assert "samesite=strict" in set_cookie.lower()
+
+
+def test_secure_cookie_not_forced_by_x_forwarded_proto() -> None:
+    """I-4: a client `X-Forwarded-Proto: https` does NOT force the Secure cookie flag.
+
+    On the plain-HTTP tailnet the header is client-controlled; forcing Secure would
+    self-break the cookie. Only a real https scheme sets Secure (trust is off by
+    default — `_TRUST_FORWARDED_PROTO`).
+    """
+    client, token = _auth_client()
+    client.get("/login", headers={"X-Forwarded-Proto": "https"})
+    csrf = client.cookies.get("tb_csrf", "")
+    ok = client.post(
+        "/login",
+        data={"token": token, "next": "/", "csrf": csrf},
+        headers={"X-Forwarded-Proto": "https"},
+        follow_redirects=False,
+    )
+    set_cookie = ok.headers.get("set-cookie", "").lower()
+    assert "tb_session=" in set_cookie
+    assert "secure" not in set_cookie  # not forced by the spoofed header

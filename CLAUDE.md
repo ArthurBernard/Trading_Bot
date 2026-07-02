@@ -38,7 +38,7 @@ from PyPI for the integration code (see Dependencies).
 # so the deps are present. Without fynance the domain/performance KPI tests SKIP; without
 # dccd the E5+ data-feed tests skip.
 pyenv virtualenv 3.12.13 trading_bot_env && pyenv local trading_bot_env
-pip install -e ".[dev,daemon]"
+pip install -e ".[dev]"                               # dev already pulls the daemon deps (typer/fastapi/uvicorn/jinja2/apscheduler)
 pip install -e ../Fynance                            # fynance — enables the KPI tests
 pip install -e ../Download_Crypto_Currencies_Data    # dccd — market data (E5+)
 pip install -e ../fynance-research                   # live portfolio signals

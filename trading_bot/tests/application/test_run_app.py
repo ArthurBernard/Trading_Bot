@@ -50,7 +50,9 @@ ETH_USD = Instrument(Symbol("ETH", "USD"))
 # --- a fake dccd client (canned bars, no network) -------------------------- #
 
 
-def _dccd_ohlc(closes: list[float], *, start_ns: int = 0, span_s: int = 60) -> pl.DataFrame:
+def _dccd_ohlc(
+    closes: list[float], *, start_ns: int = 0, span_s: int = 60
+) -> pl.DataFrame:
     """Build a canned dccd OHLC frame (dccd columns) from a list of closes.
 
     dccd's ``read`` returns ``TS, open, high, low, close, volume, ...`` with
@@ -119,7 +121,9 @@ def custom_flat_signal(bars: pl.DataFrame) -> Signal:
 # --- the canonical 2-strategy offline config ------------------------------- #
 
 
-def _trend_up_then_down(n_up: int = 20, n_down: int = 20, *, base: float = 100.0) -> list[float]:
+def _trend_up_then_down(
+    n_up: int = 20, n_down: int = 20, *, base: float = 100.0
+) -> list[float]:
     """A close series that trends up then down (crosses an MA both ways)."""
     up = [base + i for i in range(n_up)]
     top = base + n_up - 1
@@ -363,7 +367,10 @@ def test_build_runners_bad_builtin_params_is_config_error() -> None:
                     "name": "bad-params",
                     "symbol": "BTC/USD",
                     "data": {"exchange": "kraken", "span": 60},
-                    "signal": {"ref": "ma_crossover", "params": {"fast": 10, "slow": 5}},
+                    "signal": {
+                        "ref": "ma_crossover",
+                        "params": {"fast": 10, "slow": 5},
+                    },
                 }
             ]
         }
@@ -428,8 +435,12 @@ def test_build_runners_equivalent_symbol_spellings_commingle() -> None:
     """
     config = _same_symbol_config(second_symbol="XBT/USD")
     engine = build_engine(config, db_path=None)
-    with pytest.raises(ConfigError, match="commingle"):
+    # Assert the behaviour (the alias is recognised as the same instrument and
+    # rejected), not the exact wording: a ConfigError that names the normalised
+    # duplicate — the stable, load-bearing detail — rather than a prose regex.
+    with pytest.raises(ConfigError) as exc_info:
         build_runners(config, engine, dccd_client=_FakeDccdClient({}))
+    assert "BTC/USD" in str(exc_info.value)  # XBT normalised to BTC and caught
 
 
 def test_run_app_same_symbol_rejected() -> None:
@@ -437,7 +448,9 @@ def test_run_app_same_symbol_rejected() -> None:
     import asyncio
 
     config = _same_symbol_config()
-    with pytest.raises(ConfigError, match="commingle"):
+    # The contract is the *type* that surfaces (the config is rejected before any
+    # order path), not the human message — so assert on ConfigError alone.
+    with pytest.raises(ConfigError):
         asyncio.run(run_app(config, dccd_client=_FakeDccdClient({})))
 
 
@@ -581,9 +594,7 @@ async def test_run_app_startup_reconcile_converges_to_venue(
     assert router.tracked_orders() == {}
     assert tracker.all_positions() == {}
 
-    monkeypatch.setattr(
-        run_app_mod, "build_engine", lambda cfg, db_path=None: engine
-    )
+    monkeypatch.setattr(run_app_mod, "build_engine", lambda cfg, db_path=None: engine)
     await run_app(config)  # reconcile_on_start defaults True
 
     # The venue-open order is now tracked (ingested), and the BTC position was

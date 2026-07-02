@@ -143,8 +143,8 @@ def test_single_instrument_pnl_fees_equity_hand_computed() -> None:
     # Equity curve = v0 + cumulative realised PnL, one point per fill.
     # Running realised PnL: -6, -9, 3991, 13991.
     assert svc.equity_curve() == (
-        Decimal("99994"),   # 100000 - 6
-        Decimal("99991"),   # 100000 - 9
+        Decimal("99994"),  # 100000 - 6
+        Decimal("99991"),  # 100000 - 9
         Decimal("103991"),  # 100000 + 3991
         Decimal("113991"),  # 100000 + 13991
     )
@@ -170,11 +170,25 @@ def test_realised_pnl_since_windows_the_cumulative_curve() -> None:
     day2 = day1 + 86_400_000  # 2021-01-02 00:00 UTC
     svc = PerformanceService(v0=money("100000"))
     # Day 1: open long 2 @ 30000 (no realised PnL yet, only sets the entry).
-    svc.apply(_fill(fill_id="D1", side=OrderSide.BUY, qty="2", price="30000",
-                    ts=day1 + 3_600_000))
+    svc.apply(
+        _fill(
+            fill_id="D1",
+            side=OrderSide.BUY,
+            qty="2",
+            price="30000",
+            ts=day1 + 3_600_000,
+        )
+    )
     # Day 2: close the long @ 31000 -> +2000 realised (against the day-1 entry).
-    svc.apply(_fill(fill_id="D2", side=OrderSide.SELL, qty="2", price="31000",
-                    ts=day2 + 3_600_000))
+    svc.apply(
+        _fill(
+            fill_id="D2",
+            side=OrderSide.SELL,
+            qty="2",
+            price="31000",
+            ts=day2 + 3_600_000,
+        )
+    )
 
     # Since day-2 midnight: only the close counts -> +2000 (the full gain).
     assert svc.realised_pnl_since(day2) == money("2000")
@@ -189,15 +203,19 @@ def test_realised_pnl_since_isolates_a_losing_day() -> None:
     day2 = day1 + 86_400_000
     svc = PerformanceService()
     # Day 1: round-trip a +5000 gain (buy then sell higher).
-    svc.apply(_fill(fill_id="A1", side=OrderSide.BUY, qty="1", price="30000",
-                    ts=day1 + 1))
-    svc.apply(_fill(fill_id="A2", side=OrderSide.SELL, qty="1", price="35000",
-                    ts=day1 + 2))
+    svc.apply(
+        _fill(fill_id="A1", side=OrderSide.BUY, qty="1", price="30000", ts=day1 + 1)
+    )
+    svc.apply(
+        _fill(fill_id="A2", side=OrderSide.SELL, qty="1", price="35000", ts=day1 + 2)
+    )
     # Day 2: round-trip a -3000 loss.
-    svc.apply(_fill(fill_id="B1", side=OrderSide.BUY, qty="1", price="35000",
-                    ts=day2 + 1))
-    svc.apply(_fill(fill_id="B2", side=OrderSide.SELL, qty="1", price="32000",
-                    ts=day2 + 2))
+    svc.apply(
+        _fill(fill_id="B1", side=OrderSide.BUY, qty="1", price="35000", ts=day2 + 1)
+    )
+    svc.apply(
+        _fill(fill_id="B2", side=OrderSide.SELL, qty="1", price="32000", ts=day2 + 2)
+    )
 
     assert svc.realised_pnl() == money("2000")  # 5000 - 3000 cumulative
     assert svc.realised_pnl_since(day2) == money("-3000")  # only day 2's loss
@@ -207,8 +225,11 @@ def test_realised_pnl_since_isolates_a_losing_day() -> None:
 def test_realised_pnl_since_empty_window_is_zero() -> None:
     """A bound after every fill (no fill in the window) yields zero."""
     svc = PerformanceService()
-    svc.apply(_fill(fill_id="F1", side=OrderSide.BUY, qty="1", price="30000",
-                    ts=1000, fee="5"))
+    svc.apply(
+        _fill(
+            fill_id="F1", side=OrderSide.BUY, qty="1", price="30000", ts=1000, fee="5"
+        )
+    )
     # Nothing at/after 2000 -> zero realised in that window.
     assert svc.realised_pnl_since(2000) == money("0")
     # An empty service is likewise zero for any bound.
@@ -221,16 +242,44 @@ def test_realised_pnl_since_empty_window_is_zero() -> None:
 def test_multi_instrument_aggregate_equals_sum_of_positions() -> None:
     """Two instruments interleaved: aggregate = sum of per-instrument folds."""
     btc = [
-        _fill(fill_id="B1", side=OrderSide.BUY, qty="2", price="30000", fee="6",
-              instrument=BTC_USD, cid="btc"),
-        _fill(fill_id="B2", side=OrderSide.SELL, qty="1", price="31000", fee="3.1",
-              instrument=BTC_USD, cid="btc"),
+        _fill(
+            fill_id="B1",
+            side=OrderSide.BUY,
+            qty="2",
+            price="30000",
+            fee="6",
+            instrument=BTC_USD,
+            cid="btc",
+        ),
+        _fill(
+            fill_id="B2",
+            side=OrderSide.SELL,
+            qty="1",
+            price="31000",
+            fee="3.1",
+            instrument=BTC_USD,
+            cid="btc",
+        ),
     ]
     eth = [
-        _fill(fill_id="E1", side=OrderSide.BUY, qty="10", price="2000", fee="2",
-              instrument=ETH_USD, cid="eth"),
-        _fill(fill_id="E2", side=OrderSide.SELL, qty="10", price="2100", fee="2.1",
-              instrument=ETH_USD, cid="eth"),
+        _fill(
+            fill_id="E1",
+            side=OrderSide.BUY,
+            qty="10",
+            price="2000",
+            fee="2",
+            instrument=ETH_USD,
+            cid="eth",
+        ),
+        _fill(
+            fill_id="E2",
+            side=OrderSide.SELL,
+            qty="10",
+            price="2100",
+            fee="2.1",
+            instrument=ETH_USD,
+            cid="eth",
+        ),
     ]
     svc = PerformanceService(v0=money("0"))
     # Interleave to prove arrival order per instrument is what is folded.
@@ -327,7 +376,7 @@ def test_max_drawdown_nonzero_on_dip() -> None:
         _fill(fill_id="F1", side=OrderSide.BUY, qty="1", price="100", fee="0"),
         _fill(fill_id="F2", side=OrderSide.SELL, qty="1", price="110", fee="0"),  # +10
         _fill(fill_id="F3", side=OrderSide.BUY, qty="1", price="110", fee="0"),
-        _fill(fill_id="F4", side=OrderSide.SELL, qty="1", price="80", fee="0"),   # -30
+        _fill(fill_id="F4", side=OrderSide.SELL, qty="1", price="80", fee="0"),  # -30
         _fill(fill_id="F5", side=OrderSide.BUY, qty="1", price="80", fee="0"),
         _fill(fill_id="F6", side=OrderSide.SELL, qty="1", price="130", fee="0"),  # +50
     ]
@@ -348,10 +397,16 @@ def test_event_bus_subscription_drives_view() -> None:
     svc = PerformanceService(v0=money("100000"), event_bus=bus)
 
     bus.emit(LogEvent(message="noise"))  # ignored
-    bus.emit(FillEvent(_fill(fill_id="F1", side=OrderSide.BUY, qty="1",
-                             price="30000", fee="3")))
-    bus.emit(FillEvent(_fill(fill_id="F2", side=OrderSide.SELL, qty="1",
-                             price="31000", fee="3.1")))
+    bus.emit(
+        FillEvent(
+            _fill(fill_id="F1", side=OrderSide.BUY, qty="1", price="30000", fee="3")
+        )
+    )
+    bus.emit(
+        FillEvent(
+            _fill(fill_id="F2", side=OrderSide.SELL, qty="1", price="31000", fee="3.1")
+        )
+    )
 
     # close 1: (31000-30000)*1 = +1000; fees -3 -3.1 -> realised 993.9.
     assert svc.realised_pnl() == Decimal("993.9")
@@ -443,10 +498,14 @@ def test_subscribed_service_dedups_reemitted_fill_event() -> None:
     """A re-emitted ``FillEvent`` (same ``fill_id``) does not corrupt realised PnL."""
     bus = EventBus()
     svc = PerformanceService(v0=money("1000"), event_bus=bus)
-    bus.emit(FillEvent(_fill(fill_id="F1", side=OrderSide.BUY, qty="1", price="100",
-                             fee="1")))
-    sell = FillEvent(_fill(fill_id="F2", side=OrderSide.SELL, qty="1", price="110",
-                           fee="1"))
+    bus.emit(
+        FillEvent(
+            _fill(fill_id="F1", side=OrderSide.BUY, qty="1", price="100", fee="1")
+        )
+    )
+    sell = FillEvent(
+        _fill(fill_id="F2", side=OrderSide.SELL, qty="1", price="110", fee="1")
+    )
     bus.emit(sell)
     bus.emit(sell)  # the venue re-emits the same execution after a reconnect
     # Realised PnL == one BUY 1@100 (fee 1) then one SELL 1@110 (fee 1): +10 - 2 = 8.

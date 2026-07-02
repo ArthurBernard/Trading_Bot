@@ -170,6 +170,51 @@ async def test_reconcile_closes_orphan_order_not_on_venue() -> None:
     assert result.adopted_orders == 0
 
 
+async def test_reconcile_evicts_orphan_even_if_close_transition_is_forbidden() -> None:
+    """An orphan whose close transition is refused is still evicted from the map.
+
+    The orphan policy is *tolerant*: if the state machine forbids driving the
+    orphan to a terminal label (a defensive guard), reconcile swallows the
+    ``OrderError`` and the caller still ``forget``s the id — the phantom never
+    lingers in the tracked map even when its label can't be updated.
+    """
+    from trading_bot.domain.errors import OrderError
+
+    class _UnclosableOrder(Order):
+        """A non-terminal order whose submit/cancel transitions always refuse."""
+
+        def submit(self) -> None:  # refuse the nudge
+            raise OrderError("simulated: submit forbidden")
+
+        def cancel(self) -> None:  # refuse the close
+            raise OrderError("simulated: cancel forbidden")
+
+    broker = PaperBroker(starting_balances={"USD": money("1000000")})
+    bus, router, tracker = _engine(broker)
+
+    phantom = _UnclosableOrder(
+        client_order_id="stuck-orphan",
+        instrument=BTC_USD,
+        side=OrderSide.BUY,
+        qty=money("1"),
+        type=OrderType.LIMIT,
+        limit_price=money("30000"),
+    )
+    # Force it OPEN (non-terminal) via the base transitions, bypassing the override.
+    Order.submit(phantom)
+    Order.open(phantom, "VENUE-GONE")
+    assert not phantom.is_terminal
+    router.ingest(phantom)
+    assert await broker.open_orders() == []
+
+    result = await reconcile(broker, router, tracker, event_bus=bus)
+
+    # The close was refused, so the label is unchanged — but the id is evicted
+    # regardless, so no phantom lingers, and it still counts as a closed orphan.
+    assert router.get("stuck-orphan") is None
+    assert result.closed_orphans == 1
+
+
 async def test_reconcile_closes_new_orphan_nudged_through_submitted() -> None:
     """A ``NEW`` orphan (never opened) is nudged SUBMITTED then closed CANCELLED.
 

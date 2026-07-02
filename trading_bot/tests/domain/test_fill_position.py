@@ -61,9 +61,7 @@ class TestFillConstruction:
 
     def test_empty_client_order_id_rejected(self) -> None:
         with pytest.raises(OrderError, match="client_order_id"):
-            make_fill(
-                side=OrderSide.BUY, qty="1", price="30000", client_order_id=""
-            )
+            make_fill(side=OrderSide.BUY, qty="1", price="30000", client_order_id="")
 
     def test_non_positive_qty_rejected(self) -> None:
         with pytest.raises(OrderError, match="qty"):
@@ -323,20 +321,36 @@ class TestRealDataFlipSequence:
     def test_realistic_flip_sequence(self) -> None:
         fills = [
             make_fill(
-                side=OrderSide.BUY, qty="2", price="30000", fee="12.0",
-                fill_id="T1", ts=1_700_000_000_000,
+                side=OrderSide.BUY,
+                qty="2",
+                price="30000",
+                fee="12.0",
+                fill_id="T1",
+                ts=1_700_000_000_000,
             ),
             make_fill(
-                side=OrderSide.BUY, qty="1", price="33000", fee="6.6",
-                fill_id="T2", ts=1_700_000_060_000,
+                side=OrderSide.BUY,
+                qty="1",
+                price="33000",
+                fee="6.6",
+                fill_id="T2",
+                ts=1_700_000_060_000,
             ),
             make_fill(
-                side=OrderSide.SELL, qty="1", price="35000", fee="7.0",
-                fill_id="T3", ts=1_700_000_120_000,
+                side=OrderSide.SELL,
+                qty="1",
+                price="35000",
+                fee="7.0",
+                fill_id="T3",
+                ts=1_700_000_120_000,
             ),
             make_fill(
-                side=OrderSide.SELL, qty="5", price="36000", fee="36.0",
-                fill_id="T4", ts=1_700_000_180_000,
+                side=OrderSide.SELL,
+                qty="5",
+                price="36000",
+                fee="36.0",
+                fill_id="T4",
+                ts=1_700_000_180_000,
             ),
         ]
         pos = Position.from_fills(fills)
@@ -373,11 +387,21 @@ class TestIncrementalFold:
         performance service rely on for their O(n) drain.
         """
         fills = [
-            make_fill(side=OrderSide.BUY, qty="2", price="30000", fee="1", fill_id="F1"),
-            make_fill(side=OrderSide.BUY, qty="1", price="33000", fee="1", fill_id="F2"),
-            make_fill(side=OrderSide.SELL, qty="1", price="35000", fee="1", fill_id="F3"),
-            make_fill(side=OrderSide.SELL, qty="2", price="31000", fee="1", fill_id="F4"),
-            make_fill(side=OrderSide.SELL, qty="2", price="29000", fee="1", fill_id="F5"),
+            make_fill(
+                side=OrderSide.BUY, qty="2", price="30000", fee="1", fill_id="F1"
+            ),
+            make_fill(
+                side=OrderSide.BUY, qty="1", price="33000", fee="1", fill_id="F2"
+            ),
+            make_fill(
+                side=OrderSide.SELL, qty="1", price="35000", fee="1", fill_id="F3"
+            ),
+            make_fill(
+                side=OrderSide.SELL, qty="2", price="31000", fee="1", fill_id="F4"
+            ),
+            make_fill(
+                side=OrderSide.SELL, qty="2", price="29000", fee="1", fill_id="F5"
+            ),
         ]
         running = Position.flat(BTCUSD)
         for i, fill in enumerate(fills, start=1):
@@ -396,7 +420,10 @@ class TestIncrementalFold:
         with pytest.raises(InstrumentMismatch, match="BTC/USD"):
             pos.with_fill(
                 make_fill(
-                    side=OrderSide.BUY, qty="1", price="2000", instrument=ETHUSD,
+                    side=OrderSide.BUY,
+                    qty="1",
+                    price="2000",
+                    instrument=ETHUSD,
                     fill_id="F2",
                 )
             )

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "trading_bot"
-version = "0.9.0"
+version = "0.10.0"
 description = "Execution & orchestration layer of the trading triptych — live strategies, order routing, risk. Hexagonal, async-first."
 readme = "README.md"
 license = { text = "MIT" }
@@ -60,7 +60,11 @@ dev = [
     "pytest-asyncio>=0.23",
     "pytest-cov>=4.1",
     "pytest-httpx>=0.30",
-    "ruff>=0.4",
+    # Pin ruff exactly (not a floating `>=`) so `ruff format` produces byte-identical
+    # output in the pre-commit hook, in CI (`ruff format --check`) and locally — a
+    # floating minor can change format rules and wedge the CI parity check (T-5/T-7).
+    # Keep this in lockstep with the `ruff-format` hook `rev` in .pre-commit-config.yaml.
+    "ruff==0.15.20",
     "mypy>=1.0",
     "interrogate>=1.5",
     "pyyaml>=6.0",
@@ -106,6 +110,19 @@ include = ["trading_bot*"]
 addopts = "-vv --cov=trading_bot --cov-report=term-missing --cov-fail-under=90 -m 'not network'"
 testpaths = ["trading_bot"]
 asyncio_mode = "auto"
+# Pin the pytest-asyncio fixture-loop scope explicitly (silences the ≥0.24
+# "unset default fixture loop scope" warning and locks the behaviour for the next
+# pytest-asyncio major).
+asyncio_default_fixture_loop_scope = "function"
+# Police warnings: escalate to errors so a new, meaningful deprecation fails the
+# build instead of scrolling past. The one known-benign exception is Starlette's
+# TestClient-on-httpx deprecation (it wants the not-yet-released `httpx2`); matched
+# by message so the filter parses even where starlette is not importable. Scope is
+# deliberately narrow — only this one message is allow-listed, everything else errors.
+filterwarnings = [
+    "error",
+    "ignore:Using `httpx` with `starlette.testclient` is deprecated:UserWarning",
+]
 markers = [
     "network: end-to-end tests that hit real exchange / broker APIs (run with -m network)",
 ]

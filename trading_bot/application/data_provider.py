@@ -183,9 +183,7 @@ class ResamplingDccdClient:
         every: str = "1d",
     ) -> None:
         if source_span <= 0:
-            raise ValueError(
-                f"source_span must be positive seconds, got {source_span}"
-            )
+            raise ValueError(f"source_span must be positive seconds, got {source_span}")
         if source_span >= daily_span:
             raise ValueError(
                 f"source_span ({source_span}) must be finer than daily_span "
@@ -214,9 +212,7 @@ class ResamplingDccdClient:
         straight through to the wrapped client.
         """
         if span != self._daily_span:
-            return self._inner.read(
-                exchange, symbol, data_type, span, start_ns, end_ns
-            )
+            return self._inner.read(exchange, symbol, data_type, span, start_ns, end_ns)
         raw = self._inner.read(
             exchange, symbol, data_type, self._source_span, start_ns, end_ns
         )
@@ -331,7 +327,9 @@ def _resolve_start_ns(start: str | int | None) -> int | None:
             "(e.g. '2024-01-01' or '2024-01-01T00:00:00') or an epoch-ns int"
         ) from exc
     if isinstance(parsed, datetime):
-        dt = parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=timezone.utc)
+        dt = (
+            parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=timezone.utc)
+        )
     else:
         dt = datetime(parsed.year, parsed.month, parsed.day, tzinfo=timezone.utc)
     # int(timestamp) seconds → nanoseconds; keep sub-second precision exact.

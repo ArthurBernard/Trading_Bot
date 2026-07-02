@@ -142,9 +142,7 @@ async def test_end_to_end_position_follows_signal() -> None:
 
     # The deltas net out to the final target exactly: sum of signed fill qtys
     # (BUY +, SELL -) equals net_qty.
-    signed = sum(
-        (f.qty if f.side is OrderSide.BUY else -f.qty) for f in fills
-    )
+    signed = sum((f.qty if f.side is OrderSide.BUY else -f.qty) for f in fills)
     assert signed == pos.net_qty
 
 
@@ -232,8 +230,9 @@ async def test_step_returns_none_on_zero_delta() -> None:
     def _flat(bars: pl.DataFrame) -> Signal:
         return Signal.exposure(BTC_USD, money("0"), ts=0)
 
-    strat = Strategy(name="flat", instrument=BTC_USD, signal_fn=_flat,
-                     reference_qty=money("1"))
+    strat = Strategy(
+        name="flat", instrument=BTC_USD, signal_fn=_flat, reference_qty=money("1")
+    )
     runner, broker, _tracker, _bus = _wire(strat, _bars([100.0]), mark="100")
 
     order = await runner.step(_bars([100.0]))
@@ -257,8 +256,12 @@ async def test_run_stops_when_stop_event_already_set() -> None:
     def _always_long(bars: pl.DataFrame) -> Signal:
         return Signal.exposure(BTC_USD, money("1"), ts=0)
 
-    strat = Strategy(name="stop", instrument=BTC_USD, signal_fn=_always_long,
-                     reference_qty=money("1"))
+    strat = Strategy(
+        name="stop",
+        instrument=BTC_USD,
+        signal_fn=_always_long,
+        reference_qty=money("1"),
+    )
     runner, broker, _tracker, _bus = _wire(strat, _bars([100.0] * 5), mark="100")
 
     stop = asyncio.Event()
@@ -300,8 +303,12 @@ async def test_run_stops_between_steps_on_stop_event() -> None:
     def _always_long(bars: pl.DataFrame) -> Signal:
         return Signal.exposure(BTC_USD, money("1"), ts=0)
 
-    strat = Strategy(name="midstop", instrument=BTC_USD, signal_fn=_always_long,
-                     reference_qty=money("1"))
+    strat = Strategy(
+        name="midstop",
+        instrument=BTC_USD,
+        signal_fn=_always_long,
+        reference_qty=money("1"),
+    )
     feed = _StopAfterFirst(InMemoryFeed(frame))
     bus = EventBus()
     tracker = PositionTracker(event_bus=bus)
@@ -400,9 +407,9 @@ async def test_idempotent_rerun_does_not_double_submit() -> None:
 
     submitted_orders: list = []
     bus.subscribe(
-        lambda e: submitted_orders.append(e.order)
-        if isinstance(e, OrderEvent)
-        else None
+        lambda e: (
+            submitted_orders.append(e.order) if isinstance(e, OrderEvent) else None
+        )
     )
 
     runner = StrategyRunner(strat, InMemoryFeed(frame), router, tracker)
@@ -502,8 +509,9 @@ async def test_causality_signal_never_sees_future_bar() -> None:
         # A trivial flat signal — we only care what bars it saw.
         return Signal.exposure(BTC_USD, money("0"), ts=0)
 
-    strat = Strategy(name="spy", instrument=BTC_USD, signal_fn=_spy,
-                     reference_qty=money("1"))
+    strat = Strategy(
+        name="spy", instrument=BTC_USD, signal_fn=_spy, reference_qty=money("1")
+    )
     runner, _broker, _tracker, _bus = _wire(strat, frame, mark="100")
     await runner.run()
 

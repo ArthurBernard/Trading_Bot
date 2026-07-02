@@ -111,6 +111,7 @@ logger = logging.getLogger(__name__)
 # Decimal-as-string JSON — the money-exactness crux
 # ---------------------------------------------------------------------------
 
+
 def _money_str(value: Decimal | None) -> str | None:
     """Render a money :class:`~decimal.Decimal` as an exact string (``None`` passes).
 
@@ -157,6 +158,7 @@ class _DecimalJSONResponse(JSONResponse):
 # ---------------------------------------------------------------------------
 # Serialization — engine objects -> JSON-ready dicts (money already stringified)
 # ---------------------------------------------------------------------------
+
 
 def _position_dict(position: Position) -> dict[str, Any]:
     """Render a :class:`~trading_bot.domain.position.Position` as a JSON-ready dict.
@@ -288,6 +290,7 @@ def _event_key(event: Event) -> str | None:
 # Serialization — supervisor aggregate rows -> JSON-ready dicts
 # ---------------------------------------------------------------------------
 
+
 def _position_row_dict(row: PositionRow) -> dict[str, Any]:
     """Render a supervisor :class:`PositionRow` as a JSON-ready dict.
 
@@ -405,8 +408,89 @@ def _finite_or_none(value: float | None) -> float | None:
 
 
 # ---------------------------------------------------------------------------
+# Shared HTTP hardening — body-size cap + security headers (I-6, I-11)
+# ---------------------------------------------------------------------------
+
+#: The largest request body (bytes) the app accepts before returning ``413``. A
+#: control-plane body is a small JSON deploy/mode descriptor — 64 KiB is generous —
+#: so an oversized ``Content-Length`` (or a body that streams past the cap) is a
+#: memory/disk-amplification DoS vector (I-6), not a legitimate request. The
+#: read-only view has no bodies at all; the cap is a cheap safety net either way.
+_MAX_BODY_BYTES = 64 * 1024
+
+#: The security-response headers set on **every** response (I-11). ``nosniff`` stops
+#: content-type sniffing; ``DENY`` / ``frame-ancestors 'none'`` block clickjacking of
+#: the control UI; ``no-referrer`` keeps paths/tokens out of the ``Referer``. These
+#: are free on a private tailnet and a second line of defence if the surface grows.
+_SECURITY_HEADERS = {
+    "X-Content-Type-Options": "nosniff",
+    "X-Frame-Options": "DENY",
+    "Content-Security-Policy": "frame-ancestors 'none'",
+    "Referrer-Policy": "no-referrer",
+}
+
+
+def _install_hardening(app: FastAPI) -> None:
+    """Add the shared body-size cap + security-header middleware to ``app``.
+
+    One place for the transport hardening both factories share:
+
+    * **I-6 — request-body cap.** A request whose ``Content-Length`` exceeds
+      :data:`_MAX_BODY_BYTES`, *or* whose actually-read body does, is refused
+      ``413`` before any handler runs — so an oversized deploy/login body cannot
+      amplify into a giant manifest / filename / memory spike.
+    * **I-11 — security headers + no-store.** Every response carries
+      :data:`_SECURITY_HEADERS` (nosniff / anti-clickjacking / no-referrer), and
+      every authed JSON body (``/api/*``) additionally gets ``Cache-Control:
+      no-store`` so the live book is never cached by a browser or intermediary.
+
+    Middleware runs outermost-first in registration order; the body cap is added
+    last here so it runs **first** (it can reject before the header middleware even
+    builds a response).
+    """
+
+    @app.middleware("http")
+    async def _security_headers(request: Request, call_next: Any) -> Any:
+        response = await call_next(request)
+        for header, value in _SECURITY_HEADERS.items():
+            response.headers.setdefault(header, value)
+        # Authed JSON (the live book) must never be cached by a browser or a
+        # proxy — set no-store on the API surface (the HTML shell may still be
+        # cached; it carries no engine data).
+        if request.url.path.startswith("/api/"):
+            response.headers["Cache-Control"] = "no-store"
+        return response
+
+    @app.middleware("http")
+    async def _limit_body_size(request: Request, call_next: Any) -> Any:
+        # Reject early on a declared oversized Content-Length (cheap, no read).
+        declared = request.headers.get("content-length")
+        if declared is not None:
+            try:
+                if int(declared) > _MAX_BODY_BYTES:
+                    return JSONResponse(
+                        {"detail": "request body too large"}, status_code=413
+                    )
+            except ValueError:
+                return JSONResponse(
+                    {"detail": "invalid Content-Length"}, status_code=400
+                )
+        # Guard the chunked / missing-length case: buffer the body once, cap it, and
+        # re-inject it so the downstream handler still reads it (Starlette caches the
+        # body on the request after the first `.body()`).
+        if request.method in ("POST", "PUT", "PATCH", "DELETE"):
+            body = await request.body()
+            if len(body) > _MAX_BODY_BYTES:
+                return JSONResponse(
+                    {"detail": "request body too large"}, status_code=413
+                )
+        return await call_next(request)
+
+
+# ---------------------------------------------------------------------------
 # Application factory
 # ---------------------------------------------------------------------------
+
 
 def create_app(engine: Engine) -> FastAPI:
     """Build the read-only FastAPI over a wired :class:`Engine`.
@@ -438,6 +522,7 @@ def create_app(engine: Engine) -> FastAPI:
         default_response_class=_DecimalJSONResponse,
     )
     app.state.engine = engine
+    _install_hardening(app)  # body-size cap + security headers (I-6, I-11)
 
     def _engine(request: Request) -> Engine:
         """Read the wired engine off ``app.state`` (explicit, testable access)."""
@@ -592,6 +677,28 @@ _LOGIN_RATE_PER_MIN = 10
 #: Path prefixes reachable without a session (the login flow + assets).
 _OPEN_PREFIXES = ("/login", "/logout", "/static")
 
+#: Hard cap on live sessions (I-7): once reached, the oldest session is evicted on a
+#: new login so the in-memory map cannot grow without bound over a long-lived daemon.
+_MAX_SESSIONS = 1024
+#: A login rate-bucket idle for longer than this (seconds) is pruned (I-7): the
+#: buckets are keyed by peer address and were never swept, so every distinct source
+#: that ever hit ``/login`` used to leave a permanent entry. One TTL wider than the
+#: refill window (a bucket idle this long has fully refilled — dropping it is a no-op).
+_RATE_BUCKET_TTL_SECONDS = 3600
+#: The hidden ``/login`` form field carrying the double-submit CSRF token (I-13). The
+#: token is minted into a cookie on ``GET /login`` and must be echoed in the POST.
+_CSRF_COOKIE = "tb_csrf"
+_CSRF_FIELD = "csrf"
+
+#: Whether the app trusts a client-supplied ``X-Forwarded-Proto`` to decide the
+#: ``Secure`` cookie flag (I-4). **Off** for the direct-uvicorn tailnet deployment:
+#: the header is fully client-controlled there (no stripping proxy), and the path is
+#: plain-HTTP over WireGuard — so forcing ``Secure`` on would only self-break the
+#: cookie. Only a real ``https`` request scheme sets ``Secure`` unless a trusted
+#: proxy is explicitly introduced (then flip this and strip/overwrite the header at
+#: the proxy). The tailnet's own encryption — not this flag — protects the cookie.
+_TRUST_FORWARDED_PROTO = False
+
 #: The module prefixes a deploy-body ``signal.ref`` may import from (I-1). A dotted
 #: ``"module:function"`` ref is handed to :func:`importlib.import_module` at unit
 #: start — arbitrary-module import is RCE-adjacent for a token holder. Confining the
@@ -609,7 +716,9 @@ _SIGNAL_REF_ALLOWED_PREFIXES = (
 #: A conservative shape check for the module part of a ``"module:function"`` ref:
 #: dotted identifiers only (each segment a Python identifier). Rejects paths with
 #: separators, spaces or other injection-ish characters before any import happens.
-_SIGNAL_REF_MODULE_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*$")
+_SIGNAL_REF_MODULE_RE = re.compile(
+    r"^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*$"
+)
 
 
 class _ModeBody(BaseModel):
@@ -656,8 +765,12 @@ class _CreateStrategyBody(BaseModel):
         The venue key the bars are read under / the deployment runs on (e.g.
         ``"binance"``, ``"kraken"``, or ``"paper"``).
     mode : {"paper", "testnet", "live"}
-        The seed deployment mode. The unit is added **stopped**; going live still
-        needs the typed confirmation on ``.../mode`` and the go-live gates.
+        The seed deployment mode. **Must match the manifest's global seed mode**
+        (deployments inherit it — the supervisor seeds every new unit from the
+        manifest, not per-entry): a ``mode`` the server would otherwise discard is
+        rejected ``422`` (I-9), so the field is meaningful rather than misleading.
+        The unit is added **stopped**; going live still needs the typed confirmation
+        on ``.../mode`` and the go-live gates.
     signal : str
         The signal reference: a builtin name (``"ma_crossover"``) or a
         ``"module:function"`` dotted ref to an importable callable.
@@ -688,20 +801,24 @@ class _CreateStrategyBody(BaseModel):
 
     """
 
-    name: str
+    # I-6: bound every free-form string so a giant field cannot amplify into a giant
+    # manifest / on-disk filename / memory spike (the body-size middleware is the
+    # coarse gate; these are the per-field defence in depth). A name / venue / symbol
+    # / signal ref is a short identifier; a universe is a handful of pairs.
+    name: str = Field(min_length=1, max_length=128)
     kind: Literal["strategy", "portfolio"]
-    venue: str
+    venue: str = Field(min_length=1, max_length=64)
     mode: Literal["paper", "testnet", "live"] = "paper"
-    signal: str
-    symbol: str | None = None
-    universe: list[str] | None = None
+    signal: str = Field(min_length=1, max_length=256)
+    symbol: str | None = Field(default=None, max_length=64)
+    universe: list[str] | None = Field(default=None, max_length=256)
     capital: Decimal | None = None
     params: dict[str, Any] = Field(default_factory=dict)
     reference_qty: Decimal | None = None
     lookback: int = 0
     span: int = 86_400
     risk: dict[str, Any] | None = None
-    db_path: str | None = None
+    db_path: str | None = Field(default=None, max_length=512)
 
 
 def _entry_from_body(
@@ -1159,8 +1276,31 @@ def _install_control_auth(
     ``/api/*``, redirect to ``/login`` for pages — except the open prefixes), a
     rate-limited ``/login`` (token → HttpOnly session cookie) and ``/logout``.
     ``/api/*`` also accepts a ``Bearer <token>`` header or ``?token=`` query for
-    non-browser clients. Constant-time token comparison; ``Secure`` cookie behind
-    HTTPS. Sessions are in-process (reset on restart — fine for a single daemon).
+    non-browser clients. Constant-time token comparison. Sessions are in-process
+    (reset on restart — fine for a single daemon).
+
+    Hardening baked in
+    ------------------
+    * **Bounded state (I-7).** Sessions are pruned by TTL *and* capped at
+      :data:`_MAX_SESSIONS` (oldest evicted); the login rate-buckets are swept of
+      idle entries (:data:`_RATE_BUCKET_TTL_SECONDS`) so neither map grows without
+      bound over a long-lived daemon.
+    * **Trusted-peer rate key (I-10).** The login throttle keys on the transport
+      peer (``request.client.host``), **not** a client-supplied ``X-Forwarded-For``
+      — correct for the direct-uvicorn tailnet (spoofing XFF cannot reset the
+      bucket). *Assumption: no reverse proxy.* Behind a proxy every client would
+      collapse to the proxy address and share one bucket; if a proxy is adopted,
+      switch to a trusted-XFF parse gated on a proxy allowlist.
+    * **``Secure`` cookie posture (I-4).** ``X-Forwarded-Proto`` is **not** trusted
+      by default (:data:`_TRUST_FORWARDED_PROTO`): on the plain-HTTP tailnet the
+      header is client-controlled and there is no TLS, so ``Secure`` follows only a
+      genuine ``https`` scheme. WireGuard — not this flag — is the transport
+      security layer.
+    * **CSRF on the login flow (I-13).** ``/login`` / ``/logout`` carry a
+      double-submit CSRF token (cookie + hidden field), and the session cookie is
+      ``SameSite=strict`` — so a cross-site POST can neither carry the cookie nor
+      forge the CSRF pair. The mutating ``/api/*`` routes are already protected by
+      SameSite + same-origin + the JSON content-type preflight.
     """
     import time
 
@@ -1170,11 +1310,29 @@ def _install_control_auth(
     app.state.login_buckets = {}  # client -> (tokens, last monotonic)
 
     def _prune() -> None:
-        cutoff = time.time_ns() - _SESSION_TTL_SECONDS * 1_000_000_000
+        # I-7: sweep expired sessions AND idle rate-buckets so neither map grows
+        # without bound. Sessions past their TTL are dropped; a rate-bucket idle
+        # longer than its TTL has fully refilled (dropping it changes no decision).
+        now_ns = time.time_ns()
+        cutoff = now_ns - _SESSION_TTL_SECONDS * 1_000_000_000
         for sid in [s for s, ts in app.state.sessions.items() if ts < cutoff]:
             app.state.sessions.pop(sid, None)
+        now_mono = time.monotonic()
+        buckets = app.state.login_buckets
+        for key in [
+            k
+            for k, (_, last) in buckets.items()
+            if now_mono - last > _RATE_BUCKET_TTL_SECONDS
+        ]:
+            buckets.pop(key, None)
 
     def _new_session() -> str:
+        _prune()
+        # I-7: cap live sessions — evict the oldest if at the ceiling before minting
+        # a new one, so a login storm cannot grow the map past the bound.
+        while len(app.state.sessions) >= _MAX_SESSIONS:
+            oldest = min(app.state.sessions, key=app.state.sessions.get)
+            app.state.sessions.pop(oldest, None)
         sid = secrets.token_urlsafe(32)
         app.state.sessions[sid] = time.time_ns()
         return sid
@@ -1187,15 +1345,29 @@ def _install_control_auth(
         return sid in app.state.sessions
 
     def _is_https(request: Request) -> bool:
+        # I-4: only a genuine `https` scheme sets `Secure` — a client-supplied
+        # `X-Forwarded-Proto` is trusted only when a proxy mode is explicitly
+        # enabled (`_TRUST_FORWARDED_PROTO`), never on the plain-HTTP tailnet where
+        # the header is forgeable and forcing `Secure` would self-break the cookie.
         if request.url.scheme == "https":
             return True
-        fwd = request.headers.get("x-forwarded-proto", "")
-        return fwd.split(",", 1)[0].strip() == "https"
+        if _TRUST_FORWARDED_PROTO:
+            fwd = request.headers.get("x-forwarded-proto", "")
+            return fwd.split(",", 1)[0].strip() == "https"
+        return False
 
     def _safe_next(nxt: str | None) -> str:
         if nxt and nxt.startswith("/") and not nxt.startswith("//") and "\\" not in nxt:
             return nxt
         return "/"
+
+    def _rate_key(request: Request) -> str:
+        # I-10: key on the transport peer, NOT a client-supplied X-Forwarded-For —
+        # correct for the direct-uvicorn tailnet (XFF spoofing cannot reset the
+        # bucket). Assumes no reverse proxy; behind one, switch to a trusted-XFF
+        # parse gated on a proxy allowlist (see the factory docstring).
+        client = request.client
+        return client.host if client else "unknown"
 
     def _rate_allow(key: str) -> bool:
         buckets = app.state.login_buckets
@@ -1225,20 +1397,41 @@ def _install_control_auth(
 
     def _login_page(request: Request, *, error: str = "", status: int = 200) -> Any:
         nxt = _safe_next(request.query_params.get("next"))
+        # I-13: mint (or reuse) a per-render CSRF token, embed it in the form AND
+        # set it as a SameSite=strict cookie — the POST must echo both (double
+        # submit). A fresh token each GET is fine (the browser keeps the latest).
+        csrf = secrets.token_urlsafe(32)
         if templates is not None:
-            return templates.TemplateResponse(
+            resp: Any = templates.TemplateResponse(
                 request,
                 "login.html",
-                {"version": trading_bot.__version__, "next": nxt, "error": error},
+                {
+                    "version": trading_bot.__version__,
+                    "next": nxt,
+                    "error": error,
+                    "csrf": csrf,
+                    "csrf_field": _CSRF_FIELD,
+                },
                 status_code=status,
             )
-        return HTMLResponse(
-            '<form method="post" action="/login">'
-            f'<input type="hidden" name="next" value="{nxt}">'
-            '<input name="token" type="password" placeholder="token">'
-            "<button>Sign in</button></form>",
-            status_code=status,
+        else:
+            resp = HTMLResponse(
+                '<form method="post" action="/login">'
+                f'<input type="hidden" name="next" value="{nxt}">'
+                f'<input type="hidden" name="{_CSRF_FIELD}" value="{csrf}">'
+                '<input name="token" type="password" placeholder="token">'
+                "<button>Sign in</button></form>",
+                status_code=status,
+            )
+        resp.set_cookie(
+            _CSRF_COOKIE,
+            csrf,
+            httponly=False,
+            samesite="strict",
+            secure=_is_https(request),
+            max_age=_SESSION_TTL_SECONDS,
         )
+        return resp
 
     @app.get("/login", response_class=HTMLResponse)
     async def login_form(request: Request) -> Any:
@@ -1246,8 +1439,7 @@ def _install_control_auth(
 
     @app.post("/login")
     async def login_submit(request: Request) -> Any:
-        client = request.client
-        if not _rate_allow(client.host if client else "unknown"):
+        if not _rate_allow(_rate_key(request)):
             return JSONResponse(
                 {"detail": "too many attempts"},
                 status_code=429,
@@ -1259,6 +1451,19 @@ def _install_control_auth(
         form = parse_qs((await request.body()).decode("utf-8", "replace"))
         token = (form.get("token") or [""])[0]
         nxt = _safe_next((form.get("next") or ["/"])[0])
+        # I-13: double-submit CSRF check — the form field must equal the cookie the
+        # GET set (constant-time compare, both must be present and non-empty). A
+        # cross-site login-CSRF cannot read the SameSite=strict cookie to forge it.
+        csrf_cookie = request.cookies.get(_CSRF_COOKIE, "")
+        csrf_form = (form.get(_CSRF_FIELD) or [""])[0]
+        if (
+            not csrf_cookie
+            or not csrf_form
+            or not secrets.compare_digest(csrf_form, csrf_cookie)
+        ):
+            return _login_page(
+                request, error="Invalid or missing CSRF token.", status=403
+            )
         if not secrets.compare_digest(token, auth_token):
             return _login_page(request, error="Invalid token.", status=401)
         resp = RedirectResponse(nxt, status_code=303)
@@ -1266,7 +1471,7 @@ def _install_control_auth(
             _SESSION_COOKIE,
             _new_session(),
             httponly=True,
-            samesite="lax",
+            samesite="strict",
             secure=_is_https(request),
             max_age=_SESSION_TTL_SECONDS,
         )
@@ -1427,6 +1632,7 @@ def create_dashboard_app(
         summary="Unified monitoring + control dashboard over the supervisor.",
         default_response_class=_DecimalJSONResponse,
     )
+    _install_hardening(app)  # body-size cap + security headers (I-6, I-11)
     app.state.supervisor = supervisor
     app.state.read_only = read_only
     app.state.auth_enabled = bool(auth_token)
@@ -1532,9 +1738,7 @@ def create_dashboard_app(
         sup = _sup(request)
         source = sup.order_history() if history else sup.open_orders()
         rows = [_order_row_dict(row) for row in source]
-        rows = _filtered(
-            rows, crypto=crypto, exchange=exchange, strategy=strategy
-        )
+        rows = _filtered(rows, crypto=crypto, exchange=exchange, strategy=strategy)
         # History is capped to the most recent `limit` (the source is oldest-first,
         # so take the tail); the open-orders view is small and left uncapped.
         if history and limit >= 0:
@@ -1568,9 +1772,7 @@ def create_dashboard_app(
                 detail=f"unknown group_by {group_by!r}; expected one of {_GROUP_BY_KEYS}",
             )
         rows = [_fill_row_dict(row) for row in _sup(request).fills()]
-        rows = _filtered(
-            rows, crypto=crypto, exchange=exchange, strategy=strategy
-        )
+        rows = _filtered(rows, crypto=crypto, exchange=exchange, strategy=strategy)
         # Most-recent-first cap (the source is oldest-first execution order).
         if limit >= 0:
             rows = rows[-limit:] if limit else []
@@ -1600,9 +1802,7 @@ def create_dashboard_app(
     # -- PnL series (per-mode realised-PnL / equity curve over time) --------- #
 
     @app.get("/api/pnl")
-    async def pnl(
-        request: Request, strategy: str, mode: str = "all"
-    ) -> dict[str, Any]:
+    async def pnl(request: Request, strategy: str, mode: str = "all") -> dict[str, Any]:
         """Per-mode realised-PnL / equity curve for one strategy, over time.
 
         ``?strategy=<name>`` (required) — the derived equity curve per mode
@@ -1745,15 +1945,32 @@ def create_dashboard_app(
         db_path = (
             _sanitise_body_db_path(body.db_path)
             if body.db_path
-            else _auto_db_path(
-                body.name, global_db_path=sup.manifest().storage.db_path
-            )
+            else _auto_db_path(body.name, global_db_path=sup.manifest().storage.db_path)
         )
         entry = _entry_from_body(body, db_path=db_path)
         try:
             name = sup.add_unit(entry)
         except ConfigError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
+        # I-9: the supervisor seeds every new unit from the manifest's global mode
+        # (`_mode_of`), NOT from a per-entry `body.mode` — so a `body.mode` that the
+        # server would silently discard is a misleading contract. Honour it by
+        # *rejecting* a mismatch: a deployed unit whose actual seed mode differs from
+        # what the body requested is rolled back (nothing left added) with a clear
+        # error. So `mode` is meaningful (a testnet/live request off a paper manifest
+        # fails loudly instead of quietly seeding paper). Switching a deployed unit's
+        # mode afterwards still goes through the live-gated `.../mode` route.
+        seeded = sup.status(name)[0].mode
+        if seeded != body.mode:
+            sup.remove_unit(name)
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    f"requested mode {body.mode!r} but this manifest seeds new units "
+                    f"as {seeded!r} (deployments inherit the manifest's global mode); "
+                    f"deploy with mode={seeded!r} and switch via .../mode afterwards"
+                ),
+            )
         _persist(request)
         return {"ok": True, "status": _status_dict(sup.status(name)[0])}
 

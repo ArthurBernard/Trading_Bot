@@ -81,9 +81,7 @@ class EquityPoint:
     equity: Money
 
 
-def equity_series(
-    fills: Iterable[Fill], *, v0: Money = _ZERO
-) -> list[EquityPoint]:
+def equity_series(fills: Iterable[Fill], *, v0: Money = _ZERO) -> list[EquityPoint]:
     """Fold ``fills`` (in timestamp order) into an equity curve — one point per fill.
 
     Sorts the fills by their ``ts`` (stably, so same-timestamp fills keep their

@@ -195,26 +195,18 @@ def weights_to_signals(
 
     """
     if capital <= 0:
-        raise ConfigError(
-            f"capital must be positive to size weights, got {capital}"
-        )
+        raise ConfigError(f"capital must be positive to size weights, got {capital}")
 
     signals: list[Signal] = []
     for symbol, weight in weights.items():
         price = prices.get(symbol)
         if price is None:
-            raise SignalError(
-                f"no price for {symbol} to size its weight {weight}"
-            )
+            raise SignalError(f"no price for {symbol} to size its weight {weight}")
         if price <= 0:
-            raise SignalError(
-                f"price for {symbol} must be positive, got {price}"
-            )
+            raise SignalError(f"price for {symbol} must be positive, got {price}")
         # Keep everything Decimal: (weight * capital) / price, exactly.
         qty = money(str(weight * capital / price))
-        signals.append(
-            Signal.target_qty(Instrument(symbol), qty, ts=asof_ms)
-        )
+        signals.append(Signal.target_qty(Instrument(symbol), qty, ts=asof_ms))
     return signals
 
 
@@ -271,8 +263,7 @@ def load_portfolio_signal(ref: str) -> PortfolioSignalFn:
         module = importlib.import_module(module_name)
     except ImportError as exc:
         raise ConfigError(
-            f"cannot import module {module_name!r} for portfolio signal "
-            f"{ref!r}: {exc}"
+            f"cannot import module {module_name!r} for portfolio signal {ref!r}: {exc}"
         ) from exc
     try:
         fn = getattr(module, attr)
@@ -283,8 +274,7 @@ def load_portfolio_signal(ref: str) -> PortfolioSignalFn:
         ) from exc
     if not callable(fn):
         raise ConfigError(
-            f"portfolio signal {ref!r} resolved to a non-callable "
-            f"{type(fn).__name__}"
+            f"portfolio signal {ref!r} resolved to a non-callable {type(fn).__name__}"
         )
     return fn  # type: ignore[no-any-return]
 

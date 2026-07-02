@@ -4,6 +4,7 @@ These are deliberately trivial: they guard the Phase 0 skeleton (packaging,
 imports) before the real domain/transport/broker layers land. Replace/extend as
 those layers are built (see ``doc/dev/07-roadmap.md``).
 """
+
 from __future__ import annotations
 
 from importlib import metadata

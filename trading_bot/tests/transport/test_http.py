@@ -16,8 +16,14 @@ from trading_bot.transport import (
     AmbiguousRequestError,
     AsyncHTTPClient,
     HTTPError,
+    ResponseTooLargeError,
 )
-from trading_bot.transport.http import _redact_url
+from trading_bot.transport.http import (
+    _MAX_CONNECTIONS,
+    _MAX_KEEPALIVE_CONNECTIONS,
+    _MAX_RESPONSE_BYTES,
+    _redact_url,
+)
 
 # --- Fake secrets --------------------------------------------------------- #
 # Synthetic, NOT real credentials. A 64-hex-char stand-in for a Binance
@@ -273,9 +279,7 @@ async def test_post_default_retries_5xx_then_succeeds(httpx_mock) -> None:
     sleep = RecordingSleep()
 
     async with AsyncHTTPClient(backoff_base=0.5, sleep=sleep) as client:
-        result = await client.post(
-            "https://example.test/Balance", data={"nonce": "1"}
-        )
+        result = await client.post("https://example.test/Balance", data={"nonce": "1"})
 
     assert result == {"ok": True}
     assert sleep.calls == [pytest.approx(0.5)]
@@ -307,9 +311,7 @@ async def test_limiter_acquired_before_request(httpx_mock) -> None:
         def __init__(self) -> None:
             self.acquired: list[tuple[str | None, float]] = []
 
-        async def acquire(
-            self, exchange: str | None, weight: float = 1.0
-        ) -> None:
+        async def acquire(self, exchange: str | None, weight: float = 1.0) -> None:
             self.acquired.append((exchange, weight))
 
     limiter = FakeLimiter()
@@ -460,10 +462,7 @@ def test_redact_url_masks_param_at_start() -> None:
 
 def test_redact_url_masks_param_in_middle() -> None:
     """A sensitive param sandwiched between innocuous ones is masked."""
-    url = (
-        "https://x.test/o?symbol=BTCUSDT"
-        f"&apiKey={_FAKE_API_KEY}&recvWindow=5000"
-    )
+    url = f"https://x.test/o?symbol=BTCUSDT&apiKey={_FAKE_API_KEY}&recvWindow=5000"
     out = _redact_url(url)
     assert _FAKE_API_KEY not in out
     assert "symbol=BTCUSDT" in out
@@ -554,9 +553,7 @@ async def test_signed_url_429_no_secret_leak(httpx_mock, caplog) -> None:
     assert "redacted" in caplog.text
 
 
-async def test_signed_url_transport_error_no_secret_leak(
-    httpx_mock, caplog
-) -> None:
+async def test_signed_url_transport_error_no_secret_leak(httpx_mock, caplog) -> None:
     """A transport error whose message embeds the signed URL is scrubbed."""
     # httpx renders the request URL into the exception; craft one that carries it.
     request = httpx.Request("GET", _SIGNED_URL)
@@ -596,9 +593,7 @@ async def test_signed_url_no_retry_transport_error_ambiguous_no_secret_leak(
 ) -> None:
     """A ``retry=False`` transport error embeds the URL in ``reason``, scrubbed."""
     request = httpx.Request("POST", _SIGNED_URL)
-    httpx_mock.add_exception(
-        httpx.ConnectError("connection failed", request=request)
-    )
+    httpx_mock.add_exception(httpx.ConnectError("connection failed", request=request))
     sleep = RecordingSleep()
 
     with caplog.at_level(logging.DEBUG, logger="trading_bot.transport.http"):
@@ -608,6 +603,164 @@ async def test_signed_url_no_retry_transport_error_ambiguous_no_secret_leak(
 
     _assert_no_secret(str(exc_info.value))
     _assert_no_secret(caplog.text)
+
+
+# --- B-11: transport hardening (pool, timeouts, size cap, redirects) ------- #
+
+
+async def test_client_config_pool_timeouts_no_redirect_and_trust_env() -> None:
+    """The underlying httpx client is built with explicit hardening config.
+
+    B-11: bounded connection pool (``Limits``), per-*phase* timeout (connect vs
+    read distinguished, not one scalar), ``follow_redirects=False`` (a signed
+    query must never be replayed to another host), and an explicit — default
+    off — ``trust_env`` proxy posture.
+    """
+    async with AsyncHTTPClient(
+        timeout=10.0, connect_timeout=3.0, read_timeout=7.0
+    ) as client:
+        # Bounded pool (not httpx's unbounded default) — the configured limits.
+        assert client._limits.max_connections == _MAX_CONNECTIONS
+        assert client._limits.max_keepalive_connections == _MAX_KEEPALIVE_CONNECTIONS
+
+        httpx_client = client._client
+        assert httpx_client is not None
+
+        # Per-phase timeouts: connect and read are DISTINCT, not one scalar.
+        timeout = httpx_client.timeout
+        assert timeout.connect == pytest.approx(3.0)
+        assert timeout.read == pytest.approx(7.0)
+        assert timeout.connect != timeout.read
+
+        # A signed API client must not follow a redirect (could replay the
+        # signed query to another host).
+        assert httpx_client.follow_redirects is False
+        # Explicit proxy/TLS-env posture, off by default.
+        assert httpx_client.trust_env is False
+
+
+async def test_read_timeout_on_submit_stays_ambiguous_no_retry(
+    httpx_mock,
+) -> None:
+    """A **read**-timeout on a ``retry=False`` submit → ambiguous, sent once.
+
+    A read-timeout means the request WAS sent but the response was lost — the
+    order may have landed. It must stay ambiguous (reconcile) and must NEVER be
+    auto-retried (a retry could place a second order). This is the core B-11 /
+    idempotency guarantee.
+    """
+    request = httpx.Request("POST", "https://example.test/AddOrder")
+    httpx_mock.add_exception(httpx.ReadTimeout("read timed out", request=request))
+    sleep = RecordingSleep()
+
+    async with AsyncHTTPClient(max_retries=3, sleep=sleep) as client:
+        with pytest.raises(AmbiguousRequestError) as exc_info:
+            await client.post(
+                "https://example.test/AddOrder",
+                data={"pair": "XBTUSD"},
+                retry=False,
+            )
+
+    # Sent exactly once, NEVER retried, no backoff sleep.
+    assert len(httpx_mock.get_requests()) == 1
+    assert sleep.calls == []
+    msg = str(exc_info.value)
+    assert "reconcile" in msg
+    # The reason names the read-timeout phase (request sent, outcome unknown).
+    assert "read-timeout" in exc_info.value.reason
+
+
+async def test_connect_timeout_on_submit_stays_ambiguous_no_retry(
+    httpx_mock,
+) -> None:
+    """A **connect**-timeout on a ``retry=False`` submit is also ambiguous.
+
+    A connect-timeout most likely never left, but the transport stays
+    conservative: it surfaces ambiguous (reconcile) rather than risk a double
+    submit on a mis-classified phase. The reason names the connect phase so the
+    two cases are still distinguishable in logs.
+    """
+    request = httpx.Request("POST", "https://example.test/AddOrder")
+    httpx_mock.add_exception(httpx.ConnectTimeout("connect timed out", request=request))
+    sleep = RecordingSleep()
+
+    async with AsyncHTTPClient(max_retries=3, sleep=sleep) as client:
+        with pytest.raises(AmbiguousRequestError) as exc_info:
+            await client.post(
+                "https://example.test/AddOrder",
+                data={"pair": "XBTUSD"},
+                retry=False,
+            )
+
+    assert len(httpx_mock.get_requests()) == 1
+    assert sleep.calls == []
+    assert "connect-timeout" in exc_info.value.reason
+
+
+async def test_read_timeout_get_is_retried(httpx_mock) -> None:
+    """An idempotent GET read-timeout is still retried (unchanged behaviour).
+
+    Contrast with the non-idempotent submit above: a read-timeout is a transient
+    transport error, so the *idempotent* path retries it with backoff and can
+    recover — only the non-idempotent ``retry=False`` path must stay ambiguous.
+    """
+    request = httpx.Request("GET", "https://example.test/flaky")
+    httpx_mock.add_exception(httpx.ReadTimeout("read timed out", request=request))
+    httpx_mock.add_response(status_code=200, json={"recovered": True})
+    sleep = RecordingSleep()
+
+    async with AsyncHTTPClient(sleep=sleep) as client:
+        result = await client.get("https://example.test/flaky")
+
+    assert result == {"recovered": True}
+    assert sleep.calls == [pytest.approx(0.5)]
+
+
+async def test_response_size_cap_rejects_oversized_declared_body(
+    httpx_mock,
+) -> None:
+    """A response declaring an over-cap ``Content-Length`` is refused.
+
+    B-11: the body is rejected with :class:`ResponseTooLargeError` before it is
+    trusted / parsed, guarding against a runaway or hostile payload.
+    """
+    httpx_mock.add_response(
+        status_code=200,
+        json={"ok": True},
+        headers={"Content-Length": str(_MAX_RESPONSE_BYTES + 1)},
+    )
+
+    async with AsyncHTTPClient() as client:
+        with pytest.raises(ResponseTooLargeError) as exc_info:
+            await client.get("https://example.test/huge")
+
+    assert exc_info.value.limit == _MAX_RESPONSE_BYTES
+
+
+async def test_response_size_cap_rejects_oversized_actual_body(
+    httpx_mock,
+) -> None:
+    """A body larger than the cap is refused even without a declared length.
+
+    The authoritative check is the actually-buffered byte length, so a missing
+    or lying ``Content-Length`` cannot smuggle an over-cap body through.
+    """
+    oversized = b"x" * (_MAX_RESPONSE_BYTES + 1)
+    httpx_mock.add_response(status_code=200, content=oversized)
+
+    async with AsyncHTTPClient() as client:
+        with pytest.raises(ResponseTooLargeError):
+            await client.get("https://example.test/huge-actual")
+
+
+async def test_response_under_cap_parses_normally(httpx_mock) -> None:
+    """A normal (under-cap) response still parses to JSON unchanged."""
+    httpx_mock.add_response(status_code=200, json={"balances": {"USD": "10"}})
+
+    async with AsyncHTTPClient() as client:
+        result = await client.get("https://example.test/balances")
+
+    assert result == {"balances": {"USD": "10"}}
 
 
 @pytest.mark.network

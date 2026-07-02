@@ -92,9 +92,7 @@ class FaultyBroker(Broker):
 
     # --- fault arming (one-shot) ------------------------------------------ #
 
-    def fail_next_place(
-        self, exc: BrokerError | None = None
-    ) -> None:
+    def fail_next_place(self, exc: BrokerError | None = None) -> None:
         """Arm the next :meth:`place_order` to **cleanly reject** — no record.
 
         The next placement raises ``exc`` (default a generic
@@ -182,7 +180,7 @@ class FaultyBroker(Broker):
             The fills to append to the wrapped broker's recorded history.
 
         """
-        self.inner._fills.extend(fills)
+        self.inner.seed_fills(fills)
 
     # --- Broker port ------------------------------------------------------ #
 

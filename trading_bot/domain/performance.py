@@ -125,7 +125,13 @@ class PerformanceDependencyError(TradingBotError):
 
 
 def _check_aligned(fills: Sequence[Fill], prices: Sequence[Money]) -> None:
-    """Require a non-empty fill series and a price series of equal length."""
+    """Require a price series of equal length to the fills (empty is allowed).
+
+    The only contract is that ``prices`` and ``fills`` share one index. An empty
+    pair is deliberately valid — the PnL functions return an empty tuple for it
+    (a strategy with no fills has a flat, empty curve) — so only a *length
+    mismatch* is rejected, never emptiness.
+    """
     if len(fills) != len(prices):
         raise ValueError(
             f"prices and fills must have equal length, "
@@ -187,7 +193,9 @@ def exchanged_volume(fills: Sequence[Fill]) -> tuple[Money, ...]:
     return tuple(f.qty for f in fills)
 
 
-def position_series(fills: Sequence[Fill], *, initial: Money = _ZERO) -> tuple[Money, ...]:
+def position_series(
+    fills: Sequence[Fill], *, initial: Money = _ZERO
+) -> tuple[Money, ...]:
     """Signed net position held **going into** each step.
 
     The exposure carried over the interval ending at step ``t`` — i.e. the net
@@ -285,9 +293,7 @@ def pnl(
     pos = position_series(fills, initial=initial_position)
     rets = returns(prices)
     fees = fee_series(fills)
-    return tuple(
-        p * r - fee for p, r, fee in zip(pos, rets, fees, strict=True)
-    )
+    return tuple(p * r - fee for p, r, fee in zip(pos, rets, fees, strict=True))
 
 
 def cum_pnl(
@@ -362,8 +368,7 @@ def equity_curve(
 
     """
     return tuple(
-        v0 + c
-        for c in cum_pnl(fills, prices, initial_position=initial_position)
+        v0 + c for c in cum_pnl(fills, prices, initial_position=initial_position)
     )
 
 
@@ -393,7 +398,9 @@ def equity_array(equity: Sequence[Money]) -> NDArray[np.float64]:
 # --------------------------------------------------------------------------- #
 
 
-def _as_float_array(equity: Sequence[Money] | NDArray[np.float64]) -> NDArray[np.float64]:
+def _as_float_array(
+    equity: Sequence[Money] | NDArray[np.float64],
+) -> NDArray[np.float64]:
     """Coerce an equity curve (Decimal sequence or float array) to ``float64``."""
     if isinstance(equity, np.ndarray):
         return equity.astype(np.float64)

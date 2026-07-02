@@ -30,6 +30,7 @@ from trading_bot.application.config import RiskConfig
 from trading_bot.brokers.base import Broker, Capability
 from trading_bot.brokers.paper import PaperBroker
 from trading_bot.domain import (
+    BrokerError,
     Fill,
     Instrument,
     Money,
@@ -120,6 +121,59 @@ class _SpyBroker(Broker):
         raise NotImplementedError
 
 
+class _CancelFailingBroker(Broker):
+    """A :class:`PaperBroker` wrapper whose ``cancel_order`` can fail.
+
+    Delegates every method to the wrapped paper broker (so the venue's recorded
+    truth stays the paper broker's), but the *first* ``cancel_order`` raises a
+    :class:`~trading_bot.domain.errors.BrokerError` — modelling a stuck cancel.
+    Used to prove :meth:`RiskManager.kill` swallows the failure, still reaches
+    the remaining orders, and still trips the switch (a stuck order never blocks
+    the halt).
+    """
+
+    name = "cancel-failing"
+
+    def __init__(self, inner: PaperBroker, *, fail_first_cancel: bool) -> None:
+        self.inner = inner
+        self._fail_first_cancel = fail_first_cancel
+        self._fail_next_place: BrokerError | None = None
+        self.cancel_attempts = 0
+
+    def fail_next_place(self, exc: BrokerError) -> None:
+        """Arm the next ``place_order`` to raise cleanly (no venue record)."""
+        self._fail_next_place = exc
+
+    def capabilities(self) -> set[Capability]:
+        return self.inner.capabilities()
+
+    async def place_order(self, order: Order) -> str:
+        clean_fail = self._fail_next_place
+        self._fail_next_place = None
+        if clean_fail is not None:
+            raise clean_fail
+        return await self.inner.place_order(order)
+
+    async def cancel_order(self, venue_order_id: str) -> None:
+        self.cancel_attempts += 1
+        if self._fail_first_cancel:
+            self._fail_first_cancel = False
+            raise BrokerError(f"simulated stuck cancel for {venue_order_id}")
+        await self.inner.cancel_order(venue_order_id)
+
+    async def open_orders(self) -> list[Order]:
+        return await self.inner.open_orders()
+
+    async def balances(self) -> dict[str, Money]:
+        return await self.inner.balances()
+
+    async def fills(self, since_ms: int | None = None) -> list[Fill]:
+        return await self.inner.fills(since_ms)
+
+    async def ticker(self, instrument: Instrument) -> Money:
+        return await self.inner.ticker(instrument)
+
+
 # --- max_order ------------------------------------------------------------- #
 
 
@@ -147,9 +201,7 @@ def test_max_position_blocks_order_pushing_net_past_cap() -> None:
     """An order whose resulting |net| exceeds ``max_position`` is blocked."""
     tracker = PositionTracker()
     tracker.apply(_fill("seed", OrderSide.BUY, "1"))  # net +1
-    rm = RiskManager(
-        RiskConfig(max_position=money("1.5")), position_tracker=tracker
-    )
+    rm = RiskManager(RiskConfig(max_position=money("1.5")), position_tracker=tracker)
     # +1 (current) + 1 (this BUY) = 2 > 1.5 -> breach.
     with pytest.raises(RiskLimitBreached) as exc:
         rm.check(_order(qty="1", side=OrderSide.BUY))
@@ -162,9 +214,7 @@ def test_max_position_allows_order_within_cap() -> None:
     """An order whose resulting |net| stays within the cap is allowed."""
     tracker = PositionTracker()
     tracker.apply(_fill("seed", OrderSide.BUY, "1"))  # net +1
-    rm = RiskManager(
-        RiskConfig(max_position=money("1.5")), position_tracker=tracker
-    )
+    rm = RiskManager(RiskConfig(max_position=money("1.5")), position_tracker=tracker)
     # +1 + 0.5 = 1.5, not > 1.5 -> allowed.
     rm.check(_order(qty="0.5", side=OrderSide.BUY))
 
@@ -173,9 +223,7 @@ def test_max_position_reducing_order_never_blocked_by_it() -> None:
     """An order that *reduces* an over-cap position is not blocked by max_position."""
     tracker = PositionTracker()
     tracker.apply(_fill("seed", OrderSide.BUY, "5"))  # net +5 (already over cap)
-    rm = RiskManager(
-        RiskConfig(max_position=money("3")), position_tracker=tracker
-    )
+    rm = RiskManager(RiskConfig(max_position=money("3")), position_tracker=tracker)
     # A SELL of 1: +5 + (-1) = +4 -> still over cap, blocked. But a SELL of 3
     # brings it to +2 which is within cap -> allowed (the gate is on the result).
     rm.check(_order(qty="3", side=OrderSide.SELL))
@@ -185,9 +233,7 @@ def test_max_position_uses_signed_side_for_resulting_net() -> None:
     """A SELL subtracts: with net +1 and cap 1, a SELL of 3 flips to |−2| > 1 -> blocked."""
     tracker = PositionTracker()
     tracker.apply(_fill("seed", OrderSide.BUY, "1"))  # net +1
-    rm = RiskManager(
-        RiskConfig(max_position=money("1")), position_tracker=tracker
-    )
+    rm = RiskManager(RiskConfig(max_position=money("1")), position_tracker=tracker)
     with pytest.raises(RiskLimitBreached) as exc:
         rm.check(_order(qty="3", side=OrderSide.SELL))  # +1 - 3 = -2, |−2| = 2 > 1
     assert exc.value.value == money("2")
@@ -204,12 +250,18 @@ def test_max_position_no_tracker_treats_current_as_flat() -> None:
 # --- max_daily_loss -------------------------------------------------------- #
 
 
-def test_max_daily_loss_blocks_once_loss_reached_via_record() -> None:
-    """Once the recorded daily loss >= cap, new orders are blocked."""
-    rm = RiskManager(RiskConfig(max_daily_loss=money("100")))
-    rm.record_daily_pnl(money("-50"))  # loss 50 < 100 -> ok
-    rm.check(_order())
-    rm.record_daily_pnl(money("-100"))  # loss 100 >= 100 -> blocked
+def test_max_daily_loss_blocks_once_loss_reached() -> None:
+    """Once the provider's daily loss >= cap, new orders are blocked."""
+    realised = money("-50")
+
+    def provider(_day_start_ms: int) -> Money:
+        return realised
+
+    rm = RiskManager(
+        RiskConfig(max_daily_loss=money("100")), daily_pnl_provider=provider
+    )
+    rm.check(_order())  # loss 50 < 100 -> ok
+    realised = money("-100")  # loss 100 >= 100 -> blocked
     with pytest.raises(RiskLimitBreached) as exc:
         rm.check(_order())
     assert exc.value.limit == "max_daily_loss"
@@ -219,8 +271,16 @@ def test_max_daily_loss_blocks_once_loss_reached_via_record() -> None:
 
 def test_max_daily_loss_profit_never_blocks() -> None:
     """A profitable day (positive PnL) never registers as a loss -> never blocks."""
-    rm = RiskManager(RiskConfig(max_daily_loss=money("100")))
-    rm.record_daily_pnl(money("250"))  # profit, loss is 0
+    rm = RiskManager(
+        RiskConfig(max_daily_loss=money("100")),
+        daily_pnl_provider=lambda _day_start_ms: money("250"),  # profit, loss 0
+    )
+    rm.check(_order())
+
+
+def test_max_daily_loss_without_provider_never_blocks() -> None:
+    """With no provider wired the daily-loss check sees no loss and never blocks."""
+    rm = RiskManager(RiskConfig(max_daily_loss=money("100")))  # no provider
     rm.check(_order())
 
 
@@ -326,16 +386,6 @@ def test_cumulative_loss_across_days_does_not_latch() -> None:
     rm.check(_order())  # a new day: not latched, trading allowed
 
 
-def test_reset_day_clears_recorded_loss() -> None:
-    """reset_day() rolls the recorded daily PnL back to zero (new day)."""
-    rm = RiskManager(RiskConfig(max_daily_loss=money("100")))
-    rm.record_daily_pnl(money("-200"))
-    with pytest.raises(RiskLimitBreached):
-        rm.check(_order())
-    rm.reset_day()
-    rm.check(_order())  # day reset -> loss is 0 again
-
-
 # --- kill-switch ----------------------------------------------------------- #
 
 
@@ -408,15 +458,141 @@ async def test_kill_requires_router_or_broker() -> None:
         await rm.kill()
 
 
+async def test_kill_via_router_tolerates_a_stuck_cancel_and_still_trips() -> None:
+    """A cancel that raises does not abort the halt: the switch still trips.
+
+    The panic path must never be blocked by one stuck order. We drive two live
+    orders, make the *first* cancel raise on the venue, and assert kill() still
+    reaches the second order, still trips, and swallows the failure (no raise).
+    """
+    broker = _CancelFailingBroker(
+        PaperBroker(fill_model="partial", partial_fill_ratio=money("0.5")),
+        fail_first_cancel=True,
+    )
+    bus = EventBus()
+    rm = RiskManager(RiskConfig())
+    router = OrderRouter(broker, bus, risk_manager=rm)
+
+    await router.submit(_order(cid="s1"))
+    o2 = await router.submit(_order(cid="s2"))
+    assert len(await broker.open_orders()) == 2
+
+    # kill() must not raise even though the first cancel blows up.
+    await rm.kill(router=router, reason="panic")
+
+    # The switch tripped despite the failure, and the *reachable* order cancelled.
+    assert rm.tripped is True
+    assert broker.cancel_attempts == 2  # both were attempted, none skipped
+    assert o2.status is OrderStatus.CANCELLED  # the non-failing one went through
+    with pytest.raises(RiskLimitBreached):
+        await router.submit(_order(cid="s3"))
+
+
+async def test_kill_via_router_skips_terminal_and_unplaced_orders() -> None:
+    """kill(router=...) only cancels orders live on a venue, skipping the rest.
+
+    A rejected order is terminal *and* has no venue id — it is uncancellable and
+    must be skipped (not attempted). One live order alongside it is still
+    cancelled, and the switch still trips.
+    """
+    broker = _CancelFailingBroker(
+        PaperBroker(fill_model="partial", partial_fill_ratio=money("0.5")),
+        fail_first_cancel=False,
+    )
+    broker.fail_next_place(BrokerError("venue said no"))
+    bus = EventBus()
+    rm = RiskManager(RiskConfig())
+    router = OrderRouter(broker, bus, risk_manager=rm)
+
+    # First submit is rejected by the venue → terminal, no venue id (uncancellable).
+    with pytest.raises(BrokerError):
+        await router.submit(_order(cid="rej"))
+    rejected = router.tracked_orders()["rej"]
+    assert rejected.is_terminal
+    assert rejected.venue_order_id is None
+    # A second, live order the kill must still reach.
+    live = await router.submit(_order(cid="live"))
+    assert live.status is OrderStatus.OPEN
+
+    await rm.kill(router=router, reason="panic")
+
+    # Only the live order was cancellable; the rejected one was skipped, not tried.
+    assert broker.cancel_attempts == 1
+    assert live.status is OrderStatus.CANCELLED
+    assert rm.tripped is True
+
+
+async def test_kill_via_broker_skips_orders_without_a_venue_id() -> None:
+    """Direct-broker kill() skips any reported order lacking a venue id."""
+
+    class _NoVenueIdBroker(Broker):
+        """Reports one open order with ``venue_order_id=None`` — uncancellable."""
+
+        name = "no-venue-id"
+
+        def __init__(self) -> None:
+            self.cancel_attempts = 0
+
+        def capabilities(self) -> set[Capability]:
+            return {Capability.PLACE_ORDER, Capability.CANCEL}
+
+        async def place_order(self, order: Order) -> str:
+            raise NotImplementedError
+
+        async def cancel_order(self, venue_order_id: str) -> None:
+            self.cancel_attempts += 1
+
+        async def open_orders(self) -> list[Order]:
+            return [_order(cid="no-vid")]  # a fresh Order has venue_order_id=None
+
+        async def balances(self) -> dict[str, Money]:
+            raise NotImplementedError
+
+        async def fills(self, since_ms: int | None = None) -> list[Fill]:
+            raise NotImplementedError
+
+        async def ticker(self, instrument: Instrument) -> Money:
+            raise NotImplementedError
+
+    broker = _NoVenueIdBroker()
+    rm = RiskManager(RiskConfig())
+    await rm.kill(broker=broker, reason="panic")
+
+    assert broker.cancel_attempts == 0  # the venue-id-less order was skipped
+    assert rm.tripped is True
+
+
+async def test_kill_via_broker_tolerates_a_stuck_cancel_and_still_trips() -> None:
+    """Direct-broker kill() also swallows a failed cancel and still trips."""
+    broker = _CancelFailingBroker(
+        PaperBroker(fill_model="partial", partial_fill_ratio=money("0.5")),
+        fail_first_cancel=True,
+    )
+    bus = EventBus()
+    router = OrderRouter(broker, bus)
+    await router.submit(_order(cid="d1"))
+    await router.submit(_order(cid="d2"))
+    assert len(await broker.open_orders()) == 2
+
+    rm = RiskManager(RiskConfig())
+    await rm.kill(broker=broker, reason="panic")
+
+    # Both open orders were attempted; the switch tripped regardless of the failure.
+    assert broker.cancel_attempts == 2
+    assert rm.tripped is True
+
+
 # --- None limits = unconstrained ------------------------------------------- #
 
 
 def test_all_none_limits_pass_everything() -> None:
     """An all-None RiskConfig (the default) gates nothing."""
-    rm = RiskManager(RiskConfig())  # max_* all None
+    rm = RiskManager(
+        RiskConfig(),  # max_* all None
+        daily_pnl_provider=lambda _day_start_ms: money("-999999"),
+    )
     rm.check(_order(qty="1000000", side=OrderSide.BUY))
     rm.check(_order(qty="1000000", side=OrderSide.SELL))
-    rm.record_daily_pnl(money("-999999"))
     rm.check(_order())
 
 
@@ -541,13 +717,9 @@ async def test_real_paperbroker_gate_blocks_then_kill_switch() -> None:
     #    open orders are cancelled and further submits are halted. Use a fresh
     #    manager with no position cap so the only thing exercised here is the
     #    kill-switch (the per-limit gating is covered above).
-    partial_broker = PaperBroker(
-        fill_model="partial", partial_fill_ratio=money("0.5")
-    )
+    partial_broker = PaperBroker(fill_model="partial", partial_fill_ratio=money("0.5"))
     kill_rm = RiskManager(RiskConfig())
-    partial_router = OrderRouter(
-        partial_broker, EventBus(), risk_manager=kill_rm
-    )
+    partial_router = OrderRouter(partial_broker, EventBus(), risk_manager=kill_rm)
     await partial_router.submit(_order(cid="live-1", qty="1"))
     assert len(await partial_broker.open_orders()) == 1
 

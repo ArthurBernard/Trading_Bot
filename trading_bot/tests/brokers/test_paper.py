@@ -21,6 +21,7 @@ from trading_bot.domain import (
     Order,
     OrderSide,
     OrderStatus,
+    OrderTooSmall,
     OrderType,
     Symbol,
     money,
@@ -30,9 +31,7 @@ BTC_USD = Instrument(Symbol("BTC", "USD"))
 ETH_USD = Instrument(Symbol("ETH", "USD"))
 
 
-def _limit_buy(
-    qty: str = "1", price: str = "30000", cid: str = "cid-1"
-) -> Order:
+def _limit_buy(qty: str = "1", price: str = "30000", cid: str = "cid-1") -> Order:
     return Order(
         client_order_id=cid,
         instrument=BTC_USD,
@@ -43,9 +42,7 @@ def _limit_buy(
     )
 
 
-def _limit_sell(
-    qty: str = "1", price: str = "30000", cid: str = "cid-s"
-) -> Order:
+def _limit_sell(qty: str = "1", price: str = "30000", cid: str = "cid-s") -> Order:
     return Order(
         client_order_id=cid,
         instrument=BTC_USD,
@@ -185,9 +182,7 @@ async def test_immediate_limit_buy_moves_balances_exactly() -> None:
 
 async def test_immediate_limit_sell_moves_balances_exactly() -> None:
     """A SELL credits quote (notional - fee) and debits base, exact."""
-    broker = PaperBroker(
-        starting_balances={"USD": money("0"), "BTC": money("5")}
-    )
+    broker = PaperBroker(starting_balances={"USD": money("0"), "BTC": money("5")})
     await broker.place_order(_limit_sell(qty="2", price="30000"))
 
     balances = await broker.balances()
@@ -376,9 +371,7 @@ async def test_fee_is_configured_basis_points() -> None:
 
 async def test_zero_fee_model() -> None:
     """``fee_bps=0`` produces fee-free fills."""
-    broker = PaperBroker(
-        fee_bps=money("0"), starting_balances={"USD": money("100000")}
-    )
+    broker = PaperBroker(fee_bps=money("0"), starting_balances={"USD": money("100000")})
     await broker.place_order(_limit_buy(qty="1", price="30000"))
 
     fills = await broker.fills()
@@ -411,6 +404,45 @@ async def test_fills_since_ms_filters() -> None:
     second_ts = all_fills[1].ts
     later = await broker.fills(since_ms=second_ts)
     assert [f.fill_id for f in later] == [all_fills[1].fill_id]
+
+
+async def test_seed_fills_appends_to_recorded_history() -> None:
+    """``seed_fills`` records venue-confirmed fills the engine never placed.
+
+    The public reconciliation seam: fills the venue already had (e.g. during a
+    disconnect) surface via ``fills()`` and honour the ``since_ms`` filter, so a
+    rebuild folds them in as the PnL truth with no matching local order.
+    """
+    broker = PaperBroker(starting_balances={"USD": money("1000000")})
+    seeded = [
+        Fill(
+            fill_id="SEED-1",
+            client_order_id="offline-1",
+            instrument=BTC_USD,
+            side=OrderSide.BUY,
+            qty=money("2"),
+            price=money("30000"),
+            fee=money("0"),
+            ts=100,
+        ),
+        Fill(
+            fill_id="SEED-2",
+            client_order_id="offline-2",
+            instrument=BTC_USD,
+            side=OrderSide.SELL,
+            qty=money("1"),
+            price=money("31000"),
+            fee=money("0"),
+            ts=200,
+        ),
+    ]
+
+    broker.seed_fills(seeded)
+
+    recorded = await broker.fills()
+    assert [f.fill_id for f in recorded] == ["SEED-1", "SEED-2"]
+    # The since_ms filter still applies to seeded history.
+    assert [f.fill_id for f in await broker.fills(since_ms=200)] == ["SEED-2"]
 
 
 async def test_injected_clock_stamps_fills() -> None:
@@ -483,9 +515,7 @@ async def test_realistic_sequence_matches_hand_computed_decimals() -> None:
     # Leg 2: a partial buy of 2.0 @ 31000 — armed to fill half (1.0); the other
     # 1.0 stays open.
     broker.arm_partial(money("0.5"))
-    vid2 = await broker.place_order(
-        _limit_buy(qty="2", price="31000", cid="buy-2")
-    )
+    vid2 = await broker.place_order(_limit_buy(qty="2", price="31000", cid="buy-2"))
     bal = await broker.balances()
     assert bal["USD"] == Decimal("38939")
     assert bal["BTC"] == Decimal("2")
@@ -510,3 +540,112 @@ async def test_realistic_sequence_matches_hand_computed_decimals() -> None:
         Decimal("1.0"),
         Decimal("2"),
     ]
+
+
+# --- B-13: strict mode brings paper closer to live semantics --------------- #
+
+# An instrument carrying venue precision + minimums, like a live venue reports.
+STRICT_BTC_USD = Instrument(
+    Symbol("BTC", "USD"),
+    price_precision=1,
+    qty_precision=5,
+    min_qty=money("0.0001"),
+    min_notional=money("10"),
+)
+
+
+def _strict_limit_buy(qty: str, price: str = "30000", cid: str = "cid-1") -> Order:
+    """A LIMIT BUY on the precision-carrying instrument, for strict-mode tests."""
+    return Order(
+        client_order_id=cid,
+        instrument=STRICT_BTC_USD,
+        side=OrderSide.BUY,
+        qty=money(qty),
+        type=OrderType.LIMIT,
+        limit_price=money(price),
+    )
+
+
+async def test_strict_rejects_sub_min_notional_order() -> None:
+    """B-13: strict mode rejects a sub-min-notional order like a live venue.
+
+    ``0.0002 * 30000 = 6`` is below the ``min_notional`` of 10, so a live venue
+    would reject it. Strict paper must too (via ``prepare_order_values`` ->
+    :class:`OrderTooSmall`) rather than silently filling — so the reject
+    condition is visible in paper, not a live-only surprise.
+    """
+    broker = PaperBroker(starting_balances={"USD": money("100000")}, strict=True)
+
+    with pytest.raises(OrderTooSmall, match="below the minimum"):
+        await broker.place_order(_strict_limit_buy(qty="0.0002", price="30000"))
+
+    # Nothing was placed or filled: the doomed order never reached the book.
+    assert await broker.open_orders() == []
+    assert await broker.fills() == []
+
+
+async def test_strict_rejects_below_min_qty_order() -> None:
+    """B-13: strict mode rejects a below-``min_qty`` order (sub-lot)."""
+    broker = PaperBroker(starting_balances={"USD": money("100000")}, strict=True)
+
+    # 0.00001 rounds to the 5-dp lot but is below min_qty 0.0001.
+    with pytest.raises(OrderTooSmall):
+        await broker.place_order(_strict_limit_buy(qty="0.00001", price="30000"))
+
+
+async def test_strict_dedups_repeated_client_order_id() -> None:
+    """B-13: a retried client-order-id returns the SAME id — no duplicate order.
+
+    Mirrors venue-side dedup (Binance ``-2010``): re-placing the same
+    ``client_order_id`` must not create a second paper order, so the
+    idempotency invariant (a retry never duplicates an order) holds in paper.
+    """
+    broker = PaperBroker(
+        fill_model="partial",
+        partial_fill_ratio=money("0.5"),
+        starting_balances={"USD": money("1000000")},
+        strict=True,
+    )
+
+    # First placement fills half, leaving the order live (so a naive re-place
+    # would visibly open a second one).
+    id1 = await broker.place_order(_strict_limit_buy(qty="1", cid="dup"))
+    fills_after_first = len(await broker.fills())
+    open_after_first = await broker.open_orders()
+    assert len(open_after_first) == 1
+
+    # Retry the SAME client-order-id: same venue id, no new order, no new fill.
+    id2 = await broker.place_order(_strict_limit_buy(qty="1", cid="dup"))
+    assert id2 == id1
+    assert len(await broker.open_orders()) == 1
+    assert len(await broker.fills()) == fills_after_first
+
+
+async def test_strict_quantizes_over_precise_qty_before_fill() -> None:
+    """B-13: strict mode quantizes an over-precise qty down to the lot.
+
+    ``0.123456789`` snaps down to the 5-dp lot (``0.12345``); the recorded fill
+    is at the quantized quantity, matching what a live venue would accept.
+    """
+    broker = PaperBroker(starting_balances={"USD": money("100000")}, strict=True)
+
+    await broker.place_order(_strict_limit_buy(qty="0.123456789", price="30000"))
+
+    fills = await broker.fills()
+    assert len(fills) == 1
+    assert fills[0].qty == Decimal("0.12345")
+
+
+async def test_non_strict_default_still_permissive() -> None:
+    """The default (non-strict) broker is unchanged: no dedup, no min rejection.
+
+    A sub-min order fills and a repeated client-order-id opens a second order —
+    the historical permissive simulator behaviour, preserved for existing tests.
+    """
+    broker = PaperBroker(starting_balances={"USD": money("100000")})
+
+    # Sub-min-notional order fills anyway (no rejection in permissive mode).
+    id1 = await broker.place_order(_strict_limit_buy(qty="0.0002", cid="p"))
+    id2 = await broker.place_order(_strict_limit_buy(qty="0.0002", cid="p"))
+    assert id1 != id2  # a second order was created (no dedup)
+    assert len(await broker.fills()) == 2

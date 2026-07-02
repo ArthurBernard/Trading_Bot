@@ -87,7 +87,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING
 
 from trading_bot.application.events import EventBus, LogEvent
@@ -122,9 +122,7 @@ logger = logging.getLogger(__name__)
 #: runner overrides the order's ``client_order_id`` with its deterministic,
 #: symbol-namespaced per-step id, so a factory need not (and should not rely on)
 #: set one.
-PortfolioOrderFactory = Callable[
-    ["PortfolioStrategy", Instrument, Money, Money], Order
-]
+PortfolioOrderFactory = Callable[["PortfolioStrategy", Instrument, Money, Money], Order]
 
 _ZERO: Money = money("0")
 
@@ -324,9 +322,7 @@ class PortfolioRunner:
                 await asyncio.sleep(0)
         return submitted
 
-    async def rebalance(
-        self, frames: Mapping[Symbol, pl.DataFrame]
-    ) -> RebalanceResult:
+    async def rebalance(self, frames: Mapping[Symbol, pl.DataFrame]) -> RebalanceResult:
         """Process **one** rebalance tick: weight vector → N idempotent legs.
 
         Evaluates ``strategy.signal_fn(asof, frames)`` for the whole book, sizes
@@ -369,8 +365,7 @@ class PortfolioRunner:
         # 0-weight (flat) target so it is fully closed. Iterate the *universe*,
         # not the weight keys.
         full_weights: dict[Symbol, Money] = {
-            symbol: weights.get(symbol, _ZERO)
-            for symbol in self._strategy.universe
+            symbol: weights.get(symbol, _ZERO) for symbol in self._strategy.universe
         }
 
         signals = weights_to_signals(
@@ -433,14 +428,25 @@ class PortfolioRunner:
     async def rebalance_latest(self) -> RebalanceResult | None:
         """Rebalance the book over the feed's **latest** cross-section — for a daemon.
 
-        Reads the feed's most recent causal cross-section (the last one a fresh
-        iteration yields — a live :class:`~trading_bot.application.portfolio_feed
-        .PortfolioFeed` re-reads the dccd store each iteration) and runs **one**
+        Reads the feed's most recent causal cross-section and runs **one**
         :meth:`rebalance` over it. Where :meth:`run` *drains* the feed once
         (replay/backtest), this is the single, on-demand rebalance a
         **scheduler-driven daemon** calls each tick: per-coin deltas are computed
         against the live tracker, so a tick over unchanged weights/data submits
         nothing and only changed targets trade. Idempotent under repetition.
+
+        Bounded per tick. A live :class:`~trading_bot.application.portfolio_feed.
+        PortfolioFeed` exposes :meth:`~trading_bot.application.portfolio_feed.
+        PortfolioFeed.latest`, which returns the **full aligned** cross-section
+        (every common date, oldest→newest) with a **single** store read — this is
+        used when present (mirroring :meth:`~trading_bot.application.strategy_runner
+        .StrategyRunner.step_latest`). That full window is *still causal*: it is the
+        exact final window a full drain would yield (the last growing prefix is the
+        whole aligned frame), so there is no lookahead — the daemon just skips the
+        O(total bars) work of re-walking every intermediate prefix only to discard
+        all but the last. A feed that exposes no ``latest()`` (a plain iterable, a
+        backtest/test fake) falls back to draining and keeping the last yielded
+        cross-section, which is identically the final causal window.
 
         Returns
         -------
@@ -449,7 +455,17 @@ class PortfolioRunner:
             cross-section (e.g. the universe has no common closed bar yet).
 
         """
-        latest: Mapping[Symbol, pl.DataFrame] | None = None
+        feed_latest = getattr(self._feed, "latest", None)
+        if callable(feed_latest):
+            # Live path: one store read for the full aligned (causal) window,
+            # instead of draining every prefix to keep only the last.
+            latest: Mapping[Symbol, pl.DataFrame] | None = feed_latest()
+            if not latest or not any(f.height > 0 for f in latest.values()):
+                return None
+            return await self.rebalance(latest)
+        # Fallback: a plain iterable feed (no ``latest()``). Drain and keep the
+        # last yielded cross-section — identically the final causal window.
+        latest = None
         for frames in self._feed:  # type: ignore[attr-defined]
             latest = frames
         if latest is None:
@@ -471,11 +487,13 @@ class PortfolioRunner:
         ``f"{strategy.name}-{symbol}-{step}"`` — symbol-namespaced so the N legs
         of one tick never collide and a re-run dedups per coin at the router.
         """
-        order = self._order_factory(self._strategy, instrument, delta, close)
-        # The runner owns idempotency, not the factory: stamp the per-coin,
-        # per-step id regardless of what the factory chose.
-        order.client_order_id = f"{self._strategy.name}-{symbol}-{step}"
-        return order
+        built = self._order_factory(self._strategy, instrument, delta, close)
+        # The runner owns idempotency, not the factory: build the final Order
+        # with the deterministic, symbol-namespaced per-step id set *at
+        # construction* (via dataclasses.replace, which re-runs validation)
+        # rather than mutating the client_order_id afterwards — the id is the
+        # aggregate's identity and must not change once the Order exists.
+        return replace(built, client_order_id=f"{self._strategy.name}-{symbol}-{step}")
 
     def _asof_ms(self, frames: Mapping[Symbol, pl.DataFrame]) -> int:
         """Resolve the as-of timestamp (ms) for this tick.
@@ -511,9 +529,7 @@ class PortfolioRunner:
         return min(latest_per_coin) // 1_000_000
 
     @staticmethod
-    def _latest_closes(
-        frames: Mapping[Symbol, pl.DataFrame]
-    ) -> dict[Symbol, Money]:
+    def _latest_closes(frames: Mapping[Symbol, pl.DataFrame]) -> dict[Symbol, Money]:
         """Read each coin's latest close as exact :class:`~decimal.Decimal`.
 
         Reads the last ``c`` per coin via ``money(str(...))`` — never ``float`` —

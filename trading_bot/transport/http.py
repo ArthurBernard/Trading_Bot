@@ -36,7 +36,12 @@ import httpx
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable, Mapping
 
-__all__ = ["AsyncHTTPClient", "AmbiguousRequestError", "HTTPError"]
+__all__ = [
+    "AsyncHTTPClient",
+    "AmbiguousRequestError",
+    "HTTPError",
+    "ResponseTooLargeError",
+]
 
 logger = logging.getLogger(__name__)
 
@@ -47,6 +52,31 @@ _DEFAULT_BACKOFF_BASE = 0.5
 # never park a request for an unreasonable time.
 _MAX_BACKOFF = 60.0
 
+# --- Connection-pool bounds ------------------------------------------------- #
+# Explicit pool bounds so the shared, reference-counted client (one per exchange,
+# used by concurrent operations) can never open an unbounded number of sockets to
+# a venue, and idle keep-alive connections are reaped. Left as constants — the
+# exchange APIs this fronts never need a wide pool.
+_MAX_CONNECTIONS = 20
+_MAX_KEEPALIVE_CONNECTIONS = 10
+_KEEPALIVE_EXPIRY = 30.0
+
+# --- Response-size cap ------------------------------------------------------ #
+# Hard ceiling on a response body before it is buffered and JSON-parsed. Exchange
+# REST payloads (balances, open orders, a page of fills) are kilobytes; a body an
+# order of magnitude past any legitimate response is treated as hostile/broken
+# and rejected *before* it is fully read into memory or handed to ``json()``,
+# rather than letting a runaway body exhaust memory. 8 MiB is generous headroom.
+_MAX_RESPONSE_BYTES = 8 * 1024 * 1024
+
+# Whether the underlying httpx client reads OS proxy / TLS-bundle environment
+# variables (``HTTP_PROXY`` / ``HTTPS_PROXY`` / ``NO_PROXY`` / ``SSL_CERT_FILE``).
+# Made **explicit** (httpx's own default is ``True``) so the proxy posture is a
+# documented, opt-in choice rather than an implicit ambient one: a signed API
+# client should not silently route through an unexpected proxy. Overridable per
+# instance via the ``trust_env`` constructor argument.
+_DEFAULT_TRUST_ENV = False
+
 # Query-string parameters whose *value* is a secret (or a nonce that reveals
 # call ordering) and must never reach a log record or an exception message. The
 # comparison is case-insensitive so both Binance's ``signature`` / ``apiKey``
@@ -54,9 +84,7 @@ _MAX_BACKOFF = 60.0
 # side of the "secrets never logged" invariant: Binance signs on the query
 # string, so the full signed URL — carrying ``signature`` and ``apiKey`` — flows
 # verbatim into every failure path here unless it is scrubbed first.
-_SENSITIVE_QUERY_KEYS = frozenset(
-    {"signature", "api_key", "apikey", "token", "nonce"}
-)
+_SENSITIVE_QUERY_KEYS = frozenset({"signature", "api_key", "apikey", "token", "nonce"})
 _REDACTED = "<redacted>"
 
 # Binance reports the weight consumed in the trailing rolling minute in this
@@ -135,6 +163,36 @@ def _redact_exc(exc: BaseException) -> str:
         return text
     raw = str(raw_url)
     return text.replace(raw, _redact_url(raw))
+
+
+class ResponseTooLargeError(Exception):
+    """A response body exceeded the transport's size cap and was rejected.
+
+    Raised by :meth:`AsyncHTTPClient._read_capped_json` when a response body
+    grows past :data:`_MAX_RESPONSE_BYTES` before it is fully read — so a
+    runaway or hostile body is refused **before** it is buffered in full or
+    parsed as JSON, rather than being allowed to exhaust memory. A legitimate
+    exchange payload (balances, open orders, a page of fills) is kilobytes, far
+    under the cap.
+
+    Parameters
+    ----------
+    url : str
+        Target URL of the over-large response. Sensitive query parameters are
+        redacted before the URL is stored or rendered.
+    limit : int
+        The byte ceiling that was exceeded.
+    """
+
+    def __init__(self, url: str, limit: int) -> None:
+        # Store the redacted URL so ``self.url``, ``args`` and ``str(self)`` are
+        # all secret-free even if the exception is re-logged far from here.
+        self.url = _redact_url(url)
+        self.limit = limit
+        super().__init__(
+            f"response from {self.url} exceeded the {limit}-byte cap; "
+            "body refused before buffering to avoid memory exhaustion"
+        )
 
 
 class HTTPError(Exception):
@@ -225,7 +283,24 @@ class AsyncHTTPClient:
         Exponential backoff base, in seconds: zero-based attempt *n* waits
         ``backoff_base * 2**n`` (0.5, 1.0, 2.0, … — increasing, capped at 60s).
     timeout : float, default 10.0
-        Per-request timeout, in seconds.
+        Default per-phase timeout, in seconds, used for any phase left
+        unspecified below. Distinguishing the phases matters for order
+        submission: a **connect**-timeout means the request likely never left
+        the client, whereas a **read**-timeout means it was sent and its
+        outcome is unknown — the caller must then reconcile, never blind-retry
+        (see :class:`AmbiguousRequestError`).
+    connect_timeout : float, optional
+        Connection-establishment timeout, in seconds. Defaults to ``timeout``.
+    read_timeout : float, optional
+        Socket-read timeout, in seconds. Defaults to ``timeout``.
+    write_timeout : float, optional
+        Socket-write timeout, in seconds. Defaults to ``timeout``.
+    trust_env : bool, default False
+        Whether the underlying httpx client honours OS proxy / TLS-bundle
+        environment variables (``HTTP_PROXY`` / ``HTTPS_PROXY`` / ``NO_PROXY`` /
+        ``SSL_CERT_FILE``). Made explicit (httpx's own default is ``True``) so a
+        signed API client does not silently route through an ambient proxy;
+        opt in deliberately when a proxy is intended.
     headers : dict of str to str, optional
         Default headers applied to every request.
     exchange : str, optional
@@ -253,6 +328,10 @@ class AsyncHTTPClient:
         max_retries: int = _DEFAULT_RETRIES,
         backoff_base: float = _DEFAULT_BACKOFF_BASE,
         timeout: float = _DEFAULT_TIMEOUT,
+        connect_timeout: float | None = None,
+        read_timeout: float | None = None,
+        write_timeout: float | None = None,
+        trust_env: bool = _DEFAULT_TRUST_ENV,
         headers: dict[str, str] | None = None,
         exchange: str | None = None,
         limiter: _Limiter | None = None,
@@ -262,6 +341,25 @@ class AsyncHTTPClient:
         self._max_retries = max_retries
         self._backoff_base = backoff_base
         self._timeout = timeout
+        # Explicit per-phase timeouts: connect vs read is the material split for
+        # order submission (a read-timeout is ambiguous — the order may have
+        # landed — while a connect-timeout most likely never left). ``pool`` (the
+        # wait for a free pooled connection) reuses the scalar default.
+        self._httpx_timeout = httpx.Timeout(
+            timeout,
+            connect=connect_timeout if connect_timeout is not None else timeout,
+            read=read_timeout if read_timeout is not None else timeout,
+            write=write_timeout if write_timeout is not None else timeout,
+        )
+        self._trust_env = trust_env
+        # Explicit connection-pool bounds for the shared, concurrently-used
+        # client. Stored so the configured posture is introspectable (and so the
+        # single source of truth is the constant set above).
+        self._limits = httpx.Limits(
+            max_connections=_MAX_CONNECTIONS,
+            max_keepalive_connections=_MAX_KEEPALIVE_CONNECTIONS,
+            keepalive_expiry=_KEEPALIVE_EXPIRY,
+        )
         self._headers = headers or {}
         self._exchange = exchange
         self._limiter = limiter
@@ -279,9 +377,20 @@ class AsyncHTTPClient:
         if self._client is None:
             self._client = httpx.AsyncClient(
                 base_url=self._base_url or "",
-                timeout=self._timeout,
+                # Per-phase timeouts (connect / read / write / pool) rather than a
+                # single scalar, so ``_request`` can tell a likely-not-sent
+                # ConnectTimeout from a sent-but-unknown ReadTimeout.
+                timeout=self._httpx_timeout,
+                # Bound the socket pool for the shared, concurrently-used client
+                # and reap idle keep-alives.
+                limits=self._limits,
                 headers=self._headers,
-                follow_redirects=True,
+                # A signed API client must not follow a redirect: a 3xx could
+                # replay the signed query to a different host, and Binance/Kraken
+                # never redirect a valid request.
+                follow_redirects=False,
+                # Explicit proxy/TLS-env posture (see ``trust_env``).
+                trust_env=self._trust_env,
             )
         self._depth += 1
         return self
@@ -544,8 +653,7 @@ class AsyncHTTPClient:
                     if not retry:
                         raise AmbiguousRequestError(
                             url,
-                            f"HTTP {resp.status_code} ({kind}): "
-                            f"{resp.text[:200]}",
+                            f"HTTP {resp.status_code} ({kind}): {resp.text[:200]}",
                         )
                     logger.warning(
                         "HTTP %d (%s) from %s, sleeping %.1fs",
@@ -577,16 +685,24 @@ class AsyncHTTPClient:
                 if resp.status_code >= 400:
                     raise HTTPError(resp.status_code, url, resp.text)
 
-                return resp.json()
+                return self._capped_json(resp, url)
 
             except httpx.TransportError as exc:
                 if not retry:
                     # The request may have reached the server before the
-                    # connection dropped — outcome unknown. Refuse to retry.
-                    # ``_redact_exc`` scrubs any signed URL httpx embeds in the
-                    # transport error's message before it enters ``reason``.
+                    # connection dropped / read timed out — outcome unknown.
+                    # Refuse to retry a non-idempotent request. A ``ReadTimeout``
+                    # is the canonical UNKNOWN case (the request was sent; the
+                    # response was lost), so it must stay ambiguous and reconcile
+                    # — NEVER auto-retry (a retry could place a second order). A
+                    # ``ConnectTimeout`` most likely never left, but we still
+                    # surface it as ambiguous (safe, over-conservative): the
+                    # caller reconciles rather than risking a double-submit on a
+                    # mis-classified phase. ``_redact_exc`` scrubs any signed URL
+                    # httpx embeds in the message before it enters ``reason``.
                     raise AmbiguousRequestError(
-                        url, f"transport error: {_redact_exc(exc)}"
+                        url,
+                        f"{self._transport_phase(exc)}: {_redact_exc(exc)}",
                     ) from exc
                 wait = self._backoff(attempt)
                 logger.warning(
@@ -604,6 +720,45 @@ class AsyncHTTPClient:
         raise RuntimeError(
             f"{method} {safe_url} failed after {self._max_retries} retries"
         )
+
+    @staticmethod
+    def _transport_phase(exc: httpx.TransportError) -> str:
+        """Classify a transport error's phase for the ambiguity ``reason``.
+
+        Distinguishes a **read**-timeout (request sent, response lost — the
+        canonical UNKNOWN/ambiguous case, must reconcile) from a **connect**
+        failure (likely never sent). This only labels the ``reason`` — a
+        ``retry=False`` request is ambiguous either way, never auto-retried —
+        so the operator/log can tell *why* the outcome is unknown.
+        """
+        if isinstance(exc, httpx.ReadTimeout):
+            return "read-timeout (request sent, response unknown)"
+        if isinstance(exc, httpx.ConnectTimeout):
+            return "connect-timeout (request likely not sent)"
+        if isinstance(exc, httpx.ConnectError):
+            return "connect error (request likely not sent)"
+        return "transport error"
+
+    def _capped_json(self, resp: httpx.Response, url: str) -> Any:
+        """Parse a 2xx response body as JSON, enforcing the size cap.
+
+        Rejects an over-large body with :class:`ResponseTooLargeError` rather
+        than parsing it: first on the declared ``Content-Length`` (so a hostile
+        server advertising a huge body is refused without trusting the header
+        alone), then on the actually-buffered byte length (the authoritative
+        check, catching a missing or lying ``Content-Length``). A legitimate
+        exchange payload is far under :data:`_MAX_RESPONSE_BYTES`.
+        """
+        declared = resp.headers.get("Content-Length")
+        if declared is not None:
+            try:
+                if int(declared) > _MAX_RESPONSE_BYTES:
+                    raise ResponseTooLargeError(url, _MAX_RESPONSE_BYTES)
+            except ValueError:
+                logger.debug("Unparseable Content-Length %r", declared)
+        if len(resp.content) > _MAX_RESPONSE_BYTES:
+            raise ResponseTooLargeError(url, _MAX_RESPONSE_BYTES)
+        return resp.json()
 
     def _retry_after(self, resp: httpx.Response, attempt: int) -> float:
         """Delay to honour a 429/418: ``Retry-After`` header, else backoff."""

@@ -383,6 +383,40 @@ async def test_open_orders_partial_fill_avg_falls_back_to_price(
     assert orders[0].avg_fill_price == Decimal("31500.0")
 
 
+async def test_open_orders_unknown_ordertype_rejected_not_coerced(
+    httpx_mock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """B-12: an unmapped Kraken ``ordertype`` is rejected, not coerced to LIMIT.
+
+    A wrong type is a wrong order: rebuilding a ``take-profit`` /
+    ``trailing-stop`` as a plain LIMIT would have ``reconcile`` adopt a
+    mislabelled order. The rebuild must raise instead of guessing.
+    """
+    httpx_mock.add_response(
+        json={
+            "error": [],
+            "result": {
+                "open": {
+                    "OABC-9": {
+                        "vol": "1.0",
+                        "vol_exec": "0.0",
+                        "descr": {
+                            "pair": "XBTUSD",
+                            "type": "buy",
+                            "ordertype": "trailing-stop",
+                            "price": "30000.0",
+                        },
+                    }
+                }
+            },
+        }
+    )
+    broker = _broker(monkeypatch)
+
+    with pytest.raises(BrokerError, match="unknown ordertype"):
+        await broker.open_orders()
+
+
 async def test_open_orders_zero_executed_applies_no_fill(
     httpx_mock, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -617,9 +651,7 @@ async def test_instrument_builds_precision(httpx_mock) -> None:
 async def test_kraken_error_raises_broker_error(
     httpx_mock, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    httpx_mock.add_response(
-        json={"error": ["EOrder:Insufficient funds"], "result": {}}
-    )
+    httpx_mock.add_response(json={"error": ["EOrder:Insufficient funds"], "result": {}})
     broker = _broker(monkeypatch)
     order = Order(
         client_order_id="cid-x",
