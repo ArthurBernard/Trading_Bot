@@ -6,6 +6,19 @@ rejected approaches as tombstones.
 
 ---
 
+### 2026-07-02 Bounded uvicorn graceful-shutdown so Ctrl-C quits promptly (PR #PR)  [accepted]
+- **Choice**: every uvicorn serve path (`dashboard`, `serve`, `run --serve`,
+  `start --serve`) sets `timeout_graceful_shutdown=_SHUTDOWN_GRACE_SECONDS` (3s).
+- **Why**: the dashboard's `/api/events` **SSE** stream is a long-lived request that
+  ends only when the *client* disconnects. uvicorn's default graceful shutdown is
+  **unbounded** — on Ctrl-C it waits for active connections to close, so a browser
+  tab holding the SSE open pinned it forever; the server hung on the first SIGINT
+  and needed a second. Reproduced: 20 s+ hang → clean 3.6 s exit with the timeout.
+- **Rejected alternatives**: (a) make the SSE generator watch a server-shutdown
+  event — uvicorn doesn't cleanly expose that to endpoints, and the timeout covers
+  *all* long-lived connections; (b) a competing `loop.add_signal_handler(SIGINT)` —
+  the very override the earlier fix removed for feeling unquittable.
+
 ### 2026-07-02 Per-unit lock serialises supervisor lifecycle vs stepping (PR #141)  [accepted]
 - **Choice**: each `_Unit` gets its own `asyncio.Lock`. `start`/`stop`/`set_mode`/
   `remove` mutate unit state only under that lock (`set_mode`'s stop→re-slice→start
