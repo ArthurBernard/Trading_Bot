@@ -50,6 +50,7 @@ performs no I/O of its own.
 from __future__ import annotations
 
 import importlib
+import logging
 import warnings
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -69,6 +70,8 @@ __all__ = [
     "load_strategy",
     "ma_crossover_signal",
 ]
+
+logger = logging.getLogger(__name__)
 
 #: A strategy's signal callable: a bars frame (OHLC, polars) → a domain
 #: :class:`~trading_bot.domain.signal.Signal` for the strategy's instrument.
@@ -263,6 +266,12 @@ def _resolve_ref(ref: str) -> SignalFn:
         raise SignalError(
             f"signal_fn reference {ref!r} must be 'module:function'"
         )
+    # Audit trail (I-1): resolving a dotted ref imports an arbitrary module (runs its
+    # top level) — log which one, at which callable, so a deploy's import is traceable.
+    # The ref carries no secret; the API boundary allow-lists the module prefix.
+    logger.info(
+        "resolving signal_fn: importing module %r for callable %r", module_name, attr
+    )
     try:
         module = importlib.import_module(module_name)
     except ImportError as exc:
