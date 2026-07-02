@@ -6,7 +6,7 @@ rejected approaches as tombstones.
 
 ---
 
-### 2026-07-02 Per-unit lock serialises supervisor lifecycle vs stepping (PR #PR)  [accepted]
+### 2026-07-02 Per-unit lock serialises supervisor lifecycle vs stepping (PR #141)  [accepted]
 - **Choice**: each `_Unit` gets its own `asyncio.Lock`. `start`/`stop`/`set_mode`/
   `remove` mutate unit state only under that lock (`set_mode`'s stop→re-slice→start
   is one atomic critical section via `_start_locked`); `step` takes the lock only to
