@@ -68,6 +68,7 @@ own (the runners' router/broker and the feed's client do).
 
 from __future__ import annotations
 
+import asyncio
 import itertools
 from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass, field
@@ -946,5 +947,13 @@ async def run_app(
         max_steps=max_steps,
         reconcile_on_start=reconcile_on_start,
     )
-    results = await system.orchestrator.run()
+    try:
+        results = await system.orchestrator.run()
+    finally:
+        # Drain the store's off-loop writer and join its thread so no order/fill
+        # enqueued during the run is lost when the process exits — the store is the
+        # reconciliation source of truth. Off the loop (blocking I/O); a no-op when
+        # no store / no writer.
+        if system.engine.store is not None:
+            await asyncio.to_thread(system.engine.store.close)
     return _build_report(system, results)

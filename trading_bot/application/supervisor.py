@@ -35,6 +35,7 @@ through the engines it builds (reconcile on start; the runners' router/broker).
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal, cast
@@ -620,6 +621,13 @@ class StrategySupervisor:
     async def stop(self, name: str) -> None:
         """Tear down the unit's engine — it is no longer stepped. Idempotent."""
         unit = self._unit(name)
+        if unit.engine is not None and unit.engine.store is not None:
+            # Drain the store's off-loop writer and join its thread so every
+            # order/fill already enqueued is persisted before we drop the engine —
+            # a graceful shutdown loses no write (the store is the reconciliation
+            # source of truth). Off the loop (the writer does blocking I/O) so the
+            # scheduler is not stalled.
+            await asyncio.to_thread(unit.engine.store.close)
         unit.running = False
         unit.runner = None
         unit.engine = None
@@ -1229,6 +1237,9 @@ class StrategySupervisor:
         with no ``db_path`` there is nowhere to read from, so the fills are empty.
         """
         if unit.running and unit.engine is not None and unit.engine.store is not None:
+            # The store writes bus-driven fills on a background thread; drain it so
+            # this reconciliation-source read reflects every confirmed fill.
+            unit.engine.store.flush()
             return unit.engine.store.stored_fills()
         db_path = unit.config.storage.db_path
         if db_path is None:
