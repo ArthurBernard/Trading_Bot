@@ -12,7 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **Cover money-critical error branches + drop dead code.** New tests take the kill-switch cancel-failure, order-router forbidden-transition, reconcile-divergence and WS-reconnect branches to full coverage; the dead recorded-value daily-PnL path is removed (the breaker uses the day-scoped provider only); dead dashboard assets (`control.js`/`control.html`) and pre-rewrite artifacts (`data_base/`, `execution_scripts/`, `general_config_example.yaml`) removed; impl-detail-coupled tests de-coupled via a `PaperBroker.seed_fills` seam (audit T-4/T-12/I-12/A-11/G-14). (#PR)
+- **Cover money-critical error branches + drop dead code.** New tests take the kill-switch cancel-failure, order-router forbidden-transition, reconcile-divergence and WS-reconnect branches to full coverage; the dead recorded-value daily-PnL path is removed (the breaker uses the day-scoped provider only); dead dashboard assets (`control.js`/`control.html`) and pre-rewrite artifacts (`data_base/`, `execution_scripts/`, `general_config_example.yaml`) removed; impl-detail-coupled tests de-coupled via a `PaperBroker.seed_fills` seam (audit T-4/T-12/I-12/A-11/G-14). (#151)
 - **`trading-bot dashboard`/`serve` quit promptly on the first Ctrl-C.** Every uvicorn serve path now sets a bounded `timeout_graceful_shutdown`, so a browser holding the `/api/events` SSE stream open no longer pins uvicorn's (default unbounded) graceful shutdown — the server force-closes the stream and exits in ~3s on the first SIGINT instead of hanging until a second one. (#145)
 
 ### Deprecated

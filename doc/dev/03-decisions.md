@@ -6,7 +6,7 @@ rejected approaches as tombstones.
 
 ---
 
-### 2026-07-02 Cover money-critical error branches; collapse the daily-loss breaker; drop dead code (PR #PR)  [accepted]
+### 2026-07-02 Cover money-critical error branches; collapse the daily-loss breaker; drop dead code (PR #151)  [accepted]
 - **Choice**: add tests for the previously-uncovered money-critical error branches
   (kill-switch cancel-failure, order-router forbidden reject transition, reconcile
   divergence, WS reconnect), taking `risk.py`/`order_router.py`/`reconcile.py` to 100%.
