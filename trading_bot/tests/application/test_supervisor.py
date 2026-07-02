@@ -9,6 +9,8 @@ needs an explicit confirmation). Async tests run un-decorated (``asyncio_mode =
 
 from __future__ import annotations
 
+import asyncio
+
 import polars as pl
 import pytest
 
@@ -20,6 +22,7 @@ from trading_bot.application.config import (
     StrategyConfig,
 )
 from trading_bot.application.events import FillEvent
+from trading_bot.application.strategy_runner import StrategyRunner
 from trading_bot.application.supervisor import StrategySupervisor
 from trading_bot.domain.errors import ConfigError, LiveTradingNotEnabled
 from trading_bot.domain.fill import Fill
@@ -1018,3 +1021,201 @@ async def test_per_strategy_replay_on_restart_stays_isolated(tmp_path) -> None: 
     assert {str(i.symbol) for i in eb.tracker.all_positions()} == {"BTC/USD"}
     assert ea.perf.realised_pnl() == money("8")
     assert eb.perf.realised_pnl() == money("18")
+
+
+# --- concurrency: per-unit lock serialises lifecycle vs stepping (A-3) ------- #
+
+
+class _BarrierRunner(StrategyRunner):
+    """A ``StrategyRunner`` whose ``step_latest`` suspends on an injected barrier.
+
+    Bypasses the real ``__init__`` (no engine wiring) so a test can install it as a
+    unit's ``runner`` directly. When stepped it signals ``entered`` and then blocks
+    on ``release`` — the deterministic seam that parks a ``step`` **mid-flight** so
+    a concurrent ``stop`` / ``set_mode`` fires while the step is suspended (the A-3
+    race), instead of hoping the scheduler happens to interleave. Being a real
+    ``StrategyRunner`` subclass, it satisfies :meth:`StrategySupervisor.step`'s
+    ``isinstance`` dispatch.
+    """
+
+    def __init__(self, entered: asyncio.Event, release: asyncio.Event) -> None:
+        # Deliberately do NOT call super().__init__ — no engine to wire here.
+        self._entered = entered
+        self._release = release
+
+    async def step_latest(self):  # type: ignore[override]  # noqa: ANN201
+        self._entered.set()  # announce the step is now in flight
+        await self._release.wait()  # park here until the test lets it finish
+        return None
+
+
+async def test_step_racing_a_concurrent_stop_does_not_crash_or_corrupt() -> None:
+    """A ``step`` parked mid-flight while a ``stop`` tears the same unit down is safe.
+
+    Reproduces A-3 deterministically: install a barrier runner, launch a ``step``
+    that suspends inside ``step_latest``, then ``stop`` the unit while the step is
+    in flight. The step must complete without raising (no ``None.step_latest()`` /
+    ``AssertionError``), and the unit must be left cleanly torn down.
+    """
+    sup = _supervisor()
+    await sup.start("btc-ma")
+    unit = sup._units["btc-ma"]  # noqa: SLF001
+
+    entered, release = asyncio.Event(), asyncio.Event()
+    unit.runner = _BarrierRunner(entered, release)
+
+    step_task = asyncio.create_task(sup.step("btc-ma"))
+    await asyncio.wait_for(entered.wait(), timeout=1.0)  # step is now mid-flight
+
+    # Tear the unit down while the step is suspended. `stop` takes the unit lock,
+    # but `step` already released it (it holds only a local runner snapshot), so
+    # `stop` does not block on the parked step.
+    await asyncio.wait_for(sup.stop("btc-ma"), timeout=1.0)
+
+    release.set()  # let the in-flight step resume and finish
+    assert await asyncio.wait_for(step_task, timeout=1.0) is None  # no exception
+
+    status = sup.status("btc-ma")[0]
+    assert status.running is False  # cleanly torn down
+    assert unit.runner is None
+    assert unit.engine is None
+    # A follow-up step on the stopped unit is a quiet no-op (consistent state).
+    assert await sup.step("btc-ma") is None
+
+
+async def test_step_racing_a_concurrent_set_mode_does_not_crash_or_corrupt() -> None:
+    """A ``step`` parked mid-flight while ``set_mode`` rebuilds the same unit is safe.
+
+    ``set_mode`` stops → re-slices → starts under the unit lock. The in-flight step
+    (holding a snapshot of the *old* runner) must finish without raising, and the
+    unit must end consistently in the new mode with a freshly-built engine. The
+    switch is a paper → paper restart: it exercises the full teardown → re-slice →
+    rebuild critical section offline (a real testnet/live build needs venue
+    credentials, out of scope here — the race is the same whatever the target mode).
+    """
+    pytest.importorskip("fynance")  # set_mode restarts → rebuilds a real engine
+    sup = _supervisor()
+    await sup.start("btc-ma")
+    unit = sup._units["btc-ma"]  # noqa: SLF001
+    old_engine = unit.engine
+
+    entered, release = asyncio.Event(), asyncio.Event()
+    unit.runner = _BarrierRunner(entered, release)
+
+    step_task = asyncio.create_task(sup.step("btc-ma"))
+    await asyncio.wait_for(entered.wait(), timeout=1.0)
+
+    # Restart under the lock (paper → paper still tears down + rebuilds the engine).
+    set_mode_task = asyncio.create_task(sup.set_mode("btc-ma", "paper"))
+    release.set()  # let the parked step resume; set_mode proceeds too
+    assert await asyncio.wait_for(step_task, timeout=1.0) is None  # no exception
+    await asyncio.wait_for(set_mode_task, timeout=2.0)
+
+    status = sup.status("btc-ma")[0]
+    assert status.mode == "paper"  # consistent end state
+    assert status.running is True
+    assert unit.engine is not None
+    assert unit.engine is not old_engine  # a genuinely fresh engine
+
+
+async def test_two_concurrent_starts_build_the_engine_exactly_once(monkeypatch) -> None:  # noqa: ANN001
+    """Two ``start``s racing on one unit build its engine exactly once (no double-build).
+
+    The concrete A-3 corruption ("double-build an engine"): ``start``'s idempotency
+    guard (``if unit.running: return``) sits *before* its awaits, so on the old,
+    un-locked code two concurrent ``start``s both pass the guard, both build an
+    engine, and the second silently clobbers the first (a leaked engine / duplicated
+    reconcile). Deterministic seam: ``reconcile`` is patched to park on a barrier the
+    first time, so the first ``start`` is suspended mid-build when the second is
+    launched. The per-unit lock serialises them — the second waits, then sees
+    ``running`` and returns — so ``build_engine`` runs exactly once.
+    """
+    import trading_bot.application.supervisor as sup_mod
+
+    build_calls = 0
+    real_build = sup_mod.build_engine
+
+    def _counting_build(*args, **kwargs):  # noqa: ANN002, ANN003, ANN202
+        nonlocal build_calls
+        build_calls += 1
+        return real_build(*args, **kwargs)
+
+    gate = asyncio.Event()
+    first = True
+    real_reconcile = sup_mod.reconcile
+
+    async def _gated_reconcile(*args, **kwargs):  # noqa: ANN002, ANN003, ANN202
+        nonlocal first
+        if first:
+            first = False
+            await gate.wait()  # park the first start mid-build
+        return await real_reconcile(*args, **kwargs)
+
+    monkeypatch.setattr(sup_mod, "build_engine", _counting_build)
+    monkeypatch.setattr(sup_mod, "reconcile", _gated_reconcile)
+
+    sup = _supervisor()
+    t1 = asyncio.create_task(sup.start("btc-ma"))
+    # Let the first start reach (and park at) the reconcile seam.
+    await asyncio.sleep(0)
+    t2 = asyncio.create_task(sup.start("btc-ma"))
+    await asyncio.sleep(0)  # give the second start a chance to (try to) proceed
+
+    gate.set()  # release the parked first start
+    await asyncio.wait_for(asyncio.gather(t1, t2), timeout=2.0)
+
+    assert build_calls == 1  # exactly one engine built — no double-build
+    assert sup.status("btc-ma")[0].running is True
+
+
+async def test_independent_units_step_concurrently_the_lock_is_not_global() -> None:
+    """Two different units step at the same time — the lock is per-unit, not global.
+
+    Both units' steps park on their barriers simultaneously; if the supervisor took
+    a single global lock, the second step could never enter while the first is
+    parked. That both report ``entered`` before either is released proves the locks
+    are independent (concurrent stepping of distinct strategies is preserved).
+    """
+    sup = StrategySupervisor(_two_venue_config(), dccd_client=_two_venue_client())
+    await sup.start("btc-kraken")
+    await sup.start("eth-binance")
+
+    e1, r1 = asyncio.Event(), asyncio.Event()
+    e2, r2 = asyncio.Event(), asyncio.Event()
+    sup._units["btc-kraken"].runner = _BarrierRunner(e1, r1)  # noqa: SLF001
+    sup._units["eth-binance"].runner = _BarrierRunner(e2, r2)  # noqa: SLF001
+
+    t1 = asyncio.create_task(sup.step("btc-kraken"))
+    t2 = asyncio.create_task(sup.step("eth-binance"))
+
+    # Both must be able to be in flight at once (a global lock would serialise them,
+    # so the second `entered` would never fire while the first is parked).
+    await asyncio.wait_for(asyncio.gather(e1.wait(), e2.wait()), timeout=1.0)
+
+    r1.set()
+    r2.set()
+    assert await asyncio.wait_for(asyncio.gather(t1, t2), timeout=1.0) == [None, None]
+
+
+async def test_remove_unit_fully_tears_down_no_residual_handles() -> None:
+    """`remove_unit` leaves no residual engine / runner / store handle on the unit.
+
+    A-10 routes `remove_unit` through the shared `_teardown`, so a removed unit is
+    torn down exactly as `stop` tears one down: engine, runner and running flag are
+    all cleared (and the unit is dropped from the registry + base config).
+    """
+    pytest.importorskip("fynance")
+    sup = _supervisor()
+    await sup.start("btc-ma")
+    unit = sup._units["btc-ma"]  # noqa: SLF001 — grab the handle before removal
+    assert unit.engine is not None  # it really was running
+
+    sup.remove_unit("btc-ma")
+
+    # The unit object itself is fully torn down (no leaked engine/runner handle) ...
+    assert unit.running is False
+    assert unit.runner is None
+    assert unit.engine is None
+    # ... and it is gone from the registry + manifest.
+    assert sup.names() == []
+    assert sup.manifest().strategies == []

@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Supervisor lifecycle no longer races stepping.** A per-unit `asyncio.Lock` guards start/stop/step/set_mode/remove so a scheduler tick can't step a half-built or torn-down unit (it previously could double-build an engine or hit `None`); independent strategies still run concurrently; stop/remove share one teardown path (audit A-3/A-10). (#141)
 - **Engine reads a real dccd store synchronously.** `_make_client` primes the dccd `Client`'s store/registry (the read-only half of dccd's async `__aenter__`), so the feed's sync `read()` works from inside the async step — it previously raised `Client must be used inside 'async with Client()'` (dccd API drift), starving every real-dccd read. Verified against 4.66M real 1m bars. (#137)
 - **Dashboard can launch strategies with a local `signal.ref`.** `trading-bot` now puts the CWD on `sys.path` (a group callback), so a manifest referencing a gitignored local strategy package (e.g. `strategies.<yourpkg>.signal:...`) resolves — previously the console script couldn't import it and the unit was silently skipped at start. (#135)
 

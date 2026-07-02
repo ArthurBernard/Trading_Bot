@@ -6,6 +6,22 @@ rejected approaches as tombstones.
 
 ---
 
+### 2026-07-02 Per-unit lock serialises supervisor lifecycle vs stepping (PR #141)  [accepted]
+- **Choice**: each `_Unit` gets its own `asyncio.Lock`. `start`/`stop`/`set_mode`/
+  `remove` mutate unit state only under that lock (`set_mode`'s stop→re-slice→start
+  is one atomic critical section via `_start_locked`); `step` takes the lock only to
+  **snapshot the runner**, then releases it before the long feed drain — once it
+  holds a live runner reference a concurrent teardown can't corrupt the in-flight
+  step. `stop` and `remove_unit` share one `_teardown` helper.
+- **Why**: audit A-3 — `step` vs `set_mode`/`stop`/`remove` were un-locked over
+  shared `_Unit` state, so a scheduler tick could double-build an engine or step a
+  half-built/torn-down unit. A **per-unit** lock (not a supervisor-wide one) keeps
+  independent strategies concurrent while removing the same-unit race. A-10 — the
+  two teardown paths were hand-inlined and could diverge.
+- **Rejected alternatives**: (a) a single global lock — serialises unrelated
+  strategies; (b) holding the lock across the whole rebalance — needlessly blocks
+  control ops for the feed-drain duration.
+
 ### 2026-07-02 Config-driven portfolio data source (resample + store path) (PR #138)  [accepted]
 - **Choice**: add `source_span` and `data_path` to `DataSourceConfig`;
   `build_portfolio_runners` wraps the real dccd client in a `ResamplingDccdClient`
