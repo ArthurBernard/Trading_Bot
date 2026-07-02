@@ -127,7 +127,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **Dashboard gate hardening (server-side).** The typed live-confirmation (`I UNDERSTAND`) is enforced on the server (a bare `confirm:true` no longer flips a strategy to live), the deploy `db_path` is rejected on absolute/traversal paths, and the deploy `signal.ref` is allow-listed to a set of module roots with an audit log on import (audit I-1/I-2/I-3). (#PR)
+- **Dashboard gate hardening (server-side).** The typed live-confirmation (`I UNDERSTAND`) is enforced on the server (a bare `confirm:true` no longer flips a strategy to live), the deploy `db_path` is rejected on absolute/traversal paths, and the deploy `signal.ref` is allow-listed to a set of module roots with an audit log on import (audit I-1/I-2/I-3). (#130)
 - **A paper unit's book no longer commingles testnet/live fills.** `start()`'s
   paper-book replay folded **all** stored fills into the paper simulator; once a store
   held fills from a different deployment mode (a strategy run testnet/live, then
