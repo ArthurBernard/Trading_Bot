@@ -191,6 +191,17 @@ class AsyncHTTPClient:
             await self._client.aclose()
             self._client = None
 
+    @property
+    def max_retries(self) -> int:
+        """The bounded number of attempts on transient errors (read-only).
+
+        Exposed so a caller running its own retry loop over a body-level venue
+        error (e.g. Kraken's HTTP-200 ``EService:Unavailable``, which the
+        transport's status-code retry never sees) can bound its attempts to the
+        same budget.
+        """
+        return self._max_retries
+
     def _backoff(self, attempt: int) -> float:
         """Backoff delay (seconds) for a zero-based *attempt*, capped.
 
@@ -198,6 +209,16 @@ class AsyncHTTPClient:
         (so a sustained outage waits longer each retry, never shorter).
         """
         return min(self._backoff_base * 2.0**attempt, _MAX_BACKOFF)
+
+    async def sleep_backoff(self, attempt: int) -> None:
+        """Sleep this client's exponential backoff for a zero-based *attempt*.
+
+        Uses the injected ``sleep`` seam (so tests can record delays without real
+        waits) and the same :meth:`_backoff` schedule as the internal retry loop.
+        Exposed for a caller running its own retry loop over a body-level venue
+        error that the transport's status-code retry cannot observe.
+        """
+        await self._sleep(self._backoff(attempt))
 
     async def get(self, url: str, params: Mapping[str, Any] | None = None) -> Any:
         """Perform a GET request with retry/backoff. Returns parsed JSON.

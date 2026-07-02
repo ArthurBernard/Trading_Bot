@@ -29,6 +29,10 @@ never calls Kraken's ``/Assets`` or ``/AssetPairs`` endpoints.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from decimal import Decimal
+
+from trading_bot.domain.errors import OrderTooSmall
+from trading_bot.domain.money import Money, quantize
 
 __all__ = [
     "Symbol",
@@ -336,6 +340,8 @@ class Instrument:
     Frozen and hashable. ``price_precision`` / ``qty_precision`` are the number
     of decimal places the venue accepts for price and quantity respectively;
     both are optional (unknown until the venue's metadata is loaded).
+    ``min_qty`` / ``min_notional`` are the venue's minimum order size and
+    minimum order value (``qty * price``) — also optional.
 
     Parameters
     ----------
@@ -345,6 +351,12 @@ class Instrument:
         Number of decimal places allowed for the price.
     qty_precision : int, optional
         Number of decimal places allowed for the quantity / volume.
+    min_qty : Decimal, optional
+        Minimum tradeable quantity (venue lot minimum, e.g. Kraken ``ordermin``
+        / Binance ``LOT_SIZE.minQty``). ``None`` when unknown.
+    min_notional : Decimal, optional
+        Minimum tradeable order value in quote units (venue notional minimum,
+        e.g. Binance ``NOTIONAL.minNotional``). ``None`` when unknown.
 
     Examples
     --------
@@ -359,7 +371,125 @@ class Instrument:
     symbol: Symbol
     price_precision: int | None = None
     qty_precision: int | None = None
+    min_qty: Money | None = None
+    min_notional: Money | None = None
 
     def __str__(self) -> str:
         """The underlying symbol's ``BASE/QUOTE``."""
         return str(self.symbol)
+
+    @staticmethod
+    def _step_from_precision(precision: int | None) -> Money | None:
+        """The tick/lot step implied by a decimal-place ``precision``.
+
+        ``precision=2 -> Decimal("0.01")``, ``precision=0 -> Decimal("1")``.
+        ``None`` when the precision is unknown (no quantization is applied).
+        """
+        if precision is None:
+            return None
+        return Decimal(1).scaleb(-precision)
+
+    @property
+    def price_step(self) -> Money | None:
+        """The price tick size implied by :attr:`price_precision` (or ``None``)."""
+        return self._step_from_precision(self.price_precision)
+
+    @property
+    def qty_step(self) -> Money | None:
+        """The quantity lot size implied by :attr:`qty_precision` (or ``None``)."""
+        return self._step_from_precision(self.qty_precision)
+
+    def quantize_price(self, price: Money) -> Money:
+        """Snap ``price`` to the venue tick (:attr:`price_step`), rounding down.
+
+        ``ROUND_DOWN`` (toward zero) so a submitted price never overshoots the
+        intended level. When :attr:`price_precision` is unknown the price is
+        returned unchanged.
+        """
+        step = self.price_step
+        return price if step is None else quantize(price, step)
+
+    def quantize_qty(self, qty: Money) -> Money:
+        """Snap ``qty`` to the venue lot (:attr:`qty_step`), rounding down.
+
+        ``ROUND_DOWN`` (toward zero) is the *safe* direction for both sides: a
+        buy never buys more than intended and a sell never sells more than is
+        held. When :attr:`qty_precision` is unknown the quantity is returned
+        unchanged.
+        """
+        step = self.qty_step
+        return qty if step is None else quantize(qty, step)
+
+    def prepare_order_values(
+        self,
+        qty: Money,
+        *,
+        limit_price: Money | None = None,
+        stop_price: Money | None = None,
+    ) -> tuple[Money, Money | None, Money | None]:
+        """Quantize an order's numeric fields and reject a sub-minimum order.
+
+        Returns the ``(qty, limit_price, stop_price)`` an adapter should put on
+        the wire, each snapped to the venue tick/lot (:meth:`quantize_qty` /
+        :meth:`quantize_price`), rounding **down** so a submission never
+        overshoots the intended price or size (a sell never sells more than
+        held). ``None`` prices pass through as ``None``.
+
+        The quantized order is then checked against the venue minimums and
+        rejected with :class:`~trading_bot.domain.errors.OrderTooSmall` — rather
+        than sent to be rejected by the venue — when:
+
+        * quantizing ``qty`` to the lot leaves **zero** (sub-lot dust); or
+        * ``qty`` is below :attr:`min_qty`; or
+        * the notional (``qty * reference_price``) is below :attr:`min_notional`,
+          where the reference price is the quantized ``limit_price`` (falling
+          back to the quantized ``stop_price``); with no price available (a
+          market order) the notional check is skipped — it cannot be computed
+          client-side.
+
+        Parameters
+        ----------
+        qty : Decimal
+            The requested order quantity.
+        limit_price : Decimal, optional
+            The requested limit price (``None`` for market/stop-only orders).
+        stop_price : Decimal, optional
+            The requested stop trigger price (``None`` when not a stop order).
+
+        Returns
+        -------
+        tuple of (Decimal, Decimal or None, Decimal or None)
+            The quantized ``(qty, limit_price, stop_price)`` ready for the wire.
+
+        Raises
+        ------
+        OrderTooSmall
+            If the quantized order is below the venue lot / min-qty /
+            min-notional.
+
+        """
+        q_qty = self.quantize_qty(qty)
+        q_limit = None if limit_price is None else self.quantize_price(limit_price)
+        q_stop = None if stop_price is None else self.quantize_price(stop_price)
+
+        if q_qty <= 0:
+            raise OrderTooSmall(
+                str(self),
+                f"quantity {qty} rounds to zero at lot step {self.qty_step}",
+            )
+        if self.min_qty is not None and q_qty < self.min_qty:
+            raise OrderTooSmall(
+                str(self),
+                f"quantity {q_qty} is below the minimum {self.min_qty}",
+            )
+        if self.min_notional is not None:
+            reference = q_limit if q_limit is not None else q_stop
+            if reference is not None:
+                notional = q_qty * reference
+                if notional < self.min_notional:
+                    raise OrderTooSmall(
+                        str(self),
+                        f"notional {notional} (qty {q_qty} x price {reference}) "
+                        f"is below the minimum {self.min_notional}",
+                    )
+        return q_qty, q_limit, q_stop

@@ -25,6 +25,12 @@ __all__ = [
     "RiskLimitBreached",
     "NoCapability",
     "BrokerError",
+    "OrderTooSmall",
+    "InsufficientBalance",
+    "InvalidInstrument",
+    "InvalidNonce",
+    "RateLimited",
+    "ServiceUnavailable",
     "SignalError",
     "ConfigError",
     "LiveTradingNotEnabled",
@@ -55,6 +61,114 @@ class BrokerError(TradingBotError):
 
     def __init__(self, msg: str) -> None:
         super().__init__(msg)
+
+
+class InsufficientBalance(BrokerError):
+    """A venue rejected an order because the account balance is too low.
+
+    The venue-neutral mapping of an *insufficient funds* rejection reported by a
+    venue's order endpoint (Kraken ``EOrder:Insufficient funds``; Binance
+    ``-2010`` naming an insufficient balance). Distinct from the structured
+    :class:`InsufficientFunds` — a venue rejection string carries no reliable
+    asset/required/available breakdown, so this subclass of :class:`BrokerError`
+    carries only the venue detail and, being a ``BrokerError``, stays catchable by
+    the order router's ``except BrokerError`` reject path.
+
+    Parameters
+    ----------
+    msg : str, optional
+        Human-readable venue detail. When omitted a generic message is built.
+
+    """
+
+    def __init__(self, msg: str | None = None) -> None:
+        detail = msg if msg is not None else "insufficient balance"
+        super().__init__(f"insufficient balance at venue: {detail}")
+
+
+class InvalidInstrument(BrokerError):
+    """A venue rejected an order because the pair/instrument is not tradeable.
+
+    The venue-neutral mapping of an *invalid pair / unknown symbol* rejection
+    (Kraken ``EQuery:Unknown asset pair`` / ``EOrder:Unknown pair``; Binance
+    ``-1121 Invalid symbol``). A subclass of :class:`BrokerError` so existing
+    ``except BrokerError`` sites keep catching it, while a caller that wants to
+    distinguish an unfixable-by-retry instrument error can match on the type.
+
+    Parameters
+    ----------
+    symbol : str
+        The venue symbol/pair that was rejected.
+    msg : str, optional
+        Human-readable venue detail. When omitted a generic message is built.
+
+    """
+
+    def __init__(self, symbol: str, msg: str | None = None) -> None:
+        self.symbol = symbol
+        detail = msg if msg is not None else "invalid or unknown instrument"
+        super().__init__(f"invalid instrument {symbol!r}: {detail}")
+
+
+class InvalidNonce(BrokerError):
+    """A venue rejected a signed request because its nonce was invalid.
+
+    Maps Kraken ``EAPI:Invalid nonce``. Almost always a *client-side* nonce bug
+    (non-monotonic counter, a clock step-back, or two callers sharing a nonce
+    source) rather than a transient venue condition, so it is **not** retriable:
+    a blind retry with a fresh nonce could double-submit a non-idempotent
+    ``AddOrder``. Surfaced distinctly so the operator sees the real cause.
+
+    Parameters
+    ----------
+    msg : str, optional
+        Human-readable venue detail. When omitted a generic message is built.
+
+    """
+
+    def __init__(self, msg: str | None = None) -> None:
+        detail = msg if msg is not None else "invalid nonce"
+        super().__init__(f"nonce rejected by venue: {detail}")
+
+
+class RateLimited(BrokerError):
+    """A venue rejected a request because a rate limit was exceeded.
+
+    Maps Kraken ``EAPI:Rate limit exceeded`` / ``EGeneral:Too many requests``
+    (Kraken returns these inside an HTTP-200 body) and Binance ``-1003``. A
+    **retriable** condition: backing off and retrying the *idempotent* calls is
+    the correct response. A subclass of :class:`BrokerError`.
+
+    Parameters
+    ----------
+    msg : str, optional
+        Human-readable venue detail. When omitted a generic message is built.
+
+    """
+
+    def __init__(self, msg: str | None = None) -> None:
+        detail = msg if msg is not None else "rate limit exceeded"
+        super().__init__(f"rate limited by venue: {detail}")
+
+
+class ServiceUnavailable(BrokerError):
+    """A venue is temporarily unavailable / in maintenance.
+
+    Maps Kraken ``EService:Unavailable`` / ``EService:Busy`` (returned inside an
+    HTTP-200 body, which is why the transport's 5xx retry never sees them) and
+    Binance ``-1001``. A **retriable** condition for idempotent calls. A subclass
+    of :class:`BrokerError`.
+
+    Parameters
+    ----------
+    msg : str, optional
+        Human-readable venue detail. When omitted a generic message is built.
+
+    """
+
+    def __init__(self, msg: str | None = None) -> None:
+        detail = msg if msg is not None else "service unavailable"
+        super().__init__(f"venue temporarily unavailable: {detail}")
 
 
 class OrderError(TradingBotError):
@@ -155,6 +269,32 @@ class InsufficientFunds(TradingBotError):
         super().__init__(
             f"insufficient {asset}: need {required}, only {available} available"
         )
+
+
+class OrderTooSmall(BrokerError):
+    """An order is below the venue's minimum tradeable size / notional.
+
+    Raised **client-side, before submission**, when quantizing an order to the
+    venue's lot/tick step leaves a quantity of zero (sub-lot dust), or the
+    quantity is below the venue's ``min_qty``, or the order's notional
+    (``qty * price``) is below the venue's ``min_notional``. Rejecting here
+    turns a doomed request (the venue would reject it anyway, costing a round
+    trip and a rate-limit token) into a clear, immediate error. A subclass of
+    :class:`BrokerError` so the order router's ``except BrokerError`` path drives
+    the order to ``REJECTED`` (a too-small order was never live on the venue).
+
+    Parameters
+    ----------
+    instrument : str
+        The instrument the order is for (its ``BASE/QUOTE`` string).
+    detail : str
+        Human-readable reason (which minimum was violated, and by how much).
+
+    """
+
+    def __init__(self, instrument: str, detail: str) -> None:
+        self.instrument = instrument
+        super().__init__(f"order on {instrument} is too small: {detail}")
 
 
 class RiskLimitBreached(TradingBotError):

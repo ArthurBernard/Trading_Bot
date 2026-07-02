@@ -46,12 +46,20 @@ import base64
 import hashlib
 import hmac
 import os
+import threading
 import time
 import urllib.parse
 from typing import TYPE_CHECKING, Any
 
 from trading_bot.brokers.base import Broker, Capability
-from trading_bot.domain.errors import BrokerError
+from trading_bot.domain.errors import (
+    BrokerError,
+    InsufficientBalance,
+    InvalidInstrument,
+    InvalidNonce,
+    RateLimited,
+    ServiceUnavailable,
+)
 from trading_bot.domain.fill import Fill
 from trading_bot.domain.instrument import (
     Instrument,
@@ -89,6 +97,82 @@ _KRAKEN_TO_ORDERTYPE: dict[str, OrderType] = {
     "limit": OrderType.LIMIT,
     "stop-loss": OrderType.STOP_LOSS,
 }
+
+# 32-bit unsigned ceiling for a Kraken ``userref`` (a signed 32-bit int; Kraken
+# accepts 0 .. 2**31-1). The domain ``client_order_id`` is arbitrary text, so it
+# is hashed deterministically into this range (see :func:`_userref_for`) — a
+# *transformation*, never a silent drop, so ``reconcile`` can match on it.
+_USERREF_MODULUS = 2**31 - 1
+
+# Substrings (upper-cased) that classify a Kraken error string returned inside an
+# HTTP-200 body into a retriable transient condition. Kraken returns
+# ``EService:Unavailable`` / ``EService:Busy`` and ``EAPI:Rate limit exceeded`` /
+# ``EGeneral:Too many requests`` with HTTP 200, so the transport's 5xx/429 retry
+# never sees them — they must be retried at this layer.
+_RETRIABLE_ERROR_MARKERS: tuple[str, ...] = (
+    "ESERVICE:UNAVAILABLE",
+    "ESERVICE:BUSY",
+    "ERATE",
+    "EAPI:RATE LIMIT",
+    "EGENERAL:TOO MANY",
+)
+
+
+def _userref_for(client_order_id: str) -> int:
+    """Deterministically map an arbitrary ``client_order_id`` to a Kraken userref.
+
+    Kraken's ``userref`` is a 32-bit signed integer, so an arbitrary domain
+    ``client_order_id`` (free text) cannot be forwarded verbatim. Rather than
+    drop it — which would make :func:`~trading_bot.application.reconcile.
+    reconcile` unable to correlate the order — it is hashed (BLAKE2b, digest
+    folded) into ``[0, 2**31-1]``. The mapping is **stable** (same id → same
+    userref across processes/restarts), so a reconcile pass matches the userref
+    the order was submitted with. It is one-way and may collide in principle,
+    but the primary correlation key stays the ``txid``; the userref is a
+    best-effort venue-side idempotency/lookup tag.
+    """
+    digest = hashlib.blake2b(client_order_id.encode(), digest_size=8).digest()
+    return int.from_bytes(digest, "big") % _USERREF_MODULUS
+
+
+def _map_kraken_error(errors: list[str], *, context: str) -> BrokerError:
+    """Map Kraken error strings to the most specific domain :class:`BrokerError`.
+
+    Kraken wraps failures as an ``error`` array of ``"ECategory:Detail"`` codes
+    (e.g. ``"EOrder:Insufficient funds"``). This inspects the (joined) codes and
+    returns the most specific domain error — :class:`~trading_bot.domain.errors.
+    InsufficientBalance`, :class:`~trading_bot.domain.errors.InvalidInstrument`,
+    :class:`~trading_bot.domain.errors.InvalidNonce`,
+    :class:`~trading_bot.domain.errors.RateLimited`,
+    :class:`~trading_bot.domain.errors.ServiceUnavailable` — falling back to a
+    generic :class:`BrokerError`. The error strings are plain venue diagnostics
+    (never key material), so they are safe to surface.
+    """
+    joined = "; ".join(errors)
+    upper = joined.upper()
+    detail = f"Kraken {context}: {joined}"
+    if "INSUFFICIENT FUNDS" in upper or "INSUFFICIENTFUNDS" in upper:
+        return InsufficientBalance(detail)
+    if "UNKNOWN ASSET PAIR" in upper or "UNKNOWN PAIR" in upper:
+        return InvalidInstrument(context, joined)
+    if "INVALID NONCE" in upper:
+        return InvalidNonce(detail)
+    if any(marker in upper for marker in ("ERATE", "EAPI:RATE LIMIT", "EGENERAL:TOO MANY")):
+        return RateLimited(detail)
+    if "ESERVICE:UNAVAILABLE" in upper or "ESERVICE:BUSY" in upper:
+        return ServiceUnavailable(detail)
+    return BrokerError(detail)
+
+
+def _is_retriable_kraken_error(errors: list[str]) -> bool:
+    """Whether a Kraken HTTP-200 ``error`` array is a retriable transient one.
+
+    ``True`` for the service-unavailable / rate-limit codes Kraken returns inside
+    a 200 body (see :data:`_RETRIABLE_ERROR_MARKERS`); ``False`` for a terminal
+    rejection (insufficient funds, invalid pair, invalid nonce, ...).
+    """
+    upper = "; ".join(errors).upper()
+    return any(marker in upper for marker in _RETRIABLE_ERROR_MARKERS)
 
 
 def _sign(path: str, data: Mapping[str, Any], secret: str) -> str:
@@ -199,6 +283,11 @@ class KrakenBroker(Broker):
             exchange=self.name, limiter=RateLimiter()
         )
         self._counter = call_counter or KrakenCallCounter.for_tier("starter")
+        # Monotonic nonce state (B-3): a counter seeded from the current time in
+        # microseconds, advanced under a lock so it is strictly increasing across
+        # concurrent private calls and a backward clock step. See :meth:`_nonce`.
+        self._nonce_lock = threading.Lock()
+        self._last_nonce = 0
 
     # --- capability declaration -------------------------------------------- #
 
@@ -234,28 +323,46 @@ class KrakenBroker(Broker):
                 "KRAKEN_API_KEY and KRAKEN_API_SECRET in the environment"
             )
 
-    @staticmethod
-    def _nonce() -> str:
-        """A fresh, monotonically-increasing nonce (microseconds since epoch)."""
-        # Microsecond granularity keeps successive nonces strictly increasing
-        # even for back-to-back calls within the same millisecond.
-        return str(int(time.time() * 1_000_000))
+    def _nonce(self) -> str:
+        """A fresh, strictly-increasing nonce, safe under concurrency and clock skew.
+
+        Kraken rejects a signed request whose nonce is not greater than the
+        previous one for the same key (``EAPI:Invalid nonce``), which is a hard,
+        non-retriable failure on ``AddOrder``. A bare ``int(time.time()*1e6)``
+        can *repeat* (two calls within the same microsecond) or *go backwards*
+        (an NTP step-back), both of which trigger it.
+
+        This holds a monotonic counter guarded by a lock: the next nonce is the
+        larger of the current microsecond clock and ``last_nonce + 1``. So it is
+        strictly increasing across concurrent callers **and** across a backward
+        clock step, while still tracking wall time when the clock advances
+        normally. The lock section takes no ``await``, so it is safe under
+        asyncio and across threads.
+        """
+        with self._nonce_lock:
+            candidate = int(time.time() * 1_000_000)
+            nonce = candidate if candidate > self._last_nonce else self._last_nonce + 1
+            self._last_nonce = nonce
+        return str(nonce)
 
     # --- request plumbing -------------------------------------------------- #
 
     @staticmethod
     def _raise_on_error(payload: Any, *, context: str) -> dict[str, Any]:
-        """Return ``payload["result"]`` or raise :class:`BrokerError` on a venue error.
+        """Return ``payload["result"]`` or raise a mapped domain error on a venue error.
 
         Kraken always wraps responses as ``{"error": [...], "result": {...}}``; a
-        non-empty ``error`` array is a venue rejection. The error strings are
-        plain venue diagnostics (never key material), so they are safe to surface.
+        non-empty ``error`` array is a venue rejection. The array is mapped to the
+        most specific domain error via :func:`_map_kraken_error` (insufficient
+        funds / invalid pair / invalid nonce / rate limit / service unavailable /
+        generic). The error strings are plain venue diagnostics (never key
+        material), so they are safe to surface.
         """
         if not isinstance(payload, dict):
             raise BrokerError(f"Kraken {context}: malformed response {payload!r}")
         errors = payload.get("error") or []
         if errors:
-            raise BrokerError(f"Kraken {context}: {'; '.join(errors)}")
+            raise _map_kraken_error(errors, context=context)
         result = payload.get("result")
         if result is None:
             raise BrokerError(f"Kraken {context}: missing result")
@@ -279,9 +386,25 @@ class KrakenBroker(Broker):
     ) -> dict[str, Any]:
         """Sign and POST a private endpoint, returning its ``result`` (or raise).
 
-        Builds a fresh ``nonce``-first body, throttles via the Kraken call
-        counter at the endpoint's cost, signs with :func:`_sign`, and sends the
-        ``API-Key`` / ``API-Sign`` headers. Requires credentials.
+        Builds a fresh ``nonce``-first body (a strictly-increasing nonce — see
+        :meth:`_nonce`), throttles via the Kraken call counter at the endpoint's
+        cost, signs with :func:`_sign`, and sends the ``API-Key`` / ``API-Sign``
+        headers. Requires credentials.
+
+        Retriable HTTP-200 venue errors
+        --------------------------------
+        Kraken returns ``EService:Unavailable`` / ``EAPI:Rate limit`` inside an
+        **HTTP 200** body, so the transport's 5xx/429 retry never sees them. When
+        ``retry`` is ``True`` (the idempotent read/query endpoints) such an error
+        is retried here with a bounded exponential backoff before it is finally
+        surfaced as the mapped domain error. When ``retry`` is ``False`` (the
+        **non-idempotent** ``AddOrder``) it is **not** retried — a retriable
+        200-error still maps to :class:`~trading_bot.domain.errors.
+        ServiceUnavailable` / :class:`~trading_bot.domain.errors.RateLimited` and
+        is raised, preserving the reconcile-before-retry guarantee for order
+        submission (an ambiguous 5xx/timeout is separately raised as
+        :class:`~trading_bot.transport.http.AmbiguousRequestError` by the
+        transport).
 
         Parameters
         ----------
@@ -290,12 +413,43 @@ class KrakenBroker(Broker):
         data : mapping
             The endpoint body (the ``nonce`` is prepended here).
         retry : bool, default True
-            Forwarded to :meth:`~trading_bot.transport.http.AsyncHTTPClient.post`.
-            ``True`` for **idempotent** endpoints (queries/reads — a duplicate is
-            harmless); ``False`` for the **non-idempotent** ``AddOrder`` so a
-            blind retry can never double-submit (see :meth:`place_order`).
+            Forwarded to :meth:`~trading_bot.transport.http.AsyncHTTPClient.post`
+            for the transport-level (5xx/429/transport) retry, **and** gates the
+            HTTP-200 venue-error retry above. ``True`` for **idempotent**
+            endpoints (queries/reads — a duplicate is harmless); ``False`` for the
+            **non-idempotent** ``AddOrder`` so a blind retry can never
+            double-submit (see :meth:`place_order`).
         """
         self._require_credentials()
+        max_attempts = self._http.max_retries if retry else 1
+        last_errors: list[str] = []
+        for attempt in range(max_attempts):
+            payload = await self._send_signed(endpoint, data, retry=retry)
+            errors = payload.get("error") or [] if isinstance(payload, dict) else []
+            # A retriable HTTP-200 venue error (service unavailable / rate limit)
+            # is retried only on the idempotent path; AddOrder (retry=False) never
+            # loops here, preserving reconcile-before-retry.
+            if retry and errors and _is_retriable_kraken_error(errors):
+                last_errors = errors
+                if attempt + 1 < max_attempts:
+                    await self._http.sleep_backoff(attempt)
+                    continue
+            return self._raise_on_error(payload, context=endpoint)
+        # Retries exhausted on a retriable 200-error: surface the mapped error.
+        raise _map_kraken_error(last_errors, context=endpoint)
+
+    async def _send_signed(
+        self, endpoint: str, data: Mapping[str, Any], *, retry: bool
+    ) -> Any:
+        """Sign and POST one attempt of a private request; return the raw payload.
+
+        A single signed attempt (fresh nonce, call-counter throttle, ``API-Key`` /
+        ``API-Sign`` headers). ``retry`` is forwarded to the transport: ``False``
+        (``AddOrder``) sends it **at most once** so an ambiguous transient failure
+        raises :class:`~trading_bot.transport.http.AmbiguousRequestError` rather
+        than double-submitting; the HTTP-200 venue-error retry loop lives in
+        :meth:`_private_post`.
+        """
         path = f"{_PRIVATE}/{endpoint}"
         # Build the body nonce-first so the signed postdata is deterministic.
         body: dict[str, Any] = {"nonce": self._nonce()}
@@ -306,10 +460,9 @@ class KrakenBroker(Broker):
         await self._counter.acquire_method(endpoint)
         url = f"{_API_BASE}{path}"
         async with self._http as client:
-            payload = await client.post(
+            return await client.post(
                 url, data=body, headers=headers, retry=retry
             )
-        return self._raise_on_error(payload, context=endpoint)
 
     # --- public endpoints -------------------------------------------------- #
 
@@ -344,6 +497,8 @@ class KrakenBroker(Broker):
         entry = next(iter(result.values()))
         price_precision = entry.get("pair_decimals")
         qty_precision = entry.get("lot_decimals")
+        ordermin = entry.get("ordermin")
+        costmin = entry.get("costmin")
         return Instrument(
             symbol=symbol,
             price_precision=(
@@ -352,6 +507,10 @@ class KrakenBroker(Broker):
             qty_precision=(
                 int(qty_precision) if qty_precision is not None else None
             ),
+            # Kraken ``ordermin`` is the minimum order volume; ``costmin`` the
+            # minimum order cost (notional). Both are decimal strings.
+            min_qty=money(str(ordermin)) if ordermin is not None else None,
+            min_notional=money(str(costmin)) if costmin is not None else None,
         )
 
     async def ticker(self, instrument: Instrument) -> Money:
@@ -471,26 +630,44 @@ class KrakenBroker(Broker):
         own. ``price`` is the limit price for limit orders and the stop price
         for stop-loss orders; market orders carry no price.
 
-        The domain ``client_order_id`` is **not** forwarded to Kraken here:
-        Kraken's ``cl_ord_id`` requires a UUID and ``userref`` is a 32-bit int,
-        neither of which fits an arbitrary id. Idempotency is enforced
-        engine-side by the ``OrderRouter`` (client-order-id dedup); the
-        transport-level half — *not* blindly retrying a non-idempotent
-        ``AddOrder`` POST on an ambiguous failure — is enforced by
-        :meth:`place_order` (``retry=False``; reconcile-before-retry).
+        Quantization (B-2)
+        ------------------
+        ``volume`` and ``price`` are quantized to the instrument's lot / tick
+        (:meth:`~trading_bot.domain.instrument.Instrument.prepare_order_values`),
+        rounding **down** so a submission never overshoots the intended size or
+        price (a sell never sells more than held). An order that quantizes to a
+        sub-lot / sub-minimum size is rejected there with
+        :class:`~trading_bot.domain.errors.OrderTooSmall` — before a doomed
+        request goes out — rather than sent to be rejected by Kraken.
+
+        Idempotency key (B-5 / B-15)
+        ----------------------------
+        The domain ``client_order_id`` is forwarded as Kraken's ``userref`` — a
+        32-bit int — via a deterministic hash (:func:`_userref_for`), so an
+        arbitrary id is **transformed**, never dropped; a dropped id would make
+        :func:`~trading_bot.application.reconcile.reconcile` unable to correlate
+        the order. The primary correlation key remains the ``txid``; the userref
+        is a best-effort venue-side lookup/idempotency tag. Idempotency is also
+        enforced engine-side by the ``OrderRouter`` (client-order-id dedup) and,
+        at the transport level, by :meth:`place_order` not blindly retrying a
+        non-idempotent ``AddOrder`` on an ambiguous failure.
         """
+        qty, limit_price, stop_price = order.instrument.prepare_order_values(
+            order.qty, limit_price=order.limit_price, stop_price=order.stop_price
+        )
         params: dict[str, str] = {
             "pair": order.instrument.symbol.to_venue_symbol(self.name),
             "type": order.side.value,  # "buy" / "sell"
             "ordertype": _ORDERTYPE_TO_KRAKEN[order.type],
-            "volume": str(order.qty),
+            "volume": str(qty),
+            "userref": str(_userref_for(order.client_order_id)),
         }
         if order.type is OrderType.STOP_LOSS:
             # STOP_LOSS carries its trigger in ``stop_price``.
-            params["price"] = str(order.stop_price)
-        elif order.limit_price is not None:
+            params["price"] = str(stop_price)
+        elif limit_price is not None:
             # LIMIT (and a priced BEST_LIMIT) carry a ``limit_price``.
-            params["price"] = str(order.limit_price)
+            params["price"] = str(limit_price)
         return params
 
     async def cancel_order(self, venue_order_id: str) -> None:
@@ -535,7 +712,16 @@ class KrakenBroker(Broker):
         return orders
 
     def _rebuild_order(self, txid: str, info: Mapping[str, Any]) -> Order:
-        """Rebuild a domain :class:`Order` from a Kraken open-order entry."""
+        """Rebuild a domain :class:`Order` from a Kraken open-order entry.
+
+        The rebuilt order's ``client_order_id`` is the ``userref`` Kraken echoes
+        back (the value :meth:`_add_order_params` sent, derived from the domain
+        id via :func:`_userref_for`) so :func:`~trading_bot.application.reconcile.
+        reconcile` correlates on the value **actually sent**. When no ``userref``
+        is present (an order placed outside this engine), it falls back to the
+        ``txid`` (still a stable, unique venue id) so a foreign order is never
+        left without an identity.
+        """
         descr = info.get("descr", {})
         symbol = parse_kraken_pair(str(descr.get("pair", "")))
         side = OrderSide(descr.get("type", "buy"))
@@ -556,8 +742,10 @@ class KrakenBroker(Broker):
             if otype is OrderType.STOP_LOSS and price_str
             else None
         )
+        userref = info.get("userref")
+        client_order_id = str(userref) if userref not in (None, "", 0) else txid
         order = Order(
-            client_order_id=txid,
+            client_order_id=client_order_id,
             instrument=Instrument(symbol),
             side=side,
             qty=qty,
