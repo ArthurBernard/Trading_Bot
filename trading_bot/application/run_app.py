@@ -73,7 +73,11 @@ from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, cast
 
-from trading_bot.application.data_provider import feed_for
+from trading_bot.application.data_provider import (
+    ResamplingDccdClient,
+    _make_client,
+    feed_for,
+)
 from trading_bot.application.live_fills import LiveFillStreamer
 from trading_bot.application.orchestrator import Orchestrator
 from trading_bot.application.portfolio import (
@@ -605,14 +609,26 @@ def build_portfolio_runners(
         )
 
         data = portfolio_cfg.data
+        # Per-source store root overrides the global storage path.
+        data_path = data.data_path or config.storage.data_path
+        # A daily portfolio over a 1m store resamples up (dccd does not): wrap the
+        # real client in a ResamplingDccdClient when a finer source_span is declared.
+        # An injected client (tests / a caller's own resampling client) is used as-is.
+        feed_client = dccd_client
+        if feed_client is None and data.source_span is not None:
+            feed_client = ResamplingDccdClient(
+                _make_client(data_path),
+                daily_span=data.span,
+                source_span=data.source_span,
+            )
         feed = PortfolioFeed(
             universe,
             exchange=data.exchange,
-            client=dccd_client,
+            client=feed_client,
             span=data.span,
             start_ns=_portfolio_start_ns(data.start),
             data_type=data.data_type,
-            data_path=config.storage.data_path,
+            data_path=data_path,
             symbol_for=_store_key_renderer(
                 portfolio_cfg.store_key_format, data.exchange
             ),
