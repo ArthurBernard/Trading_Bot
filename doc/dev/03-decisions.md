@@ -6,6 +6,20 @@ rejected approaches as tombstones.
 
 ---
 
+### 2026-07-02 Engine/order robustness: idempotent cancel, bounded feed, honest KPI anchor (PR #PR)  [accepted]
+- **Choice**: `cancel` is idempotent (a terminal-order cancel is a no-op; concurrent
+  cancels serialised by a per-id in-flight future, no venue re-hit); `rebalance_latest`
+  reads only the latest aligned window (one store read) instead of draining the whole
+  feed each tick; `combined_equity_series` anchors `v0` only for units that have fills
+  in the requested mode.
+- **Why**: audit A-8 (double/concurrent cancel re-hit the venue and could raise),
+  A-7 (O(total-bars) drain every tick), A-6 (idle units inflated the aggregate equity
+  anchor, skewing exchange/total KPI ratios). A-9: `restore` seeds the dedup map (the
+  restart-time idempotency guard); the crash-before-persist residual is closed by
+  reconcile pending a venue idempotency token (documented).
+- **Rejected alternatives**: persisting the transient in-flight future (A-9) — the
+  dedup map already covers restart; the venue token is the real fix, deferred.
+
 ### 2026-07-02 Bounded uvicorn graceful-shutdown so Ctrl-C quits promptly (PR #145)  [accepted]
 - **Choice**: every uvicorn serve path (`dashboard`, `serve`, `run --serve`,
   `start --serve`) sets `timeout_graceful_shutdown=_SHUTDOWN_GRACE_SECONDS` (3s).
