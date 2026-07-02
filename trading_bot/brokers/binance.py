@@ -791,12 +791,40 @@ class BinanceBroker(Broker):
         order.submit()
         order.open(composite)
         # Reflect any already-executed volume so the status matches Binance's.
+        # B-8: derive the *true* average fill price from Binance's executed
+        # fields — ``cummulativeQuoteQty / executedQty`` — never the resting
+        # LIMIT/STOP price. Fills are the PnL source of truth, so a partial
+        # fill's basis must be what the venue actually executed at, not what the
+        # order asked for (the two diverge whenever the book fills through the
+        # limit). With no executed qty there is no average yet, so no fill is
+        # applied.
         executed = money(str(info.get("executedQty", "0")))
         if executed > 0:
-            avg_price = limit_price or stop_price
+            avg_price = self._avg_fill_price(info, executed)
             if avg_price is not None and avg_price > 0:
                 order.apply_fill(executed, avg_price)
         return order
+
+    @staticmethod
+    def _avg_fill_price(info: Mapping[str, Any], executed: Money) -> Money | None:
+        """Average fill price of a partial fill: quote spent / base executed.
+
+        Binance reports the cumulative quote spent on the executed portion as
+        ``cummulativeQuoteQty`` and the executed base quantity as
+        ``executedQty``; their ratio is the volume-weighted average execution
+        price — the correct PnL basis (:class:`~trading_bot.domain.fill.Fill` is
+        the source of truth for PnL, not the resting limit price).
+
+        Returns ``None`` when the average cannot be derived (``executed`` is
+        non-positive, or the venue reported no ``cummulativeQuoteQty`` yet) so
+        the caller applies no bogus fill. All arithmetic stays exact ``Decimal``.
+        """
+        if executed <= 0:
+            return None
+        cumulative_quote = money(str(info.get("cummulativeQuoteQty", "0")))
+        if cumulative_quote <= 0:
+            return None
+        return cumulative_quote / executed
 
     async def fills(self, since_ms: int | None = None) -> list[Fill]:
         """Return executions as domain :class:`Fill`s (``GET /myTrades`` per symbol).
