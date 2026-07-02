@@ -48,8 +48,10 @@ import asyncio
 import contextlib
 import dataclasses
 import math
+import os
 import pathlib
 import signal
+import sys
 from collections.abc import Callable
 from decimal import Decimal
 from typing import TYPE_CHECKING
@@ -100,10 +102,12 @@ _RUNBOOK = "doc/dev/09-go-live.md"
 def _main() -> None:
     """``trading-bot`` — the engine's command-line interface.
 
-    A no-op group callback so Typer treats the app as a *multi-command* group
-    (without it a lone command collapses into the root callback). The real
-    commands slot in alongside ``version``.
+    Runs before every command. Besides marking the app as a *multi-command* group
+    (without it a lone command collapses into the root callback), it puts the CWD
+    on ``sys.path`` so a manifest's local ``strategies.*`` signal refs resolve —
+    see :func:`_ensure_cwd_importable`.
     """
+    _ensure_cwd_importable()
 
 
 @app.command()
@@ -888,6 +892,24 @@ def start(
 #: — one persistent control plane common to every strategy it declares. Under the
 #: gitignored ``configs/`` tree (deployment content, LOCAL-only).
 _DEFAULT_MANIFEST = pathlib.Path("configs/dashboard.yaml")
+
+
+def _ensure_cwd_importable() -> None:
+    """Put the current working directory on ``sys.path``.
+
+    A manifest's ``signal.ref`` may point at a **local** strategy package — the
+    gitignored ``strategies/`` tree (e.g. ``strategies.alloc1.signal:...``) that
+    lives in the project root and is deliberately never committed. Resolving that
+    dotted ref (``importlib.import_module``) needs the project root on
+    ``sys.path``. A console-script entry point (``trading-bot``) does **not** add
+    the CWD to ``sys.path`` the way ``python script.py`` / ``python -m`` do, so
+    without this a manifest referencing ``strategies.*`` would fail to import and
+    the unit would be silently skipped at start. Running ``trading-bot`` from the
+    project root then behaves like a script launched there. Idempotent.
+    """
+    cwd = os.getcwd()
+    if cwd not in sys.path:
+        sys.path.insert(0, cwd)
 
 
 def _load_or_create_manifest(path: pathlib.Path) -> AppConfig:

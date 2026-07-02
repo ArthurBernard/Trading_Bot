@@ -12,6 +12,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Dashboard can launch strategies with a local `signal.ref`.** `trading-bot` now puts the CWD on `sys.path` (a group callback), so a manifest referencing a gitignored local strategy package (e.g. `strategies.alloc1.signal:...`) resolves — previously the console script couldn't import it and the unit was silently skipped at start. (#135)
+
 ### Deprecated
 
 ### Removed
