@@ -235,6 +235,53 @@ async def test_resubmit_after_rejection_does_not_recall_broker() -> None:
     assert again.status is OrderStatus.REJECTED
 
 
+async def test_reject_tolerates_an_already_terminal_order() -> None:
+    """A place_order that fails on an *already terminal* order still tracks + emits.
+
+    Models an adversarial broker that drives the caller's order to a terminal
+    state (FILLED) before raising: ``_reject`` can then neither submit nor reject
+    it, so the state-machine transition is forbidden. The router must swallow that
+    (the id is still recorded so a retry is deduped) and still emit the event —
+    it never lets a broker fault leave an untracked order.
+    """
+
+    class _FillsThenRaisesBroker(_SpyBroker):
+        """Drives the caller's order to terminal FILLED, then raises."""
+
+        name = "fills-then-raises"
+
+        async def place_order(self, order: Order) -> str:
+            self.place_calls += 1
+            # Drive the passed order all the way to a terminal FILLED state...
+            order.submit()
+            order.open("VID-terminal")
+            order.apply_fill(order.qty, money("30000"))
+            assert order.is_terminal
+            # ...then fail the placement, as a flaky venue might.
+            raise BrokerError("venue faulted after the order already filled")
+
+    broker = _FillsThenRaisesBroker()
+    bus = EventBus()
+    seen = _capture(bus)
+    router = OrderRouter(broker, bus)
+
+    order = _order(cid="term")
+    with pytest.raises(BrokerError):
+        await router.submit(order)
+
+    # The forbidden transition was swallowed: the order stays FILLED (terminal),
+    # the id is tracked (so a retry is deduped), and one event was still emitted.
+    assert order.status is OrderStatus.FILLED
+    assert "term" in router.tracked_orders()
+    assert len(seen) == 1
+    assert isinstance(seen[0], OrderEvent)
+
+    # A retry of the same id is deduped: the broker is not called again.
+    again = await router.submit(_order(cid="term"))
+    assert broker.place_calls == 1
+    assert again is order
+
+
 # --- cancel ---------------------------------------------------------------- #
 
 
@@ -268,6 +315,28 @@ async def test_cancel_unknown_id_raises_missing_order() -> None:
     router = OrderRouter(PaperBroker(), EventBus())
     with pytest.raises(MissingOrder):
         await router.cancel("never-seen")
+
+
+async def test_cancel_tracked_order_without_venue_id_raises_missing_order() -> None:
+    """A tracked-but-never-placed order (no venue id) cannot be cancelled.
+
+    A rejected order is tracked (so retries dedup) but never got a venue id, so
+    there is nothing live to cancel — the router must raise MissingOrder rather
+    than call the broker against a null id.
+    """
+    broker = _SpyBroker(fail=True)  # place_order raises → order rejected, no vid
+    router = OrderRouter(broker, EventBus())
+
+    with pytest.raises(BrokerError):
+        await router.submit(_order(cid="rej"))
+    rejected = router.tracked_orders()["rej"]
+    assert rejected.status is OrderStatus.REJECTED
+    assert rejected.venue_order_id is None
+
+    # Tracked, but with no venue id it is not cancellable on any venue.
+    with pytest.raises(MissingOrder):
+        await router.cancel("rej")
+    assert broker.cancel_calls == 0  # the broker was never asked to cancel
 
 
 # --- verification on real data (PaperBroker) ------------------------------- #

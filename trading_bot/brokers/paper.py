@@ -89,7 +89,7 @@ simulator, not a risk gate); margin/funding checks live in the engine.
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from itertools import count
 from typing import TYPE_CHECKING
@@ -307,6 +307,23 @@ class PaperBroker(Broker):
                 f"arm_partial ratio must be in (0, 1), got {ratio}"
             )
         self._armed_ratio = ratio
+
+    def seed_fills(self, fills: Iterable[Fill]) -> None:
+        """Append broker-confirmed ``fills`` to the venue's recorded history.
+
+        A simulation/reconciliation seam: records executions the venue *already*
+        confirmed (e.g. while the engine was disconnected), so a later
+        :meth:`fills` / reconcile folds them in as the PnL truth even with no
+        matching locally-tracked order. Mirrors how a real venue would hold fills
+        the engine never saw — the public counterpart of the internal fill store.
+
+        Parameters
+        ----------
+        fills : Iterable[Fill]
+            The broker-confirmed executions to append to the recorded history.
+
+        """
+        self._fills.extend(fills)
 
     # --- order lifecycle --------------------------------------------------- #
 

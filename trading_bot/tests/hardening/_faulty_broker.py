@@ -182,7 +182,7 @@ class FaultyBroker(Broker):
             The fills to append to the wrapped broker's recorded history.
 
         """
-        self.inner._fills.extend(fills)
+        self.inner.seed_fills(fills)
 
     # --- Broker port ------------------------------------------------------ #
 
