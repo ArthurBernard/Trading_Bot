@@ -12,6 +12,8 @@ Public surface:
 * :class:`~trading_bot.transport.http.HTTPError` — transport-local HTTP failure.
 * :class:`~trading_bot.transport.http.AmbiguousRequestError` — a non-retryable
   request failed ambiguously (reconcile before retrying).
+* :class:`~trading_bot.transport.http.ResponseTooLargeError` — a response body
+  exceeded the transport's size cap and was refused before buffering/parsing.
 * :class:`~trading_bot.transport.ws.WebSocketBase` — async WebSocket base with
   ``stream_raw`` and exponential reconnect.
 * :class:`~trading_bot.transport.ratelimit.RateLimiter` /
@@ -29,6 +31,7 @@ from trading_bot.transport.http import (
     AmbiguousRequestError,
     AsyncHTTPClient,
     HTTPError,
+    ResponseTooLargeError,
 )
 from trading_bot.transport.ratelimit import (
     KrakenCallCounter,
@@ -44,6 +47,7 @@ __all__ = [
     "HTTPError",
     "KrakenCallCounter",
     "RateLimiter",
+    "ResponseTooLargeError",
     "TokenBucket",
     "WebSocketBase",
     "WeightBucket",

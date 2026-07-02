@@ -492,6 +492,36 @@ async def test_open_orders_zero_executed_applies_no_fill(
     assert orders[0].avg_fill_price is None
 
 
+async def test_open_orders_unknown_type_rejected_not_coerced(
+    httpx_mock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """B-12: an unmapped Binance ``type`` is rejected, not coerced to LIMIT.
+
+    A wrong type is a wrong order: rebuilding a ``TAKE_PROFIT_LIMIT`` as a plain
+    LIMIT would have ``reconcile`` adopt a mislabelled order. The rebuild must
+    raise instead of guessing.
+    """
+    httpx_mock.add_response(
+        json=[
+            {
+                "symbol": "BTCUSDT",
+                "orderId": 999,
+                "clientOrderId": "strat-x",
+                "price": "30000.00",
+                "origQty": "1.00000",
+                "executedQty": "0.00000",
+                "type": "TAKE_PROFIT_LIMIT",
+                "side": "BUY",
+                "status": "NEW",
+            }
+        ]
+    )
+    broker = _broker(monkeypatch)
+
+    with pytest.raises(BrokerError, match="unknown type"):
+        await broker.open_orders()
+
+
 async def test_fills_over_two_symbol_set(
     httpx_mock, monkeypatch: pytest.MonkeyPatch
 ) -> None:
