@@ -29,6 +29,10 @@ never calls Kraken's ``/Assets`` or ``/AssetPairs`` endpoints.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from decimal import Decimal
+
+from trading_bot.domain.errors import OrderTooSmall
+from trading_bot.domain.money import Money, quantize
 
 __all__ = [
     "Symbol",
@@ -56,6 +60,55 @@ _CANONICAL_TO_KRAKEN: dict[str, str] = {
 # legacy 4-char form. Used to split a concatenated legacy pair on the boundary.
 _FIAT: frozenset[str] = frozenset(
     {"USD", "EUR", "GBP", "JPY", "CAD", "AUD", "CHF"}
+)
+
+# Genuine Kraken *legacy* 4-char asset codes (the ``X``-prefixed crypto and
+# ``Z``-prefixed fiat forms), listed explicitly so :func:`normalise` strips the
+# prefix ONLY for these — never for a modern altname that merely happens to be
+# 4 chars long and start with ``X`` (e.g. ``XTZ`` is Tezos, not an X-prefixed
+# ``TZ``). The crypto set is Kraken's documented legacy roster; the fiat set is
+# ``{"Z"+f for f in _FIAT}``. A code in neither set passes through unchanged.
+_KRAKEN_LEGACY_X: frozenset[str] = frozenset(
+    {
+        "XXBT",  # Bitcoin (-> XBT -> BTC)
+        "XETH",  # Ether
+        "XXRP",  # Ripple
+        "XXLM",  # Stellar Lumens
+        "XXMR",  # Monero
+        "XXDG",  # Dogecoin (-> XDG -> DOGE)
+        "XLTC",  # Litecoin
+        "XETC",  # Ethereum Classic
+        "XREP",  # Augur
+        "XMLN",  # Enzyme (Melon)
+        "XZEC",  # Zcash
+        "XXTZ",  # Tezos (legacy X-prefixed form of XTZ)
+        "XICN",  # Iconomi
+        "XNMC",  # Namecoin
+        "XXVN",  # Vanacoin
+    }
+)
+_KRAKEN_LEGACY_Z: frozenset[str] = frozenset(f"Z{f}" for f in _FIAT)
+
+# Quote codes that appear at the *end* of a modern Kraken **altname** pair
+# (``XTZUSD``, ``ETHXBT``, ``ADAUSDT``), each with its length. Ordered longest
+# first so the suffix match is unambiguous (``USDT`` before ``USD``). These are
+# the only trailing quotes an altname pair uses; a 4-char ``Z``-prefixed fiat
+# (``ZUSD``) only ever appears in the *legacy* 8-char form (handled separately),
+# so it is deliberately NOT here — that ambiguity is exactly the ``XTZUSD`` bug
+# (``XTZ`` + ``USD``, never ``XT`` + ``ZUSD``).
+_KRAKEN_ALTNAME_QUOTES: tuple[str, ...] = (
+    "USDT",
+    "USDC",
+    "USD",
+    "EUR",
+    "GBP",
+    "JPY",
+    "CAD",
+    "AUD",
+    "CHF",
+    "DAI",
+    "XBT",
+    "ETH",
 )
 
 # --- Binance pair parsing -------------------------------------------------- #
@@ -90,10 +143,16 @@ def normalise(asset: str) -> str:
     Rules, applied in order:
 
     1. upper-case and strip surrounding whitespace;
-    2. on a **4-character** legacy code, strip a leading ``X`` (crypto) or
-       ``Z`` (fiat) prefix — ``XXBT→XBT``, ``XETH→ETH``, ``ZUSD→USD``,
-       ``ZEUR→EUR``;
+    2. strip the leading legacy prefix **only** for a genuine Kraken legacy
+       code — an ``X``-prefixed crypto in :data:`_KRAKEN_LEGACY_X` (``XXBT→XBT``,
+       ``XETH→ETH``, ``XXTZ→XTZ``) or a ``Z``-prefixed fiat in
+       :data:`_KRAKEN_LEGACY_Z` (``ZUSD→USD``, ``ZEUR→EUR``);
     3. apply ticker aliases — ``XBT→BTC``, ``XDG→DOGE``.
+
+    A 4-char code that merely *starts* with ``X`` but is not a listed legacy
+    code (e.g. ``XTZ`` is not 4 chars, ``XRPX`` is not legacy) is left intact —
+    the previous "strip any leading X on any 4-char code" rule corrupted such
+    tickers.
 
     Codes that are already canonical (``BTC``, ``ETH``, ``USD``, ``USDT``, ...)
     pass through unchanged.
@@ -118,21 +177,16 @@ def normalise(asset: str) -> str:
     'DOGE'
     >>> normalise("usdt")
     'USDT'
+    >>> normalise("XTZ")   # Tezos, not an X-prefixed 'TZ'
+    'XTZ'
 
     """
     code = asset.upper().strip()
-    # Strip the legacy X/Z prefix only on 4-char codes (XXBT, XETH, ZUSD...).
-    # Modern altnames (USDT, TRX) and bare aliases (XBT, XDG) are 3-4 chars
-    # without a doubled/fiat prefix, so guard on length == 4 and a known prefix.
-    if len(code) == 4 and code[0] in ("X", "Z"):
-        stripped = code[1:]
-        # Only strip when it actually yields a known crypto (X-prefixed) or a
-        # known fiat (Z-prefixed); otherwise keep the original (e.g. a genuine
-        # 4-letter ticker would be left intact — none in our universe).
-        if code[0] == "Z" and stripped in _FIAT:
-            code = stripped
-        elif code[0] == "X":
-            code = stripped
+    # Strip the legacy X/Z prefix ONLY for a genuine legacy code, looked up in
+    # the explicit rosters. A modern altname that happens to start with X (e.g.
+    # a hypothetical 4-char ticker) is left untouched — no blanket X-strip.
+    if code in _KRAKEN_LEGACY_X or code in _KRAKEN_LEGACY_Z:
+        code = code[1:]
     return _KRAKEN_TO_CANONICAL.get(code, code)
 
 
@@ -217,9 +271,16 @@ def parse_kraken_pair(pair: str) -> Symbol:
     The split strategy:
 
     * a separator (``/``, ``-``, ``_``) is honoured if present;
-    * an 8-char legacy pair splits 4/4 (``XXBT`` + ``ZUSD``);
-    * otherwise the quote is taken as a trailing known fiat (3-char) or a
-      trailing ``XBT``/``XXBT`` crypto-quote, with the remainder as base.
+    * an 8-char *legacy* pair whose **both** halves are genuine legacy codes
+      (in :data:`_KRAKEN_LEGACY_X` / :data:`_KRAKEN_LEGACY_Z`) splits 4/4
+      (``XXBT`` + ``ZUSD``);
+    * otherwise it is a modern altname: the quote is the longest trailing code
+      in :data:`_KRAKEN_ALTNAME_QUOTES` (``USDT`` before ``USD``), the remainder
+      is the base.
+
+    The altname quote table deliberately excludes the 4-char ``Z``-prefixed
+    fiats — those only appear in the legacy form — so ``XTZUSD`` splits as
+    ``XTZ`` + ``USD`` (Tezos), not the old, wrong ``XT`` + ``ZUSD``.
 
     Parameters
     ----------
@@ -246,6 +307,8 @@ def parse_kraken_pair(pair: str) -> Symbol:
     'ETH/USD'
     >>> str(parse_kraken_pair("ETHXBT"))
     'ETH/BTC'
+    >>> str(parse_kraken_pair("XTZUSD"))
+    'XTZ/USD'
 
     """
     raw = pair.strip()
@@ -256,18 +319,23 @@ def parse_kraken_pair(pair: str) -> Symbol:
             return Symbol(base, quote)
 
     code = raw.upper()
-    # Legacy 8-char form: XXBT + ZUSD, XETH + ZEUR, ... split 4/4.
-    if len(code) == 8 and code[0] in ("X", "Z") and code[4] in ("X", "Z"):
+    # Legacy 8-char form: XXBT + ZUSD (fiat quote), XETH + XXBT (crypto quote),
+    # ... split 4/4, but ONLY when both halves are genuine legacy codes — the
+    # base is always X-crypto; the quote is either a Z-fiat or an X-crypto. This
+    # guard stops an 8-char *altname* (e.g. ``MATICUSD``) being mis-split.
+    if (
+        len(code) == 8
+        and code[:4] in _KRAKEN_LEGACY_X
+        and (code[4:] in _KRAKEN_LEGACY_Z or code[4:] in _KRAKEN_LEGACY_X)
+    ):
         return Symbol(code[:4], code[4:])
 
-    # Altname form: try a trailing fiat quote (after normalisation), then a
-    # trailing crypto quote (XBT). Longest plausible quote first.
-    for qlen in (4, 3):
-        if len(code) > qlen:
-            base_raw, quote_raw = code[:-qlen], code[-qlen:]
-            quote = normalise(quote_raw)
-            if quote in _FIAT or quote in {"BTC", "USDT", "USDC", "DAI"}:
-                return Symbol(base_raw, quote_raw)
+    # Modern altname form: longest trailing quote in the explicit table wins
+    # (USDT before USD), leaving a non-empty base. No 4-char Z-fiat here, so the
+    # XTZ/USD boundary is unambiguous.
+    for quote in _KRAKEN_ALTNAME_QUOTES:
+        if code.endswith(quote) and len(code) > len(quote):
+            return Symbol(code[: -len(quote)], quote)
 
     raise ValueError(f"cannot parse Kraken pair {pair!r}")
 
@@ -336,6 +404,8 @@ class Instrument:
     Frozen and hashable. ``price_precision`` / ``qty_precision`` are the number
     of decimal places the venue accepts for price and quantity respectively;
     both are optional (unknown until the venue's metadata is loaded).
+    ``min_qty`` / ``min_notional`` are the venue's minimum order size and
+    minimum order value (``qty * price``) — also optional.
 
     Parameters
     ----------
@@ -345,6 +415,12 @@ class Instrument:
         Number of decimal places allowed for the price.
     qty_precision : int, optional
         Number of decimal places allowed for the quantity / volume.
+    min_qty : Decimal, optional
+        Minimum tradeable quantity (venue lot minimum, e.g. Kraken ``ordermin``
+        / Binance ``LOT_SIZE.minQty``). ``None`` when unknown.
+    min_notional : Decimal, optional
+        Minimum tradeable order value in quote units (venue notional minimum,
+        e.g. Binance ``NOTIONAL.minNotional``). ``None`` when unknown.
 
     Examples
     --------
@@ -359,7 +435,125 @@ class Instrument:
     symbol: Symbol
     price_precision: int | None = None
     qty_precision: int | None = None
+    min_qty: Money | None = None
+    min_notional: Money | None = None
 
     def __str__(self) -> str:
         """The underlying symbol's ``BASE/QUOTE``."""
         return str(self.symbol)
+
+    @staticmethod
+    def _step_from_precision(precision: int | None) -> Money | None:
+        """The tick/lot step implied by a decimal-place ``precision``.
+
+        ``precision=2 -> Decimal("0.01")``, ``precision=0 -> Decimal("1")``.
+        ``None`` when the precision is unknown (no quantization is applied).
+        """
+        if precision is None:
+            return None
+        return Decimal(1).scaleb(-precision)
+
+    @property
+    def price_step(self) -> Money | None:
+        """The price tick size implied by :attr:`price_precision` (or ``None``)."""
+        return self._step_from_precision(self.price_precision)
+
+    @property
+    def qty_step(self) -> Money | None:
+        """The quantity lot size implied by :attr:`qty_precision` (or ``None``)."""
+        return self._step_from_precision(self.qty_precision)
+
+    def quantize_price(self, price: Money) -> Money:
+        """Snap ``price`` to the venue tick (:attr:`price_step`), rounding down.
+
+        ``ROUND_DOWN`` (toward zero) so a submitted price never overshoots the
+        intended level. When :attr:`price_precision` is unknown the price is
+        returned unchanged.
+        """
+        step = self.price_step
+        return price if step is None else quantize(price, step)
+
+    def quantize_qty(self, qty: Money) -> Money:
+        """Snap ``qty`` to the venue lot (:attr:`qty_step`), rounding down.
+
+        ``ROUND_DOWN`` (toward zero) is the *safe* direction for both sides: a
+        buy never buys more than intended and a sell never sells more than is
+        held. When :attr:`qty_precision` is unknown the quantity is returned
+        unchanged.
+        """
+        step = self.qty_step
+        return qty if step is None else quantize(qty, step)
+
+    def prepare_order_values(
+        self,
+        qty: Money,
+        *,
+        limit_price: Money | None = None,
+        stop_price: Money | None = None,
+    ) -> tuple[Money, Money | None, Money | None]:
+        """Quantize an order's numeric fields and reject a sub-minimum order.
+
+        Returns the ``(qty, limit_price, stop_price)`` an adapter should put on
+        the wire, each snapped to the venue tick/lot (:meth:`quantize_qty` /
+        :meth:`quantize_price`), rounding **down** so a submission never
+        overshoots the intended price or size (a sell never sells more than
+        held). ``None`` prices pass through as ``None``.
+
+        The quantized order is then checked against the venue minimums and
+        rejected with :class:`~trading_bot.domain.errors.OrderTooSmall` — rather
+        than sent to be rejected by the venue — when:
+
+        * quantizing ``qty`` to the lot leaves **zero** (sub-lot dust); or
+        * ``qty`` is below :attr:`min_qty`; or
+        * the notional (``qty * reference_price``) is below :attr:`min_notional`,
+          where the reference price is the quantized ``limit_price`` (falling
+          back to the quantized ``stop_price``); with no price available (a
+          market order) the notional check is skipped — it cannot be computed
+          client-side.
+
+        Parameters
+        ----------
+        qty : Decimal
+            The requested order quantity.
+        limit_price : Decimal, optional
+            The requested limit price (``None`` for market/stop-only orders).
+        stop_price : Decimal, optional
+            The requested stop trigger price (``None`` when not a stop order).
+
+        Returns
+        -------
+        tuple of (Decimal, Decimal or None, Decimal or None)
+            The quantized ``(qty, limit_price, stop_price)`` ready for the wire.
+
+        Raises
+        ------
+        OrderTooSmall
+            If the quantized order is below the venue lot / min-qty /
+            min-notional.
+
+        """
+        q_qty = self.quantize_qty(qty)
+        q_limit = None if limit_price is None else self.quantize_price(limit_price)
+        q_stop = None if stop_price is None else self.quantize_price(stop_price)
+
+        if q_qty <= 0:
+            raise OrderTooSmall(
+                str(self),
+                f"quantity {qty} rounds to zero at lot step {self.qty_step}",
+            )
+        if self.min_qty is not None and q_qty < self.min_qty:
+            raise OrderTooSmall(
+                str(self),
+                f"quantity {q_qty} is below the minimum {self.min_qty}",
+            )
+        if self.min_notional is not None:
+            reference = q_limit if q_limit is not None else q_stop
+            if reference is not None:
+                notional = q_qty * reference
+                if notional < self.min_notional:
+                    raise OrderTooSmall(
+                        str(self),
+                        f"notional {notional} (qty {q_qty} x price {reference}) "
+                        f"is below the minimum {self.min_notional}",
+                    )
+        return q_qty, q_limit, q_stop

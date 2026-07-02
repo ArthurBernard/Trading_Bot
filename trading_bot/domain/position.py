@@ -61,6 +61,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
+from decimal import localcontext
 
 from trading_bot.domain.errors import InstrumentMismatch
 from trading_bot.domain.fill import Fill
@@ -70,9 +71,19 @@ from trading_bot.domain.order import OrderSide
 
 __all__ = [
     "Position",
+    "AVG_ENTRY_PRECISION",
 ]
 
 _ZERO: Money = money("0")
+
+#: Precision (significant digits) of the explicit :class:`~decimal.Decimal`
+#: context under which the quantity-weighted average *entry* price is divided.
+#: Pinned so a repeating quotient rounds **deterministically and documented**,
+#: independent of the process-global 28-digit context. 34 digits is IEEE-754
+#: ``decimal128`` — matches :data:`~trading_bot.domain.order.AVG_PRICE_PRECISION`
+#: so the order's average fill price and the position's average entry price
+#: round identically.
+AVG_ENTRY_PRECISION: int = 34
 
 
 @dataclass(frozen=True, slots=True)
@@ -208,7 +219,13 @@ class Position:
             old_mag = abs(net_qty)
             add_mag = fill.qty
             total_mag = old_mag + add_mag
-            avg_entry = (avg_entry * old_mag + price * add_mag) / total_mag
+            # Divide under an explicit, pinned Decimal context so a repeating
+            # quotient rounds deterministically, independent of the global one.
+            with localcontext() as ctx:
+                ctx.prec = AVG_ENTRY_PRECISION
+                avg_entry = +(
+                    (avg_entry * old_mag + price * add_mag) / total_mag
+                )
             net_qty += signed
         else:
             # Opposite direction: this fill reduces (and maybe flips) exposure.

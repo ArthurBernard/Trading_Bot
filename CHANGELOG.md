@@ -16,6 +16,164 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 
+## [0.8.0] - 2026-07-02
+
+### Added
+
+- **Config-driven dashboard web settings (remote access, the dccd way).** A manifest
+  can carry a **`ui:`** section (`host` / `port` / `token` / `read_only`), and
+  `trading-bot dashboard` reads it — so you set the host + token **once** in
+  `configs/dashboard.yaml` and a bare `dashboard` serves remotely every launch, no
+  flags to remember (mirrors dccd's `ui_host` / `ui_auth_token`). CLI flags (and
+  `TRADING_BOT_UI_TOKEN`) override the config; defaults stay **loopback + no auth**,
+  and a non-loopback host still **requires a token** (from the config or the flag).
+  `doc/dev/10-deploy.md` updated. (#125)
+
+- **Per-strategy store isolation** — a `StrategyConfig` / `PortfolioStrategyConfig`
+  may set its own `db_path`, so several strategies in **one** dashboard manifest each
+  keep their **own** SQLite store (isolated book, fills and PnL — no commingling). The
+  supervisor applies the override when slicing a unit; the dashboard's `POST
+  /api/strategies` **auto-assigns** `…/dashboard/<name>.sqlite` when none is given, so
+  UI-deployed strategies are isolated by default. Absent → the global store (backward
+  compatible). Needed for one dashboard running multiple strategies. (#123)
+
+- **Dashboard Orders/Fills + Logs pages.** An **Orders/Fills** history page —
+  `GET /api/fills` (fill history across every unit's store) and `GET /api/orders?history=true`
+  (open + recent) with **crypto / exchange / strategy filters** + `limit` — and a
+  **Logs** page streaming the merged engine activity over `/api/events` (SSE) with a
+  recent-event buffer. Completes the unified dashboard's five pages. (#120)
+
+- **Dashboard PnL chart (uPlot, self-hosted).** The PnL page draws a per-strategy
+  **equity-over-time chart** with **live and testnet as separate, colour-coded
+  series** (fake vs real money never combined), fed by `/api/pnl` — a strategy
+  selector, a per-mode legend/toggle, a stats table, empty-state + resize + polling.
+  Uses **uPlot v1.6.31** vendored into `static/` (MIT; no CDN, no build). And the
+  **aggregate ratio KPIs** (Sharpe/Sortino/Calmar/maxDD at `level=exchange|total`)
+  are now computed on the combined equity curve — filling the `null`s the Overview
+  left — degrading to `null` without `fynance`. (#119)
+
+- **PnL time-series (per strategy, per mode).** Persisted fills now carry a **mode +
+  venue** storage tag (idempotent migration; existing rows default to `paper`; the
+  domain `Fill` stays pure), and a new `application/pnl_series.py` folds a strategy's
+  fills in timestamp order into an equity curve (`equity(t) = starting_capital + Σ
+  realised PnL`, via the domain `Position` fold). `supervisor.pnl_series(name)` +
+  `GET /api/pnl?strategy=&mode=live|testnet|paper|all` return **live and testnet as
+  separate series** (fake vs real money never combined) with v0 / current equity /
+  unrealised. The data foundation for the dashboard PnL chart. Verified: the derived
+  final equity equals the engine's own realised PnL exactly. (#118)
+
+- **Manage strategies from the dashboard (persistent control plane).** The dashboard
+  now owns a **manifest** (`configs/dashboard.yaml`, the default for `trading-bot
+  dashboard` when no `-c` — gitignored, local-only) that it reads on startup and
+  **rewrites on every change**, so deployments survive a restart. New endpoints
+  (`403` under `--read-only`): `POST /api/strategies` (deploy — a name + kind + venue
+  + mode + **signal ref** + symbol/universe + capital + risk), `DELETE
+  /api/strategies/{name}`, and `GET /api/signals` (builtins + a scan of
+  `strategies/*/signal.py`). `StrategySupervisor` gains dynamic membership
+  (`add_unit` — validated + atomic + never auto-starts / `remove_unit` / `manifest`)
+  and `AppConfig` gains `to_yaml` + add/remove-entry helpers. The UI **deploys signals
+  that already exist in code** — it never authors the signal's Python (that stays in
+  `strategies/`), exactly as dccd's UI configures jobs, not the collector. A small
+  "Deploy a strategy" form + per-row Remove land on the Strategies page. (#117)
+
+- **Dashboard Strategies page + a book that survives a restart.** The unified
+  dashboard now serves the control surface — `GET /api/strategies` and `POST
+  /api/strategies/{name}/start|stop|mode` (shared with the old control app; live
+  needs `confirm:true` → `403` otherwise; writes refused when `--read-only`) — and a
+  Strategies page grouped by exchange with a mode select, start/stop, and the typed
+  live-confirm modal. The `trading-bot dashboard` command now `start_all()`s the
+  declared strategies (a unit that can't start is skipped with a warning, never
+  crashing the dashboard), and **`supervisor.start()` replays the store's fills into
+  a paper unit's tracker/perf** so its book (positions + realised PnL) survives a
+  restart — live/testnet still reconcile from the broker (no double-count). Verified
+  end-to-end: a restarted dashboard shows the 14 restored alloc1 paper positions and
+  the live-mode switch is refused (403) without a typed confirmation. (#115)
+
+- **Dashboard Overview + KPI at 3 levels.** The dashboard app now serves aggregate
+  reads over the supervisor's per-strategy engines — `GET /api/positions` &
+  `/api/orders` (`?group_by=crypto|exchange|strategy`), `GET /api/kpi?level=strategy|
+  exchange|total` (realised PnL + fees at each level; Sharpe/Sortino/Calmar/maxDD per
+  strategy; aggregate ratios deferred), and a **merged `/api/events` SSE** fanning
+  every running unit's engine bus onto one feed (dedup by id). The Overview page
+  renders a KPI strip (level toggle), a positions table (group-by crypto/exchange) and
+  an open-orders table, live via SSE with a polling fallback. Verified against a real
+  paper alloc1 book: the accessors equal the engine's own realised PnL/fees exactly.
+  (#114)
+
+- **Unified dashboard skeleton** — one `create_dashboard_app` factory + a
+  dccd-style **self-contained `base.html` shell** (nav Overview / Strategies /
+  Orders / PnL / Logs; brand + version + health chip + connection dot; all shared
+  CSS + JS helpers in one file) + a `trading-bot dashboard` command that **quits
+  cleanly on Ctrl-C** (uvicorn owns SIGINT; the supervisor drains in `finally`).
+  Read-only is a runtime posture (`--read-only`), not a second app. Stub pages for
+  now; data lands in the following leaves. First leaf of the unified-dashboard epic
+  that will retire the split read-only/control apps. (#113)
+
+- **ALLOC1 portfolio config (Binance + Kraken)** — wires the research allocator ALLOC1
+  (`../fynance-research/DEPLOY_ALLOC1.md`: a dynamic regime-aware blend of LS2 / MN1 / BEAR1)
+  by config + a thin generic adapter, exactly like LS1. Adds
+  `strategies/alloc1/{binance.yaml, kraken.yaml, signal.py, test_e2e.py}`: the signal wrapper
+  adapts `fynance_research.strategies.alloc1_live.target_weights(venue)` to the
+  `PortfolioSignalFn` contract (research imported lazily) for both venues; the paper configs
+  declare the 14-coin Binance USDT and 13-coin Kraken USD (no BNB) portfolios; the wiring tests
+  prove both validate + their signal refs resolve offline. Paper-only; no engine code changed.
+  **Binance is fully validated; the Kraken config is paper and blocked for live/2026** on a dccd
+  BTC-USD Kraken data gap (Jan–May 2026) — ready to activate once backfilled (DEPLOY_ALLOC1.md §Kraken).
+
+### Changed
+
+- **Groom the dev-doc pack to match the shipped engine** — real module set, the dashboard framed as a control plane, the Binance adapter documented, stale `legacy/`/`scheduler.py`/`BrokerRegistry` references removed, and 12 finished plan trees archived (audit G-1…G-9). (#133)
+- **The split web apps are retired onto one `dashboard` command.** `trading-bot serve`
+  is now an alias that serves the unified dashboard **read-only**, and `trading-bot
+  start --serve` serves the same `create_dashboard_app` (single code path) alongside
+  the scheduler; `create_control_app` is a thin backward-compat wrapper over it. One
+  app, one primary command (`trading-bot dashboard`). `doc/dev/10-deploy.md` +
+  `deploy/trading-bot.service` now lead with `dashboard`. Completes the unified
+  dccd-style dashboard epic. (#120)
+
+- **Private read-only endpoints validated live on mainnet for both venues** — the
+  go-live runbook's *Proven vs pending* now records that `balances` / `open_orders`
+  / `fills` were exercised read-only against **real Kraken** (37 assets, 50 trades
+  parsed) and **real Binance** (mainnet read key + testnet), with **no order ever
+  sent or cancelled**. Supersedes the earlier "`balances` needs Query Funds" caveat.
+  (#106)
+
+### Fixed
+
+- **Hermetic, enforced test gate.** An autouse `conftest.py` runs each test from a temp CWD and scrubs `TRADING_BOT_*` env, so the suite no longer reads a developer's local `configs/dashboard.yaml`; `--exitfirst` is dropped from `addopts` (all failures reported) and coverage is floored at `--cov-fail-under=90` (audit T-1/T-2/T-3). (#132)
+- **Domain money & instrument guards.** `Order`/`Fill`/`Signal` reject a raw `float` money field at construction, average-price divisions run under a pinned `Decimal` context, non-finite (`NaN`/`Inf`) signal targets are rejected, and `parse_kraken_pair` no longer mis-parses Tezos `XTZUSD` to `XT/USD` (audit D-1/D-3/D-4/D-7/D-10). (#128)
+- **Broker order-path live-readiness.** Order qty/price are quantized to the venue lot/tick (round-down, sub-min rejected) before submit, Kraken uses a monotonic lock-guarded nonce, venue error codes map to domain errors (retriable Kraken HTTP-200 errors retried; `AddOrder` never blind-retried), and the client-order-id is forwarded to both venues so reconcile matches on the value sent (audit B-2/B-3/B-4/B-5/B-15). (#129)
+- **Redact secrets from transport logs & errors.** A signed Binance request URL (with `&signature=<hmac>` + api key) is masked in every `transport/http.py` log line and exception message, so a 429/5xx/timeout no longer leaks the request signature (audit B-1). (#127)
+- **Dashboard gate hardening (server-side).** The typed live-confirmation (`I UNDERSTAND`) is enforced on the server (a bare `confirm:true` no longer flips a strategy to live), the deploy `db_path` is rejected on absolute/traversal paths, and the deploy `signal.ref` is allow-listed to a set of module roots with an audit log on import (audit I-1/I-2/I-3). (#130)
+- **`max_daily_loss` is now genuinely daily.** The day-loss breaker is scoped to realised PnL since UTC midnight and auto-resets at the day boundary (it previously used cumulative session PnL and latched the kill-switch permanently); plus an idempotent `orders`-table schema migration, a persisted order timestamp, and a restored reject reason on reload (audit A-1/D-2/D-5/D-14). (#131)
+- **A paper unit's book no longer commingles testnet/live fills.** `start()`'s
+  paper-book replay folded **all** stored fills into the paper simulator; once a store
+  held fills from a different deployment mode (a strategy run testnet/live, then
+  switched back to paper), that mixed **fake and real money** into the paper PnL — and
+  a testnet round trip landing on the same instrument as a large open paper position
+  realised a spurious close against the wrong entry price. The replay now filters on
+  the storage `mode` tag (paper-only). Surfaced by the PnL-time-series real-data run.
+  (#118)
+
+- **`StrategySupervisor.set_mode` no longer leaves a unit on the wrong mode when a
+  switch is refused.** It mutated `unit.mode` *before* validating the target slice, so
+  a testnet/live switch that raised `ConfigError` (e.g. no broker for the venue) left
+  the unit on the new mode anyway. The slice is now validated first — a refused switch
+  changes nothing, matching the live-confirm gate. (#115)
+
+- **Binance testnet now authenticates with testnet credentials.** The engine's
+  testnet path (`testnet: true` on a Binance broker) hard-pinned the testnet URL
+  but still read the default `BINANCE_API_KEY` / `BINANCE_API_SECRET` — which, once
+  separate mainnet + testnet keys coexist in `.env`, is the **mainnet** key and is
+  rejected by `testnet.binance.vision` (`-2015`). It now reads
+  `BINANCE_TESTNET_API_KEY` / `BINANCE_TESTNET_API_SECRET` (falling back to the
+  generic pair for the older single-key setup). Verified read-only against real
+  Binance testnet via `build_engine` (balances). (#108)
+
+### Deprecated
+
+### Removed
+
 ## [0.7.0] - 2026-06-30
 
 ### Added

@@ -6,6 +6,243 @@ rejected approaches as tombstones.
 
 ---
 
+### 2026-07-02 Make the pytest gate hermetic and enforced (PR #PR)  [accepted]
+- **Choice**: add a repo `conftest.py` with an autouse fixture that runs every test
+  from a temp CWD and scrubs `TRADING_BOT_*` env; drop `--exitfirst` from `addopts`;
+  add `--cov-fail-under=90`.
+- **Why**: audit T-1 (Critical) — the gate was red locally / green in CI because ~5
+  dashboard tests read the CWD-relative, secret-bearing `configs/dashboard.yaml` (no
+  `conftest.py`, no isolation). T-2: `--exitfirst` hid every failure after the first
+  and invalidated coverage; T-3: coverage (~96%) was measured but never enforced.
+- **Rejected alternatives**: patching the five individual tests to look elsewhere —
+  leaves the whole class of CWD/env bleed unaddressed; the autouse fixture fixes it
+  once for the whole suite.
+### 2026-07-02 Domain applies its own money() guard at construction (PR #PR)  [accepted]
+- **Choice**: route every money field through `money()` inside `Order`/`Fill`/`Signal`
+  `__post_init__` and **reject** a raw `float` (fail-fast) rather than coerce it; pin an
+  explicit `decimal.localcontext` on the average-price / average-entry divisions; reject
+  non-finite (`NaN`/`Inf`) Decimals with a `MoneyError`.
+- **Why**: audit D-1 (Critical) — the `money()` guard existed but was never applied in
+  the value-object constructors, so a stray `float` could silently enter the PnL source
+  of truth and only fail later (or persist corrupt). Every legitimate caller already
+  builds amounts via `money(str(...))`, so rejecting floats is a pure backstop, not a
+  behaviour change. D-4: the global 28-digit context rounded repeating quotients
+  non-deterministically; a pinned context makes average prices deterministic.
+- **Rejected alternatives**: silent float→Decimal coercion (hides caller bugs and the
+  `float(x)` precision loss it's meant to prevent).
+### 2026-07-02 Broker order-path live-readiness (PR #PR)  [accepted]
+- **Choice**: quantize qty/price to the venue lot/tick (`ROUND_DOWN`, reject
+  sub-min-lot/notional with `OrderTooSmall`) before submit on both venues; give Kraken
+  a monotonic, lock-guarded nonce; map venue error codes to domain errors and retry
+  **only** Kraken's retriable HTTP-200 errors (`EService:Unavailable`, `EAPI:Rate
+  limit`); always forward the client-order-id (Binance `newClientOrderId`, Kraken
+  `userref`), deterministically transforming it when it doesn't fit the venue rather
+  than dropping it.
+- **Why**: audit B-2 (Critical) sent raw sizes → silent venue rejects or oversell;
+  B-3/B-4/B-5/B-15 are go-live prerequisites — a non-monotonic nonce hard-fails
+  `AddOrder`, a stringy `BrokerError` hides insufficient-funds vs rate-limit, and a
+  dropped client-order-id makes `reconcile()` double-ingest / false-orphan the order.
+- **Rejected alternatives**: (a) retrying `AddOrder` on an ambiguous 5xx/timeout —
+  would break the ambiguous-submit→reconcile idempotency guarantee, so submit still
+  raises `AmbiguousRequestError`; (b) rounding size up — can oversell holdings; (c)
+  silently dropping an out-of-charset client-order-id.
+### 2026-07-02 Redact secrets at the transport boundary (PR #PR)  [accepted]
+- **Choice**: a redaction helper in `transport/http.py` masks the values of
+  sensitive query params (`signature`, api key, `token`, `nonce`) in every log line
+  and exception message, and the `HTTPError`/`AmbiguousRequestError` objects store the
+  already-redacted URL so re-logging them elsewhere stays safe.
+- **Why**: audit B-1 (Critical) — Binance signs on the query string, and the full
+  signed URL (with `&signature=<hmac>`) was embedded verbatim in error messages and
+  every `logger.warning`, so any 429/5xx/timeout leaked the request signature into
+  logs, violating "secrets never logged".
+- **Rejected alternatives**: (a) sign in headers only — not all Binance endpoints
+  support it; (b) scrub at the logging formatter — misses exception `__str__` paths
+  that get logged far from the transport.
+### 2026-07-02 Enforce dashboard live/filesystem/import gates server-side (PR #PR)  [accepted]
+- **Choice**: validate the typed live-acknowledgement (`I UNDERSTAND`) on the server
+  with a constant-time compare (a bare `confirm:true` no longer flips to live); reject
+  absolute or `..`-traversal `db_path` in the deploy body (400); allow-list the deploy
+  `signal.ref` to a set of module roots (`strategies`, `fynance`, `fynance_research`,
+  `trading_bot`) at the API boundary + emit an audit log line on every `import_module`.
+- **Why**: audit I-1/I-2/I-3 — the dashboard is a control plane bound to `0.0.0.0`
+  behind only a token; the typed live-confirm was enforced only in browser JS, the
+  deploy `db_path` was unsanitised (write-anywhere SQLite), and `signal.ref` was an
+  unbounded `importlib` path (arbitrary-module import for a token holder).
+- **Rejected alternatives**: (a) trusting the browser check for the live gate; (b)
+  sanitising only the auto-derived `db_path` (the explicit one bypassed it). Residual
+  blast radius documented in code: allow-listed modules still run import-time code — the
+  auth token remains the real trust boundary.
+### 2026-07-02 Daily-loss breaker is UTC-day-scoped; orders table gets a migration (PR #PR)  [accepted]
+- **Choice**: wire `max_daily_loss` to realised PnL **since UTC midnight** via an
+  injectable clock, so the breaker resets automatically at the day boundary; add an
+  idempotent `orders`-table column migration mirroring `_migrate_fills_tags`.
+- **Why**: audit A-1 (High) — the "daily" breaker read cumulative *session* PnL and
+  `reset_day` was dead, so once tripped it escalated to the kill-switch and halted the
+  book permanently. D-2 (High) — only `fills` had a migration, so any `orders` schema
+  drift hard-failed `upsert_order` with `OperationalError`.
+- **Rejected alternatives**: (a) a scheduler-driven midnight reset — a needless moving
+  part; the clock-derived UTC-day-start is self-resetting; (b) a windowed PnL refold —
+  realised PnL depends on prior-day entry prices, so "PnL since midnight" is read as the
+  rise of the cumulative realised curve, not a refold.
+
+### 2026-07-02 Config-driven dashboard web settings (a `ui:` section) (PR #125)  [accepted]
+- **Choice**: add a `ui:` section to `AppConfig` (`host` / `port` / `token` /
+  `read_only`); the `dashboard` command reads it as the default, with CLI flags (and
+  `TRADING_BOT_UI_TOKEN`) overriding. Defaults stay loopback + no auth; the
+  non-loopback-requires-a-token guard runs on the *resolved* values.
+- **Why**: the maintainer asked why remote access wasn't "automatic like dccd". It
+  wasn't a capability gap — the dashboard was already loopback+token like dccd — but
+  a *source* gap: dccd reads `ui_host` / `ui_auth_token` from its **persistent
+  config**, so once set it serves remotely with no flags; trading_bot only took CLI
+  flags/env, so they had to be re-passed each launch. Putting the web settings in the
+  manifest matches dccd's "set once, forget" and keeps `trading-bot dashboard` (no
+  args) as the single command.
+- **Rejected alternatives**: (a) CLI-flags only — the status quo that felt manual;
+  (b) a separate settings file distinct from the manifest — dccd keeps them together
+  in one config, and the dashboard already owns a persistent manifest; (c) defaulting
+  the host to `0.0.0.0` — unsafe (the dashboard is the control surface), so loopback
+  stays the default and going wide is an explicit config/flag choice + a token.
+
+### 2026-07-01 Retire the split web apps onto one dashboard (PR #120)  [accepted]
+- **Choice**: `create_dashboard_app` is now the single web app (monitor + control +
+  manage + PnL). `create_control_app` becomes a thin wrapper over it; `trading-bot
+  serve` is an alias for the dashboard in `--read-only` posture and `start --serve`
+  serves the same app alongside the scheduler. `create_app(engine)` is kept as-is (it
+  serves the read-only view over a *single run engine* for `run --serve`, a different
+  shape than the supervisor-backed dashboard). Wrappers, not hard deletions, so no
+  import site breaks.
+- **Why**: three launch paths (`serve` / `run --serve` / `start --serve`) over two
+  apps was the maintainer's core UI complaint (monitor OR control, never one common
+  dashboard). Folding them onto `create_dashboard_app` gives one coherent surface and
+  one code path to maintain, while keeping the old command names working as aliases so
+  nothing (systemd units, muscle memory, tests) breaks abruptly.
+- **Rejected alternatives**: (a) hard-delete `create_control_app`/`create_app` — breaks
+  importers + the `run --serve` engine path with no transition; (b) keep the three
+  paths — the split UX we set out to remove; (c) fold `create_app` too — its
+  engine-not-supervisor shape doesn't map cleanly, so it stays the `run --serve` path.
+- **Note**: this closes the unified-dashboard epic (7 leaves).
+
+### 2026-07-01 PnL time-series — derive from mode-tagged fills; live/testnet separate (PR #118)  [accepted]
+- **Choice**: a strategy's PnL/equity curve is **derived** by folding its stored fills
+  in timestamp order (`equity = starting_capital + Σ realised PnL`), not stored as a
+  separate time-series. Each **fill row carries a `mode`+`venue` storage tag**, so the
+  curve is split **per mode** — live and testnet are **separate series** and never
+  combined. The domain `Fill` is unchanged (the tag is a storage/deployment fact, not
+  a domain property). Continuous mark-to-market history is out of scope; only a current
+  unrealised end point is offered when a live price is on hand.
+- **Why**: fills are the source of truth for PnL, so folding them is the honest curve
+  and needs no extra persistence to keep consistent. Testnet money is fake and live is
+  real — mixing them on one curve is meaningless, so the mode tag keeps them apart. A
+  storage tag (not a domain field) keeps the domain pure and lets old DBs migrate with
+  a default. Deriving avoids a snapshot table that could drift from the fills.
+- **Rejected alternatives**: (a) periodic equity snapshots — a second source that can
+  disagree with the fills; (b) full continuous mark-to-market history — needs a price
+  pipeline (out of scope v1); (c) one combined curve across modes — mixes fake and real
+  money; (d) a `mode` field on the domain `Fill` — pollutes the pure domain with a
+  deployment concern.
+- **Consequence**: tagging fills by mode also **fixed a latent commingling bug** — the
+  paper-book replay had folded all fills regardless of mode; it now replays paper-only.
+
+### 2026-07-01 Dashboard is a persistent control plane — deploy existing signals, not author code (PR #117)  [accepted]
+- **Choice**: the dashboard owns a persistent **manifest** (`configs/dashboard.yaml`,
+  the default when `trading-bot dashboard` gets no `-c`) that it rewrites on every
+  membership change; the UI **adds/removes strategies** by composing a *deployment*
+  (`POST /api/strategies` with a **signal ref** + venue/mode/capital/universe/risk),
+  never writing the signal's Python. Signal code stays in `strategies/<name>/signal.py`;
+  `GET /api/signals` discovers the builtins + those refs. `supervisor.add_unit` is
+  validated, atomic and **never auto-starts** (paper-safe). The manifest is gitignored
+  (deployment/strategy content is local-only) and holds no secrets (venue keys come
+  from the environment).
+- **Why**: a per-strategy YAML passed with `-c` conflated a strategy's *authoring
+  file* with the *deployment manifest*, so the dashboard looked tied to one strategy.
+  The control plane should be **one dashboard common to all strategies**, managed from
+  the UI and persisted — mirroring dccd, whose UI configures jobs, not the collector
+  code. Authoring signal *code* from a browser is out of scope (and unsafe); deploying
+  an existing, importable signal is the right UI surface.
+- **Rejected alternatives**: (a) a single hand-edited master manifest with no UI CRUD
+  — still YAML-by-hand, not "managed from the UI"; (b) let the UI author signal code —
+  arbitrary code execution + no review; (c) auto-start a unit on deploy — a deploy
+  should be paper-safe and explicit, so start stays a separate deliberate action.
+
+### 2026-07-01 Paper unit start replays the store's fills; live/testnet reconcile (PR #115)  [accepted]
+- **Choice**: `StrategySupervisor.start()` replays the store's persisted fills into
+  the engine's tracker + performance service **only when the unit is paper**, so a
+  paper strategy's book (positions + realised PnL) survives a process restart. On
+  live/testnet it does **not** replay — the venue `reconcile` already rebuilt the
+  positions from the broker's fills. The `trading-bot dashboard` command `start_all()`s
+  on launch (skipping any unit that can't start) so the dashboard shows the restored
+  book immediately.
+- **Why**: the dashboard was empty on launch — units weren't started, and even when
+  started a paper unit's tracker was empty (the paper simulator holds no venue state,
+  so the startup `reconcile` resets it to an empty fill set). Fills are the PnL source
+  of truth, so replaying `store.fills()` is the correct restore for paper. Doing the
+  same on live would **double-count** against the broker-reported fills that
+  `reconcile` already applied — hence the paper-only gate. Both `apply`s dedup by
+  `fill_id`, so the replay is idempotent.
+- **Rejected alternatives**: (a) replay on all modes — double-counts live positions
+  against the broker; (b) leave the dashboard empty until a UI tick — poor UX and the
+  paper book is genuinely known from the store; (c) persist tracker snapshots
+  separately — redundant with the fills, which are already the source of truth.
+
+### 2026-07-01 Dashboard KPI aggregation model — per-strategy ownership, exchange folding, ratios deferred (PR #114)  [accepted]
+- **Choice**: the supervisor exposes `positions()` / `open_orders()` / `kpi(level)`
+  aggregating over the **running** units' engines. Each strategy **owns** its
+  instruments (no commingling), so a position row is tagged (strategy, exchange,
+  crypto) and the API groups by any of them. `kpi(level)`: `strategy` = one row per
+  unit with that unit's realised PnL/fees **and** ratios (Sharpe/Sortino/Calmar/
+  maxDD); `exchange` folds units sharing a venue; `total` folds all — and at the
+  exchange/total levels the **ratios are `null`** (deferred).
+- **Why**: realised PnL/fees are exactly additive across engines, so folding them per
+  exchange / total is unambiguous. The **ratios are not additive** — Sharpe/Sortino/…
+  need a *combined equity curve over time*, which only exists once fills carry a
+  timestamp+mode (the PnL-time-series data model, leaf 04). Emitting a wrong aggregate
+  ratio would be worse than `null`; so aggregate ratios wait for the combined curve
+  (leaf 05) rather than being faked from per-strategy averages.
+- **Rejected alternatives**: (a) average the per-strategy ratios into an aggregate —
+  statistically meaningless; (b) block the whole KPI feature until the time-series
+  exists — the additive KPIs are useful now; (c) a merged position per instrument
+  across strategies — hides the per-strategy attribution the maintainer asked for.
+- **Known follow-up (→ leaf 03)**: `supervisor.start()` restores only the router
+  dedup map, not the tracker/perf from stored fills, and the `dashboard` command does
+  not `start_all()` — so a freshly launched dashboard shows an empty book until a unit
+  is started and its book restored. Starting a unit should **replay the store's fills
+  into the tracker/perf for paper** (reconcile stays the source of truth for live), and
+  the `dashboard` command should `start_all()` so declared strategies appear.
+
+### 2026-07-01 Merge the two web apps into one dashboard + clean Ctrl-C (PR #113)  [accepted]
+- **Choice**: fold the read-only `create_app` and the control `create_control_app`
+  into ONE `create_dashboard_app(supervisor, *, auth_token, read_only)`; read-only is
+  a **runtime posture** (`--read-only` / no supervisor), not a second app. Serve it
+  from a single `trading-bot dashboard` command that runs `uvicorn.run` inside a
+  `try/finally` and lets **uvicorn own SIGINT** — the supervisor is drained in the
+  `finally`. Explicitly do **not** register a competing
+  `loop.add_signal_handler(SIGINT, …)`.
+- **Why**: two apps + two launch commands (`serve` vs `start --serve`) meant you
+  could monitor OR control, never both in one coherent dashboard (the maintainer's
+  core UI complaint). And the old `start --serve` registered its own SIGINT handler
+  **over** uvicorn's, so Ctrl-C never reached uvicorn's shutdown — the process felt
+  unquittable and, on a detached terminal, orphaned. Letting uvicorn own SIGINT makes
+  the first Ctrl-C return cleanly (verified ~0.3s).
+- **Rejected alternatives**: (a) keep two apps and just polish — leaves the split
+  UX; (b) a home-grown async daemon coordinating uvicorn + a stop event by hand — the
+  exact source of the signal conflict; (c) `install_signal_handlers=False` + manual
+  handling — more surface for the same bug than simply deferring to uvicorn.
+
+### 2026-07-01 Binance testnet reads `BINANCE_TESTNET_*` credentials (PR #108)  [accepted]
+- **Choice**: the testnet adapter built by `_build_testnet_venue("binance")` now
+  reads `BINANCE_TESTNET_API_KEY` / `BINANCE_TESTNET_API_SECRET`, falling back to
+  the generic `BINANCE_API_KEY` / `BINANCE_API_SECRET`. The URL was already
+  hard-pinned to `testnet.binance.vision`; only the credential source changed.
+- **Why**: mainnet and testnet are **distinct** Binance credentials — a mainnet
+  key is rejected by the testnet endpoint with `-2015`. Once mainnet + testnet keys
+  coexist in `.env`, the testnet path must pick the testnet pair, not the default
+  `BINANCE_API_KEY` (which is now mainnet). The fallback preserves the older
+  single-key setup where the only Binance key *was* the testnet one.
+- **Rejected alternatives**: (a) a per-broker `credentials_env` config field —
+  more config surface for a convention that can be derived; (b) requiring the user
+  to overwrite `BINANCE_API_KEY` with the testnet key when testing — brittle and
+  makes mainnet reads (validated read-only) impossible at the same time.
+
 ### 2026-06-30 Control dashboard auth — token login + sessions (dccd-style) (PR #102)  [accepted]
 
 **Choice.** The control dashboard gains an **optional** token auth (off by default):

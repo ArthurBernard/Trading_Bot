@@ -2,14 +2,15 @@
 
 from __future__ import annotations
 
-from decimal import Decimal
+from decimal import Decimal, localcontext
 
 import pytest
 
-from trading_bot.domain.errors import OrderError, OrderStatusError
+from trading_bot.domain.errors import MoneyError, OrderError, OrderStatusError
 from trading_bot.domain.instrument import Instrument, Symbol
-from trading_bot.domain.money import money
+from trading_bot.domain.money import Money, money
 from trading_bot.domain.order import (
+    AVG_PRICE_PRECISION,
     DEFAULT_FILL_TOLERANCE,
     Order,
     OrderSide,
@@ -126,6 +127,94 @@ class TestConstructionValidation:
         assert o.venue_order_id is None
         assert o.reject_reason is None
         assert o.fill_tolerance == DEFAULT_FILL_TOLERANCE
+
+
+class TestMoneyFieldGuard:
+    """D-1/D-7: every money field is routed through money() at construction."""
+
+    def test_float_qty_rejected(self) -> None:
+        with pytest.raises(TypeError, match="float"):
+            Order(
+                client_order_id="cid",
+                instrument=INSTRUMENT,
+                side=OrderSide.BUY,
+                qty=1.5,  # type: ignore[arg-type]
+                type=OrderType.MARKET,
+            )
+
+    def test_float_limit_price_rejected(self) -> None:
+        with pytest.raises(TypeError, match="float"):
+            Order(
+                client_order_id="cid",
+                instrument=INSTRUMENT,
+                side=OrderSide.BUY,
+                qty=money("1"),
+                type=OrderType.LIMIT,
+                limit_price=30000.0,  # type: ignore[arg-type]
+            )
+
+    def test_float_stop_price_rejected(self) -> None:
+        with pytest.raises(TypeError, match="float"):
+            Order(
+                client_order_id="cid",
+                instrument=INSTRUMENT,
+                side=OrderSide.SELL,
+                qty=money("1"),
+                type=OrderType.STOP_LOSS,
+                stop_price=29000.0,  # type: ignore[arg-type]
+            )
+
+    def test_non_finite_qty_rejected(self) -> None:
+        with pytest.raises(MoneyError, match="finite"):
+            Order(
+                client_order_id="cid",
+                instrument=INSTRUMENT,
+                side=OrderSide.BUY,
+                qty=Decimal("NaN"),
+                type=OrderType.MARKET,
+            )
+
+    def test_apply_fill_float_rejected(self) -> None:
+        o = make_order(qty="2", otype=OrderType.MARKET, limit_price=None)
+        o.submit()
+        o.open("V1")
+        with pytest.raises(TypeError, match="float"):
+            o.apply_fill(1.0, 30000.0)  # type: ignore[arg-type]
+
+    def test_apply_fill_non_finite_rejected(self) -> None:
+        o = make_order(qty="2", otype=OrderType.MARKET, limit_price=None)
+        o.submit()
+        o.open("V1")
+        with pytest.raises(MoneyError, match="finite"):
+            o.apply_fill(money("1"), Decimal("Infinity"))
+
+
+class TestAvgFillPriceDeterminism:
+    """D-4: the average fill price is deterministic across global contexts."""
+
+    def test_repeating_quotient_is_context_independent(self) -> None:
+        from decimal import getcontext
+
+        def compute_avg() -> Money:
+            o = make_order(qty="3", otype=OrderType.MARKET, limit_price=None)
+            o.submit()
+            o.open("V1")
+            # A notional not divisible by the filled qty -> a repeating tail.
+            o.apply_fill(money("1"), money("100"))
+            o.apply_fill(money("2"), money("100.0000001"))
+            assert o.avg_fill_price is not None
+            return o.avg_fill_price
+
+        original = getcontext().prec
+        results = set()
+        try:
+            for prec in (5, 10, 28, 60, 200):
+                getcontext().prec = prec
+                results.add(str(compute_avg()))
+        finally:
+            getcontext().prec = original
+        # One and only one value, regardless of the process-global precision.
+        assert len(results) == 1
 
 
 class TestLegalLifecycle:
@@ -376,8 +465,20 @@ class TestRealisticPartialFillReplay:
             o.apply_fill(q, p)
 
         total_qty = sum((q for q, _ in fills), money("0"))
-        notional = sum((q * p for q, p in fills), money("0"))
-        expected_avg = notional / total_qty
+        # Reproduce the exact quantity-weighted average the aggregate computes:
+        # an *incremental* running average (re-weighted each fill), evaluated
+        # under the same pinned AVG_PRICE_PRECISION context so rounding matches
+        # deterministically (see D-4). A single-shot notional/total_qty would
+        # differ in the last digits from the incremental fold.
+        with localcontext() as ctx:
+            ctx.prec = AVG_PRICE_PRECISION
+            acc_qty = money("0")
+            acc_avg = money("0")
+            for q, p in fills:
+                acc_notional = acc_avg * acc_qty + q * p
+                acc_qty = acc_qty + q
+                acc_avg = acc_notional / acc_qty
+            expected_avg = acc_avg
 
         assert total_qty == money("1.5")
         assert o.filled_qty == money("1.5")

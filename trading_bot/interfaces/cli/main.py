@@ -641,19 +641,22 @@ def _resolve_kpi_capital(
 
 
 def _build_serve_app(config: AppConfig) -> FastAPI:
-    """Build the read-only FastAPI dashboard app over a freshly-wired engine.
+    """Build the **read-only** unified dashboard app over a supervisor.
 
     The wiring seam :func:`serve` calls so the command is testable **without**
     launching uvicorn: the test patches :func:`uvicorn.run` and asserts the app
-    this helper returns is what ``serve`` hands it. Builds a paper-by-default
-    engine via :func:`~trading_bot.application.service_factory.build_engine`
-    (persisting to ``config.storage.db_path`` when set) and wraps it in
-    :func:`~trading_bot.interfaces.api.create_app`.
+    this helper returns is what ``serve`` hands it. ``serve`` is now an **alias**
+    of the unified dashboard in a read-only posture — it builds a
+    :class:`~trading_bot.application.supervisor.StrategySupervisor` from the config
+    and wraps it in :func:`~trading_bot.interfaces.api.create_dashboard_app` with
+    ``read_only=True`` (every mutation returns 403; no manifest is rewritten). The
+    single dashboard code path replaces the old one-engine read-only ``create_app``.
     """
-    from trading_bot.interfaces.api import create_app
+    from trading_bot.application.supervisor import StrategySupervisor
+    from trading_bot.interfaces.api import create_dashboard_app
 
-    engine = build_engine(config, db_path=config.storage.db_path)
-    return create_app(engine)
+    supervisor = StrategySupervisor(config)
+    return create_dashboard_app(supervisor, read_only=True)
 
 
 @app.command()
@@ -675,21 +678,21 @@ def serve(
         help="TCP port to listen on.",
     ),
 ) -> None:
-    """Serve the read-only web dashboard (positions / orders / PnL) over HTTP.
+    """Serve the unified dashboard **read-only** — an alias of ``dashboard --read-only``.
 
-    Builds a wired engine from ``--config`` (or a paper default), wraps it in the
-    read-only FastAPI app (:func:`~trading_bot.interfaces.api.create_app`) and
-    runs it under uvicorn. The dashboard is a **pure HTTP client** of the API and
-    is **read-only** — it can observe the engine but never place an order.
+    Kept for backward compatibility: ``serve`` now runs the single unified
+    dashboard (Overview / Strategies / Orders / PnL / Logs) in a **read-only**
+    posture. It builds a :class:`~trading_bot.application.supervisor.
+    StrategySupervisor` from ``--config`` (or a paper default), wraps it in
+    :func:`~trading_bot.interfaces.api.create_dashboard_app` with ``read_only=True``
+    and runs it under uvicorn — so it can *observe* positions / orders / fills /
+    PnL but every control mutation (start / stop / mode / deploy / remove) returns
+    ``403``. Prefer ``trading-bot dashboard --read-only`` directly; this alias
+    simply forwards to it.
 
-    MVP scope
-    ---------
-    ``serve`` exposes a **freshly-built** engine: it shows whatever state that
-    engine accumulates (e.g. the order/fill history persisted in the configured
-    ``storage.db_path``, replayed into the tracker/performance views), not a
-    separately-running live trading process. Attaching the dashboard to a
-    long-running live system (one ``run`` driving strategies while ``serve`` views
-    it) is future work; for now ``serve`` + a persisted store is the data path.
+    Unlike ``dashboard``, ``serve`` does **not** start the declared strategies or
+    rewrite a manifest — it is a lightweight read-only view. To bring strategies
+    online (restored + controllable) use ``trading-bot dashboard``.
     """
     import uvicorn
 
@@ -706,8 +709,8 @@ def serve(
         raise typer.Exit(code=1) from exc
 
     _console.print(
-        f"[green]serving dashboard[/green] "
-        f"(mode={config.mode}) on http://{host}:{port}"
+        f"[green]serving dashboard[/green] (read-only, mode={config.mode}) on "
+        f"http://{host}:{port}  —  use 'trading-bot dashboard' for the full control UI"
     )
     uvicorn.run(application, host=host, port=port)
 
@@ -773,7 +776,7 @@ async def _run_daemon(
         if serve:
             import uvicorn
 
-            from trading_bot.interfaces.api import create_control_app
+            from trading_bot.interfaces.api import create_dashboard_app
 
             if host not in ("127.0.0.1", "localhost", "::1") and not auth_token:
                 _console.print(
@@ -782,7 +785,11 @@ async def _run_daemon(
                     "bind 127.0.0.1 and tunnel (the control plane can trade)."
                 )
                 raise typer.Exit(code=1)
-            api = create_control_app(supervisor, auth_token=auth_token)
+            # The daemon's --serve dashboard is the single unified dashboard (the
+            # same one `trading-bot dashboard` serves) — one code path, one set of
+            # gates. The daemon owns the scheduler/lifecycle here, so no on_change
+            # manifest hook is wired (the daemon reads a static config).
+            api = create_dashboard_app(supervisor, auth_token=auth_token)
             if auth_token:
                 _console.print("[dim]control dashboard auth: token login enabled[/dim]")
             server = uvicorn.Server(
@@ -872,6 +879,188 @@ def start(
     except Exception as exc:  # noqa: BLE001 - surface any build/config failure cleanly
         _console.print(f"[red]refusing to start daemon:[/red] {exc}")
         raise typer.Exit(code=1) from exc
+
+
+# --- dashboard (unified UI) ------------------------------------------------ #
+
+
+#: The default manifest the dashboard reads/rewrites when no ``--config`` is given
+#: — one persistent control plane common to every strategy it declares. Under the
+#: gitignored ``configs/`` tree (deployment content, LOCAL-only).
+_DEFAULT_MANIFEST = pathlib.Path("configs/dashboard.yaml")
+
+
+def _load_or_create_manifest(path: pathlib.Path) -> AppConfig:
+    """Load the manifest at ``path``, creating a fresh empty-paper one if absent.
+
+    The dashboard is a **persistent control plane**: it reads a manifest on
+    startup and rewrites it on every membership change. With no ``--config`` this
+    is the default ``configs/dashboard.yaml``; an explicit ``-c`` names its own
+    file. A missing manifest is created as a fresh empty-paper
+    :class:`~trading_bot.application.config.AppConfig` (written to ``path``), so a
+    first launch has a file to persist deployments into.
+    """
+    if path.exists():
+        return AppConfig.from_yaml(path)
+    config = AppConfig()  # paper by default, no strategies
+    config.to_yaml(path)
+    return config
+
+
+async def _start_dashboard_units(supervisor: object) -> None:
+    """Start every declared unit before the dashboard serves — tolerant of failures.
+
+    Wraps :meth:`~trading_bot.application.supervisor.StrategySupervisor.start_all`
+    per unit so the declared strategies come up **restored** (a paper unit's
+    persisted book replayed into its fresh engine) and immediately controllable.
+    A unit that fails to start (e.g. a live/testnet unit lacking credentials, or a
+    misconfigured feed) is logged as a warning and **skipped** — one bad unit never
+    stops the dashboard from serving the rest.
+    """
+    from trading_bot.application.supervisor import StrategySupervisor
+
+    assert isinstance(supervisor, StrategySupervisor)
+    for name in supervisor.names():
+        try:
+            await supervisor.start(name)
+        except Exception as exc:  # noqa: BLE001 - one bad unit must not crash serve
+            _console.print(
+                f"[yellow]skipping strategy {name!r}[/yellow] "
+                f"(failed to start: {exc})"
+            )
+
+
+@app.command()
+def dashboard(
+    config_path: pathlib.Path | None = typer.Option(
+        None,
+        "--config",
+        "-c",
+        help="YAML AppConfig path. Defaults to a paper config (no strategies).",
+    ),
+    host: str | None = typer.Option(
+        None,
+        "--host",
+        help="Interface to bind. Overrides the manifest's ui.host "
+        "(default 127.0.0.1 — loopback, local-only).",
+    ),
+    port: int | None = typer.Option(
+        None,
+        "--port",
+        help="TCP port to listen on. Overrides the manifest's ui.port (default 8000).",
+    ),
+    token: str | None = typer.Option(
+        None,
+        "--token",
+        envvar="TRADING_BOT_UI_TOKEN",
+        help="Login token (enables auth). Overrides the manifest's ui.token. "
+        "Mandatory to bind a non-loopback host. Reads TRADING_BOT_UI_TOKEN.",
+    ),
+    read_only: bool | None = typer.Option(
+        None,
+        "--read-only/--no-read-only",
+        help="Advertise a read-only stance. Overrides the manifest's ui.read_only.",
+    ),
+) -> None:
+    """Serve the **unified dashboard** (Overview / Strategies / Orders / PnL / Logs).
+
+    Builds a :class:`~trading_bot.application.supervisor.StrategySupervisor` from
+    ``--config`` (or a paper default), **starts every declared strategy** (so each
+    comes online restored — a paper unit's persisted book replayed into its engine
+    — and immediately controllable) and serves the single-shell dashboard
+    (:func:`~trading_bot.interfaces.api.create_dashboard_app`) over uvicorn. A unit
+    that fails to start (e.g. a live unit lacking credentials) is logged and
+    skipped — the others still serve.
+
+    Web settings come from the manifest's ``ui:`` section (``host`` / ``port`` /
+    ``token`` / ``read_only``); the CLI flags (or ``TRADING_BOT_UI_TOKEN``) override
+    them. So set the host + token **once** in the config and a bare ``trading-bot
+    dashboard`` serves the same way every launch — no flags to remember (the dccd
+    model). Binds **loopback** by default; a non-loopback host **requires** a token
+    (from the config or the flag/env) — the dashboard is the control surface, so it
+    refuses to bind wide open with no auth.
+
+    Clean shutdown
+    --------------
+    ``uvicorn.run`` **owns SIGINT**: Ctrl-C makes it return promptly, and the
+    ``finally`` then shuts the supervisor down. There is no scheduler here (the
+    daemon's ``start`` steps strategies on a tick; the dashboard just serves the
+    restored + controllable units), so a plain ``uvicorn.run`` inside ``try/finally``
+    is the whole loop — we deliberately do **not** also register a competing
+    ``loop.add_signal_handler(SIGINT, …)`` (that override is what makes
+    ``start --serve`` feel unquittable).
+    """
+    import uvicorn
+
+    from trading_bot.application.supervisor import StrategySupervisor
+    from trading_bot.interfaces.api import create_dashboard_app
+
+    # The manifest the dashboard reads on startup and rewrites on every change:
+    # an explicit --config, or the default configs/dashboard.yaml (created fresh
+    # empty-paper if absent) so one dashboard is common to all strategies it
+    # declares and persists across restarts.
+    manifest_path = config_path if config_path is not None else _DEFAULT_MANIFEST
+    config = _load_or_create_manifest(manifest_path)
+
+    # Resolve the web settings: an explicit CLI flag (or TRADING_BOT_UI_TOKEN for the
+    # token) wins; otherwise fall back to the manifest's `ui:` section — the dccd
+    # model, set the host/port/token once in the config and a bare `dashboard` serves
+    # the same way every launch (no flags to remember). Defaults stay loopback + no
+    # auth, so a bare config never exposes the control surface by accident.
+    host = host if host is not None else config.ui.host
+    port = port if port is not None else config.ui.port
+    token = token if token is not None else config.ui.token
+    read_only = read_only if read_only is not None else config.ui.read_only
+
+    if host not in ("127.0.0.1", "localhost", "::1") and not token:
+        _console.print(
+            "[red]refusing to bind a non-loopback dashboard with no auth "
+            "token[/red] — set --token / TRADING_BOT_UI_TOKEN, or bind 127.0.0.1 "
+            "and tunnel (the dashboard is the control surface)."
+        )
+        raise typer.Exit(code=1)
+
+    try:
+        supervisor = StrategySupervisor(config)
+    except Exception as exc:  # noqa: BLE001 - surface any build failure cleanly
+        _console.print(f"[red]refusing to serve dashboard:[/red] {exc}")
+        raise typer.Exit(code=1) from exc
+
+    # Bring the declared strategies up before serving so they come online
+    # **restored** (a paper unit's persisted book replayed into its engine — see
+    # StrategySupervisor.start) and immediately controllable. start_all() is async;
+    # the restored state lives in the in-memory engines, which persist across this
+    # asyncio.run and the later uvicorn.run. A unit that fails to start (e.g. a live
+    # unit lacking credentials) is logged and skipped — one bad unit never crashes
+    # the dashboard; the others still serve.
+    asyncio.run(_start_dashboard_units(supervisor))
+
+    # Persist the manifest back to its path after any membership change (the
+    # dashboard owns the manifest). `manifest()` reconstructs the AppConfig from
+    # the live units; `to_yaml` round-trips it (money as exact Decimal strings).
+    def _persist_manifest() -> None:
+        supervisor.manifest().to_yaml(manifest_path)
+
+    application = create_dashboard_app(
+        supervisor,
+        auth_token=token,
+        read_only=read_only,
+        on_change=None if read_only else _persist_manifest,
+    )
+    if token:
+        _console.print("[dim]dashboard auth: token login enabled[/dim]")
+    _console.print(
+        f"[green]serving dashboard[/green] (mode={config.mode}"
+        f"{', read-only' if read_only else ''}) on http://{host}:{port}"
+        "  —  Ctrl-C to stop"
+    )
+    try:
+        # uvicorn owns SIGINT: Ctrl-C returns from run() cleanly the first time.
+        uvicorn.run(application, host=host, port=port)
+    finally:
+        # Tear the supervisor down whether serve returned normally or on Ctrl-C.
+        asyncio.run(supervisor.shutdown())
+        _console.print("[green]dashboard stopped[/green]")
 
 
 if __name__ == "__main__":  # pragma: no cover - manual invocation only

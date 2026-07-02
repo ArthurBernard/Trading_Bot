@@ -6,7 +6,7 @@ from decimal import Decimal
 
 import pytest
 
-from trading_bot.domain.errors import InstrumentMismatch, OrderError
+from trading_bot.domain.errors import InstrumentMismatch, MoneyError, OrderError
 from trading_bot.domain.fill import Fill
 from trading_bot.domain.instrument import Instrument, Symbol
 from trading_bot.domain.money import money
@@ -84,6 +84,47 @@ class TestFillConstruction:
     def test_zero_fee_allowed(self) -> None:
         f = make_fill(side=OrderSide.BUY, qty="1", price="30000", fee="0")
         assert f.fee == money("0")
+
+    # --- D-1/D-7: money fields routed through money() at construction ------- #
+
+    def test_float_price_rejected(self) -> None:
+        with pytest.raises(TypeError, match="float"):
+            Fill(
+                fill_id="T1",
+                client_order_id="cid-1",
+                instrument=BTCUSD,
+                side=OrderSide.BUY,
+                qty=money("1"),
+                price=30000.0,  # type: ignore[arg-type]
+                fee=money("0"),
+                ts=1,
+            )
+
+    def test_float_qty_rejected(self) -> None:
+        with pytest.raises(TypeError, match="float"):
+            Fill(
+                fill_id="T1",
+                client_order_id="cid-1",
+                instrument=BTCUSD,
+                side=OrderSide.BUY,
+                qty=1.0,  # type: ignore[arg-type]
+                price=money("30000"),
+                fee=money("0"),
+                ts=1,
+            )
+
+    def test_non_finite_price_rejected(self) -> None:
+        with pytest.raises(MoneyError, match="finite"):
+            Fill(
+                fill_id="T1",
+                client_order_id="cid-1",
+                instrument=BTCUSD,
+                side=OrderSide.BUY,
+                qty=money("1"),
+                price=Decimal("NaN"),
+                fee=money("0"),
+                ts=1,
+            )
 
 
 class TestPositionBasics:
@@ -359,3 +400,33 @@ class TestIncrementalFold:
                     fill_id="F2",
                 )
             )
+
+
+class TestAvgEntryDeterminism:
+    """D-4: the average entry price is deterministic across global contexts."""
+
+    def test_repeating_quotient_is_context_independent(self) -> None:
+        from decimal import getcontext
+
+        def compute_avg_entry() -> str:
+            # Two same-side fills whose weighted-average entry has a repeating
+            # tail (3 * 100.0000001 / 3 style), exercising the pinned division.
+            fills = [
+                make_fill(side=OrderSide.BUY, qty="1", price="100", fill_id="F1"),
+                make_fill(
+                    side=OrderSide.BUY, qty="2", price="100.0000001", fill_id="F2"
+                ),
+            ]
+            pos = Position.from_fills(fills)
+            assert pos.avg_entry_price is not None
+            return str(pos.avg_entry_price)
+
+        original = getcontext().prec
+        results = set()
+        try:
+            for prec in (5, 10, 28, 60, 200):
+                getcontext().prec = prec
+                results.add(compute_avg_entry())
+        finally:
+            getcontext().prec = original
+        assert len(results) == 1

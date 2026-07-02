@@ -12,9 +12,20 @@ from __future__ import annotations
 import polars as pl
 import pytest
 
-from trading_bot.application.config import AppConfig
+from trading_bot.application.config import (
+    AppConfig,
+    DataSourceConfig,
+    PortfolioStrategyConfig,
+    SignalRefConfig,
+    StrategyConfig,
+)
+from trading_bot.application.events import FillEvent
 from trading_bot.application.supervisor import StrategySupervisor
 from trading_bot.domain.errors import ConfigError, LiveTradingNotEnabled
+from trading_bot.domain.fill import Fill
+from trading_bot.domain.instrument import Instrument, Symbol
+from trading_bot.domain.money import money
+from trading_bot.domain.order import OrderSide
 
 
 def _dccd_ohlc(closes: list[float], *, span_s: int = 60) -> pl.DataFrame:
@@ -131,13 +142,19 @@ async def test_set_mode_live_requires_explicit_confirmation() -> None:
 
 
 async def test_testnet_without_a_broker_is_refused() -> None:
-    """A paper-only unit with no configured broker cannot go testnet/live."""
+    """A paper-only unit with no configured broker cannot go testnet/live.
+
+    And a refused switch changes **nothing**: the mode is validated (sliced) before
+    the unit is mutated, so a ConfigError leaves the unit on its previous mode.
+    """
     sup = StrategySupervisor(
         _config(with_broker=False),
         dccd_client=_FakeDccdClient({"BTC/USD": _dccd_ohlc(_trend())}),
     )
     with pytest.raises(ConfigError, match="no matching broker"):
         await sup.set_mode("btc-ma", "testnet")
+    # The refused switch left the unit on paper (config-validation is atomic).
+    assert sup.status("btc-ma")[0].mode == "paper"
 
 
 def test_status_includes_the_strategys_exchange() -> None:
@@ -197,3 +214,807 @@ async def test_start_all_step_all_shutdown() -> None:
     await sup.shutdown()
     assert not any(s.running for s in sup.status())
     assert await sup.step_all() == 0  # nothing running → nothing stepped
+
+
+# --- aggregate read accessors (Overview page) ------------------------------ #
+
+
+def _two_venue_config() -> AppConfig:
+    """A paper config with two strategies, on Kraken and on Binance."""
+    return AppConfig.model_validate(
+        {
+            "mode": "paper",
+            "brokers": [
+                {"name": "kraken", "exchange": "kraken"},
+                {"name": "binance", "exchange": "binance"},
+            ],
+            "strategies": [
+                {
+                    "name": "btc-kraken",
+                    "symbol": "BTC/USD",
+                    "data": {"exchange": "kraken", "span": 60},
+                    "signal": {"ref": "ma_crossover", "params": {"fast": 3, "slow": 6}},
+                    "reference_qty": "2",
+                    "lookback": 6,
+                },
+                {
+                    "name": "eth-binance",
+                    "symbol": "ETH/USDT",
+                    "data": {"exchange": "binance", "span": 60},
+                    "signal": {"ref": "ma_crossover", "params": {"fast": 3, "slow": 6}},
+                    "reference_qty": "2",
+                    "lookback": 6,
+                },
+            ],
+        }
+    )
+
+
+def _two_venue_client() -> _FakeDccdClient:
+    """Offline dccd client for the two-venue config's symbols.
+
+    Injected so `start()` never imports the real dccd (absent in CI). The bars are
+    only read on a `step`; these KPI/positions tests seed fills directly, so canned
+    data suffices.
+    """
+    return _FakeDccdClient(
+        {"BTC/USD": _dccd_ohlc(_trend()), "ETH/USDT": _dccd_ohlc(_trend())}
+    )
+
+
+def _seed_fills(sup: StrategySupervisor, name: str, symbol: Symbol) -> None:
+    """Emit a buy→sell round trip on the running unit's engine bus.
+
+    Drives the unit's own tracker + performance service (both subscribed to the
+    engine bus) exactly as a broker's confirmed fills would — the aggregate
+    accessors then reflect that engine truth.
+    """
+    inst = Instrument(symbol)
+    bus = sup._units[name].engine.bus  # noqa: SLF001 — seed the wired bus
+    bus.emit(
+        FillEvent(
+            Fill(f"{name}-F1", f"{name}-c1", inst, OrderSide.BUY,
+                 money("1"), money("100"), money("1"), 1)
+        )
+    )
+    bus.emit(
+        FillEvent(
+            Fill(f"{name}-F2", f"{name}-c2", inst, OrderSide.SELL,
+                 money("1"), money("110"), money("1"), 2)
+        )
+    )
+
+
+async def _seeded_two_venue_supervisor() -> StrategySupervisor:
+    """Two running paper units (Kraken + Binance), each with a seeded round trip."""
+    sup = StrategySupervisor(_two_venue_config(), dccd_client=_two_venue_client())
+    await sup.start("btc-kraken")
+    await sup.start("eth-binance")
+    _seed_fills(sup, "btc-kraken", Symbol("BTC", "USD"))
+    _seed_fills(sup, "eth-binance", Symbol("ETH", "USDT"))
+    return sup
+
+
+async def test_kpi_strategy_level_has_one_row_per_unit() -> None:
+    """`kpi("strategy")` returns a row per running unit with its own PnL + ratios."""
+    sup = await _seeded_two_venue_supervisor()
+    rows = sup.kpi("strategy")
+    assert {r.strategy for r in rows} == {"btc-kraken", "eth-binance"}
+    by_name = {r.strategy: r for r in rows}
+    # Each round trip: +10 gross - 2 fees = +8 realised.
+    assert by_name["btc-kraken"].realised_pnl == money("8")
+    assert by_name["btc-kraken"].fees_paid == money("2")
+    assert by_name["btc-kraken"].exchange == "kraken"
+    # Per-strategy ratios are floats (computed off the unit's curve) when fynance is
+    # available; they degrade to None without it (the dashboard stays functional).
+    pytest.importorskip("fynance")
+    assert isinstance(by_name["btc-kraken"].sharpe, float)
+
+
+async def test_kpi_exchange_level_folds_per_venue() -> None:
+    """`kpi("exchange")` folds units per venue (PnL/fees summed; ratios None)."""
+    sup = await _seeded_two_venue_supervisor()
+    rows = sup.kpi("exchange")
+    by_venue = {r.exchange: r for r in rows}
+    assert set(by_venue) == {"kraken", "binance"}
+    assert by_venue["kraken"].realised_pnl == money("8")
+    assert by_venue["binance"].realised_pnl == money("8")
+    # Aggregate ratios are None (a combined curve lands in a later leaf).
+    assert by_venue["kraken"].sharpe is None
+    assert by_venue["kraken"].strategy is None
+
+
+async def test_kpi_total_sums_all_units() -> None:
+    """`kpi("total")` is a single row summing every unit (ratios None)."""
+    sup = await _seeded_two_venue_supervisor()
+    [total] = sup.kpi("total")
+    assert total.key == "total"
+    assert total.realised_pnl == money("16")  # 8 + 8
+    assert total.fees_paid == money("4")  # 2 + 2
+    assert total.sharpe is None
+    assert total.exchange is None
+
+
+async def test_positions_carry_strategy_and_exchange_tags() -> None:
+    """`positions()` rows carry the owning strategy + its venue (group-by keys)."""
+    sup = StrategySupervisor(_two_venue_config(), dccd_client=_two_venue_client())
+    await sup.start("btc-kraken")
+    await sup.start("eth-binance")
+    # Seed a net-long book (a buy only, no close) so the position is non-flat.
+    inst = Instrument(Symbol("BTC", "USD"))
+    sup._units["btc-kraken"].engine.bus.emit(  # noqa: SLF001
+        FillEvent(
+            Fill("k-F1", "k-c1", inst, OrderSide.BUY,
+                 money("3"), money("100"), money("1"), 1)
+        )
+    )
+    rows = sup.positions()
+    [row] = rows
+    assert row.strategy == "btc-kraken"
+    assert row.exchange == "kraken"
+    assert row.instrument == "BTC/USD"
+    assert row.base == "BTC"
+    assert row.net_qty == money("3")
+
+
+async def test_open_orders_carry_strategy_and_exchange_tags() -> None:
+    """`open_orders()` rows are tagged with strategy + exchange across the units."""
+    pytest.importorskip("fynance")
+    client = _FakeDccdClient({"BTC/USD": _dccd_ohlc(_trend())})
+    sup = StrategySupervisor(_config(), dccd_client=client)
+    await sup.start("btc-ma")
+    await sup.step("btc-ma")  # routes an order into the unit's router
+    rows = sup.open_orders()
+    # The paper broker fills market orders immediately (terminal), so there may be
+    # no *open* order; but every row that exists must carry the tags.
+    for row in rows:
+        assert row.strategy == "btc-ma"
+        assert row.exchange == "kraken"
+
+
+def test_aggregate_accessors_empty_when_nothing_running() -> None:
+    """An all-stopped supervisor aggregates to empty lists (total is a zero row)."""
+    sup = StrategySupervisor(_two_venue_config(), dccd_client=_two_venue_client())
+    assert sup.positions() == []
+    assert sup.open_orders() == []
+    assert sup.kpi("strategy") == []
+    assert sup.kpi("exchange") == []
+    [total] = sup.kpi("total")  # total is always one row, even when empty
+    assert total.realised_pnl == money("0")
+
+
+def test_kpi_rejects_an_unknown_level() -> None:
+    """An unknown KPI level is a clear ValueError (the API maps it to 422)."""
+    sup = StrategySupervisor(_two_venue_config(), dccd_client=_two_venue_client())
+    with pytest.raises(ValueError, match="unknown KPI level"):
+        sup.kpi("bogus")  # type: ignore[arg-type]
+
+
+# --- dynamic membership: add_unit / remove_unit / manifest ----------------- #
+
+
+def _portfolio_entry(name: str = "alloc1") -> PortfolioStrategyConfig:
+    """A deployable portfolio entry pointing at an existing signal ref."""
+    return PortfolioStrategyConfig(
+        name=name,
+        venue="binance",
+        universe=["BTC/USDT", "ETH/USDT"],
+        signal=SignalRefConfig(ref="strategies.alloc1.signal:alloc1_portfolio_signal"),
+        capital=money("100000"),
+        data=DataSourceConfig(exchange="binance", span=86400),
+    )
+
+
+def test_add_unit_appends_a_stopped_unit() -> None:
+    """`add_unit` deploys a new **stopped** unit reflected in status() + names()."""
+    sup = _supervisor()
+    name = sup.add_unit(_portfolio_entry())
+    assert name == "alloc1"
+    assert sup.names() == ["btc-ma", "alloc1"]
+    [st] = [s for s in sup.status() if s.name == "alloc1"]
+    assert st.kind == "portfolio"
+    assert st.exchange == "binance"
+    assert st.running is False  # never auto-started (paper-safe)
+
+
+def test_add_unit_rejects_a_duplicate_name() -> None:
+    """A name already managed is a ConfigError; nothing is added."""
+    sup = _supervisor()
+    with pytest.raises(ConfigError, match="duplicate"):
+        sup.add_unit(StrategyConfig(name="btc-ma", symbol="ETH/USD"))
+    assert sup.names() == ["btc-ma"]  # unchanged
+
+
+async def test_add_unit_bad_signal_ref_surfaces_on_start() -> None:
+    """A deployment with an unimportable signal ref adds (paper-safe) but fails to start.
+
+    Adding never resolves the signal (paper-safe, no import), so a bad
+    ``module:function`` ref lands as a stopped unit; the clear error surfaces when
+    it is *started* (where the runner resolves + imports the signal).
+    """
+    sup = _supervisor()
+    sup.add_unit(
+        PortfolioStrategyConfig(
+            name="pf",
+            venue="binance",
+            universe=["BTC/USDT", "ETH/USDT"],
+            signal=SignalRefConfig(ref="nonexistent.module:sig"),
+            capital=money("100000"),
+            data=DataSourceConfig(exchange="binance", span=86400),
+        )
+    )
+    assert "pf" in sup.names()  # added stopped (deploy is paper-safe)
+    with pytest.raises(ConfigError):
+        await sup.start("pf")  # the runner resolves the ref here → clear error
+
+
+def test_add_unit_non_paper_seed_needs_a_matching_broker() -> None:
+    """A non-paper seed with no matching broker for the venue is rejected atomically.
+
+    The base config is ``live`` with a Kraken broker only; deploying a Binance
+    portfolio (no matching broker) must raise and leave the supervisor untouched.
+    """
+    base = AppConfig.model_validate(
+        {
+            "mode": "live",
+            "live_enabled": True,
+            "brokers": [{"name": "k", "exchange": "kraken"}],
+        }
+    )
+    sup = StrategySupervisor(base)
+    with pytest.raises(ConfigError, match="no matching broker"):
+        sup.add_unit(_portfolio_entry())
+    assert sup.names() == []  # nothing added; base restored
+
+
+def test_manifest_reflects_the_current_units() -> None:
+    """`manifest()` returns the AppConfig reconstructed from the live units."""
+    sup = _supervisor()
+    sup.add_unit(_portfolio_entry())
+    man = sup.manifest()
+    assert [s.name for s in man.strategies] == ["btc-ma"]
+    assert [p.name for p in man.portfolios] == ["alloc1"]
+
+
+async def test_remove_unit_stops_and_drops() -> None:
+    """`remove_unit` stops a running unit, drops it, and forgets its config."""
+    pytest.importorskip("fynance")  # ma_crossover evaluates fynance.sma
+    sup = _supervisor()
+    await sup.start("btc-ma")
+    assert sup.status("btc-ma")[0].running is True
+    sup.remove_unit("btc-ma")
+    assert sup.names() == []
+    assert sup.manifest().strategies == []
+    # It is truly gone — operating on it is now an unknown-strategy error.
+    with pytest.raises(ConfigError, match="unknown strategy"):
+        await sup.start("btc-ma")
+
+
+def test_remove_unit_unknown_is_a_config_error() -> None:
+    """Removing an unmanaged name is a clear ConfigError."""
+    sup = _supervisor()
+    with pytest.raises(ConfigError, match="unknown strategy"):
+        sup.remove_unit("nope")
+
+
+# --- paper start-replay: a persisted book survives a restart --------------- #
+
+
+def _config_with_store(db_path: str) -> AppConfig:
+    """A paper BTC/USD strategy whose engine persists to (and restores from) ``db_path``."""
+    return AppConfig.model_validate(
+        {
+            "mode": "paper",
+            "storage": {"db_path": db_path},
+            "brokers": [{"name": "kraken", "exchange": "kraken"}],
+            "strategies": [
+                {
+                    "name": "btc-ma",
+                    "symbol": "BTC/USD",
+                    "data": {"exchange": "kraken", "span": 60},
+                    "signal": {"ref": "ma_crossover", "params": {"fast": 3, "slow": 6}},
+                    "reference_qty": "2",
+                    "lookback": 6,
+                }
+            ],
+        }
+    )
+
+
+def _seed_store(db_path: str) -> None:
+    """Persist a buy→sell round trip on BTC/USD to a fresh store (+8 realised)."""
+    from trading_bot.storage.sqlite_store import SqliteStore
+
+    inst = Instrument(Symbol("BTC", "USD"))
+    store = SqliteStore(db_path)
+    store.record_fill(
+        Fill("SF1", "sc1", inst, OrderSide.BUY, money("1"), money("100"), money("1"), 1)
+    )
+    store.record_fill(
+        Fill("SF2", "sc2", inst, OrderSide.SELL, money("1"), money("110"), money("1"), 2)
+    )
+
+
+async def test_paper_start_replays_the_stored_book(tmp_path) -> None:  # noqa: ANN001
+    """A paper unit started over a seeded store restores its tracker + realised PnL.
+
+    The end-to-end win: a freshly-built paper engine holds no venue state (its
+    startup reconcile resets the tracker to empty), so without the replay a
+    restarted paper unit would show an empty book. `start` replays the store's
+    fills into the engine's tracker + performance service, so the position and
+    realised PnL survive the restart.
+    """
+    db = str(tmp_path / "book.sqlite")
+    _seed_store(db)  # a buy→sell round trip: net flat, +10 gross - 2 fees = +8
+
+    sup = StrategySupervisor(
+        _config_with_store(db),
+        dccd_client=_FakeDccdClient({"BTC/USD": _dccd_ohlc(_trend())}),
+    )
+    await sup.start("btc-ma")
+
+    engine = sup._units["btc-ma"].engine  # noqa: SLF001
+    inst = Instrument(Symbol("BTC", "USD"))
+    position = engine.tracker.position(inst)
+    assert position is not None  # the book was restored, not empty
+    assert position.net_qty == money("0")  # bought 1, sold 1 → flat
+    assert position.realised_pnl == money("8")  # +10 gross - 2 fees
+    assert engine.perf.realised_pnl() == money("8")
+    assert engine.perf.fees_paid() == money("2")
+    # And the supervisor's status surfaces it.
+    assert sup.status("btc-ma")[0].realised_pnl == money("8")
+
+
+async def test_paper_start_replay_does_not_double_count_on_restart(tmp_path) -> None:  # noqa: ANN001
+    """Stopping and re-starting a paper unit restores the same book (no double-count)."""
+    db = str(tmp_path / "book.sqlite")
+    _seed_store(db)
+    sup = StrategySupervisor(
+        _config_with_store(db),
+        dccd_client=_FakeDccdClient({"BTC/USD": _dccd_ohlc(_trend())}),
+    )
+    await sup.start("btc-ma")
+    await sup.stop("btc-ma")
+    await sup.start("btc-ma")  # a fresh engine, replays the same fills once
+
+    engine = sup._units["btc-ma"].engine  # noqa: SLF001
+    assert engine.perf.realised_pnl() == money("8")  # not 16
+    assert engine.perf.fees_paid() == money("2")  # not 4
+
+
+async def test_paper_start_replays_only_paper_tagged_fills(tmp_path) -> None:  # noqa: ANN001
+    """A store with mixed-mode fills replays ONLY its paper fills into a paper engine.
+
+    Fake / real money must never commingle into the paper simulator's book: a
+    testnet round trip on the same instrument as a large open paper position would
+    otherwise realise a spurious close against the wrong entry. The paper unit's
+    replay filters on the storage `mode` tag, so its realised PnL is the paper
+    fold alone.
+    """
+    from trading_bot.storage.sqlite_store import SqliteStore
+
+    db = str(tmp_path / "book.sqlite")
+    inst = Instrument(Symbol("BTC", "USD"))
+    store = SqliteStore(db)
+    # A paper round trip: +8 realised.
+    store.set_context(mode="paper", venue="")
+    store.record_fill(
+        Fill("PF1", "pc1", inst, OrderSide.BUY, money("1"), money("100"), money("1"), 1)
+    )
+    store.record_fill(
+        Fill("PF2", "pc2", inst, OrderSide.SELL, money("1"), money("110"), money("1"), 2)
+    )
+    # A testnet round trip on the SAME instrument (fake money — must be ignored by
+    # the paper replay): would otherwise add +18.
+    store.set_context(mode="testnet", venue="binance")
+    store.record_fill(
+        Fill("TF1", "tc1", inst, OrderSide.BUY, money("1"), money("100"), money("1"), 3)
+    )
+    store.record_fill(
+        Fill("TF2", "tc2", inst, OrderSide.SELL, money("1"), money("120"), money("1"), 4)
+    )
+
+    sup = StrategySupervisor(
+        _config_with_store(db),
+        dccd_client=_FakeDccdClient({"BTC/USD": _dccd_ohlc(_trend())}),
+    )
+    await sup.start("btc-ma")
+    engine = sup._units["btc-ma"].engine  # noqa: SLF001
+    # Only the paper fold — the testnet fills were not commingled.
+    assert engine.perf.realised_pnl() == money("8")  # not 26
+    assert engine.perf.fees_paid() == money("2")  # not 4
+
+
+# --- pnl_series: per-mode realised-PnL / equity curve over time ------------- #
+
+
+async def test_pnl_series_paper_matches_engine_truth(tmp_path) -> None:  # noqa: ANN001
+    """A running paper unit's pnl_series folds its store's fills to the engine's truth.
+
+    The load-bearing reconciliation: the derived curve's final equity equals
+    `v0 + engine.perf.realised_pnl()` exactly (same fold, same v0), is non-empty,
+    and monotonic in ts.
+    """
+    db = str(tmp_path / "book.sqlite")
+    _seed_store(db)  # a buy→sell round trip: +8 realised
+    sup = StrategySupervisor(
+        _config_with_store(db),
+        dccd_client=_FakeDccdClient({"BTC/USD": _dccd_ohlc(_trend())}),
+    )
+    await sup.start("btc-ma")
+
+    result = sup.pnl_series("btc-ma")
+    v0 = result["v0"]
+    series = result["series"]
+    assert "paper" in series
+    paper = series["paper"]
+    assert paper  # non-empty
+    # Monotonic in ts (ascending, time-ordered).
+    ts_list = [row[0] for row in paper]
+    assert ts_list == sorted(ts_list)
+    # The final equity reconciles to the running engine's realised PnL exactly.
+    engine = sup._units["btc-ma"].engine  # noqa: SLF001
+    final_equity = paper[-1][2]
+    assert final_equity == v0 + engine.perf.realised_pnl()
+    # And v0 is the unit's configured starting capital.
+    assert v0 == sup._units["btc-ma"].config.starting_capital  # noqa: SLF001
+
+
+async def test_pnl_series_splits_live_and_testnet(tmp_path) -> None:  # noqa: ANN001
+    """Fills tagged under two modes yield two separate series, each anchored at v0.
+
+    Directly stores fills under two modes (paper→testnet is free; both fake
+    money) so no venue/network is needed, then asserts pnl_series returns a
+    per-mode split — testnet is never combined into the paper series.
+    """
+    from trading_bot.storage.sqlite_store import SqliteStore
+
+    db = str(tmp_path / "book.sqlite")
+    inst = Instrument(Symbol("BTC", "USD"))
+    store = SqliteStore(db)
+    # Paper round trip: +8 realised.
+    store.set_context(mode="paper", venue="")
+    store.record_fill(
+        Fill("PF1", "pc1", inst, OrderSide.BUY, money("1"), money("100"), money("1"), 1)
+    )
+    store.record_fill(
+        Fill("PF2", "pc2", inst, OrderSide.SELL, money("1"), money("110"), money("1"), 2)
+    )
+    # Testnet round trip on the same book (fake money, separate series): +18.
+    store.set_context(mode="testnet", venue="binance")
+    store.record_fill(
+        Fill("TF1", "tc1", inst, OrderSide.BUY, money("1"), money("100"), money("1"), 3)
+    )
+    store.record_fill(
+        Fill("TF2", "tc2", inst, OrderSide.SELL, money("1"), money("120"), money("1"), 4)
+    )
+
+    # Read via a stopped unit (reads the configured db_path store).
+    sup = StrategySupervisor(
+        _config_with_store(db),
+        dccd_client=_FakeDccdClient({"BTC/USD": _dccd_ohlc(_trend())}),
+    )
+    result = sup.pnl_series("btc-ma")
+    v0 = result["v0"]
+    series = result["series"]
+    assert set(series) == {"paper", "testnet"}
+    # Each mode folds from the SAME v0, independently.
+    assert series["paper"][-1][2] == v0 + money("8")
+    assert series["testnet"][-1][2] == v0 + money("18")
+    # The current end points reflect each mode's equity.
+    assert result["current"]["paper"]["equity"] == v0 + money("8")
+    assert result["current"]["testnet"]["equity"] == v0 + money("18")
+
+
+def test_pnl_series_unknown_strategy_raises() -> None:
+    """pnl_series on an unmanaged name is a clear ConfigError (the API maps to 404)."""
+    sup = _supervisor()
+    with pytest.raises(ConfigError, match="unknown strategy"):
+        sup.pnl_series("nope")
+
+
+def test_pnl_series_no_fills_is_empty() -> None:
+    """A unit that persists nothing (no db_path) has empty series (not an error)."""
+    sup = _supervisor()  # the default config has no storage.db_path
+    result = sup.pnl_series("btc-ma")
+    assert result["series"] == {}
+    assert result["current"] == {}
+    assert result["v0"] == sup._units["btc-ma"].config.starting_capital  # noqa: SLF001
+
+
+async def test_combined_equity_series_sums_v0_and_merges_fills(tmp_path) -> None:  # noqa: ANN001
+    """combined_equity_series merges two strategies' paper fills, summing their v0."""
+    from trading_bot.storage.sqlite_store import SqliteStore
+
+    inst = Instrument(Symbol("BTC", "USD"))
+    db_a = str(tmp_path / "a.sqlite")
+    db_b = str(tmp_path / "b.sqlite")
+    for db in (db_a, db_b):
+        store = SqliteStore(db, mode="paper", venue="kraken")
+        store.record_fill(
+            Fill(f"{db}-F1", f"{db}-c1", inst, OrderSide.BUY,
+                 money("1"), money("100"), money("0"), 1)
+        )
+        store.record_fill(
+            Fill(f"{db}-F2", f"{db}-c2", inst, OrderSide.SELL,
+                 money("1"), money("110"), money("0"), 2)
+        )
+    cfg = AppConfig.model_validate(
+        {
+            "mode": "paper",
+            "brokers": [{"name": "kraken", "exchange": "kraken"}],
+            "strategies": [
+                {
+                    "name": "a",
+                    "symbol": "BTC/USD",
+                    "storage": {"db_path": db_a},  # ignored here — set per-unit below
+                    "data": {"exchange": "kraken", "span": 60},
+                    "signal": {"ref": "ma_crossover", "params": {"fast": 3, "slow": 6}},
+                    "reference_qty": "2",
+                    "lookback": 6,
+                },
+            ],
+            "storage": {"db_path": db_a},
+        }
+    )
+    sup = StrategySupervisor(
+        cfg, dccd_client=_FakeDccdClient({"BTC/USD": _dccd_ohlc(_trend())})
+    )
+    combined = sup.combined_equity_series(["a"], mode="paper")
+    assert combined  # non-empty
+    # Single strategy 'a': +10 gross (no fees) from its v0.
+    v0 = sup._units["a"].config.starting_capital  # noqa: SLF001
+    assert combined[-1][2] == v0 + money("10")
+
+
+# --- aggregate ratio KPIs (exchange / total on the combined curve) --------- #
+
+
+def _kpi_ratio_supervisor(db_path: str) -> StrategySupervisor:
+    """A running paper unit whose store holds a multi-fill book (a real curve).
+
+    Records a spread of paper round trips to ``db_path`` (varied prices, so the
+    derived equity curve has non-zero dispersion — a Sharpe/Sortino/Calmar is
+    defined on it), then starts the unit so its engine reads that store. The unit
+    is running, so ``combined_equity_series`` reads the live ``engine.store``.
+    """
+    from trading_bot.storage.sqlite_store import SqliteStore
+
+    inst = Instrument(Symbol("BTC", "USD"))
+    store = SqliteStore(db_path, mode="paper", venue="kraken")
+    # A varied round-trip book (5 buys, 5 sells at different prices) so the equity
+    # curve moves up and down — a ratio is defined (a flat/monotone curve is not).
+    prices = [(100, 108), (108, 104), (104, 112), (112, 106), (106, 115)]
+    for i, (buy_px, sell_px) in enumerate(prices):
+        store.record_fill(
+            Fill(f"B{i}", f"cB{i}", inst, OrderSide.BUY,
+                 money("1"), money(str(buy_px)), money("0"), 2 * i + 1)
+        )
+        store.record_fill(
+            Fill(f"S{i}", f"cS{i}", inst, OrderSide.SELL,
+                 money("1"), money(str(sell_px)), money("0"), 2 * i + 2)
+        )
+    cfg = AppConfig.model_validate(
+        {
+            "mode": "paper",
+            "storage": {"db_path": db_path},
+            "brokers": [{"name": "kraken", "exchange": "kraken"}],
+            "strategies": [
+                {
+                    "name": "btc-ma",
+                    "symbol": "BTC/USD",
+                    "data": {"exchange": "kraken", "span": 60},
+                    "signal": {"ref": "ma_crossover", "params": {"fast": 3, "slow": 6}},
+                    "reference_qty": "2",
+                    "lookback": 6,
+                }
+            ],
+        }
+    )
+    return StrategySupervisor(
+        cfg, dccd_client=_FakeDccdClient({"BTC/USD": _dccd_ohlc(_trend())})
+    )
+
+
+async def test_kpi_total_ratios_come_from_the_combined_curve(tmp_path) -> None:  # noqa: ANN001
+    """`kpi("total")` / `kpi("exchange")` ratios are non-null on a real combined curve."""
+    pytest.importorskip("fynance")  # the ratios need the research dependency
+    sup = _kpi_ratio_supervisor(str(tmp_path / "book.sqlite"))
+    await sup.start("btc-ma")
+
+    [total] = sup.kpi("total")
+    # The combined curve has dispersion, so every ratio estimates to a real float.
+    assert isinstance(total.sharpe, float)
+    assert isinstance(total.sortino, float)
+    assert isinstance(total.calmar, float)
+    assert isinstance(total.max_drawdown, float)
+
+    [exchange] = sup.kpi("exchange")
+    assert exchange.exchange == "kraken"
+    assert isinstance(exchange.sharpe, float)
+
+
+async def test_kpi_aggregate_ratios_degrade_without_fynance(  # noqa: ANN001
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Without fynance the aggregate ratios are None (never raise)."""
+    sup = _kpi_ratio_supervisor(str(tmp_path / "book.sqlite"))
+    await sup.start("btc-ma")
+
+    # Make every ratio wrapper behave as if fynance were absent.
+    import trading_bot.application.supervisor as sup_mod
+    from trading_bot.domain.performance import PerformanceDependencyError
+
+    def _no_fynance(*_args: object, **_kwargs: object) -> float:
+        raise PerformanceDependencyError("sharpe")
+
+    for name in ("sharpe", "sortino", "calmar", "max_drawdown"):
+        monkeypatch.setattr(sup_mod, name, _no_fynance)
+
+    [total] = sup.kpi("total")
+    assert total.sharpe is None
+    assert total.sortino is None
+    assert total.calmar is None
+    assert total.max_drawdown is None
+    # PnL/fees still surface (the fold is money-exact, dependency-free).
+    # Round trips: (108-100)+(104-108)+(112-104)+(106-112)+(115-106) = 15, no fees.
+    assert total.realised_pnl == money("15")
+
+
+# --- per-strategy store isolation: two portfolios, two stores --------------- #
+
+
+def _fake_portfolio_signal(asof_ms, frames):  # noqa: ANN001, ANN201, ARG001
+    """A no-op portfolio signal (offline, CI-safe — never evaluated in these tests).
+
+    Referenced by ``_two_portfolio_config`` so ``start()`` can resolve a portfolio
+    signal **without** importing the gitignored ``strategies/`` (absent in CI). The
+    units are never stepped, so the empty target is never used — fills are seeded
+    onto the engine bus directly.
+    """
+    return {}
+
+
+def _two_portfolio_config(db_a: str, db_b: str) -> AppConfig:
+    """A manifest with two portfolios, each declaring its OWN ``db_path``.
+
+    Reproduces the deploy-two-portfolios-in-one-manifest shape (alloc1-binance +
+    alloc1-kraken): both paper, disjoint universes/venues, each with a per-strategy
+    store path so their books never commingle. The signal is a local no-op ref (so it
+    resolves offline, no ``strategies/`` import); the units are never stepped.
+    """
+    ref = "trading_bot.tests.application.test_supervisor:_fake_portfolio_signal"
+    return AppConfig.model_validate(
+        {
+            "mode": "paper",
+            "storage": {"db_path": "./var/should-not-be-used.sqlite"},
+            "portfolios": [
+                {
+                    "name": "pf-a",
+                    "venue": "binance",
+                    "universe": ["BTC/USDT"],
+                    "capital": "100000",
+                    "signal": {"ref": ref},
+                    "data": {"exchange": "binance", "span": 86400},
+                    "db_path": db_a,
+                },
+                {
+                    "name": "pf-b",
+                    "venue": "kraken",
+                    "universe": ["BTC/USD"],
+                    "capital": "100000",
+                    "signal": {"ref": ref},
+                    "data": {"exchange": "kraken", "span": 86400},
+                    "db_path": db_b,
+                },
+            ],
+        }
+    )
+
+
+def _two_portfolio_client() -> _FakeDccdClient:
+    """Offline dccd client for the two-portfolio config (so ``start`` needs no dccd)."""
+    return _FakeDccdClient(
+        {"BTC/USDT": _dccd_ohlc(_trend()), "BTC/USD": _dccd_ohlc(_trend())}
+    )
+
+
+def _seed_portfolio_fills(
+    sup: StrategySupervisor, name: str, symbol: Symbol, *, exit_price: str
+) -> None:
+    """Emit a buy@100 → sell@``exit_price`` round trip on ``name``'s engine bus."""
+    inst = Instrument(symbol)
+    bus = sup._units[name].engine.bus  # noqa: SLF001 — seed the wired bus
+    bus.emit(
+        FillEvent(
+            Fill(f"{name}-F1", f"{name}-c1", inst, OrderSide.BUY,
+                 money("1"), money("100"), money("1"), 1)
+        )
+    )
+    bus.emit(
+        FillEvent(
+            Fill(f"{name}-F2", f"{name}-c2", inst, OrderSide.SELL,
+                 money("1"), money(exit_price), money("1"), 2)
+        )
+    )
+
+
+async def test_per_strategy_db_path_isolates_the_slice(tmp_path) -> None:  # noqa: ANN001
+    """Each portfolio's sliced config points at its OWN ``db_path`` (not the global)."""
+    db_a = str(tmp_path / "a.sqlite")
+    db_b = str(tmp_path / "b.sqlite")
+    sup = StrategySupervisor(
+        _two_portfolio_config(db_a, db_b), dccd_client=_two_portfolio_client()
+    )
+    # The per-strategy db_path overrode the global storage.db_path on each slice.
+    assert sup._units["pf-a"].config.storage.db_path == db_a  # noqa: SLF001
+    assert sup._units["pf-b"].config.storage.db_path == db_b  # noqa: SLF001
+
+
+async def test_per_strategy_stores_do_not_commingle_fills(tmp_path) -> None:  # noqa: ANN001
+    """Two portfolios with their own db_path keep pnl_series disjoint (no commingling).
+
+    The whole point of the isolation fix: seed a disjoint paper round trip onto each
+    unit's engine bus (each writes to its OWN store), then assert each unit's
+    ``pnl_series`` folds only its own fills — pf-a's +8 never leaks into pf-b's +18.
+    """
+    db_a = str(tmp_path / "a.sqlite")
+    db_b = str(tmp_path / "b.sqlite")
+    sup = StrategySupervisor(
+        _two_portfolio_config(db_a, db_b), dccd_client=_two_portfolio_client()
+    )
+    await sup.start("pf-a")
+    await sup.start("pf-b")
+    # Disjoint books: pf-a on BTC/USDT (+8), pf-b on BTC/USD (+18).
+    _seed_portfolio_fills(sup, "pf-a", Symbol("BTC", "USDT"), exit_price="110")
+    _seed_portfolio_fills(sup, "pf-b", Symbol("BTC", "USD"), exit_price="120")
+
+    pa = sup.pnl_series("pf-a")
+    pb = sup.pnl_series("pf-b")
+    v0 = money("100000")
+    # Each series folds ONLY its own fills — no cross-contamination.
+    assert pa["series"]["paper"][-1][2] == v0 + money("8")
+    assert pb["series"]["paper"][-1][2] == v0 + money("18")
+    # And each unit's live engine holds only its own instrument.
+    a_insts = {
+        str(i.symbol)
+        for i in sup._units["pf-a"].engine.tracker.all_positions()  # noqa: SLF001
+    }
+    b_insts = {
+        str(i.symbol)
+        for i in sup._units["pf-b"].engine.tracker.all_positions()  # noqa: SLF001
+    }
+    assert a_insts == {"BTC/USDT"}
+    assert b_insts == {"BTC/USD"}
+
+
+async def test_per_strategy_replay_on_restart_stays_isolated(tmp_path) -> None:  # noqa: ANN001
+    """After a stop→start (which replays each store), every unit's book is its own only.
+
+    The restart path is where commingling used to bite: ``_replay_paper_book`` folds
+    the store's fills back into a fresh engine. With per-strategy stores each unit
+    replays only its own persisted fills, so pf-a's restored book is BTC/USDT +8 and
+    pf-b's is BTC/USD +18 — never each other's.
+    """
+    db_a = str(tmp_path / "a.sqlite")
+    db_b = str(tmp_path / "b.sqlite")
+    sup = StrategySupervisor(
+        _two_portfolio_config(db_a, db_b), dccd_client=_two_portfolio_client()
+    )
+    await sup.start("pf-a")
+    await sup.start("pf-b")
+    _seed_portfolio_fills(sup, "pf-a", Symbol("BTC", "USDT"), exit_price="110")
+    _seed_portfolio_fills(sup, "pf-b", Symbol("BTC", "USD"), exit_price="120")
+
+    # Restart both — each engine is rebuilt and replays its OWN store's fills.
+    await sup.stop("pf-a")
+    await sup.stop("pf-b")
+    await sup.start("pf-a")
+    await sup.start("pf-b")
+
+    ea = sup._units["pf-a"].engine  # noqa: SLF001
+    eb = sup._units["pf-b"].engine  # noqa: SLF001
+    assert {str(i.symbol) for i in ea.tracker.all_positions()} == {"BTC/USDT"}
+    assert {str(i.symbol) for i in eb.tracker.all_positions()} == {"BTC/USD"}
+    assert ea.perf.realised_pnl() == money("8")
+    assert eb.perf.realised_pnl() == money("18")

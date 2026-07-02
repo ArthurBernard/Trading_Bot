@@ -60,6 +60,7 @@ own.
 from __future__ import annotations
 
 import importlib
+import logging
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
@@ -83,6 +84,8 @@ __all__ = [
     "load_portfolio_signal",
     "as_portfolio_signal",
 ]
+
+logger = logging.getLogger(__name__)
 
 #: A multi-asset strategy's signal callable: ``(asof_ms, {Symbol: frame})`` →
 #: a weight vector ``{Symbol: weight}``. Each weight is a **signed fraction of
@@ -256,6 +259,14 @@ def load_portfolio_signal(ref: str) -> PortfolioSignalFn:
         raise ConfigError(
             f"portfolio signal reference {ref!r} must be 'module:function'"
         )
+    # Audit trail (I-1): resolving a dotted ref imports an arbitrary module (runs its
+    # top level) — log which one, at which callable, so a deploy's import is traceable.
+    # The ref carries no secret; the API boundary allow-lists the module prefix.
+    logger.info(
+        "resolving portfolio signal: importing module %r for callable %r",
+        module_name,
+        attr,
+    )
     try:
         module = importlib.import_module(module_name)
     except ImportError as exc:

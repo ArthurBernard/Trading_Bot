@@ -20,10 +20,33 @@ off-by-default opt-in. History in git + `CHANGELOG.md`; see `06-status.md`.
 generic `as_portfolio_signal` adapter; concrete strategies kept **local-only** under
 the gitignored `strategies/`, real dccd-data verified). History in `CHANGELOG.md`.
 
+## Audit remediation (2026-07-02)
+
+Full deep audit landed in [`audit/`](audit/) — 90 findings (4 Critical, 16 High,
+30 Medium, 24 Low, 16 Info). All money-risk findings are **latent** (paper/testnet
+only today); they gate go-live.
+
+**Wave 1 (all 4 Critical + top High) shipped in v0.8.0** — test-gate hermeticity,
+domain money guards, transport secret redaction, broker live-readiness, dashboard
+gate hardening, engine risk + storage, docs groom (see `CHANGELOG.md`; plan tree
+archived).
+
+- [ ] **Audit remediation — wave 2 (deferred, needs care).** Async SQLite off the
+  event loop (`A-2`), supervisor step/set_mode/stop locking (`A-3`), Binance weight
+  budget + 418/`Retry-After` limiter (`B-6`), and the long tail of Medium/Low
+  robustness items. Tracked per-finding in the audit reports.
+
 ## Known issues / follow-ups
 
-_None open — the engine-side roadmap is clear. Remaining work is the maintainer's
-real-key go-live step below._
+- [ ] **Binance futures/margin testnet adapter (for a faithful long/short testnet
+  live-test).** The `BinanceBroker` is **spot** (`/api/v3`), and the Binance testnet
+  it reaches (`testnet.binance.vision`) is spot-only — it **cannot short**.
+  Long/short portfolio strategies (e.g. ALLOC1, typically net-short) therefore can
+  only be *paper*-tested faithfully; a testnet "live test" would silently drop every
+  short leg. A USDT-M **futures** testnet adapter (`testnet.binancefuture.com`, which
+  supports shorts) is the prerequisite for a faithful testnet live-test of a
+  long/short book. Until then, long/short strategies stay **paper**; spot-only or
+  long-only strategies can use the spot testnet today.
 
 > **Live fill streaming — done.** The private `KrakenPrivateWS` is wired into the run
 > loop via `LiveFillStreamer` (real-money live Kraken only), reconcile fires on every

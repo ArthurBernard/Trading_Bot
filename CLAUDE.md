@@ -33,13 +33,15 @@ from PyPI for the integration code (see Dependencies).
 ## Commands
 
 ```bash
-# Dev env (Python 3.11+) — use a project venv (.venv/, gitignored) so the triptych
-# deps are present. Without fynance the domain/performance KPI tests SKIP; without
+# Dev env (Python 3.11+) — a dedicated pyenv-virtualenv (`trading_bot_env`), pinned by
+# .python-version so `cd` into the repo auto-activates it. Install the triptych editable
+# so the deps are present. Without fynance the domain/performance KPI tests SKIP; without
 # dccd the E5+ data-feed tests skip.
-python -m venv .venv && . .venv/bin/activate
-pip install -e ".[dev]"
+pyenv virtualenv 3.12.13 trading_bot_env && pyenv local trading_bot_env
+pip install -e ".[dev,daemon]"
 pip install -e ../Fynance                            # fynance — enables the KPI tests
 pip install -e ../Download_Crypto_Currencies_Data    # dccd — market data (E5+)
+pip install -e ../fynance-research                   # live portfolio signals (e.g. ALLOC1)
 
 # Run the full unit suite (network E2E excluded by default)
 pytest
@@ -72,7 +74,8 @@ stays self-contained:
   atomic PRs, never one catch-all branch.
 - **Model: `opus`, always** — interactive sessions and every spawned subagent; a plan
   leaf's `complexity` is effort/ordering only and never downgrades the model.
-- **Before every commit** — `.venv/bin/python -m pytest` and `.venv/bin/ruff check trading_bot/` must pass.
+- **Before every commit** — `python -m pytest` and `ruff check trading_bot/` must pass
+  (run under the `trading_bot_env` pyenv-virtualenv, auto-activated by `.python-version`).
 
 ### Dev loop & docs of record
 

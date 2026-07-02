@@ -13,6 +13,10 @@ The single entrypoint is :func:`~trading_bot.interfaces.api.app.create_app`.
 
 from __future__ import annotations
 
-from trading_bot.interfaces.api.app import create_app, create_control_app
+from trading_bot.interfaces.api.app import (
+    create_app,
+    create_control_app,
+    create_dashboard_app,
+)
 
-__all__ = ["create_app", "create_control_app"]
+__all__ = ["create_app", "create_control_app", "create_dashboard_app"]

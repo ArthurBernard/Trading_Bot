@@ -156,6 +156,65 @@ def test_single_instrument_pnl_fees_equity_hand_computed() -> None:
     assert p.avg_entry_price == Decimal("36000")
 
 
+# --- day-scoped realised PnL (realised_pnl_since) -------------------------- #
+
+
+def test_realised_pnl_since_windows_the_cumulative_curve() -> None:
+    """realised_pnl_since(bound) is the cumulative curve's rise from before bound.
+
+    A long opened on "day 1" is closed on "day 2"; the day-2 realised PnL must be
+    the full close gain (against the day-1 entry), *not* a refold of only day-2
+    fills. This is why the window reads the cumulative curve's delta.
+    """
+    day1 = 1_609_459_200_000  # 2021-01-01 00:00 UTC
+    day2 = day1 + 86_400_000  # 2021-01-02 00:00 UTC
+    svc = PerformanceService(v0=money("100000"))
+    # Day 1: open long 2 @ 30000 (no realised PnL yet, only sets the entry).
+    svc.apply(_fill(fill_id="D1", side=OrderSide.BUY, qty="2", price="30000",
+                    ts=day1 + 3_600_000))
+    # Day 2: close the long @ 31000 -> +2000 realised (against the day-1 entry).
+    svc.apply(_fill(fill_id="D2", side=OrderSide.SELL, qty="2", price="31000",
+                    ts=day2 + 3_600_000))
+
+    # Since day-2 midnight: only the close counts -> +2000 (the full gain).
+    assert svc.realised_pnl_since(day2) == money("2000")
+    # Since day-1 midnight: the whole history -> equals cumulative realised PnL.
+    assert svc.realised_pnl_since(day1) == svc.realised_pnl()
+    assert svc.realised_pnl_since(day1) == money("2000")
+
+
+def test_realised_pnl_since_isolates_a_losing_day() -> None:
+    """A prior profitable day is excluded; the window sees only the losing day."""
+    day1 = 1_609_459_200_000
+    day2 = day1 + 86_400_000
+    svc = PerformanceService()
+    # Day 1: round-trip a +5000 gain (buy then sell higher).
+    svc.apply(_fill(fill_id="A1", side=OrderSide.BUY, qty="1", price="30000",
+                    ts=day1 + 1))
+    svc.apply(_fill(fill_id="A2", side=OrderSide.SELL, qty="1", price="35000",
+                    ts=day1 + 2))
+    # Day 2: round-trip a -3000 loss.
+    svc.apply(_fill(fill_id="B1", side=OrderSide.BUY, qty="1", price="35000",
+                    ts=day2 + 1))
+    svc.apply(_fill(fill_id="B2", side=OrderSide.SELL, qty="1", price="32000",
+                    ts=day2 + 2))
+
+    assert svc.realised_pnl() == money("2000")  # 5000 - 3000 cumulative
+    assert svc.realised_pnl_since(day2) == money("-3000")  # only day 2's loss
+    assert svc.realised_pnl_since(day1) == money("2000")  # whole history
+
+
+def test_realised_pnl_since_empty_window_is_zero() -> None:
+    """A bound after every fill (no fill in the window) yields zero."""
+    svc = PerformanceService()
+    svc.apply(_fill(fill_id="F1", side=OrderSide.BUY, qty="1", price="30000",
+                    ts=1000, fee="5"))
+    # Nothing at/after 2000 -> zero realised in that window.
+    assert svc.realised_pnl_since(2000) == money("0")
+    # An empty service is likewise zero for any bound.
+    assert PerformanceService().realised_pnl_since(0) == money("0")
+
+
 # --- aggregate across multiple instruments --------------------------------- #
 
 

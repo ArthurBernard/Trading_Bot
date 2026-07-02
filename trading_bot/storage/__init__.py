@@ -11,6 +11,6 @@ See :class:`~trading_bot.storage.sqlite_store.SqliteStore`.
 
 from __future__ import annotations
 
-from trading_bot.storage.sqlite_store import SqliteStore
+from trading_bot.storage.sqlite_store import SqliteStore, StoredFill
 
-__all__ = ["SqliteStore"]
+__all__ = ["SqliteStore", "StoredFill"]

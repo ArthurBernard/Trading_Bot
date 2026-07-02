@@ -6,6 +6,7 @@ from decimal import ROUND_HALF_UP, Decimal
 
 import pytest
 
+from trading_bot.domain.errors import MoneyError
 from trading_bot.domain.money import (
     Money,
     add,
@@ -60,6 +61,32 @@ class TestFloatGuard:
     def test_from_float_rejects_non_float(self) -> None:
         with pytest.raises(TypeError):
             from_float("0.1")  # type: ignore[arg-type]
+
+
+class TestNonFiniteGuard:
+    """D-7: non-finite Decimals are rejected with a typed domain error."""
+
+    @pytest.mark.parametrize("bad", ["NaN", "-NaN", "sNaN", "Infinity", "-Infinity"])
+    def test_non_finite_decimal_rejected(self, bad: str) -> None:
+        with pytest.raises(MoneyError, match="finite"):
+            money(Decimal(bad))
+
+    @pytest.mark.parametrize("bad", ["nan", "inf", "-inf", "Infinity"])
+    def test_non_finite_string_rejected(self, bad: str) -> None:
+        # A string that parses to a non-finite Decimal is refused too.
+        with pytest.raises(MoneyError, match="finite"):
+            money(bad)
+
+    def test_unparsable_string_raises_money_error(self) -> None:
+        # A malformed string surfaces as a typed MoneyError, not a bare
+        # decimal.InvalidOperation.
+        with pytest.raises(MoneyError):
+            money("not-a-number")
+
+    def test_money_error_is_domain_error(self) -> None:
+        from trading_bot.domain.errors import TradingBotError
+
+        assert issubclass(MoneyError, TradingBotError)
 
 
 class TestQuantize:

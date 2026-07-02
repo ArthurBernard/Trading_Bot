@@ -206,6 +206,11 @@ class StrategyConfig(BaseModel):
     lookback : int, optional
         Warmup: minimum number of bars before the signal is meaningful. Must be
         ``>= 0``. Default ``0`` (no warmup).
+    db_path : str or None, optional
+        Per-strategy SQLite store path; overrides the global ``storage.db_path``
+        for this strategy so its book/PnL are isolated. ``None`` → use the global
+        store. Absent → the current (shared-store) behaviour, fully
+        backward-compatible.
 
     """
 
@@ -215,6 +220,7 @@ class StrategyConfig(BaseModel):
     signal: SignalRefConfig | None = None
     reference_qty: Decimal | None = None
     lookback: int = 0
+    db_path: str | None = None
 
     @field_validator("name", "symbol")
     @classmethod
@@ -305,6 +311,11 @@ class PortfolioStrategyConfig(BaseModel):
 
         Single-instrument strategies need no equivalent: they read under the exact
         ``symbol`` string the config gives, so there is nothing to re-render.
+    db_path : str or None, optional
+        Per-strategy SQLite store path; overrides the global ``storage.db_path``
+        for this strategy so its book/PnL are isolated. ``None`` → use the global
+        store. Absent → the current (shared-store) behaviour, fully
+        backward-compatible.
 
     """
 
@@ -316,6 +327,7 @@ class PortfolioStrategyConfig(BaseModel):
     gross_cap: Decimal | None = None
     venue: str = "binance"
     store_key_format: Literal["venue", "hyphen", "slash"] = "venue"
+    db_path: str | None = None
 
     @field_validator("name", "venue")
     @classmethod
@@ -428,6 +440,45 @@ class RiskConfig(BaseModel):
         return v
 
 
+class UIConfig(BaseModel):
+    """How the dashboard binds + authenticates — the persistent web settings.
+
+    Lets the manifest carry the remote-access settings so ``trading-bot dashboard``
+    serves the same way every launch without CLI flags (the dccd model: set once in
+    the config, forget). CLI flags (``--host`` / ``--port`` / ``--token`` /
+    ``--read-only``) override these. Defaults are **loopback + no auth** — a bare
+    ``dashboard`` stays local-only and never exposes the control surface by accident.
+
+    Parameters
+    ----------
+    host : str, optional
+        Interface to bind (default ``127.0.0.1`` — loopback). A non-loopback host
+        (e.g. ``0.0.0.0`` or a Tailscale IP) **requires** ``token`` — the dashboard
+        is the control surface, so it refuses to bind wide open with no auth.
+    port : int, optional
+        TCP port (default ``8000``).
+    token : str or None, optional
+        Login token enabling auth (``None`` = no auth, loopback-only). Prefer the
+        ``TRADING_BOT_UI_TOKEN`` environment variable so the token never sits in a
+        file; a value here is a convenience for a trusted host.
+    read_only : bool, optional
+        Advertise a read-only stance (controls hidden/refused). Default ``False``.
+    """
+
+    host: str = "127.0.0.1"
+    port: int = 8000
+    token: str | None = None
+    read_only: bool = False
+
+    @field_validator("host")
+    @classmethod
+    def _non_empty_host(cls, v: str) -> str:
+        """Reject a blank ``host``."""
+        if not v or not v.strip():
+            raise ValueError("ui.host must be a non-empty string")
+        return v
+
+
 class AppConfig(BaseModel):
     """Top-level engine configuration — brokers, strategies and risk.
 
@@ -498,6 +549,7 @@ class AppConfig(BaseModel):
     portfolios: list[PortfolioStrategyConfig] = Field(default_factory=list)
     risk: RiskConfig = Field(default_factory=RiskConfig)
     storage: StorageConfig = Field(default_factory=StorageConfig)
+    ui: UIConfig = Field(default_factory=UIConfig)
 
     @field_validator("starting_capital")
     @classmethod
@@ -537,3 +589,113 @@ class AppConfig(BaseModel):
         with open(path) as f:
             data = yaml.safe_load(f) or {}
         return cls.model_validate(data)
+
+    def to_yaml(self, path: str | pathlib.Path) -> None:
+        """Dump this config to a YAML file so a UI edit persists (round-trippable).
+
+        The inverse of :meth:`from_yaml`: serialise the validated model to YAML
+        at ``path``, such that ``AppConfig.from_yaml(path)`` reconstructs an
+        equivalent config. Money fields (``starting_capital`` / risk limits /
+        ``capital`` / ...) are dumped via ``model_dump(mode="json")`` so each
+        :class:`~decimal.Decimal` becomes an **exact string** (e.g.
+        ``"100000"``), which :meth:`from_yaml` re-parses back to the same
+        ``Decimal`` — never through ``float``. The parent directory is created
+        if absent (the dashboard writes a default manifest under ``configs/``).
+
+        Parameters
+        ----------
+        path : str or pathlib.Path
+            Destination YAML file. Its parent directory is created if missing.
+
+        """
+        target = pathlib.Path(path)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        # `mode="json"` renders every Decimal as an exact string, so the YAML
+        # scalar `from_yaml` reads back parses to the identical Decimal.
+        data = self.model_dump(mode="json")
+        with open(target, "w") as f:
+            yaml.safe_dump(data, f, sort_keys=False, default_flow_style=False)
+
+    def add_strategy(self, strategy: StrategyConfig) -> AppConfig:
+        """Return a new, validated config with ``strategy`` appended.
+
+        A pure helper (this config is unchanged): rejects a name already claimed
+        by a strategy **or** a portfolio (managed units share one name space),
+        then re-validates the whole config so a bad entry (e.g. an unparseable
+        symbol) is caught here rather than at deployment.
+
+        Raises
+        ------
+        ValueError
+            If a strategy or portfolio with the same ``name`` already exists.
+
+        """
+        self._reject_duplicate_name(strategy.name)
+        return self.model_validate(
+            {
+                **self.model_dump(),
+                "strategies": [*self.strategies, strategy],
+            }
+        )
+
+    def add_portfolio(self, portfolio: PortfolioStrategyConfig) -> AppConfig:
+        """Return a new, validated config with ``portfolio`` appended.
+
+        The portfolio analogue of :meth:`add_strategy`: rejects a name already
+        claimed by any managed unit and re-validates the whole config (so an
+        empty / duplicate-coin universe or a non-positive capital is caught).
+
+        Raises
+        ------
+        ValueError
+            If a strategy or portfolio with the same ``name`` already exists.
+
+        """
+        self._reject_duplicate_name(portfolio.name)
+        return self.model_validate(
+            {
+                **self.model_dump(),
+                "portfolios": [*self.portfolios, portfolio],
+            }
+        )
+
+    def remove_entry(self, name: str) -> AppConfig:
+        """Return a new, validated config with the strategy/portfolio ``name`` removed.
+
+        Drops the single-instrument strategy **or** portfolio whose ``name``
+        matches (the two share one name space, so at most one is dropped), then
+        re-validates. A pure helper — this config is unchanged.
+
+        Raises
+        ------
+        ValueError
+            If no strategy or portfolio is named ``name``.
+
+        """
+        strategies = [s for s in self.strategies if s.name != name]
+        portfolios = [p for p in self.portfolios if p.name != name]
+        if (
+            len(strategies) == len(self.strategies)
+            and len(portfolios) == len(self.portfolios)
+        ):
+            raise ValueError(
+                f"no strategy or portfolio named {name!r} to remove"
+            )
+        return self.model_validate(
+            {
+                **self.model_dump(),
+                "strategies": strategies,
+                "portfolios": portfolios,
+            }
+        )
+
+    def _reject_duplicate_name(self, name: str) -> None:
+        """Raise if ``name`` is already a strategy or portfolio (shared name space)."""
+        existing = {s.name for s in self.strategies} | {
+            p.name for p in self.portfolios
+        }
+        if name in existing:
+            raise ValueError(
+                f"duplicate name {name!r}: a strategy or portfolio with that "
+                "name already exists (managed units share one name space)"
+            )

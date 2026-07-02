@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import pytest
 
+from trading_bot.domain.errors import OrderTooSmall
 from trading_bot.domain.instrument import (
     Instrument,
     Symbol,
@@ -11,6 +12,7 @@ from trading_bot.domain.instrument import (
     parse_binance_symbol,
     parse_kraken_pair,
 )
+from trading_bot.domain.money import money
 
 # Real Kraken pair strings (legacy X/Z-prefixed form) and their canonical map.
 REAL_KRAKEN_PAIRS = [
@@ -21,6 +23,32 @@ REAL_KRAKEN_PAIRS = [
     ("XLTCZUSD", "LTC", "USD"),
     ("XXRPZUSD", "XRP", "USD"),
     ("XETHXXBT", "ETH", "BTC"),
+]
+
+# Real Kraken **altname** pair strings (modern, no X/Z-prefix on the base) and
+# their true venue meaning. The X/Z-prefixed altnames (XTZ = Tezos, XLM, XMR,
+# XRP) are the regression guard for D-3: a naive "trailing ZUSD is legacy fiat"
+# split turns ``XTZUSD`` into the wrong market ``XT/USD``.
+REAL_KRAKEN_ALTNAME_PAIRS = [
+    ("XTZUSD", "XTZ", "USD"),  # Tezos — the D-3 wrong-market bug
+    ("XTZEUR", "XTZ", "EUR"),
+    ("XTZXBT", "XTZ", "BTC"),
+    ("XLMUSD", "XLM", "USD"),
+    ("XMRUSD", "XMR", "USD"),
+    ("XRPUSD", "XRP", "USD"),
+    ("XBTUSD", "BTC", "USD"),
+    ("ETHUSD", "ETH", "USD"),
+    ("ETHUSDT", "ETH", "USDT"),
+    ("ETHXBT", "ETH", "BTC"),
+    ("ADAUSD", "ADA", "USD"),
+    ("ADAUSDT", "ADA", "USDT"),
+    ("DOTUSD", "DOT", "USD"),
+    ("SOLUSD", "SOL", "USD"),
+    ("LINKUSD", "LINK", "USD"),
+    ("ALGOUSD", "ALGO", "USD"),
+    ("MATICUSD", "MATIC", "USD"),
+    ("DOGEUSD", "DOGE", "USD"),
+    ("DOTXBT", "DOT", "BTC"),
 ]
 
 
@@ -52,6 +80,26 @@ class TestNormalise:
         assert normalise("  xxbt ") == "BTC"
         assert normalise("zusd") == "USD"
 
+    # --- D-10: only genuine legacy X/Z codes get their prefix stripped ------ #
+
+    def test_tezos_xtz_is_not_stripped(self) -> None:
+        # XTZ is Tezos, not an X-prefixed "TZ" — it must pass through intact.
+        assert normalise("XTZ") == "XTZ"
+
+    def test_non_legacy_four_char_x_code_is_left_intact(self) -> None:
+        # A 4-char code starting with X that is NOT a genuine Kraken legacy code
+        # must not have its leading X stripped (the D-10 over-eager rule bug).
+        assert normalise("XRPX") == "XRPX"
+        assert normalise("XYZW") == "XYZW"
+
+    def test_non_legacy_four_char_z_code_is_left_intact(self) -> None:
+        # ZABC is not a Z-fiat legacy code (ABC is not a known fiat).
+        assert normalise("ZABC") == "ZABC"
+
+    def test_tezos_legacy_xxtz_is_stripped(self) -> None:
+        # The genuine legacy form XXTZ does collapse to XTZ.
+        assert normalise("XXTZ") == "XTZ"
+
 
 class TestParseKrakenPair:
     @pytest.mark.parametrize("pair,base,quote", REAL_KRAKEN_PAIRS)
@@ -64,6 +112,21 @@ class TestParseKrakenPair:
         assert parse_kraken_pair("ETHUSD") == Symbol("ETH", "USD")
         assert parse_kraken_pair("XBTUSD") == Symbol("BTC", "USD")
         assert parse_kraken_pair("ETHXBT") == Symbol("ETH", "BTC")
+
+    @pytest.mark.parametrize("pair,base,quote", REAL_KRAKEN_ALTNAME_PAIRS)
+    def test_real_altname_pairs(self, pair: str, base: str, quote: str) -> None:
+        # Verification on real Kraken altnames: the split must match the venue's
+        # true base/quote, including the X/Z-prefixed altnames (XTZ, XLM, XMR).
+        sym = parse_kraken_pair(pair)
+        assert sym == Symbol(base, quote)
+        assert str(sym) == f"{base}/{quote}"
+
+    def test_xtz_altname_is_tezos_not_xt(self) -> None:
+        # D-3 regression: XTZUSD is Tezos (XTZ/USD), never the wrong XT/USD.
+        sym = parse_kraken_pair("XTZUSD")
+        assert sym == Symbol("XTZ", "USD")
+        assert sym.base == "XTZ"
+        assert sym.quote == "USD"
 
     def test_explicit_separator(self) -> None:
         assert parse_kraken_pair("BTC/USD") == Symbol("BTC", "USD")
@@ -179,3 +242,99 @@ class TestInstrument:
         assert isinstance(hash(inst), int)
         with pytest.raises(Exception):
             inst.price_precision = 2  # type: ignore[misc]
+
+    def test_minimums_optional_and_default_none(self) -> None:
+        inst = Instrument(Symbol("BTC", "USD"))
+        assert inst.min_qty is None
+        assert inst.min_notional is None
+
+
+class TestInstrumentQuantization:
+    """The venue tick/lot quantization + sub-minimum rejection (B-2)."""
+
+    BTC_USD = Instrument(Symbol("BTC", "USD"), price_precision=1, qty_precision=8)
+
+    def test_price_and_qty_step_from_precision(self) -> None:
+        assert self.BTC_USD.price_step == money("0.1")
+        assert self.BTC_USD.qty_step == money("0.00000001")
+
+    def test_step_none_when_precision_unknown(self) -> None:
+        inst = Instrument(Symbol("BTC", "USD"))
+        assert inst.price_step is None
+        assert inst.qty_step is None
+
+    def test_quantize_qty_rounds_down(self) -> None:
+        # An over-precise qty snaps to the lot step, rounding *down* (never sells
+        # more than held): 0.123456789 -> 0.12345678 at 8 dp.
+        inst = self.BTC_USD
+        assert inst.quantize_qty(money("0.123456789")) == money("0.12345678")
+
+    def test_quantize_price_rounds_down(self) -> None:
+        inst = self.BTC_USD
+        assert inst.quantize_price(money("27123.456789")) == money("27123.4")
+
+    def test_quantize_passthrough_when_precision_unknown(self) -> None:
+        inst = Instrument(Symbol("BTC", "USD"))
+        assert inst.quantize_qty(money("0.123456789")) == money("0.123456789")
+        assert inst.quantize_price(money("27123.456789")) == money("27123.456789")
+
+    def test_prepare_over_precise_snaps_to_step(self) -> None:
+        qty, limit, stop = self.BTC_USD.prepare_order_values(
+            money("0.123456789"), limit_price=money("27123.456789")
+        )
+        assert qty == money("0.12345678")
+        assert limit == money("27123.4")
+        assert stop is None
+
+    def test_prepare_sub_lot_rounds_to_zero_rejected(self) -> None:
+        # A qty below the lot step quantizes to zero -> doomed order, rejected.
+        with pytest.raises(OrderTooSmall, match="rounds to zero"):
+            self.BTC_USD.prepare_order_values(money("0.000000001"))
+
+    def test_prepare_below_min_qty_rejected(self) -> None:
+        inst = Instrument(
+            Symbol("BTC", "USD"),
+            price_precision=1,
+            qty_precision=8,
+            min_qty=money("0.0001"),
+        )
+        with pytest.raises(OrderTooSmall, match="below the minimum"):
+            inst.prepare_order_values(money("0.00005"))
+
+    def test_prepare_below_min_notional_rejected(self) -> None:
+        inst = Instrument(
+            Symbol("BTC", "USD"),
+            price_precision=1,
+            qty_precision=8,
+            min_notional=money("10"),
+        )
+        # 0.0001 BTC * 30000 = 3 USD < 10 USD minimum notional.
+        with pytest.raises(OrderTooSmall, match="below the minimum"):
+            inst.prepare_order_values(
+                money("0.0001"), limit_price=money("30000")
+            )
+
+    def test_prepare_meets_min_notional_passes(self) -> None:
+        inst = Instrument(
+            Symbol("BTC", "USD"),
+            price_precision=1,
+            qty_precision=8,
+            min_notional=money("10"),
+        )
+        qty, limit, _ = inst.prepare_order_values(
+            money("0.001"), limit_price=money("30000")
+        )
+        assert qty == money("0.00100000")
+        assert limit == money("30000.0")
+
+    def test_prepare_market_order_skips_notional_check(self) -> None:
+        # No price to compute notional client-side: the notional check is skipped.
+        inst = Instrument(
+            Symbol("BTC", "USD"),
+            price_precision=1,
+            qty_precision=8,
+            min_notional=money("10"),
+        )
+        qty, limit, stop = inst.prepare_order_values(money("0.001"))
+        assert qty == money("0.00100000")
+        assert limit is None and stop is None

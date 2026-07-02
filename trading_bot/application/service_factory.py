@@ -48,6 +48,7 @@ name the simulator explicitly.
 
 from __future__ import annotations
 
+import os
 import pathlib
 from dataclasses import dataclass
 from typing import Protocol, runtime_checkable
@@ -196,16 +197,18 @@ def build_engine(
     # not sign-cross), making Sharpe/Sortino/Calmar over a real run meaningful.
     perf = PerformanceService(v0=config.starting_capital, event_bus=bus)
     # Wire the daily-loss circuit breaker to the live PnL: the risk manager reads
-    # the day's *signed realised PnL* (a loss is negative) straight off the
-    # performance service. Without this, ``max_daily_loss`` saw a constant zero and
-    # never engaged; with it, once the day's realised loss reaches the limit the
-    # gate refuses every new order (and the router escalates to the kill-switch —
-    # cancelling resting orders + halting — on that breach). "Daily" here is the run
-    # session (no clock); a multi-day reset wires ``reset_day`` to a scheduler.
+    # the *current UTC day's* signed realised PnL (a loss is negative) off the
+    # performance service via ``realised_pnl_since(day_start_ms)``. "Daily" is a
+    # real UTC calendar day — the manager derives today's midnight from its clock
+    # and asks the service for the realised PnL since then, so the window resets
+    # automatically at the boundary (yesterday's loss no longer latches the book).
+    # Once the day's realised loss reaches the limit the gate refuses every new
+    # order (and the router escalates to the kill-switch — cancelling resting
+    # orders + halting — on that breach) for the rest of that UTC day.
     risk = RiskManager(
         config.risk,
         position_tracker=tracker,
-        daily_pnl_provider=perf.realised_pnl,
+        daily_pnl_provider=perf.realised_pnl_since,
     )
     router = OrderRouter(broker, bus, risk_manager=risk)
 
@@ -368,20 +371,45 @@ def _build_live_venue(venue: str) -> _LiveBroker:
     raise BrokerError(f"no live adapter for venue {venue!r}")
 
 
+def _binance_testnet_credentials() -> tuple[str, str]:
+    """The Binance **testnet** key/secret, from the environment.
+
+    Testnet and mainnet are distinct credentials (a mainnet key is rejected by
+    ``testnet.binance.vision`` with ``-2015``), so the testnet adapter reads the
+    **testnet-specific** ``BINANCE_TESTNET_API_KEY`` / ``BINANCE_TESTNET_API_SECRET``
+    first, falling back to the generic ``BINANCE_API_KEY`` / ``BINANCE_API_SECRET``
+    for the older single-key setup where the only Binance key *was* the testnet one.
+    Returns ``("", "")`` when absent (the caller's ``has_credentials`` gate refuses).
+    """
+    key = os.environ.get("BINANCE_TESTNET_API_KEY") or os.environ.get(
+        "BINANCE_API_KEY", ""
+    )
+    secret = os.environ.get("BINANCE_TESTNET_API_SECRET") or os.environ.get(
+        "BINANCE_API_SECRET", ""
+    )
+    return key, secret
+
+
 def _build_testnet_venue(venue: str) -> _LiveBroker:
     """Construct a venue's **testnet** adapter, hard-pinned to its sandbox URL.
 
     Only venues in :data:`_TESTNET_VENUES` have a testnet. The base URL is forced
     to the venue's testnet endpoint (passed explicitly, so any ``BINANCE_API_BASE``
     env value is overridden) — the adapter can therefore never reach mainnet, which
-    is why the caller skips the ``live_enabled`` opt-in for it. Credentials are
-    still read from the environment (testnet keys). A venue with no testnet (e.g.
-    Kraken, which has no public spot sandbox) raises.
+    is why the caller skips the ``live_enabled`` opt-in for it. Credentials are the
+    venue's **testnet** keys (``BINANCE_TESTNET_*``, falling back to ``BINANCE_*``);
+    see :func:`_binance_testnet_credentials`. A venue with no testnet (e.g. Kraken,
+    which has no public spot sandbox) raises.
     """
     if venue == "binance":
         # Hard-pin the testnet base URL (explicit arg overrides the env default),
-        # so this adapter is structurally incapable of hitting api.binance.com.
-        return BinanceBroker(base_url=TESTNET_API_BASE)
+        # so this adapter is structurally incapable of hitting api.binance.com, and
+        # feed it the *testnet* credentials (not the mainnet key, which testnet
+        # rejects with -2015).
+        key, secret = _binance_testnet_credentials()
+        return BinanceBroker(
+            api_key=key, api_secret=secret, base_url=TESTNET_API_BASE
+        )
     raise BrokerError(
         f"venue {venue!r} has no testnet/sandbox; testnet is available for "
         f"{sorted(_TESTNET_VENUES)!r} only (Kraken has no public spot testnet — "

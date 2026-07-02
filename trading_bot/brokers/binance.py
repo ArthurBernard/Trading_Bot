@@ -78,7 +78,13 @@ import urllib.parse
 from typing import TYPE_CHECKING, Any
 
 from trading_bot.brokers.base import Broker, Capability
-from trading_bot.domain.errors import BrokerError
+from trading_bot.domain.errors import (
+    BrokerError,
+    InsufficientBalance,
+    InvalidInstrument,
+    RateLimited,
+    ServiceUnavailable,
+)
 from trading_bot.domain.fill import Fill
 from trading_bot.domain.instrument import (
     Instrument,
@@ -125,11 +131,68 @@ _BINANCE_TO_ORDERTYPE: dict[str, OrderType] = {
 }
 
 # Binance's ``newClientOrderId`` constraint: at most 36 chars from the charset
-# [.A-Za-z0-9:/_-]. The runner's ``f"{name}-{step}"`` ids satisfy this; an
-# arbitrary domain client_order_id may not, in which case it is simply not
-# forwarded (engine-side dedup still guards re-submission of the same logical
-# order; see :meth:`BinanceBroker.place_order`).
+# [.A-Za-z0-9:/_-]. The runner's ``f"{name}-{step}"`` ids satisfy this verbatim;
+# an arbitrary domain client_order_id may not, in which case it is deterministically
+# *transformed* into a fitting id (never dropped — see :func:`_binance_client_order_id`
+# and :meth:`BinanceBroker._order_params`).
 _CLIENT_ORDER_ID_RE = re.compile(r"^[.A-Za-z0-9:/_-]{1,36}$")
+
+# Binance API error codes -> retriable class. ``-1003`` (too many requests) and
+# ``-1015`` (too many orders) are rate limits; ``-1001`` (disconnected) and
+# ``-1016`` (service shutting down) are service-unavailable. All are retriable on
+# the idempotent path; a non-idempotent order POST still never blind-retries.
+_BINANCE_RATE_LIMIT_CODES: frozenset[int] = frozenset({-1003, -1015})
+_BINANCE_SERVICE_CODES: frozenset[int] = frozenset({-1001, -1016})
+# ``-2010`` (order would not execute / rejected) can carry "insufficient balance".
+_BINANCE_INSUFFICIENT_MARKERS: tuple[str, ...] = (
+    "INSUFFICIENT BALANCE",
+    "INSUFFICIENT FUNDS",
+)
+# ``-1121`` invalid symbol; ``-1100``/`-1130` illegal params sometimes name a bad
+# symbol, but ``-1121`` is the unambiguous invalid-instrument code.
+_BINANCE_INVALID_SYMBOL_CODES: frozenset[int] = frozenset({-1121})
+
+
+def _binance_client_order_id(client_order_id: str) -> str:
+    """Return a Binance-valid ``newClientOrderId`` for ``client_order_id``.
+
+    When the domain id already fits Binance's constraint (≤36 chars, charset
+    ``[.A-Za-z0-9:/_-]``) it is returned **verbatim** — the common case for the
+    runner's ``f"{name}-{step}"`` ids. Otherwise it is deterministically
+    **transformed** (not dropped): a ``"tb-"`` prefix plus the hex BLAKE2b digest
+    of the original id, which is always a valid 35-char id. Determinism matters
+    because :func:`~trading_bot.application.reconcile.reconcile` correlates on the
+    value **actually sent**: dropping the id would make a placed order look like an
+    untracked orphan (and re-ingest it), so the id is always carried in some
+    stable, venue-valid form.
+    """
+    if _is_valid_new_client_order_id(client_order_id):
+        return client_order_id
+    digest = hashlib.blake2b(client_order_id.encode(), digest_size=16).hexdigest()
+    return f"tb-{digest}"
+
+
+def _map_binance_error(code: int, msg: str, *, context: str) -> BrokerError:
+    """Map a Binance ``{"code", "msg"}`` error to the most specific domain error.
+
+    Returns :class:`~trading_bot.domain.errors.InvalidInstrument` (``-1121``),
+    :class:`~trading_bot.domain.errors.RateLimited` (``-1003`` / ``-1015``),
+    :class:`~trading_bot.domain.errors.ServiceUnavailable` (``-1001`` / ``-1016``),
+    or :class:`~trading_bot.domain.errors.InsufficientBalance` (``-2010`` naming
+    an insufficient balance), falling back to a generic :class:`BrokerError`. The
+    ``msg`` is a plain venue diagnostic (never key material), safe to surface.
+    """
+    detail = f"Binance {context}: {msg} (code {code})"
+    upper = msg.upper()
+    if code in _BINANCE_INVALID_SYMBOL_CODES or "INVALID SYMBOL" in upper:
+        return InvalidInstrument(context, f"{msg} (code {code})")
+    if code in _BINANCE_RATE_LIMIT_CODES:
+        return RateLimited(detail)
+    if code in _BINANCE_SERVICE_CODES:
+        return ServiceUnavailable(detail)
+    if any(marker in upper for marker in _BINANCE_INSUFFICIENT_MARKERS):
+        return InsufficientBalance(detail)
+    return BrokerError(detail)
 
 
 def _sign(query: str, secret: str) -> str:
@@ -327,17 +390,23 @@ class BinanceBroker(Broker):
 
     @staticmethod
     def _raise_on_error(payload: Any, *, context: str) -> Any:
-        """Return ``payload`` or raise :class:`BrokerError` on a Binance error body.
+        """Return ``payload`` or raise a mapped domain error on a Binance error body.
 
         Binance signals a rejection with a JSON object
-        ``{"code": -xxxx, "msg": "..."}``. The ``msg`` is a plain venue
-        diagnostic (never key material), so it is safe to surface. A successful
-        payload is a list or an object without a ``code`` field.
+        ``{"code": -xxxx, "msg": "..."}``. The code/msg are mapped to the most
+        specific domain error via :func:`_map_binance_error` (invalid instrument /
+        rate limit / service unavailable / insufficient funds / generic). The
+        ``msg`` is a plain venue diagnostic (never key material), so it is safe to
+        surface. A successful payload is a list or an object without a ``code``
+        field.
         """
         if isinstance(payload, dict) and "code" in payload and "msg" in payload:
-            raise BrokerError(
-                f"Binance {context}: {payload['msg']} (code {payload['code']})"
-            )
+            code = payload["code"]
+            try:
+                code_int = int(code)
+            except (TypeError, ValueError):
+                code_int = 0
+            raise _map_binance_error(code_int, str(payload["msg"]), context=context)
         return payload
 
     async def _public_get(
@@ -450,10 +519,22 @@ class BinanceBroker(Broker):
         if qty_precision is None:
             base_prec = entry.get("baseAssetPrecision")
             qty_precision = int(base_prec) if base_prec is not None else None
+        # LOT_SIZE.minQty is the minimum order quantity; NOTIONAL/MIN_NOTIONAL
+        # carries the minimum order value (Binance renamed MIN_NOTIONAL ->
+        # NOTIONAL). Both are decimal strings when present.
+        min_qty_str = filters.get("LOT_SIZE", {}).get("minQty")
+        notional_filter = filters.get("NOTIONAL") or filters.get("MIN_NOTIONAL") or {}
+        min_notional_str = notional_filter.get("minNotional")
         return Instrument(
             symbol=symbol,
             price_precision=price_precision,
             qty_precision=qty_precision,
+            min_qty=money(str(min_qty_str)) if min_qty_str is not None else None,
+            min_notional=(
+                money(str(min_notional_str))
+                if min_notional_str is not None
+                else None
+            ),
         )
 
     async def ticker(self, instrument: Instrument) -> Money:
@@ -577,32 +658,53 @@ class BinanceBroker(Broker):
 
         Pure (no I/O), so the order-to-payload mapping is unit-testable on its
         own. ``price`` + ``timeInForce=GTC`` are set for limit orders;
-        ``stopPrice`` (and ``price``) for stop-loss-limit orders. The
-        ``newClientOrderId`` is forwarded only when the domain
-        ``client_order_id`` fits Binance's constraint.
+        ``stopPrice`` (and ``price``) for stop-loss-limit orders.
+
+        Quantization (B-2)
+        ------------------
+        ``quantity`` and ``price`` / ``stopPrice`` are quantized to the
+        instrument's lot / tick
+        (:meth:`~trading_bot.domain.instrument.Instrument.prepare_order_values`),
+        rounding **down** so a submission never overshoots the intended size or
+        price (a sell never sells more than held). An order that quantizes to a
+        sub-lot / sub-min-notional size is rejected there with
+        :class:`~trading_bot.domain.errors.OrderTooSmall` before the request goes
+        out, rather than sent to be rejected by Binance.
+
+        Idempotency key (B-5 / B-15)
+        ----------------------------
+        The domain ``client_order_id`` is **always** forwarded as
+        ``newClientOrderId`` — verbatim when it fits Binance's charset/length, or
+        deterministically transformed via :func:`_binance_client_order_id` when it
+        does not (never dropped: a dropped id makes
+        :func:`~trading_bot.application.reconcile.reconcile` treat a placed order as
+        an orphan). Binance dedups venue-side on this id (a duplicate is rejected
+        with ``-2010``).
         """
+        qty, limit_price, stop_price = order.instrument.prepare_order_values(
+            order.qty, limit_price=order.limit_price, stop_price=order.stop_price
+        )
         params: dict[str, str] = {
             "symbol": order.instrument.symbol.to_venue_symbol(self.name),
             "side": order.side.value.upper(),  # "BUY" / "SELL"
             "type": _ORDERTYPE_TO_BINANCE[order.type],
-            "quantity": str(order.qty),
+            "quantity": str(qty),
         }
         if order.type is OrderType.STOP_LOSS:
             # STOP_LOSS maps to a STOP_LOSS_LIMIT: the trigger is ``stopPrice``;
             # Binance also wants a working ``price`` + ``timeInForce`` for the
             # resting limit. With no explicit limit, rest at the stop price.
-            params["stopPrice"] = str(order.stop_price)
-            params["price"] = str(order.limit_price or order.stop_price)
+            params["stopPrice"] = str(stop_price)
+            params["price"] = str(limit_price if limit_price is not None else stop_price)
             params["timeInForce"] = "GTC"
         elif order.type in (OrderType.LIMIT, OrderType.BEST_LIMIT):
-            if order.limit_price is not None:
-                params["price"] = str(order.limit_price)
+            if limit_price is not None:
+                params["price"] = str(limit_price)
                 params["timeInForce"] = "GTC"
-        # Forward the idempotency key venue-side when it fits Binance's charset/
-        # length; otherwise omit it (engine-side dedup + retry=False still guard
-        # against duplicates).
-        if _is_valid_new_client_order_id(order.client_order_id):
-            params["newClientOrderId"] = order.client_order_id
+        # Forward the idempotency key venue-side, verbatim when valid or
+        # deterministically transformed otherwise — never dropped (reconcile
+        # correlates on the value actually sent).
+        params["newClientOrderId"] = _binance_client_order_id(order.client_order_id)
         return params
 
     async def cancel_order(self, venue_order_id: str) -> None:

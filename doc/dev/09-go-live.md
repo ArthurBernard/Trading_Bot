@@ -75,9 +75,9 @@ missing any one refuses with a non-zero exit / a raised
 4. **Run the hardening suite** and the full test suite — both must be green:
 
    ```bash
-   .venv/bin/python -m pytest -q
-   .venv/bin/ruff check trading_bot/
-   .venv/bin/mypy trading_bot/
+   python -m pytest -q
+   ruff check trading_bot/
+   mypy trading_bot/
    ```
 5. **Validate against a real-key sandbox.** This is the one remaining
    prerequisite and is **not done in-repo**: before any real order, exercise the
@@ -123,7 +123,7 @@ Before the first live order, confirm every item:
 | Concern | Proven offline (`tests/hardening/`) | Pending — needs a real-key sandbox |
 |---|---|---|
 | Reconciliation | Reconcile converges local state to broker-reported open orders / balances / fills after a disconnect | — |
-| **Private reads (read-only live ✓)** | — | **Validated read-only against real Kraken**: `OpenOrders` + `TradesHistory` (`fills`) returned + parsed; the private executions **WS** streamed a real snapshot. `balances` needs the key's *Query Funds* permission. **No order was sent.** |
+| **Private reads (read-only live ✓✓)** | **Validated read-only on mainnet — both venues.** **Kraken**: `Balance` (37 assets), `OpenOrders`, `TradesHistory` (`fills`, parsed) + the private executions **WS** snapshot. **Binance**: `account` (`balances`), `openOrders`, `myTrades` (`fills`) with a mainnet read key; the testnet key validates the same trio on `testnet.binance.vision`. **No order was ever sent or cancelled** (only `ticker`/`balances`/`open_orders`/`fills` called). | — |
 | Idempotency | **Engine-side** idempotency: a retried submit with the same client-order-id never double-submits locally | **Venue-level** idempotency token: Kraken honouring the client-order-id so a retry never creates a duplicate *at the venue* |
 | Ambiguous failures | Ambiguous submit failures (timeout / unknown outcome) are surfaced, not silently assumed filled or failed | Real network-edge behaviour against the live API |
 | Kill-switch | Kill-switch cancels open orders + halts new ones | Real cancel against the venue |
@@ -185,7 +185,7 @@ under the gitignored `strategies/` tree, so run them by path — e.g. for LS1:
 
 ```bash
 pip install -e ../fynance-research            # the research oracle (lazy-imported)
-.venv/bin/python -m pytest strategies/ls1/test_e2e.py -m network -v
+python -m pytest strategies/ls1/test_e2e.py -m network -v
 ```
 
 For a **Binance testnet** order round-trip, add a *testnet* key to a gitignored
@@ -214,6 +214,15 @@ stray `BINANCE_API_BASE` pointing at mainnet is ignored) — it is structurally
 incapable of trading real money, which is why it is exempt from the `live_enabled`
 opt-in. Only Binance qualifies; `testnet: true` on Kraken raises (no public spot
 testnet). **Real mainnet** still requires `live_enabled: true` + a real key (above).
+Testnet credentials are read from `BINANCE_TESTNET_API_KEY` / `_SECRET` (falling
+back to `BINANCE_API_KEY` / `_SECRET`) — keep them distinct from the mainnet key,
+which the testnet endpoint rejects with `-2015`.
+
+> **Spot testnet is long-only.** `testnet.binance.vision` is a **spot** venue — it
+> cannot short. A **long/short** portfolio (e.g. ALLOC1, typically net-short) would
+> have every short leg refused there, so it can only be *paper*-tested faithfully; a
+> faithful testnet live-test of a long/short book needs a **USDT-M futures** testnet
+> adapter (`testnet.binancefuture.com`) — an open follow-up (`07-roadmap.md`).
 
 ### Going live with LS1
 
