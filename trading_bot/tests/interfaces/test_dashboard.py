@@ -155,11 +155,15 @@ def test_auth_api_requires_a_token() -> None:
 
 
 def test_auth_login_flow_authenticates() -> None:
-    """A correct token at /login mints a session cookie that authenticates."""
+    """A correct token + CSRF at /login mints a session cookie that authenticates."""
     client, token = _auth_client()
-    assert client.get("/login").status_code == 200  # the form is open
+    assert client.get("/login").status_code == 200  # the form is open + sets CSRF cookie
+    csrf = client.cookies.get("tb_csrf", "")
+    assert csrf
     ok = client.post(
-        "/login", data={"token": token, "next": "/"}, follow_redirects=False
+        "/login",
+        data={"token": token, "next": "/", "csrf": csrf},
+        follow_redirects=False,
     )
     assert ok.status_code == 303
     assert client.get("/api/health").status_code == 200  # session cookie works
@@ -1527,15 +1531,23 @@ def test_dashboard_cli_flags_override_the_ui_config(
 def test_dashboard_non_loopback_ui_config_without_token_refuses(
     monkeypatch: pytest.MonkeyPatch, tmp_path
 ) -> None:  # noqa: ANN001
-    """A non-loopback `ui.host` in the config with no token is refused (like the flag)."""
+    """A hand-edited manifest binding non-loopback with no token is refused (A-4).
+
+    Written as raw YAML (bypassing ``model_validate``) precisely because
+    ``UIConfig`` now **rejects** a non-loopback host + no token at validation — so a
+    persisted / hand-edited manifest can never even load, and the CLI surfaces the
+    refusal cleanly (never reaching uvicorn, never binding wide open with no auth).
+    """
     import uvicorn
 
     monkeypatch.delenv("TRADING_BOT_UI_TOKEN", raising=False)
     called = {"run": False}
     monkeypatch.setattr(uvicorn, "run", lambda *a, **k: called.update(run=True))
-    manifest = _write_ui_manifest(tmp_path, {"host": "0.0.0.0"})  # no token
+    # Raw YAML — a hand-edited wide-open-no-auth manifest the model would reject.
+    manifest = tmp_path / "dash.yaml"
+    manifest.write_text("mode: paper\nui:\n  host: 0.0.0.0\n")
 
-    result = runner.invoke(cli_app, ["dashboard", "-c", manifest])
+    result = runner.invoke(cli_app, ["dashboard", "-c", str(manifest)])
     assert result.exit_code == 1
     assert called["run"] is False
     assert "token" in result.output.lower()
@@ -1816,3 +1828,165 @@ def test_start_serve_folds_onto_create_dashboard_app(
     assert "app" in built  # the unified dashboard was built for --serve
     client = TestClient(built["app"])
     assert "Overview" in client.get("/").text  # the unified shell
+
+
+# --- web hardening (audit wave 3: I-4, I-6, I-7, I-9, I-10, I-11, I-13) ----- #
+
+
+def test_security_headers_on_authed_json() -> None:
+    """I-11: `/api/*` JSON carries nosniff + anti-clickjacking + no-store headers."""
+    resp = _client().get("/api/health")
+    assert resp.status_code == 200
+    assert resp.headers["x-content-type-options"] == "nosniff"
+    assert resp.headers["x-frame-options"] == "DENY"
+    assert "frame-ancestors 'none'" in resp.headers["content-security-policy"]
+    assert resp.headers["referrer-policy"] == "no-referrer"
+    # The live book must never be cached by a browser / intermediary.
+    assert resp.headers["cache-control"] == "no-store"
+
+
+def test_security_headers_on_html_pages() -> None:
+    """I-11: the HTML shell carries the security headers too (no no-store — no book)."""
+    resp = _client().get("/")
+    assert resp.status_code == 200
+    assert resp.headers["x-content-type-options"] == "nosniff"
+    assert resp.headers["x-frame-options"] == "DENY"
+    # A page is not under /api/, so no forced no-store (it carries no engine data).
+    assert resp.headers.get("cache-control") != "no-store"
+
+
+def test_oversized_deploy_body_is_rejected() -> None:
+    """I-6: a request body over the size cap is refused 413 (memory/disk-amp guard)."""
+    sup = StrategySupervisor(AppConfig())
+    client = TestClient(create_dashboard_app(sup))
+    # A >64 KiB body via a giant `params` blob — over the middleware cap.
+    body = {**_portfolio_deploy_body("big"), "params": {"x": "A" * 70_000}}
+    r = client.post("/api/strategies", json=body)
+    assert r.status_code == 413, r.status_code
+    # Nothing was deployed.
+    assert client.get("/api/strategies").json() == []
+
+
+def test_oversized_name_field_is_rejected() -> None:
+    """I-6: a giant `name` field is rejected (per-field max_length, defence in depth)."""
+    sup = StrategySupervisor(AppConfig())
+    client = TestClient(create_dashboard_app(sup))
+    body = {**_portfolio_deploy_body(), "name": "n" * 1000}  # over max_length=128
+    r = client.post("/api/strategies", json=body)
+    assert r.status_code == 422, r.text  # pydantic rejects before any add
+    assert client.get("/api/strategies").json() == []
+
+
+def test_deploy_mode_mismatch_is_rejected() -> None:
+    """I-9: a deploy `mode` that the manifest would not seed is refused 422 (honest API)."""
+    sup = StrategySupervisor(AppConfig())  # paper manifest → seeds paper
+    client = TestClient(create_dashboard_app(sup))
+    body = {**_portfolio_deploy_body("wants-live"), "mode": "live"}
+    r = client.post("/api/strategies", json=body)
+    assert r.status_code == 422, r.text
+    assert "paper" in r.json()["detail"]
+    # Rolled back — nothing left added.
+    assert client.get("/api/strategies").json() == []
+
+
+def test_deploy_mode_matching_manifest_is_accepted() -> None:
+    """I-9: a deploy `mode` equal to the manifest seed (paper) is accepted."""
+    sup = StrategySupervisor(AppConfig())
+    client = TestClient(create_dashboard_app(sup))
+    r = client.post("/api/strategies", json=_portfolio_deploy_body("ok"))  # mode=paper
+    assert r.status_code == 200, r.text
+    assert client.get("/api/strategies").json()[0]["mode"] == "paper"
+
+
+def test_session_and_rate_maps_are_pruned() -> None:
+    """I-7: expired sessions AND idle rate-buckets are swept — no unbounded growth."""
+    import trading_bot.interfaces.api.app as appmod
+
+    token = "secret-token"
+    app = create_dashboard_app(_supervisor(), auth_token=token)
+    client = TestClient(app)
+
+    # A login to seed both maps: a rate-bucket (this peer) + a session.
+    csrf = (client.get("/login"), client.cookies.get("tb_csrf", ""))[1]
+    client.post(
+        "/login", data={"token": token, "next": "/", "csrf": csrf},
+        follow_redirects=False,
+    )
+    assert len(app.state.sessions) == 1
+    assert len(app.state.login_buckets) >= 1
+
+    # Force both entries "old": backdate the session timestamp beyond its TTL and the
+    # rate bucket beyond its idle window, then a fresh valid_session call prunes.
+    old_ns = 0  # epoch — far past any TTL cutoff
+    app.state.sessions = {sid: old_ns for sid in app.state.sessions}
+    stale_key = next(iter(app.state.login_buckets))
+    app.state.login_buckets[stale_key] = (float(appmod._LOGIN_RATE_PER_MIN), 0.0)
+
+    # Any auth check runs the prune sweep (session gone → 401; bucket swept).
+    assert client.get("/api/health").status_code == 401
+    assert app.state.sessions == {}  # expired session pruned
+    assert stale_key not in app.state.login_buckets  # idle bucket pruned
+
+
+def test_session_map_is_capped() -> None:
+    """I-7: the session map never exceeds the hard cap (oldest evicted on overflow)."""
+    import trading_bot.interfaces.api.app as appmod
+
+    app = create_dashboard_app(_supervisor(), auth_token="t")
+    # Fill the map to the cap with dummy sessions, then a new login evicts the oldest.
+    for i in range(appmod._MAX_SESSIONS):
+        app.state.sessions[f"sid-{i}"] = i  # ascending timestamps
+    client = TestClient(app)
+    csrf = (client.get("/login"), client.cookies.get("tb_csrf", ""))[1]
+    client.post(
+        "/login", data={"token": "t", "next": "/", "csrf": csrf},
+        follow_redirects=False,
+    )
+    assert len(app.state.sessions) <= appmod._MAX_SESSIONS
+    assert "sid-0" not in app.state.sessions  # the oldest was evicted
+
+
+def test_login_without_csrf_is_403_and_mints_no_session() -> None:
+    """I-13: a login POST with the correct token but no CSRF field is refused 403."""
+    client, token = _auth_client()
+    client.get("/login")  # sets the CSRF cookie
+    r = client.post(
+        "/login", data={"token": token, "next": "/"}, follow_redirects=False
+    )
+    assert r.status_code == 403
+    assert client.get("/api/health").status_code == 401  # no session minted
+
+
+def test_login_session_cookie_is_samesite_strict() -> None:
+    """I-13: the session cookie is SameSite=strict (blocks cross-site cookie carry)."""
+    client, token = _auth_client()
+    client.get("/login")
+    csrf = client.cookies.get("tb_csrf", "")
+    ok = client.post(
+        "/login", data={"token": token, "next": "/", "csrf": csrf},
+        follow_redirects=False,
+    )
+    set_cookie = ok.headers.get("set-cookie", "")
+    assert "tb_session=" in set_cookie
+    assert "samesite=strict" in set_cookie.lower()
+
+
+def test_secure_cookie_not_forced_by_x_forwarded_proto() -> None:
+    """I-4: a client `X-Forwarded-Proto: https` does NOT force the Secure cookie flag.
+
+    On the plain-HTTP tailnet the header is client-controlled; forcing Secure would
+    self-break the cookie. Only a real https scheme sets Secure (trust is off by
+    default — `_TRUST_FORWARDED_PROTO`).
+    """
+    client, token = _auth_client()
+    client.get("/login", headers={"X-Forwarded-Proto": "https"})
+    csrf = client.cookies.get("tb_csrf", "")
+    ok = client.post(
+        "/login",
+        data={"token": token, "next": "/", "csrf": csrf},
+        headers={"X-Forwarded-Proto": "https"},
+        follow_redirects=False,
+    )
+    set_cookie = ok.headers.get("set-cookie", "").lower()
+    assert "tb_session=" in set_cookie
+    assert "secure" not in set_cookie  # not forced by the spoofed header

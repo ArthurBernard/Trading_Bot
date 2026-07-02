@@ -97,6 +97,13 @@ _SYNTHETIC_BARS = 80
 #: The go-live runbook the ``--live`` refusals point the user at.
 _RUNBOOK = "doc/dev/09-go-live.md"
 
+#: The host values treated as loopback (local-only). Binding any *other* host makes
+#: the dashboard reachable off the box, so the serve paths that expose the control
+#: surface require a token there (and `run --serve`, which has no token, refuses a
+#: non-loopback host outright). Kept in sync with the config-layer guard
+#: (:data:`trading_bot.application.config._LOOPBACK_HOSTS`).
+_LOOPBACK_HOSTS = ("127.0.0.1", "localhost", "::1")
+
 
 #: Seconds uvicorn waits for open connections to drain on Ctrl-C before force-
 #: closing them. Small so a bare ``dashboard`` / ``serve`` / ``start --serve`` quits
@@ -336,6 +343,20 @@ def run(
     # --serve: run the declared system AND serve the read-only dashboard over the
     # SAME engine, so the run can be monitored live. Handles 0+ strategies.
     if serve:
+        # I-5: `run --serve` binds the read-only engine view (GET-only — it cannot
+        # trade), but a non-loopback bind still leaks the live book (positions /
+        # orders / PnL / mode) to the whole network segment. Unlike `dashboard` /
+        # `start --serve`, this view has no token login, so refuse a non-loopback
+        # `--serve-host` outright (loopback-only by contract) — the same
+        # muscle-memory "serve is guarded" the other serve paths uphold.
+        if serve_host not in _LOOPBACK_HOSTS:
+            _console.print(
+                "[red]refusing to bind the read-only run dashboard to a non-loopback "
+                f"host[/red] {serve_host!r} — `run --serve` has no auth and would leak "
+                "the live book to the network; bind 127.0.0.1 and tunnel, or use "
+                "`trading-bot dashboard` (token login) for remote access."
+            )
+            raise typer.Exit(code=1)
         _run_and_serve(config, host=serve_host, port=serve_port)
         return
 
@@ -809,7 +830,7 @@ async def _run_daemon(
 
             from trading_bot.interfaces.api import create_dashboard_app
 
-            if host not in ("127.0.0.1", "localhost", "::1") and not auth_token:
+            if host not in _LOOPBACK_HOSTS and not auth_token:
                 _console.print(
                     "[red]refusing to bind a non-loopback control dashboard with no "
                     "auth token[/red] — set --serve-token / TRADING_BOT_UI_TOKEN, or "
@@ -1055,7 +1076,14 @@ def dashboard(
     # empty-paper if absent) so one dashboard is common to all strategies it
     # declares and persists across restarts.
     manifest_path = config_path if config_path is not None else _DEFAULT_MANIFEST
-    config = _load_or_create_manifest(manifest_path)
+    try:
+        config = _load_or_create_manifest(manifest_path)
+    except Exception as exc:  # noqa: BLE001 - a bad/unsafe manifest must refuse cleanly
+        # A hand-edited manifest that binds a non-loopback ui.host with no token now
+        # fails UIConfig validation (A-4) — surface it as a clean refusal, not a
+        # traceback, so the operator sees why (and never binds wide open with no auth).
+        _console.print(f"[red]refusing to serve dashboard:[/red] {exc}")
+        raise typer.Exit(code=1) from exc
 
     # Resolve the web settings: an explicit CLI flag (or TRADING_BOT_UI_TOKEN for the
     # token) wins; otherwise fall back to the manifest's `ui:` section — the dccd
@@ -1067,7 +1095,7 @@ def dashboard(
     token = token if token is not None else config.ui.token
     read_only = read_only if read_only is not None else config.ui.read_only
 
-    if host not in ("127.0.0.1", "localhost", "::1") and not token:
+    if host not in _LOOPBACK_HOSTS and not token:
         _console.print(
             "[red]refusing to bind a non-loopback dashboard with no auth "
             "token[/red] — set --token / TRADING_BOT_UI_TOKEN, or bind 127.0.0.1 "

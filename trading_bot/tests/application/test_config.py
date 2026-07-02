@@ -682,3 +682,49 @@ def test_ui_config_rejects_a_blank_host() -> None:
     """A blank `ui.host` is a validation error."""
     with pytest.raises(ValidationError):
         AppConfig.model_validate({"mode": "paper", "ui": {"host": "  "}})
+
+
+def test_ui_config_non_loopback_without_token_fails_validation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A-4: a non-loopback `ui.host` with no token fails validation (defence in depth).
+
+    The control surface refuses to bind wide open with no auth **at the model
+    level**, not only at the CLI — so a hand-edited / persisted manifest that binds
+    ``0.0.0.0`` (or a Tailscale IP) with no token can never even construct.
+    """
+    monkeypatch.delenv("TRADING_BOT_UI_TOKEN", raising=False)
+    with pytest.raises(ValidationError):
+        AppConfig.model_validate({"mode": "paper", "ui": {"host": "0.0.0.0"}})
+    # A Tailscale-style IP is non-loopback too — same refusal.
+    with pytest.raises(ValidationError):
+        AppConfig.model_validate({"mode": "paper", "ui": {"host": "100.64.0.5"}})
+
+
+def test_ui_config_non_loopback_with_token_is_allowed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A-4: a non-loopback host **with** a token validates (auth present → allowed)."""
+    monkeypatch.delenv("TRADING_BOT_UI_TOKEN", raising=False)
+    cfg = AppConfig.model_validate(
+        {"mode": "paper", "ui": {"host": "0.0.0.0", "token": "tok"}}
+    )
+    assert cfg.ui.host == "0.0.0.0"
+    assert cfg.ui.token == "tok"
+
+
+def test_ui_config_non_loopback_env_token_satisfies_the_guard(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A-4: TRADING_BOT_UI_TOKEN in the env satisfies the token requirement (CLI parity)."""
+    monkeypatch.setenv("TRADING_BOT_UI_TOKEN", "from-env")
+    cfg = AppConfig.model_validate({"mode": "paper", "ui": {"host": "0.0.0.0"}})
+    assert cfg.ui.host == "0.0.0.0"  # env token satisfied the non-loopback guard
+
+
+def test_ui_config_loopback_without_token_is_allowed() -> None:
+    """A-4: the loopback default (no token) is fine — local-only, never exposed."""
+    for host in ("127.0.0.1", "localhost", "::1"):
+        cfg = AppConfig.model_validate({"mode": "paper", "ui": {"host": host}})
+        assert cfg.ui.host == host
+        assert cfg.ui.token is None

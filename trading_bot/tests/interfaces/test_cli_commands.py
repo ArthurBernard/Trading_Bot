@@ -162,6 +162,61 @@ def test_run_synthetic_feed_default(tmp_path: pathlib.Path) -> None:
     assert "orders submitted" in result.output
 
 
+# --- run --serve guard (I-5) ----------------------------------------------- #
+
+
+def test_run_serve_non_loopback_host_is_refused(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """I-5: `run --serve --serve-host 0.0.0.0` refuses (the read-only view has no auth).
+
+    The run dashboard is GET-only (it cannot trade), but a non-loopback bind would
+    leak the live book to the network. Unlike `dashboard`/`start --serve` it has no
+    token login, so a non-loopback `--serve-host` is refused outright — never
+    building the system, never binding a socket.
+    """
+    import uvicorn
+
+    called = {"server": False}
+
+    def _fake_server(*a: object, **k: object) -> object:  # pragma: no cover
+        called["server"] = True
+        return object()
+
+    monkeypatch.setattr(uvicorn, "Server", _fake_server)
+
+    result = runner.invoke(
+        app, ["run", "--serve", "--serve-host", "0.0.0.0"]
+    )
+
+    assert result.exit_code == 1
+    assert "refusing to bind" in result.output
+    assert called["server"] is False  # never reached uvicorn
+
+
+def test_run_serve_loopback_host_is_allowed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """I-5: a loopback `--serve-host` passes the guard (builds the read-only app)."""
+    pytest.importorskip("fynance")
+    import trading_bot.interfaces.cli.main as climain
+
+    built = {"served": False}
+
+    def _fake_run_and_serve(config: object, *, host: str, port: int) -> None:
+        built["served"] = True
+        built["host"] = host
+
+    monkeypatch.setattr(climain, "_run_and_serve", _fake_run_and_serve)
+
+    result = runner.invoke(
+        app, ["run", "--serve", "--serve-host", "127.0.0.1"]
+    )
+    assert result.exit_code == 0, result.output
+    assert built["served"] is True
+    assert built["host"] == "127.0.0.1"  # loopback passed the guard
+
+
 # --- --live guard ---------------------------------------------------------- #
 
 
