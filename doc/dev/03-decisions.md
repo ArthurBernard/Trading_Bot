@@ -6,6 +6,21 @@ rejected approaches as tombstones.
 
 ---
 
+### 2026-07-02 Resolve local strategy signal refs by putting the CWD on sys.path (PR #PR)  [accepted]
+- **Choice**: the CLI group callback runs `_ensure_cwd_importable()` before every
+  command, inserting the current working directory into `sys.path` so a manifest's
+  `signal.ref` pointing at the gitignored local `strategies/` tree (e.g.
+  `strategies.alloc1.signal:...`) resolves.
+- **Why**: a console-script entry point (`trading-bot`) does not add the CWD to
+  `sys.path` the way `python script.py` / `python -m` do, so importing a local
+  strategy module failed and `_start_dashboard_units` silently skipped the unit —
+  the strategy never launched from the dashboard. Running `trading-bot` from the
+  project root (which holds `strategies/`) now behaves like a script launched there.
+- **Rejected alternatives**: (a) mutating `sys.path` inside the application-layer
+  signal loaders — a layering smell (application assuming CWD semantics); (b)
+  requiring `PYTHONPATH=.` — undiscoverable and easy to forget. The interface layer
+  is the right place to set up the import environment.
+
 ### 2026-07-02 Make the pytest gate hermetic and enforced (PR #PR)  [accepted]
 - **Choice**: add a repo `conftest.py` with an autouse fixture that runs every test
   from a temp CWD and scrubs `TRADING_BOT_*` env; drop `--exitfirst` from `addopts`;
