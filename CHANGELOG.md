@@ -127,7 +127,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **Domain money & instrument guards.** `Order`/`Fill`/`Signal` reject a raw `float` money field at construction, average-price divisions run under a pinned `Decimal` context, non-finite (`NaN`/`Inf`) signal targets are rejected, and `parse_kraken_pair` no longer mis-parses Tezos `XTZUSD` to `XT/USD` (audit D-1/D-3/D-4/D-7/D-10). (#PR)
+- **Domain money & instrument guards.** `Order`/`Fill`/`Signal` reject a raw `float` money field at construction, average-price divisions run under a pinned `Decimal` context, non-finite (`NaN`/`Inf`) signal targets are rejected, and `parse_kraken_pair` no longer mis-parses Tezos `XTZUSD` to `XT/USD` (audit D-1/D-3/D-4/D-7/D-10). (#128)
 - **A paper unit's book no longer commingles testnet/live fills.** `start()`'s
   paper-book replay folded **all** stored fills into the paper simulator; once a store
   held fills from a different deployment mode (a strategy run testnet/live, then
