@@ -7,7 +7,7 @@ from decimal import Decimal
 import pytest
 
 from trading_bot.domain.errors import (
-    InsufficientFunds,
+    InstrumentMismatch,
     MissingOrder,
     NoCapability,
     OrderError,
@@ -20,7 +20,7 @@ ALL_ERRORS = [
     OrderError,
     OrderStatusError,
     MissingOrder,
-    InsufficientFunds,
+    InstrumentMismatch,
     RiskLimitBreached,
     NoCapability,
 ]
@@ -62,14 +62,12 @@ class TestMessages:
         assert "missing" in str(err)
         assert err.order_id == "OID-4"
 
-    def test_insufficient_funds_message(self) -> None:
-        err = InsufficientFunds("USD", Decimal("100"), Decimal("40"))
-        assert "USD" in str(err)
-        assert "100" in str(err)
-        assert "40" in str(err)
-        assert err.asset == "USD"
-        assert err.required == Decimal("100")
-        assert err.available == Decimal("40")
+    def test_instrument_mismatch_message(self) -> None:
+        err = InstrumentMismatch("BTC/USD", "ETH/USD")
+        assert "BTC/USD" in str(err)
+        assert "ETH/USD" in str(err)
+        assert err.expected == "BTC/USD"
+        assert err.actual == "ETH/USD"
 
     def test_risk_limit_breached_message(self) -> None:
         err = RiskLimitBreached("max_position", Decimal("5"), Decimal("3"))
@@ -89,4 +87,4 @@ class TestMessages:
 class TestRaisability:
     def test_can_catch_via_root(self) -> None:
         with pytest.raises(TradingBotError):
-            raise InsufficientFunds("EUR", Decimal("1"), Decimal("0"))
+            raise InstrumentMismatch("EUR/USD", "GBP/USD")

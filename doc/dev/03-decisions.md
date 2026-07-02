@@ -46,6 +46,19 @@ rejected approaches as tombstones.
 - **Rejected alternatives**: making connect-timeouts retryable on a submit — kept
   conservative (both ambiguous) to protect the never-blind-retry-a-submit rule;
   making strict paper the default — gated opt-in so the deterministic paper suite stays green.
+### 2026-07-02 Domain hygiene: over-fill tolerance, immutable order id, dead-error removal (PR #150)  [accepted]
+- **Choice**: an over-fill strictly within `fill_tolerance` now clamps-and-closes
+  (symmetric with the under-fill rule; the real executed qty/price still weight the
+  average — nothing dropped/double-counted); a material over-fill still raises. The
+  order factories set `client_order_id` at construction (`dataclasses.replace`) instead
+  of mutating it after (truly immutable identity). Removed the dead `InsufficientFunds`
+  error; fixed the `_check_aligned` docstring.
+- **Why**: audit D-6 (a market order that slightly over-delivers should close, not
+  raise), A-12 (the "frozen" aggregate's idempotency key was mutated post-construction),
+  D-13/D-11 hygiene. D-12 was already covered by the wave-1 `money()` guard (added a
+  regression test).
+- **Rejected alternatives**: wiring `InsufficientFunds` — its venue role is covered by
+  `InsufficientBalance`, and no client-side pre-trade balance gate exists to populate it.
 
 ### 2026-07-02 Bounded uvicorn graceful-shutdown so Ctrl-C quits promptly (PR #145)  [accepted]
 - **Choice**: every uvicorn serve path (`dashboard`, `serve`, `run --serve`,

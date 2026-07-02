@@ -74,6 +74,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Callable
+from dataclasses import replace
 from typing import TYPE_CHECKING
 
 from trading_bot.application.events import EventBus, LogEvent
@@ -351,11 +352,13 @@ class StrategyRunner:
         """
         cid = f"{self._strategy.name}-{step}"
         if self._order_factory is not None:
-            order = self._order_factory(self._strategy, delta, bars)
-            # The runner owns idempotency, not the factory: stamp the per-step id
-            # regardless of what the factory chose.
-            order.client_order_id = cid
-            return order
+            built = self._order_factory(self._strategy, delta, bars)
+            # The runner owns idempotency, not the factory: build the final Order
+            # with the deterministic per-step id set *at construction* (via
+            # dataclasses.replace, which re-runs validation) rather than mutating
+            # the client_order_id afterwards — the id is the aggregate's identity
+            # and must not change once the Order exists.
+            return replace(built, client_order_id=cid)
         side = OrderSide.BUY if delta > 0 else OrderSide.SELL
         return Order(
             client_order_id=cid,
