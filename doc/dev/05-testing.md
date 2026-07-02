@@ -2,9 +2,11 @@
 
 Tests live in `trading_bot/tests/`. The default `pytest` invocation is configured
 in `pyproject.toml` (`[tool.pytest.ini_options]`): network E2E is deselected
-(`-m 'not network'`), coverage is measured on every run
-(`--cov=trading_bot --cov-report=term-missing`), and `--exitfirst -vv` stop on the
-first failure with verbose output. CI matrix: Python 3.11–3.13.
+(`-m 'not network'`), coverage is measured on every run and floored
+(`--cov=trading_bot --cov-report=term-missing --cov-fail-under=90`), and `-vv`
+gives verbose output (a full run reports **every** failure — the suite is
+hermetic, isolated from the developer's CWD/env by `trading_bot/tests/conftest.py`).
+CI matrix: Python 3.11–3.13.
 
 ```bash
 pytest                                 # full suite (network deselected by default)
