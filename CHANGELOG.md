@@ -127,7 +127,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **Redact secrets from transport logs & errors.** A signed Binance request URL (with `&signature=<hmac>` + api key) is masked in every `transport/http.py` log line and exception message, so a 429/5xx/timeout no longer leaks the request signature (audit B-1). (#PR)
+- **Redact secrets from transport logs & errors.** A signed Binance request URL (with `&signature=<hmac>` + api key) is masked in every `transport/http.py` log line and exception message, so a 429/5xx/timeout no longer leaks the request signature (audit B-1). (#127)
 - **A paper unit's book no longer commingles testnet/live fills.** `start()`'s
   paper-book replay folded **all** stored fills into the paper simulator; once a store
   held fills from a different deployment mode (a strategy run testnet/live, then
