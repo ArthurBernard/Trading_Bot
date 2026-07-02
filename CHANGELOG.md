@@ -12,7 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **Transport hardening + optional strict PaperBroker.** The async HTTP client now sets pool limits, distinct connect/read/write timeouts, `trust_env=False` and a response-size cap; an unknown venue order-type is rejected on rebuild (not coerced to `LIMIT`); the PaperBroker gains an opt-in `strict` mode that rejects sub-min-notional/over-precise sizes and dedups a retried client-order-id (audit B-11/B-12/B-13). (#PR)
+- **Transport hardening + optional strict PaperBroker.** The async HTTP client now sets pool limits, distinct connect/read/write timeouts, `trust_env=False` and a response-size cap; an unknown venue order-type is rejected on rebuild (not coerced to `LIMIT`); the PaperBroker gains an opt-in `strict` mode that rejects sub-min-notional/over-precise sizes and dedups a retried client-order-id (audit B-11/B-12/B-13). (#149)
 - **`trading-bot dashboard`/`serve` quit promptly on the first Ctrl-C.** Every uvicorn serve path now sets a bounded `timeout_graceful_shutdown`, so a browser holding the `/api/events` SSE stream open no longer pins uvicorn's (default unbounded) graceful shutdown — the server force-closes the stream and exits in ~3s on the first SIGINT instead of hanging until a second one. (#145)
 
 ### Deprecated

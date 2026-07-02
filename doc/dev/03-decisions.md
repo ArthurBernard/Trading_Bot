@@ -6,7 +6,7 @@ rejected approaches as tombstones.
 
 ---
 
-### 2026-07-02 Transport hardening + optional strict PaperBroker (PR #PR)  [accepted]
+### 2026-07-02 Transport hardening + optional strict PaperBroker (PR #149)  [accepted]
 - **Choice**: the async HTTP client gets connection-pool limits, distinct
   connect/read/write timeouts, `trust_env=False` + no-redirects, and a response-size
   cap (`ResponseTooLargeError`); an unknown venue order-type raises on rebuild instead
