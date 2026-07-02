@@ -8,7 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **Config-driven portfolio data source.** `DataSourceConfig` gains `source_span` (resample a finer stored span up to `span` — e.g. a **daily** portfolio over a **1-minute** dccd store) and `data_path` (the dccd **store root** to read); `build_portfolio_runners` wraps the client in a `ResamplingDccdClient` when `source_span` is set, so a supervisor/dashboard reads a live 1m store as daily bars with no injected client. Verified end-to-end on the real store (every leg routed). (#PR)
+- **Config-driven portfolio data source.** `DataSourceConfig` gains `source_span` (resample a finer stored span up to `span` — e.g. a **daily** portfolio over a **1-minute** dccd store) and `data_path` (the dccd **store root** to read); `build_portfolio_runners` wraps the client in a `ResamplingDccdClient` when `source_span` is set, so a supervisor/dashboard reads a live 1m store as daily bars with no injected client. Verified end-to-end on the real store (every leg routed). (#138)
 
 ### Changed
 

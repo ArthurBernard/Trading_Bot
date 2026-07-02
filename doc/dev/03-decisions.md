@@ -6,7 +6,7 @@ rejected approaches as tombstones.
 
 ---
 
-### 2026-07-02 Config-driven portfolio data source (resample + store path) (PR #PR)  [accepted]
+### 2026-07-02 Config-driven portfolio data source (resample + store path) (PR #138)  [accepted]
 - **Choice**: add `source_span` and `data_path` to `DataSourceConfig`;
   `build_portfolio_runners` wraps the real dccd client in a `ResamplingDccdClient`
   (`daily_span=span`, `source_span`) when `source_span` is set and no client is
