@@ -201,9 +201,7 @@ def test_max_position_blocks_order_pushing_net_past_cap() -> None:
     """An order whose resulting |net| exceeds ``max_position`` is blocked."""
     tracker = PositionTracker()
     tracker.apply(_fill("seed", OrderSide.BUY, "1"))  # net +1
-    rm = RiskManager(
-        RiskConfig(max_position=money("1.5")), position_tracker=tracker
-    )
+    rm = RiskManager(RiskConfig(max_position=money("1.5")), position_tracker=tracker)
     # +1 (current) + 1 (this BUY) = 2 > 1.5 -> breach.
     with pytest.raises(RiskLimitBreached) as exc:
         rm.check(_order(qty="1", side=OrderSide.BUY))
@@ -216,9 +214,7 @@ def test_max_position_allows_order_within_cap() -> None:
     """An order whose resulting |net| stays within the cap is allowed."""
     tracker = PositionTracker()
     tracker.apply(_fill("seed", OrderSide.BUY, "1"))  # net +1
-    rm = RiskManager(
-        RiskConfig(max_position=money("1.5")), position_tracker=tracker
-    )
+    rm = RiskManager(RiskConfig(max_position=money("1.5")), position_tracker=tracker)
     # +1 + 0.5 = 1.5, not > 1.5 -> allowed.
     rm.check(_order(qty="0.5", side=OrderSide.BUY))
 
@@ -227,9 +223,7 @@ def test_max_position_reducing_order_never_blocked_by_it() -> None:
     """An order that *reduces* an over-cap position is not blocked by max_position."""
     tracker = PositionTracker()
     tracker.apply(_fill("seed", OrderSide.BUY, "5"))  # net +5 (already over cap)
-    rm = RiskManager(
-        RiskConfig(max_position=money("3")), position_tracker=tracker
-    )
+    rm = RiskManager(RiskConfig(max_position=money("3")), position_tracker=tracker)
     # A SELL of 1: +5 + (-1) = +4 -> still over cap, blocked. But a SELL of 3
     # brings it to +2 which is within cap -> allowed (the gate is on the result).
     rm.check(_order(qty="3", side=OrderSide.SELL))
@@ -239,9 +233,7 @@ def test_max_position_uses_signed_side_for_resulting_net() -> None:
     """A SELL subtracts: with net +1 and cap 1, a SELL of 3 flips to |−2| > 1 -> blocked."""
     tracker = PositionTracker()
     tracker.apply(_fill("seed", OrderSide.BUY, "1"))  # net +1
-    rm = RiskManager(
-        RiskConfig(max_position=money("1")), position_tracker=tracker
-    )
+    rm = RiskManager(RiskConfig(max_position=money("1")), position_tracker=tracker)
     with pytest.raises(RiskLimitBreached) as exc:
         rm.check(_order(qty="3", side=OrderSide.SELL))  # +1 - 3 = -2, |−2| = 2 > 1
     assert exc.value.value == money("2")
@@ -725,13 +717,9 @@ async def test_real_paperbroker_gate_blocks_then_kill_switch() -> None:
     #    open orders are cancelled and further submits are halted. Use a fresh
     #    manager with no position cap so the only thing exercised here is the
     #    kill-switch (the per-limit gating is covered above).
-    partial_broker = PaperBroker(
-        fill_model="partial", partial_fill_ratio=money("0.5")
-    )
+    partial_broker = PaperBroker(fill_model="partial", partial_fill_ratio=money("0.5"))
     kill_rm = RiskManager(RiskConfig())
-    partial_router = OrderRouter(
-        partial_broker, EventBus(), risk_manager=kill_rm
-    )
+    partial_router = OrderRouter(partial_broker, EventBus(), risk_manager=kill_rm)
     await partial_router.submit(_order(cid="live-1", qty="1"))
     assert len(await partial_broker.open_orders()) == 1
 

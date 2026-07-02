@@ -651,9 +651,7 @@ async def test_instrument_builds_precision(httpx_mock) -> None:
 async def test_kraken_error_raises_broker_error(
     httpx_mock, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    httpx_mock.add_response(
-        json={"error": ["EOrder:Insufficient funds"], "result": {}}
-    )
+    httpx_mock.add_response(json={"error": ["EOrder:Insufficient funds"], "result": {}})
     broker = _broker(monkeypatch)
     order = Order(
         client_order_id="cid-x",

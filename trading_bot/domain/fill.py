@@ -110,9 +110,7 @@ class Fill:
         frozen, so the guarded values are written back via ``object.__setattr__``.
         """
         if not self.fill_id:
-            raise OrderError(
-                self.client_order_id, "fill_id is mandatory and non-empty"
-            )
+            raise OrderError(self.client_order_id, "fill_id is mandatory and non-empty")
         if not self.client_order_id:
             raise OrderError(
                 self.client_order_id, "client_order_id is mandatory and non-empty"

@@ -57,9 +57,7 @@ class TestConstructionValidation:
         with pytest.raises(OrderError, match="MARKET"):
             make_order(otype=OrderType.MARKET, limit_price="30000")
         with pytest.raises(OrderError, match="MARKET"):
-            make_order(
-                otype=OrderType.MARKET, limit_price=None, stop_price="29000"
-            )
+            make_order(otype=OrderType.MARKET, limit_price=None, stop_price="29000")
 
     def test_limit_requires_limit_price(self) -> None:
         make_order(otype=OrderType.LIMIT, limit_price="30000")
@@ -68,9 +66,7 @@ class TestConstructionValidation:
 
     def test_limit_forbids_stop_price(self) -> None:
         with pytest.raises(OrderError, match="LIMIT order forbids stop_price"):
-            make_order(
-                otype=OrderType.LIMIT, limit_price="30000", stop_price="29000"
-            )
+            make_order(otype=OrderType.LIMIT, limit_price="30000", stop_price="29000")
 
     def test_stop_loss_requires_stop_price(self) -> None:
         make_order(otype=OrderType.STOP_LOSS, limit_price=None, stop_price="29000")
@@ -535,7 +531,9 @@ class TestOverFillTolerance:
     def test_over_fill_at_tolerance_boundary_is_rejected(self) -> None:
         # Excess fraction == tol exactly is NOT strictly below -> rejected.
         o = make_order(
-            qty="1000", otype=OrderType.MARKET, limit_price=None,
+            qty="1000",
+            otype=OrderType.MARKET,
+            limit_price=None,
             fill_tolerance="0.001",
         )
         o.submit()
@@ -546,7 +544,9 @@ class TestOverFillTolerance:
 
     def test_zero_tolerance_rejects_any_over_fill(self) -> None:
         o = make_order(
-            qty="1000", otype=OrderType.MARKET, limit_price=None,
+            qty="1000",
+            otype=OrderType.MARKET,
+            limit_price=None,
             fill_tolerance="0",
         )
         o.submit()

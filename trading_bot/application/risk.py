@@ -258,9 +258,7 @@ class RiskManager:
         resulting = current + self._signed_qty(order)
         magnitude = abs(resulting)
         if magnitude > cap:
-            raise RiskLimitBreached(
-                "max_position", value=magnitude, threshold=cap
-            )
+            raise RiskLimitBreached("max_position", value=magnitude, threshold=cap)
 
     def _check_max_daily_loss(self) -> None:
         """Breach if the day's realised loss has already reached ``max_daily_loss``."""
@@ -272,9 +270,7 @@ class RiskManager:
         daily_pnl = self._daily_pnl()
         loss = -daily_pnl if daily_pnl < 0 else _ZERO
         if loss >= cap:
-            raise RiskLimitBreached(
-                "max_daily_loss", value=loss, threshold=cap
-            )
+            raise RiskLimitBreached("max_daily_loss", value=loss, threshold=cap)
 
     def _current_net(self, order: Order) -> Money:
         """Current signed net exposure for the order's instrument (flat if none)."""
@@ -413,6 +409,4 @@ class RiskManager:
             try:
                 await broker.cancel_order(venue_id)
             except Exception:
-                logger.exception(
-                    "kill: failed to cancel venue order %s", venue_id
-                )
+                logger.exception("kill: failed to cancel venue order %s", venue_id)

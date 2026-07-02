@@ -223,9 +223,7 @@ class Position:
             # quotient rounds deterministically, independent of the global one.
             with localcontext() as ctx:
                 ctx.prec = AVG_ENTRY_PRECISION
-                avg_entry = +(
-                    (avg_entry * old_mag + price * add_mag) / total_mag
-                )
+                avg_entry = +((avg_entry * old_mag + price * add_mag) / total_mag)
             net_qty += signed
         else:
             # Opposite direction: this fill reduces (and maybe flips) exposure.

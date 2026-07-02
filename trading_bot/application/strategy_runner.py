@@ -296,9 +296,7 @@ class StrategyRunner:
                 fees_paid=_ZERO,
             )
         )
-        delta = signal.delta_to(
-            position, reference_qty=self._strategy.reference_qty
-        )
+        delta = signal.delta_to(position, reference_qty=self._strategy.reference_qty)
 
         if delta == 0:
             # Already on target (incl. flat-during-warmup → flat position): no

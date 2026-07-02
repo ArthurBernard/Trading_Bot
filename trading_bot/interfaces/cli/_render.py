@@ -135,9 +135,7 @@ def positions_table(
     return table
 
 
-def open_orders_table(
-    orders: list[Order], *, title: str = "Open orders"
-) -> Table:
+def open_orders_table(orders: list[Order], *, title: str = "Open orders") -> Table:
     """Build a :class:`rich.table.Table` of open orders, one row per order.
 
     Columns: client-order-id, venue-order-id, instrument, side, type, qty,

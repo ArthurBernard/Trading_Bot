@@ -405,7 +405,9 @@ class OrderRouter:
 
     def _resolve(self, order_or_id: Order | str) -> Order:
         """Resolve an :class:`Order` or a client-order-id to the tracked order."""
-        cid = order_or_id if isinstance(order_or_id, str) else order_or_id.client_order_id
+        cid = (
+            order_or_id if isinstance(order_or_id, str) else order_or_id.client_order_id
+        )
         order = self._orders.get(cid)
         if order is None:
             raise MissingOrder(cid)

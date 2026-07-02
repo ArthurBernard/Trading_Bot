@@ -597,9 +597,7 @@ class StrategySupervisor:
             # anyway) never double-applies.
             self._replay_paper_book(engine)
         if unit.kind == "strategy":
-            runners = build_runners(
-                unit.config, engine, dccd_client=self._dccd_client
-            )
+            runners = build_runners(unit.config, engine, dccd_client=self._dccd_client)
             unit.runner = runners[0]
         else:
             pruns = build_portfolio_runners(
@@ -1226,9 +1224,7 @@ class StrategySupervisor:
         current: dict[str, dict[str, Money | None]] = {}
         for mode, fills in buckets.items():
             points = equity_series(fills, v0=v0)
-            series[mode] = [
-                [p.ts_ms, p.realised_pnl, p.equity] for p in points
-            ]
+            series[mode] = [[p.ts_ms, p.realised_pnl, p.equity] for p in points]
             end_equity = points[-1].equity if points else v0
             current[mode] = {
                 "equity": end_equity,
@@ -1320,9 +1316,7 @@ class StrategySupervisor:
         return SqliteStore(db_path).stored_fills()
 
     @staticmethod
-    def _unrealised_of(
-        unit: _Unit, mode: str, fills: list[Fill]
-    ) -> Money | None:
+    def _unrealised_of(unit: _Unit, mode: str, fills: list[Fill]) -> Money | None:
         """Best-effort mark-to-market of the running unit's open book, in ``mode``.
 
         The running engine's tracker holds the net open positions; each is marked
@@ -1333,12 +1327,7 @@ class StrategySupervisor:
         built for it), so a non-current mode marks to ``None``. ``None`` too when
         the unit is stopped, flat, or has no priced instrument.
         """
-        if (
-            not unit.running
-            or unit.engine is None
-            or mode != unit.mode
-            or not fills
-        ):
+        if not unit.running or unit.engine is None or mode != unit.mode or not fills:
             return None
         last_price: dict[object, Money] = {}
         for fill in fills:
@@ -1376,12 +1365,8 @@ def _config_for_mode(
     can only run ``paper``.
     """
     if mode == "paper":
-        return base_slice.model_copy(
-            update={"mode": "paper", "live_enabled": False}
-        )
-    matching = [
-        b for b in base_slice.brokers if b.exchange.lower() == exchange.lower()
-    ]
+        return base_slice.model_copy(update={"mode": "paper", "live_enabled": False})
+    matching = [b for b in base_slice.brokers if b.exchange.lower() == exchange.lower()]
     if not matching:
         raise ConfigError(
             f"cannot run mode {mode!r} on exchange {exchange!r}: no matching broker "

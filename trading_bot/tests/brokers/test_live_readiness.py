@@ -49,13 +49,9 @@ from trading_bot.transport import AmbiguousRequestError, AsyncHTTPClient
 from trading_bot.transport.ratelimit import KrakenCallCounter
 
 # Kraken BTC/USD: price tick 0.1 (precision 1), lot 1e-8 (precision 8).
-KRAKEN_BTC_USD = Instrument(
-    Symbol("BTC", "USD"), price_precision=1, qty_precision=8
-)
+KRAKEN_BTC_USD = Instrument(Symbol("BTC", "USD"), price_precision=1, qty_precision=8)
 # Binance BTC/USDT: price tick 0.01 (precision 2), lot 1e-5 (precision 5).
-BINANCE_BTC_USDT = Instrument(
-    Symbol("BTC", "USDT"), price_precision=2, qty_precision=5
-)
+BINANCE_BTC_USDT = Instrument(Symbol("BTC", "USDT"), price_precision=2, qty_precision=5)
 
 # Kraken's published API-Sign vector secret (valid base64), so signing runs.
 _KRAKEN_SECRET = (
@@ -309,9 +305,7 @@ async def test_kraken_retriable_200_error_is_retried_then_succeeds(
     """A retriable Kraken HTTP-200 error on an idempotent read is retried."""
     # First a 200-body EService:Unavailable, then a clean success.
     httpx_mock.add_response(json={"error": ["EService:Unavailable"], "result": {}})
-    httpx_mock.add_response(
-        json={"error": [], "result": {"ZUSD": "100.0"}}
-    )
+    httpx_mock.add_response(json={"error": [], "result": {"ZUSD": "100.0"}})
     sleep = _RecordingSleep()
     http = AsyncHTTPClient(exchange="kraken", max_retries=3, sleep=sleep)
     broker = _kraken(monkeypatch, http=http)

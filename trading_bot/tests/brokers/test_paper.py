@@ -31,9 +31,7 @@ BTC_USD = Instrument(Symbol("BTC", "USD"))
 ETH_USD = Instrument(Symbol("ETH", "USD"))
 
 
-def _limit_buy(
-    qty: str = "1", price: str = "30000", cid: str = "cid-1"
-) -> Order:
+def _limit_buy(qty: str = "1", price: str = "30000", cid: str = "cid-1") -> Order:
     return Order(
         client_order_id=cid,
         instrument=BTC_USD,
@@ -44,9 +42,7 @@ def _limit_buy(
     )
 
 
-def _limit_sell(
-    qty: str = "1", price: str = "30000", cid: str = "cid-s"
-) -> Order:
+def _limit_sell(qty: str = "1", price: str = "30000", cid: str = "cid-s") -> Order:
     return Order(
         client_order_id=cid,
         instrument=BTC_USD,
@@ -186,9 +182,7 @@ async def test_immediate_limit_buy_moves_balances_exactly() -> None:
 
 async def test_immediate_limit_sell_moves_balances_exactly() -> None:
     """A SELL credits quote (notional - fee) and debits base, exact."""
-    broker = PaperBroker(
-        starting_balances={"USD": money("0"), "BTC": money("5")}
-    )
+    broker = PaperBroker(starting_balances={"USD": money("0"), "BTC": money("5")})
     await broker.place_order(_limit_sell(qty="2", price="30000"))
 
     balances = await broker.balances()
@@ -377,9 +371,7 @@ async def test_fee_is_configured_basis_points() -> None:
 
 async def test_zero_fee_model() -> None:
     """``fee_bps=0`` produces fee-free fills."""
-    broker = PaperBroker(
-        fee_bps=money("0"), starting_balances={"USD": money("100000")}
-    )
+    broker = PaperBroker(fee_bps=money("0"), starting_balances={"USD": money("100000")})
     await broker.place_order(_limit_buy(qty="1", price="30000"))
 
     fills = await broker.fills()
@@ -523,9 +515,7 @@ async def test_realistic_sequence_matches_hand_computed_decimals() -> None:
     # Leg 2: a partial buy of 2.0 @ 31000 — armed to fill half (1.0); the other
     # 1.0 stays open.
     broker.arm_partial(money("0.5"))
-    vid2 = await broker.place_order(
-        _limit_buy(qty="2", price="31000", cid="buy-2")
-    )
+    vid2 = await broker.place_order(_limit_buy(qty="2", price="31000", cid="buy-2"))
     bal = await broker.balances()
     assert bal["USD"] == Decimal("38939")
     assert bal["BTC"] == Decimal("2")
@@ -564,9 +554,7 @@ STRICT_BTC_USD = Instrument(
 )
 
 
-def _strict_limit_buy(
-    qty: str, price: str = "30000", cid: str = "cid-1"
-) -> Order:
+def _strict_limit_buy(qty: str, price: str = "30000", cid: str = "cid-1") -> Order:
     """A LIMIT BUY on the precision-carrying instrument, for strict-mode tests."""
     return Order(
         client_order_id=cid,
@@ -586,9 +574,7 @@ async def test_strict_rejects_sub_min_notional_order() -> None:
     :class:`OrderTooSmall`) rather than silently filling — so the reject
     condition is visible in paper, not a live-only surprise.
     """
-    broker = PaperBroker(
-        starting_balances={"USD": money("100000")}, strict=True
-    )
+    broker = PaperBroker(starting_balances={"USD": money("100000")}, strict=True)
 
     with pytest.raises(OrderTooSmall, match="below the minimum"):
         await broker.place_order(_strict_limit_buy(qty="0.0002", price="30000"))
@@ -600,15 +586,11 @@ async def test_strict_rejects_sub_min_notional_order() -> None:
 
 async def test_strict_rejects_below_min_qty_order() -> None:
     """B-13: strict mode rejects a below-``min_qty`` order (sub-lot)."""
-    broker = PaperBroker(
-        starting_balances={"USD": money("100000")}, strict=True
-    )
+    broker = PaperBroker(starting_balances={"USD": money("100000")}, strict=True)
 
     # 0.00001 rounds to the 5-dp lot but is below min_qty 0.0001.
     with pytest.raises(OrderTooSmall):
-        await broker.place_order(
-            _strict_limit_buy(qty="0.00001", price="30000")
-        )
+        await broker.place_order(_strict_limit_buy(qty="0.00001", price="30000"))
 
 
 async def test_strict_dedups_repeated_client_order_id() -> None:
@@ -645,13 +627,9 @@ async def test_strict_quantizes_over_precise_qty_before_fill() -> None:
     ``0.123456789`` snaps down to the 5-dp lot (``0.12345``); the recorded fill
     is at the quantized quantity, matching what a live venue would accept.
     """
-    broker = PaperBroker(
-        starting_balances={"USD": money("100000")}, strict=True
-    )
+    broker = PaperBroker(starting_balances={"USD": money("100000")}, strict=True)
 
-    await broker.place_order(
-        _strict_limit_buy(qty="0.123456789", price="30000")
-    )
+    await broker.place_order(_strict_limit_buy(qty="0.123456789", price="30000"))
 
     fills = await broker.fills()
     assert len(fills) == 1

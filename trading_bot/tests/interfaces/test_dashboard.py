@@ -42,6 +42,7 @@ def _FakeStartClient() -> _FakeDccdClient:  # noqa: N802 — factory named like 
     """An offline dccd client for the single BTC/USD strategy (start() never imports dccd)."""
     return _FakeDccdClient({"BTC/USD": _dccd_ohlc(_trend())})
 
+
 #: The five page routes the shared nav links to (Overview at ``/``).
 _PAGES = ("/", "/strategies", "/orders", "/pnl", "/logs")
 
@@ -157,7 +158,9 @@ def test_auth_api_requires_a_token() -> None:
 def test_auth_login_flow_authenticates() -> None:
     """A correct token + CSRF at /login mints a session cookie that authenticates."""
     client, token = _auth_client()
-    assert client.get("/login").status_code == 200  # the form is open + sets CSRF cookie
+    assert (
+        client.get("/login").status_code == 200
+    )  # the form is open + sets CSRF cookie
     csrf = client.cookies.get("tb_csrf", "")
     assert csrf
     ok = client.post(
@@ -207,10 +210,34 @@ def _seed(sup: StrategySupervisor, name: str, sym: Symbol) -> None:
     """Emit a buy→sell round trip on the running unit's engine bus (+8 realised)."""
     inst = Instrument(sym)
     bus = sup._units[name].engine.bus  # noqa: SLF001 — seed the wired bus
-    bus.emit(FillEvent(Fill(f"{name}1", f"{name}c1", inst, OrderSide.BUY,
-                            money("1"), money("100"), money("1"), 1)))
-    bus.emit(FillEvent(Fill(f"{name}2", f"{name}c2", inst, OrderSide.SELL,
-                            money("1"), money("110"), money("1"), 2)))
+    bus.emit(
+        FillEvent(
+            Fill(
+                f"{name}1",
+                f"{name}c1",
+                inst,
+                OrderSide.BUY,
+                money("1"),
+                money("100"),
+                money("1"),
+                1,
+            )
+        )
+    )
+    bus.emit(
+        FillEvent(
+            Fill(
+                f"{name}2",
+                f"{name}c2",
+                inst,
+                OrderSide.SELL,
+                money("1"),
+                money("110"),
+                money("1"),
+                2,
+            )
+        )
+    )
 
 
 async def _seeded_client() -> TestClient:
@@ -299,7 +326,9 @@ def test_pnl_endpoint_returns_the_paper_series(tmp_path) -> None:  # noqa: ANN00
         Fill("SF1", "sc1", inst, OrderSide.BUY, money("1"), money("100"), money("1"), 1)
     )
     store.record_fill(
-        Fill("SF2", "sc2", inst, OrderSide.SELL, money("1"), money("110"), money("1"), 2)
+        Fill(
+            "SF2", "sc2", inst, OrderSide.SELL, money("1"), money("110"), money("1"), 2
+        )
     )
 
     sup = StrategySupervisor(_pnl_config_with_store(db), dccd_client=_FakeStartClient())
@@ -456,12 +485,28 @@ def test_api_kpi_total_ratios_non_null_on_a_combined_curve(tmp_path) -> None:  #
     prices = [(100, 108), (108, 104), (104, 112), (112, 106), (106, 115)]
     for i, (buy_px, sell_px) in enumerate(prices):
         store.record_fill(
-            Fill(f"B{i}", f"cB{i}", inst, OrderSide.BUY,
-                 money("1"), money(str(buy_px)), money("0"), 2 * i + 1)
+            Fill(
+                f"B{i}",
+                f"cB{i}",
+                inst,
+                OrderSide.BUY,
+                money("1"),
+                money(str(buy_px)),
+                money("0"),
+                2 * i + 1,
+            )
         )
         store.record_fill(
-            Fill(f"S{i}", f"cS{i}", inst, OrderSide.SELL,
-                 money("1"), money(str(sell_px)), money("0"), 2 * i + 2)
+            Fill(
+                f"S{i}",
+                f"cS{i}",
+                inst,
+                OrderSide.SELL,
+                money("1"),
+                money(str(sell_px)),
+                money("0"),
+                2 * i + 2,
+            )
         )
 
     sup = StrategySupervisor(_kpi_ratio_config(db), dccd_client=_FakeStartClient())
@@ -484,12 +529,24 @@ async def test_positions_group_by_exchange() -> None:
     await sup.start("btc-kraken")
     await sup.start("eth-binance")
     # Net-long books (buys only) on each venue so positions are non-flat.
-    for name, sym in (("btc-kraken", Symbol("BTC", "USD")),
-                      ("eth-binance", Symbol("ETH", "USDT"))):
+    for name, sym in (
+        ("btc-kraken", Symbol("BTC", "USD")),
+        ("eth-binance", Symbol("ETH", "USDT")),
+    ):
         inst = Instrument(sym)
         sup._units[name].engine.bus.emit(  # noqa: SLF001
-            FillEvent(Fill(f"{name}b", f"{name}cb", inst, OrderSide.BUY,
-                           money("2"), money("100"), money("1"), 1))
+            FillEvent(
+                Fill(
+                    f"{name}b",
+                    f"{name}cb",
+                    inst,
+                    OrderSide.BUY,
+                    money("2"),
+                    money("100"),
+                    money("1"),
+                    1,
+                )
+            )
         )
     client = TestClient(create_dashboard_app(sup))
     groups = client.get("/api/positions?group_by=exchange").json()
@@ -505,8 +562,11 @@ async def test_positions_group_by_crypto() -> None:
     await sup.start("btc-kraken")
     inst = Instrument(Symbol("BTC", "USD"))
     sup._units["btc-kraken"].engine.bus.emit(  # noqa: SLF001
-        FillEvent(Fill("b", "cb", inst, OrderSide.BUY,
-                       money("2"), money("100"), money("1"), 1))
+        FillEvent(
+            Fill(
+                "b", "cb", inst, OrderSide.BUY, money("2"), money("100"), money("1"), 1
+            )
+        )
     )
     client = TestClient(create_dashboard_app(sup))
     groups = client.get("/api/positions?group_by=crypto").json()
@@ -595,7 +655,9 @@ def test_fills_endpoint_lists_tagged_fills(tmp_path) -> None:  # noqa: ANN001
     db = str(tmp_path / "book.sqlite")
     _seed_store(db)
     # Units stopped → each reads the shared store at its configured db_path.
-    sup = StrategySupervisor(_fills_config_with_store(db), dccd_client=_two_venue_client())
+    sup = StrategySupervisor(
+        _fills_config_with_store(db), dccd_client=_two_venue_client()
+    )
     client = TestClient(create_dashboard_app(sup))
 
     rows = client.get("/api/fills").json()
@@ -614,7 +676,9 @@ def test_fills_endpoint_filters(tmp_path) -> None:  # noqa: ANN001
     """`/api/fills` narrows by ?crypto=, ?exchange= and ?strategy= (AND, exact)."""
     db = str(tmp_path / "book.sqlite")
     _seed_store(db)
-    sup = StrategySupervisor(_fills_config_with_store(db), dccd_client=_two_venue_client())
+    sup = StrategySupervisor(
+        _fills_config_with_store(db), dccd_client=_two_venue_client()
+    )
     client = TestClient(create_dashboard_app(sup))
 
     by_exchange = client.get("/api/fills?exchange=binance").json()
@@ -632,7 +696,9 @@ def test_fills_endpoint_limit_and_group_by(tmp_path) -> None:  # noqa: ANN001
     """`/api/fills` honours ?limit= and ?group_by=."""
     db = str(tmp_path / "book.sqlite")
     _seed_store(db)
-    sup = StrategySupervisor(_fills_config_with_store(db), dccd_client=_two_venue_client())
+    sup = StrategySupervisor(
+        _fills_config_with_store(db), dccd_client=_two_venue_client()
+    )
     client = TestClient(create_dashboard_app(sup))
 
     all_rows = client.get("/api/fills").json()
@@ -656,13 +722,16 @@ def test_orders_history_reads_stored_orders(tmp_path) -> None:  # noqa: ANN001
     btc = Instrument(Symbol("BTC", "USD"))
     store = SqliteStore(db)
     # A terminal (filled) order — history includes it; the open-orders view excludes it.
-    order = Order("oc1", btc, OrderSide.BUY, money("1"), OrderType.LIMIT,
-                  limit_price=money("100"))
+    order = Order(
+        "oc1", btc, OrderSide.BUY, money("1"), OrderType.LIMIT, limit_price=money("100")
+    )
     order.status = OrderStatus.FILLED
     order.filled_qty = money("1")
     store.upsert_order(order)
 
-    sup = StrategySupervisor(_fills_config_with_store(db), dccd_client=_two_venue_client())
+    sup = StrategySupervisor(
+        _fills_config_with_store(db), dccd_client=_two_venue_client()
+    )
     client = TestClient(create_dashboard_app(sup))
 
     # Default (open only) — no non-terminal orders on the stopped units.
@@ -758,8 +827,12 @@ async def test_events_stream_merges_and_yields_a_fill() -> None:
     before = [len(b._queues) for b in buses]  # noqa: SLF001
 
     scope = {
-        "type": "http", "method": "GET", "path": "/api/events",
-        "headers": [], "query_string": b"", "app": app,
+        "type": "http",
+        "method": "GET",
+        "path": "/api/events",
+        "headers": [],
+        "query_string": b"",
+        "app": app,
     }
     request = Request(scope, _never_disconnect)
     response = await _events_route(app)(request)  # type: ignore[operator]
@@ -773,11 +846,23 @@ async def test_events_stream_merges_and_yields_a_fill() -> None:
         # A queue is registered on EACH running unit's bus (the merge).
         assert [len(b._queues) for b in buses] == [n + 1 for n in before]  # noqa: SLF001
         # Emit a fill on the second unit's bus; it must arrive as a data frame.
-        buses[1].emit(FillEvent(Fill("SF1", "sc1", inst, OrderSide.BUY,
-                                     money("1"), money("100"), money("1"), 1)))
+        buses[1].emit(
+            FillEvent(
+                Fill(
+                    "SF1",
+                    "sc1",
+                    inst,
+                    OrderSide.BUY,
+                    money("1"),
+                    money("100"),
+                    money("1"),
+                    1,
+                )
+            )
+        )
         frame = await frames.__anext__()
         assert frame.startswith("data:")
-        payload = json.loads(frame[len("data:"):].strip())
+        payload = json.loads(frame[len("data:") :].strip())
         assert payload["type"] == "fill"
         assert payload["fill"]["fill_id"] == "SF1"
     finally:
@@ -844,9 +929,7 @@ def test_start_then_stop_toggles_running() -> None:
     pytest.importorskip("fynance")  # ma_crossover evaluates fynance.sma
     client = TestClient(
         create_dashboard_app(
-            StrategySupervisor(
-                _config(), dccd_client=_FakeStartClient()
-            )
+            StrategySupervisor(_config(), dccd_client=_FakeStartClient())
         )
     )
     r = client.post("/api/strategies/btc-ma/start")
@@ -983,9 +1066,9 @@ def test_signals_endpoint_lists_builtins_and_discovered() -> None:
     try:
         body = _client().get("/api/signals").json()
         assert "ma_crossover" in body["builtins"]
-        assert (
-            f"strategies.{pkg}.signal:probe_signal" in body["discovered"]
-        ), body["discovered"]
+        assert f"strategies.{pkg}.signal:probe_signal" in body["discovered"], body[
+            "discovered"
+        ]
         # A re-exported helper (as_portfolio_signal) / a private closure is NOT a ref.
         assert not any(
             ref.endswith(":as_portfolio_signal") for ref in body["discovered"]
@@ -1166,8 +1249,7 @@ def test_deployment_crud_is_403_under_read_only() -> None:
     """Under `read_only`, POST/DELETE are 403 and never touch the supervisor."""
     client = _client(read_only=True)
     assert (
-        client.post("/api/strategies", json=_portfolio_deploy_body()).status_code
-        == 403
+        client.post("/api/strategies", json=_portfolio_deploy_body()).status_code == 403
     )
     assert client.delete("/api/strategies/btc-ma").status_code == 403
     # Nothing changed — the one declared unit is still there, unremoved.
@@ -1513,9 +1595,7 @@ def test_dashboard_cli_flags_override_the_ui_config(
     import uvicorn
 
     captured: dict[str, object] = {}
-    monkeypatch.setattr(
-        uvicorn, "run", lambda app, **kw: captured.update(kwargs=kw)
-    )
+    monkeypatch.setattr(uvicorn, "run", lambda app, **kw: captured.update(kwargs=kw))
     manifest = _write_ui_manifest(
         tmp_path, {"host": "0.0.0.0", "port": 9200, "token": "cfg-tok"}
     )
@@ -1682,9 +1762,7 @@ def test_dashboard_reads_an_existing_default_manifest(
     import uvicorn
 
     captured: dict[str, object] = {}
-    monkeypatch.setattr(
-        uvicorn, "run", lambda app, **kw: captured.update(app=app)
-    )
+    monkeypatch.setattr(uvicorn, "run", lambda app, **kw: captured.update(app=app))
 
     configs = tmp_path / "configs"
     configs.mkdir()
@@ -1825,9 +1903,7 @@ def test_start_serve_folds_onto_create_dashboard_app(
     from trading_bot.interfaces.cli.main import _run_daemon
 
     # An empty paper config (no units) so start_all/shutdown are trivial + dccd-free.
-    asyncio.run(
-        _run_daemon(AppConfig(), interval=0.05, cron=None, serve=True)
-    )
+    asyncio.run(_run_daemon(AppConfig(), interval=0.05, cron=None, serve=True))
 
     assert "app" in built  # the unified dashboard was built for --serve
     client = TestClient(built["app"])
@@ -1913,7 +1989,8 @@ def test_session_and_rate_maps_are_pruned() -> None:
     # A login to seed both maps: a rate-bucket (this peer) + a session.
     csrf = (client.get("/login"), client.cookies.get("tb_csrf", ""))[1]
     client.post(
-        "/login", data={"token": token, "next": "/", "csrf": csrf},
+        "/login",
+        data={"token": token, "next": "/", "csrf": csrf},
         follow_redirects=False,
     )
     assert len(app.state.sessions) == 1
@@ -1943,7 +2020,8 @@ def test_session_map_is_capped() -> None:
     client = TestClient(app)
     csrf = (client.get("/login"), client.cookies.get("tb_csrf", ""))[1]
     client.post(
-        "/login", data={"token": "t", "next": "/", "csrf": csrf},
+        "/login",
+        data={"token": "t", "next": "/", "csrf": csrf},
         follow_redirects=False,
     )
     assert len(app.state.sessions) <= appmod._MAX_SESSIONS
@@ -1967,7 +2045,8 @@ def test_login_session_cookie_is_samesite_strict() -> None:
     client.get("/login")
     csrf = client.cookies.get("tb_csrf", "")
     ok = client.post(
-        "/login", data={"token": token, "next": "/", "csrf": csrf},
+        "/login",
+        data={"token": token, "next": "/", "csrf": csrf},
         follow_redirects=False,
     )
     set_cookie = ok.headers.get("set-cookie", "")

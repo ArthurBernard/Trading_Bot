@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # coding: utf-8
 
-""" Example of a strategy. """
+"""Example of a strategy."""
 
 # Import external packages
 import numpy as np
@@ -9,11 +9,11 @@ import numpy as np
 # Import internal packages
 
 
-__all__ = ['get_signal']
+__all__ = ["get_signal"]
 
 
 def get_order_params(data, *args, **kwargs):
-    """ Return signal, price and volume. """
+    """Return signal, price and volume."""
     # Get parameters
     params = {}
 
@@ -24,11 +24,11 @@ def get_order_params(data, *args, **kwargs):
 
 
 def get_signal(*args, **kwargs):
-    """ Call example strategy and return signal. """
+    """Call example strategy and return signal."""
     return example_random_strat(**kwargs)
 
 
 def example_random_strat(**kwargs):
-    """ Exemple that return a random signal. """
+    """Exemple that return a random signal."""
     signals = [-1, 0, 1]
     return np.random.choice(signals)

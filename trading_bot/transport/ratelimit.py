@@ -205,9 +205,7 @@ class WeightBucket:
         sleep: Callable[[float], Awaitable[object]] = asyncio.sleep,
     ) -> None:
         if weight_limit <= 0.0:
-            raise ValueError(
-                f"weight_limit must be positive, got {weight_limit!r}"
-            )
+            raise ValueError(f"weight_limit must be positive, got {weight_limit!r}")
         if window <= 0.0:
             raise ValueError(f"window must be positive, got {window!r}")
         self._limit = weight_limit
@@ -375,9 +373,7 @@ class RateLimiter:
         bucket = self._buckets.get(exchange)
         if bucket is None:
             rate = self._rates.get(exchange, _FALLBACK_RATE)
-            bucket = TokenBucket(
-                rate, time_source=self._time_source, sleep=self._sleep
-            )
+            bucket = TokenBucket(rate, time_source=self._time_source, sleep=self._sleep)
             self._buckets[exchange] = bucket
         return bucket
 

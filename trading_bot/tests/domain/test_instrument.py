@@ -310,9 +310,7 @@ class TestInstrumentQuantization:
         )
         # 0.0001 BTC * 30000 = 3 USD < 10 USD minimum notional.
         with pytest.raises(OrderTooSmall, match="below the minimum"):
-            inst.prepare_order_values(
-                money("0.0001"), limit_price=money("30000")
-            )
+            inst.prepare_order_values(money("0.0001"), limit_price=money("30000"))
 
     def test_prepare_meets_min_notional_passes(self) -> None:
         inst = Instrument(

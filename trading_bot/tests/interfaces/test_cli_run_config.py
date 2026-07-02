@@ -114,7 +114,9 @@ def test_run_config_two_strategies_prints_multistrategy_summary(
     The dccd feed is replaced by a fake (InMemoryFeed over canned bars) so the
     whole command is offline; the paper broker is the engine's real data path.
     """
-    pytest.importorskip("fynance")  # ma_crossover strategies + KPI summary evaluate fynance
+    pytest.importorskip(
+        "fynance"
+    )  # ma_crossover strategies + KPI summary evaluate fynance
     # Replace the feed seam the entrypoint uses with the offline fake.
     import importlib
 
@@ -189,12 +191,10 @@ def test_run_config_live_without_creds_refuses_no_order(
         "      params:\n"
         "        fast: 3\n"
         "        slow: 6\n"
-        "    reference_qty: \"1\"\n"
+        '    reference_qty: "1"\n'
     )
 
-    result = runner.invoke(
-        app, ["run", "-c", str(cfg), "--live", "--yes-i-understand"]
-    )
+    result = runner.invoke(app, ["run", "-c", str(cfg), "--live", "--yes-i-understand"])
 
     assert result.exit_code != 0
     assert "refusing to run" in result.output

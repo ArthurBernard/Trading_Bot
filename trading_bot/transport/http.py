@@ -84,9 +84,7 @@ _DEFAULT_TRUST_ENV = False
 # side of the "secrets never logged" invariant: Binance signs on the query
 # string, so the full signed URL — carrying ``signature`` and ``apiKey`` — flows
 # verbatim into every failure path here unless it is scrubbed first.
-_SENSITIVE_QUERY_KEYS = frozenset(
-    {"signature", "api_key", "apikey", "token", "nonce"}
-)
+_SENSITIVE_QUERY_KEYS = frozenset({"signature", "api_key", "apikey", "token", "nonce"})
 _REDACTED = "<redacted>"
 
 # Binance reports the weight consumed in the trailing rolling minute in this
@@ -655,8 +653,7 @@ class AsyncHTTPClient:
                     if not retry:
                         raise AmbiguousRequestError(
                             url,
-                            f"HTTP {resp.status_code} ({kind}): "
-                            f"{resp.text[:200]}",
+                            f"HTTP {resp.status_code} ({kind}): {resp.text[:200]}",
                         )
                     logger.warning(
                         "HTTP %d (%s) from %s, sleeping %.1fs",

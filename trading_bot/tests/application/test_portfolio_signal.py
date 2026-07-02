@@ -51,9 +51,7 @@ def _by_symbol(signals: list) -> dict[Symbol, object]:
 
 def test_weights_to_signals_exact_quantities() -> None:
     weights = {BTC: money("0.5"), ETH: money("-0.25")}
-    signals = weights_to_signals(
-        weights, prices=PRICES, capital=CAPITAL, asof_ms=1_700
-    )
+    signals = weights_to_signals(weights, prices=PRICES, capital=CAPITAL, asof_ms=1_700)
     assert len(signals) == 2
     by_sym = _by_symbol(signals)
 
@@ -189,9 +187,7 @@ def test_load_portfolio_signal_bad_ref_raises_config_error(ref: str) -> None:
 def test_load_portfolio_signal_non_callable_raises() -> None:
     # WEIGHTS is a dict on the module -> resolvable but not callable.
     with pytest.raises(ConfigError):
-        load_portfolio_signal(
-            "trading_bot.tests.fixtures.fake_book:WEIGHTS"
-        )
+        load_portfolio_signal("trading_bot.tests.fixtures.fake_book:WEIGHTS")
 
 
 # --- fixture round-trip ---------------------------------------------------- #

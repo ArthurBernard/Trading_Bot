@@ -154,8 +154,12 @@ def test_live_and_testnet_fold_from_v0_separately() -> None:
     fills fold into their own curve from the strategy's v0.
     """
     stored = [
-        StoredFill(_fill("T1", OrderSide.BUY, "1", "100", fee="0", ts=1), "testnet", "b"),
-        StoredFill(_fill("T2", OrderSide.SELL, "1", "110", fee="0", ts=2), "testnet", "b"),
+        StoredFill(
+            _fill("T1", OrderSide.BUY, "1", "100", fee="0", ts=1), "testnet", "b"
+        ),
+        StoredFill(
+            _fill("T2", OrderSide.SELL, "1", "110", fee="0", ts=2), "testnet", "b"
+        ),
         StoredFill(_fill("L1", OrderSide.BUY, "1", "100", fee="0", ts=1), "live", "k"),
         StoredFill(_fill("L2", OrderSide.SELL, "1", "105", fee="0", ts=2), "live", "k"),
     ]

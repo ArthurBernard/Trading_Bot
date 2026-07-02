@@ -122,7 +122,7 @@ def test_negative_starting_capital_raises() -> None:
 def test_starting_capital_round_trips_from_yaml(tmp_path) -> None:
     """``starting_capital`` survives a YAML round-trip as an exact Decimal."""
     path = tmp_path / "cap.yml"
-    path.write_text("starting_capital: \"500000\"\n")
+    path.write_text('starting_capital: "500000"\n')
     cfg = AppConfig.from_yaml(path)
     assert cfg.starting_capital == Decimal("500000")
 
@@ -185,17 +185,13 @@ def test_zero_risk_limit_allowed() -> None:
 def test_blank_broker_name_raises() -> None:
     """A blank / whitespace-only broker name is rejected."""
     with pytest.raises(ValidationError):
-        AppConfig.model_validate(
-            {"brokers": [{"name": "  ", "exchange": "kraken"}]}
-        )
+        AppConfig.model_validate({"brokers": [{"name": "  ", "exchange": "kraken"}]})
 
 
 def test_blank_strategy_symbol_raises() -> None:
     """A blank strategy symbol is rejected."""
     with pytest.raises(ValidationError):
-        AppConfig.model_validate(
-            {"strategies": [{"name": "ma", "symbol": ""}]}
-        )
+        AppConfig.model_validate({"strategies": [{"name": "ma", "symbol": ""}]})
 
 
 def test_from_yaml_round_trips(tmp_path) -> None:
@@ -365,11 +361,7 @@ def test_empty_signal_ref_raises() -> None:
     """A blank signal ref is rejected."""
     with pytest.raises(ValidationError):
         AppConfig.model_validate(
-            {
-                "strategies": [
-                    {"name": "s", "symbol": "BTC/USD", "signal": {"ref": ""}}
-                ]
-            }
+            {"strategies": [{"name": "s", "symbol": "BTC/USD", "signal": {"ref": ""}}]}
         )
 
 
@@ -385,22 +377,14 @@ def test_non_positive_reference_qty_raises() -> None:
     """A non-positive reference_qty is rejected (zero too)."""
     with pytest.raises(ValidationError):
         AppConfig.model_validate(
-            {
-                "strategies": [
-                    {"name": "s", "symbol": "BTC/USD", "reference_qty": "0"}
-                ]
-            }
+            {"strategies": [{"name": "s", "symbol": "BTC/USD", "reference_qty": "0"}]}
         )
 
 
 def test_signal_params_default_empty() -> None:
     """A signal with only a ref gets an empty params dict."""
     cfg = AppConfig.model_validate(
-        {
-            "strategies": [
-                {"name": "s", "symbol": "BTC/USD", "signal": {"ref": "m:f"}}
-            ]
-        }
+        {"strategies": [{"name": "s", "symbol": "BTC/USD", "signal": {"ref": "m:f"}}]}
     )
     assert cfg.strategies[0].signal is not None
     assert cfg.strategies[0].signal.params == {}
@@ -439,7 +423,10 @@ def _full_config() -> AppConfig:
                     "name": "btc-ma",
                     "symbol": "BTC/USD",
                     "data": {"exchange": "kraken", "span": 3600},
-                    "signal": {"ref": "ma_crossover", "params": {"fast": 10, "slow": 30}},
+                    "signal": {
+                        "ref": "ma_crossover",
+                        "params": {"fast": 10, "slow": 30},
+                    },
                     "reference_qty": "0.5",
                     "lookback": 30,
                 }
@@ -588,9 +575,7 @@ def test_example_config_loads_and_validates() -> None:
 
 def test_strategy_db_path_defaults_to_none() -> None:
     """A strategy with no ``db_path`` defaults to ``None`` (the global store)."""
-    cfg = AppConfig.model_validate(
-        {"strategies": [{"name": "s", "symbol": "BTC/USD"}]}
-    )
+    cfg = AppConfig.model_validate({"strategies": [{"name": "s", "symbol": "BTC/USD"}]})
     assert cfg.strategies[0].db_path is None
 
 
@@ -618,7 +603,11 @@ def test_strategy_db_path_round_trips_through_yaml(tmp_path) -> None:  # noqa: A
     cfg = AppConfig.model_validate(
         {
             "strategies": [
-                {"name": "s", "symbol": "BTC/USD", "db_path": "./var/dashboard/s.sqlite"}
+                {
+                    "name": "s",
+                    "symbol": "BTC/USD",
+                    "db_path": "./var/dashboard/s.sqlite",
+                }
             ]
         }
     )

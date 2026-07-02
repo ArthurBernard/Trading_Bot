@@ -225,8 +225,7 @@ class Orchestrator:
             if isinstance(outcome, BaseException):
                 errors[runner] = outcome
                 self._emit(
-                    f"orchestrator: runner {_runner_name(runner)} failed: "
-                    f"{outcome!r}",
+                    f"orchestrator: runner {_runner_name(runner)} failed: {outcome!r}",
                     level="error",
                 )
             else:

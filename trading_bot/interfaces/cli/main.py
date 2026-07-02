@@ -230,9 +230,7 @@ def _build_strategy(config: AppConfig, *, fast: int, slow: int, qty: Money) -> S
     return dataclasses.replace(base, reference_qty=qty, lookback=slow)
 
 
-async def _run_engine(
-    engine: Engine, strategy: Strategy, feed: InMemoryFeed
-) -> int:
+async def _run_engine(engine: Engine, strategy: Strategy, feed: InMemoryFeed) -> int:
     """Drive the strategy over the feed through the engine; return orders sent."""
     runner = StrategyRunner(
         strategy,
@@ -302,9 +300,7 @@ def run(
     serve_host: str = typer.Option(
         "127.0.0.1", "--serve-host", help="Dashboard bind interface (loopback)."
     ),
-    serve_port: int = typer.Option(
-        8000, "--serve-port", help="Dashboard TCP port."
-    ),
+    serve_port: int = typer.Option(8000, "--serve-port", help="Dashboard TCP port."),
 ) -> None:
     """Run the declared system (or a quick demo) and print a short summary.
 
@@ -332,9 +328,7 @@ def run(
     check passes).
     """
     config = (
-        AppConfig.from_yaml(config_path)
-        if config_path is not None
-        else AppConfig()
+        AppConfig.from_yaml(config_path) if config_path is not None else AppConfig()
     )
 
     mode = _resolve_mode(config, live=live, yes_i_understand=yes_i_understand)
@@ -383,9 +377,7 @@ def run(
         _console.print(f"[red]bad strategy parameters:[/red] {exc}")
         raise typer.Exit(code=1) from exc
 
-    frame = (
-        _load_bars(bars_path) if bars_path is not None else _synthetic_bars()
-    )
+    frame = _load_bars(bars_path) if bars_path is not None else _synthetic_bars()
     feed = InMemoryFeed(frame.select(list(BARS_SCHEMA)))
 
     submitted = asyncio.run(_run_engine(engine, strategy, feed))
@@ -403,9 +395,7 @@ def run(
     _console.print(
         f"realised PnL     : {_render.fmt_money(engine.perf.realised_pnl())}"
     )
-    _console.print(
-        f"fees paid        : {_render.fmt_money(engine.perf.fees_paid())}"
-    )
+    _console.print(f"fees paid        : {_render.fmt_money(engine.perf.fees_paid())}")
     _console.print(_render.positions_table(engine.tracker.all_positions()))
 
 
@@ -434,9 +424,7 @@ def _run_declared_system(config: AppConfig) -> None:
         f"orders={report.total_orders})"
     )
     for strat in report.strategies:
-        net_qty = (
-            strat.position.net_qty if strat.position is not None else money("0")
-        )
+        net_qty = strat.position.net_qty if strat.position is not None else money("0")
         _console.print(
             f"  - {strat.name} [{strat.instrument}]: "
             f"orders={strat.orders_submitted} "
@@ -446,9 +434,7 @@ def _run_declared_system(config: AppConfig) -> None:
     _console.print(f"fees paid        : {_render.fmt_money(report.fees_paid)}")
 
     positions = {
-        s.instrument: s.position
-        for s in report.strategies
-        if s.position is not None
+        s.instrument: s.position for s in report.strategies if s.position is not None
     }
     _console.print(_render.positions_table(positions))
 
@@ -508,9 +494,7 @@ def _run_and_serve(config: AppConfig, *, host: str, port: int) -> None:
         raise typer.Exit(code=1) from exc
 
 
-def _resolve_mode(
-    config: AppConfig, *, live: bool, yes_i_understand: bool
-) -> str:
+def _resolve_mode(config: AppConfig, *, live: bool, yes_i_understand: bool) -> str:
     """Resolve the effective run mode, guarding the live path.
 
     Paper unless ``--live`` is set. ``--live`` requires *both* the explicit
@@ -744,9 +728,7 @@ def serve(
     import uvicorn
 
     config = (
-        AppConfig.from_yaml(config_path)
-        if config_path is not None
-        else AppConfig()
+        AppConfig.from_yaml(config_path) if config_path is not None else AppConfig()
     )
 
     try:
@@ -807,7 +789,9 @@ async def _run_daemon(
         try:
             stepped = await supervisor.step_all()
             if stepped:
-                _console.print(f"[dim]daemon tick: stepped {stepped} strategy(ies)[/dim]")
+                _console.print(
+                    f"[dim]daemon tick: stepped {stepped} strategy(ies)[/dim]"
+                )
         except Exception as exc:  # noqa: BLE001 - never let a tick kill the daemon
             _console.print(f"[red]daemon tick error:[/red] {exc}")
 
@@ -846,12 +830,12 @@ async def _run_daemon(
                 _console.print("[dim]control dashboard auth: token login enabled[/dim]")
             server = uvicorn.Server(
                 uvicorn.Config(
-                api,
-                host=host,
-                port=port,
-                log_level="warning",
-                timeout_graceful_shutdown=_SHUTDOWN_GRACE_SECONDS,
-            )
+                    api,
+                    host=host,
+                    port=port,
+                    log_level="warning",
+                    timeout_graceful_shutdown=_SHUTDOWN_GRACE_SECONDS,
+                )
             )
             _console.print(
                 f"[green]control dashboard[/green] on http://{host}:{port}"
@@ -918,9 +902,7 @@ def start(
     merely starting, and the dashboard requires a typed confirmation to go live.
     """
     config = (
-        AppConfig.from_yaml(config_path)
-        if config_path is not None
-        else AppConfig()
+        AppConfig.from_yaml(config_path) if config_path is not None else AppConfig()
     )
     try:
         asyncio.run(
@@ -1001,8 +983,7 @@ async def _start_dashboard_units(supervisor: object) -> None:
             await supervisor.start(name)
         except Exception as exc:  # noqa: BLE001 - one bad unit must not crash serve
             _console.print(
-                f"[yellow]skipping strategy {name!r}[/yellow] "
-                f"(failed to start: {exc})"
+                f"[yellow]skipping strategy {name!r}[/yellow] (failed to start: {exc})"
             )
 
 
@@ -1140,11 +1121,11 @@ def dashboard(
     try:
         # uvicorn owns SIGINT: Ctrl-C returns from run() cleanly the first time.
         uvicorn.run(
-        application,
-        host=host,
-        port=port,
-        timeout_graceful_shutdown=_SHUTDOWN_GRACE_SECONDS,
-    )
+            application,
+            host=host,
+            port=port,
+            timeout_graceful_shutdown=_SHUTDOWN_GRACE_SECONDS,
+        )
     finally:
         # Tear the supervisor down whether serve returned normally or on Ctrl-C.
         asyncio.run(supervisor.shutdown())

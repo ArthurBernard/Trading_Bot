@@ -122,9 +122,7 @@ logger = logging.getLogger(__name__)
 #: runner overrides the order's ``client_order_id`` with its deterministic,
 #: symbol-namespaced per-step id, so a factory need not (and should not rely on)
 #: set one.
-PortfolioOrderFactory = Callable[
-    ["PortfolioStrategy", Instrument, Money, Money], Order
-]
+PortfolioOrderFactory = Callable[["PortfolioStrategy", Instrument, Money, Money], Order]
 
 _ZERO: Money = money("0")
 
@@ -324,9 +322,7 @@ class PortfolioRunner:
                 await asyncio.sleep(0)
         return submitted
 
-    async def rebalance(
-        self, frames: Mapping[Symbol, pl.DataFrame]
-    ) -> RebalanceResult:
+    async def rebalance(self, frames: Mapping[Symbol, pl.DataFrame]) -> RebalanceResult:
         """Process **one** rebalance tick: weight vector → N idempotent legs.
 
         Evaluates ``strategy.signal_fn(asof, frames)`` for the whole book, sizes
@@ -369,8 +365,7 @@ class PortfolioRunner:
         # 0-weight (flat) target so it is fully closed. Iterate the *universe*,
         # not the weight keys.
         full_weights: dict[Symbol, Money] = {
-            symbol: weights.get(symbol, _ZERO)
-            for symbol in self._strategy.universe
+            symbol: weights.get(symbol, _ZERO) for symbol in self._strategy.universe
         }
 
         signals = weights_to_signals(
@@ -498,9 +493,7 @@ class PortfolioRunner:
         # construction* (via dataclasses.replace, which re-runs validation)
         # rather than mutating the client_order_id afterwards — the id is the
         # aggregate's identity and must not change once the Order exists.
-        return replace(
-            built, client_order_id=f"{self._strategy.name}-{symbol}-{step}"
-        )
+        return replace(built, client_order_id=f"{self._strategy.name}-{symbol}-{step}")
 
     def _asof_ms(self, frames: Mapping[Symbol, pl.DataFrame]) -> int:
         """Resolve the as-of timestamp (ms) for this tick.
@@ -536,9 +529,7 @@ class PortfolioRunner:
         return min(latest_per_coin) // 1_000_000
 
     @staticmethod
-    def _latest_closes(
-        frames: Mapping[Symbol, pl.DataFrame]
-    ) -> dict[Symbol, Money]:
+    def _latest_closes(frames: Mapping[Symbol, pl.DataFrame]) -> dict[Symbol, Money]:
         """Read each coin's latest close as exact :class:`~decimal.Decimal`.
 
         Reads the last ``c`` per coin via ``money(str(...))`` — never ``float`` —

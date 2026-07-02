@@ -249,7 +249,9 @@ def test_dccd_rejects_non_positive_span() -> None:
 
 def test_dccd_is_a_datafeed() -> None:
     """DccdFeed satisfies the runtime-checkable DataFeed protocol."""
-    feed = DccdFeed(_FakeDccdClient(_dccd_ohlc([1.0], start_ns=0, span_ns=1)), "x", "y", 1)
+    feed = DccdFeed(
+        _FakeDccdClient(_dccd_ohlc([1.0], start_ns=0, span_ns=1)), "x", "y", 1
+    )
     assert isinstance(feed, DataFeed)
 
 
@@ -334,9 +336,7 @@ async def test_live_does_not_emit_unclosed_bar_when_none_closed() -> None:
             raise _StopPolling
 
     with pytest.raises(_StopPolling):
-        async for window in feed.live_windows(
-            now_ns=clock.now_ns, sleep=bounded_sleep
-        ):
+        async for window in feed.live_windows(now_ns=clock.now_ns, sleep=bounded_sleep):
             windows.append(window)
 
     assert windows == []  # nothing closed => nothing emitted

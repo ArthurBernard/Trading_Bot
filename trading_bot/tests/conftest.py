@@ -38,9 +38,7 @@ import pytest
 
 
 @pytest.fixture(autouse=True)
-def _hermetic_env(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
-) -> None:
+def _hermetic_env(monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path) -> None:
     """Run each test from a temp CWD with a scrubbed ``TRADING_BOT_*`` environment.
 
     Guarantees the repo-root ``configs/dashboard.yaml`` is never the resolved

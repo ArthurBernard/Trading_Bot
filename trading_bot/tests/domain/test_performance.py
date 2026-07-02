@@ -109,7 +109,9 @@ class TestFeeSeries:
     def test_passes_through_fill_fee(self) -> None:
         fills = [
             make_fill(side=OrderSide.BUY, qty="1", price="100", fee="0.5", fill_id="A"),
-            make_fill(side=OrderSide.SELL, qty="1", price="110", fee="0.6", fill_id="B"),
+            make_fill(
+                side=OrderSide.SELL, qty="1", price="110", fee="0.6", fill_id="B"
+            ),
         ]
         assert perf.fee_series(fills) == (money("0.5"), money("0.6"))
 

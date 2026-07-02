@@ -279,9 +279,7 @@ async def test_post_default_retries_5xx_then_succeeds(httpx_mock) -> None:
     sleep = RecordingSleep()
 
     async with AsyncHTTPClient(backoff_base=0.5, sleep=sleep) as client:
-        result = await client.post(
-            "https://example.test/Balance", data={"nonce": "1"}
-        )
+        result = await client.post("https://example.test/Balance", data={"nonce": "1"})
 
     assert result == {"ok": True}
     assert sleep.calls == [pytest.approx(0.5)]
@@ -313,9 +311,7 @@ async def test_limiter_acquired_before_request(httpx_mock) -> None:
         def __init__(self) -> None:
             self.acquired: list[tuple[str | None, float]] = []
 
-        async def acquire(
-            self, exchange: str | None, weight: float = 1.0
-        ) -> None:
+        async def acquire(self, exchange: str | None, weight: float = 1.0) -> None:
             self.acquired.append((exchange, weight))
 
     limiter = FakeLimiter()
@@ -466,10 +462,7 @@ def test_redact_url_masks_param_at_start() -> None:
 
 def test_redact_url_masks_param_in_middle() -> None:
     """A sensitive param sandwiched between innocuous ones is masked."""
-    url = (
-        "https://x.test/o?symbol=BTCUSDT"
-        f"&apiKey={_FAKE_API_KEY}&recvWindow=5000"
-    )
+    url = f"https://x.test/o?symbol=BTCUSDT&apiKey={_FAKE_API_KEY}&recvWindow=5000"
     out = _redact_url(url)
     assert _FAKE_API_KEY not in out
     assert "symbol=BTCUSDT" in out
@@ -560,9 +553,7 @@ async def test_signed_url_429_no_secret_leak(httpx_mock, caplog) -> None:
     assert "redacted" in caplog.text
 
 
-async def test_signed_url_transport_error_no_secret_leak(
-    httpx_mock, caplog
-) -> None:
+async def test_signed_url_transport_error_no_secret_leak(httpx_mock, caplog) -> None:
     """A transport error whose message embeds the signed URL is scrubbed."""
     # httpx renders the request URL into the exception; craft one that carries it.
     request = httpx.Request("GET", _SIGNED_URL)
@@ -602,9 +593,7 @@ async def test_signed_url_no_retry_transport_error_ambiguous_no_secret_leak(
 ) -> None:
     """A ``retry=False`` transport error embeds the URL in ``reason``, scrubbed."""
     request = httpx.Request("POST", _SIGNED_URL)
-    httpx_mock.add_exception(
-        httpx.ConnectError("connection failed", request=request)
-    )
+    httpx_mock.add_exception(httpx.ConnectError("connection failed", request=request))
     sleep = RecordingSleep()
 
     with caplog.at_level(logging.DEBUG, logger="trading_bot.transport.http"):
@@ -632,10 +621,7 @@ async def test_client_config_pool_timeouts_no_redirect_and_trust_env() -> None:
     ) as client:
         # Bounded pool (not httpx's unbounded default) — the configured limits.
         assert client._limits.max_connections == _MAX_CONNECTIONS
-        assert (
-            client._limits.max_keepalive_connections
-            == _MAX_KEEPALIVE_CONNECTIONS
-        )
+        assert client._limits.max_keepalive_connections == _MAX_KEEPALIVE_CONNECTIONS
 
         httpx_client = client._client
         assert httpx_client is not None
@@ -695,9 +681,7 @@ async def test_connect_timeout_on_submit_stays_ambiguous_no_retry(
     two cases are still distinguishable in logs.
     """
     request = httpx.Request("POST", "https://example.test/AddOrder")
-    httpx_mock.add_exception(
-        httpx.ConnectTimeout("connect timed out", request=request)
-    )
+    httpx_mock.add_exception(httpx.ConnectTimeout("connect timed out", request=request))
     sleep = RecordingSleep()
 
     async with AsyncHTTPClient(max_retries=3, sleep=sleep) as client:

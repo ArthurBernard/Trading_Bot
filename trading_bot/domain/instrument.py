@@ -58,9 +58,7 @@ _CANONICAL_TO_KRAKEN: dict[str, str] = {
 
 # Known fiat codes (canonical, 3-char). Kraken prefixes these with ``Z`` in its
 # legacy 4-char form. Used to split a concatenated legacy pair on the boundary.
-_FIAT: frozenset[str] = frozenset(
-    {"USD", "EUR", "GBP", "JPY", "CAD", "AUD", "CHF"}
-)
+_FIAT: frozenset[str] = frozenset({"USD", "EUR", "GBP", "JPY", "CAD", "AUD", "CHF"})
 
 # Genuine Kraken *legacy* 4-char asset codes (the ``X``-prefixed crypto and
 # ``Z``-prefixed fiat forms), listed explicitly so :func:`normalise` strips the

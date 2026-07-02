@@ -266,9 +266,7 @@ class InstrumentMismatch(TradingBotError):
     def __init__(self, expected: str, actual: str) -> None:
         self.expected = expected
         self.actual = actual
-        super().__init__(
-            f"instrument mismatch: expected {expected}, got {actual}"
-        )
+        super().__init__(f"instrument mismatch: expected {expected}, got {actual}")
 
 
 class OrderTooSmall(BrokerError):
@@ -315,9 +313,7 @@ class RiskLimitBreached(TradingBotError):
         self.limit = limit
         self.value = value
         self.threshold = threshold
-        super().__init__(
-            f"risk limit {limit!r} breached: {value} exceeds {threshold}"
-        )
+        super().__init__(f"risk limit {limit!r} breached: {value} exceeds {threshold}")
 
 
 class SignalError(TradingBotError):

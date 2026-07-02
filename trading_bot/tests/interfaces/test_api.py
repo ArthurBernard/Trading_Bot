@@ -163,9 +163,7 @@ def test_positions_money_fields_are_exact_decimal_strings(
         assert row["realised_pnl"] == str(position.realised_pnl)
         assert row["fees_paid"] == str(position.fees_paid)
         expected_entry = (
-            None
-            if position.avg_entry_price is None
-            else str(position.avg_entry_price)
+            None if position.avg_entry_price is None else str(position.avg_entry_price)
         )
         assert row["avg_entry_price"] == expected_entry
 
@@ -239,7 +237,9 @@ def test_kpi_realised_pnl_string_matches_engine_and_has_ratios(
     client: TestClient, engine: Engine
 ) -> None:
     """``/api/kpi`` realised PnL (string) equals the perf service; ratios present."""
-    pytest.importorskip("fynance")  # the seeded curve makes /api/kpi compute fynance ratios
+    pytest.importorskip(
+        "fynance"
+    )  # the seeded curve makes /api/kpi compute fynance ratios
     resp = client.get("/api/kpi")
     assert resp.status_code == 200
     body = resp.json()
@@ -272,9 +272,7 @@ def test_kpi_empty_engine_returns_zero_ratios_and_null_equity() -> None:
 
 def _events_route(app: FastAPI) -> Any:
     """The ``/api/events`` route's async endpoint handler."""
-    route = next(
-        r for r in app.routes if getattr(r, "path", None) == "/api/events"
-    )
+    route = next(r for r in app.routes if getattr(r, "path", None) == "/api/events")
     return route.endpoint
 
 
@@ -334,7 +332,7 @@ async def test_events_stream_delivers_fill_event_and_removes_queue(
         bus.emit(FillEvent(fill))
         frame = await frames.__anext__()
         assert frame.startswith("data:")
-        payload = json.loads(frame[len("data:"):].strip())
+        payload = json.loads(frame[len("data:") :].strip())
         assert payload["type"] == "fill"
         assert payload["fill"]["fill_id"] == "SSE-1"
         # Money in the SSE frame is an exact Decimal string, like the REST routes.
@@ -429,16 +427,16 @@ def test_kpi_endpoint_stays_robust_over_a_profitable_curve() -> None:
     whichever fynance can compute on this curve, and ``0.0`` (via ``_safe_ratio``)
     for any it rejects. The point is the read-only KPI view is always 200 + numeric.
     """
-    pytest.importorskip("fynance")  # the profitable curve makes /api/kpi compute fynance ratios
+    pytest.importorskip(
+        "fynance"
+    )  # the profitable curve makes /api/kpi compute fynance ratios
     engine = build_engine(AppConfig.model_validate({"mode": "paper"}))
     perf = engine.perf
     perf.apply(
-        Fill("F1", "c1", _BTC, OrderSide.BUY, money("1"), money("100"),
-             money("0"), 1)
+        Fill("F1", "c1", _BTC, OrderSide.BUY, money("1"), money("100"), money("0"), 1)
     )
     perf.apply(
-        Fill("F2", "c1", _BTC, OrderSide.SELL, money("1"), money("110"),
-             money("0"), 2)
+        Fill("F2", "c1", _BTC, OrderSide.SELL, money("1"), money("110"), money("0"), 2)
     )
     body = TestClient(create_app(engine)).get("/api/kpi").json()
     # realised PnL +10, rendered as an exact Decimal string.

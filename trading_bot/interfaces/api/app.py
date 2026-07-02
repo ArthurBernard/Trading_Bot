@@ -111,6 +111,7 @@ logger = logging.getLogger(__name__)
 # Decimal-as-string JSON — the money-exactness crux
 # ---------------------------------------------------------------------------
 
+
 def _money_str(value: Decimal | None) -> str | None:
     """Render a money :class:`~decimal.Decimal` as an exact string (``None`` passes).
 
@@ -157,6 +158,7 @@ class _DecimalJSONResponse(JSONResponse):
 # ---------------------------------------------------------------------------
 # Serialization — engine objects -> JSON-ready dicts (money already stringified)
 # ---------------------------------------------------------------------------
+
 
 def _position_dict(position: Position) -> dict[str, Any]:
     """Render a :class:`~trading_bot.domain.position.Position` as a JSON-ready dict.
@@ -287,6 +289,7 @@ def _event_key(event: Event) -> str | None:
 # ---------------------------------------------------------------------------
 # Serialization — supervisor aggregate rows -> JSON-ready dicts
 # ---------------------------------------------------------------------------
+
 
 def _position_row_dict(row: PositionRow) -> dict[str, Any]:
     """Render a supervisor :class:`PositionRow` as a JSON-ready dict.
@@ -487,6 +490,7 @@ def _install_hardening(app: FastAPI) -> None:
 # ---------------------------------------------------------------------------
 # Application factory
 # ---------------------------------------------------------------------------
+
 
 def create_app(engine: Engine) -> FastAPI:
     """Build the read-only FastAPI over a wired :class:`Engine`.
@@ -712,7 +716,9 @@ _SIGNAL_REF_ALLOWED_PREFIXES = (
 #: A conservative shape check for the module part of a ``"module:function"`` ref:
 #: dotted identifiers only (each segment a Python identifier). Rejects paths with
 #: separators, spaces or other injection-ish characters before any import happens.
-_SIGNAL_REF_MODULE_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*$")
+_SIGNAL_REF_MODULE_RE = re.compile(
+    r"^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*$"
+)
 
 
 class _ModeBody(BaseModel):
@@ -1732,9 +1738,7 @@ def create_dashboard_app(
         sup = _sup(request)
         source = sup.order_history() if history else sup.open_orders()
         rows = [_order_row_dict(row) for row in source]
-        rows = _filtered(
-            rows, crypto=crypto, exchange=exchange, strategy=strategy
-        )
+        rows = _filtered(rows, crypto=crypto, exchange=exchange, strategy=strategy)
         # History is capped to the most recent `limit` (the source is oldest-first,
         # so take the tail); the open-orders view is small and left uncapped.
         if history and limit >= 0:
@@ -1768,9 +1772,7 @@ def create_dashboard_app(
                 detail=f"unknown group_by {group_by!r}; expected one of {_GROUP_BY_KEYS}",
             )
         rows = [_fill_row_dict(row) for row in _sup(request).fills()]
-        rows = _filtered(
-            rows, crypto=crypto, exchange=exchange, strategy=strategy
-        )
+        rows = _filtered(rows, crypto=crypto, exchange=exchange, strategy=strategy)
         # Most-recent-first cap (the source is oldest-first execution order).
         if limit >= 0:
             rows = rows[-limit:] if limit else []
@@ -1800,9 +1802,7 @@ def create_dashboard_app(
     # -- PnL series (per-mode realised-PnL / equity curve over time) --------- #
 
     @app.get("/api/pnl")
-    async def pnl(
-        request: Request, strategy: str, mode: str = "all"
-    ) -> dict[str, Any]:
+    async def pnl(request: Request, strategy: str, mode: str = "all") -> dict[str, Any]:
         """Per-mode realised-PnL / equity curve for one strategy, over time.
 
         ``?strategy=<name>`` (required) — the derived equity curve per mode
@@ -1945,9 +1945,7 @@ def create_dashboard_app(
         db_path = (
             _sanitise_body_db_path(body.db_path)
             if body.db_path
-            else _auto_db_path(
-                body.name, global_db_path=sup.manifest().storage.db_path
-            )
+            else _auto_db_path(body.name, global_db_path=sup.manifest().storage.db_path)
         )
         entry = _entry_from_body(body, db_path=db_path)
         try:
