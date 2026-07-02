@@ -46,6 +46,18 @@ rejected approaches as tombstones.
   would break the ambiguous-submit→reconcile idempotency guarantee, so submit still
   raises `AmbiguousRequestError`; (b) rounding size up — can oversell holdings; (c)
   silently dropping an out-of-charset client-order-id.
+### 2026-07-02 Redact secrets at the transport boundary (PR #PR)  [accepted]
+- **Choice**: a redaction helper in `transport/http.py` masks the values of
+  sensitive query params (`signature`, api key, `token`, `nonce`) in every log line
+  and exception message, and the `HTTPError`/`AmbiguousRequestError` objects store the
+  already-redacted URL so re-logging them elsewhere stays safe.
+- **Why**: audit B-1 (Critical) — Binance signs on the query string, and the full
+  signed URL (with `&signature=<hmac>`) was embedded verbatim in error messages and
+  every `logger.warning`, so any 429/5xx/timeout leaked the request signature into
+  logs, violating "secrets never logged".
+- **Rejected alternatives**: (a) sign in headers only — not all Binance endpoints
+  support it; (b) scrub at the logging formatter — misses exception `__str__` paths
+  that get logged far from the transport.
 
 ### 2026-07-02 Config-driven dashboard web settings (a `ui:` section) (PR #125)  [accepted]
 - **Choice**: add a `ui:` section to `AppConfig` (`host` / `port` / `token` /
