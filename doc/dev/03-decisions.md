@@ -30,6 +30,22 @@ rejected approaches as tombstones.
   non-deterministically; a pinned context makes average prices deterministic.
 - **Rejected alternatives**: silent float→Decimal coercion (hides caller bugs and the
   `float(x)` precision loss it's meant to prevent).
+### 2026-07-02 Broker order-path live-readiness (PR #PR)  [accepted]
+- **Choice**: quantize qty/price to the venue lot/tick (`ROUND_DOWN`, reject
+  sub-min-lot/notional with `OrderTooSmall`) before submit on both venues; give Kraken
+  a monotonic, lock-guarded nonce; map venue error codes to domain errors and retry
+  **only** Kraken's retriable HTTP-200 errors (`EService:Unavailable`, `EAPI:Rate
+  limit`); always forward the client-order-id (Binance `newClientOrderId`, Kraken
+  `userref`), deterministically transforming it when it doesn't fit the venue rather
+  than dropping it.
+- **Why**: audit B-2 (Critical) sent raw sizes → silent venue rejects or oversell;
+  B-3/B-4/B-5/B-15 are go-live prerequisites — a non-monotonic nonce hard-fails
+  `AddOrder`, a stringy `BrokerError` hides insufficient-funds vs rate-limit, and a
+  dropped client-order-id makes `reconcile()` double-ingest / false-orphan the order.
+- **Rejected alternatives**: (a) retrying `AddOrder` on an ambiguous 5xx/timeout —
+  would break the ambiguous-submit→reconcile idempotency guarantee, so submit still
+  raises `AmbiguousRequestError`; (b) rounding size up — can oversell holdings; (c)
+  silently dropping an out-of-charset client-order-id.
 
 ### 2026-07-02 Config-driven dashboard web settings (a `ui:` section) (PR #125)  [accepted]
 - **Choice**: add a `ui:` section to `AppConfig` (`host` / `port` / `token` /

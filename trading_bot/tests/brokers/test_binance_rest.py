@@ -26,7 +26,11 @@ import pytest
 from trading_bot.application.config import AppConfig, BrokerConfig, RiskConfig
 from trading_bot.application.service_factory import build_engine
 from trading_bot.brokers import BinanceBroker, BrokerError, Capability
-from trading_bot.brokers.binance import TESTNET_API_BASE, _sign
+from trading_bot.brokers.binance import (
+    _CLIENT_ORDER_ID_RE,
+    TESTNET_API_BASE,
+    _sign,
+)
 from trading_bot.brokers.paper import PaperBroker
 from trading_bot.domain import (
     Fill,
@@ -149,11 +153,12 @@ def test_order_params_market() -> None:
         type=OrderType.MARKET,
     )
     params = broker._order_params(order)
+    # qty quantized to the lot (qty_precision=5 -> "0.50000").
     assert params == {
         "symbol": "BTCUSDT",
         "side": "BUY",
         "type": "MARKET",
-        "quantity": "0.5",
+        "quantity": "0.50000",
         "newClientOrderId": "strat-mkt",
     }
 
@@ -169,12 +174,13 @@ def test_order_params_limit() -> None:
         limit_price=money("37500"),
     )
     params = broker._order_params(order)
+    # qty -> lot (5dp), price -> tick (2dp).
     assert params == {
         "symbol": "BTCUSDT",
         "side": "SELL",
         "type": "LIMIT",
-        "quantity": "1.25",
-        "price": "37500",
+        "quantity": "1.25000",
+        "price": "37500.00",
         "timeInForce": "GTC",
         "newClientOrderId": "strat-lim",
     }
@@ -191,30 +197,43 @@ def test_order_params_stop_loss() -> None:
         stop_price=money("28000"),
     )
     params = broker._order_params(order)
+    # qty -> lot (5dp), stopPrice/price -> tick (2dp).
     assert params == {
         "symbol": "BTCUSDT",
         "side": "SELL",
         "type": "STOP_LOSS_LIMIT",
-        "quantity": "2",
-        "stopPrice": "28000",
-        "price": "28000",
+        "quantity": "2.00000",
+        "stopPrice": "28000.00",
+        "price": "28000.00",
         "timeInForce": "GTC",
         "newClientOrderId": "strat-stop",
     }
 
 
-def test_order_params_omits_incompatible_client_order_id() -> None:
-    """A client_order_id that breaks Binance's constraint is not forwarded."""
+def test_order_params_transforms_incompatible_client_order_id() -> None:
+    """A client_order_id that breaks Binance's constraint is transformed, not dropped.
+
+    A dropped id would make ``reconcile`` treat a placed order as an untracked
+    orphan (and re-ingest it), so an over-long / illegal id is deterministically
+    hashed into a valid ``newClientOrderId`` — always present, always the same for
+    the same input.
+    """
+    from trading_bot.brokers.binance import _binance_client_order_id
+
     broker = BinanceBroker(api_key="", api_secret="")
+    long_id = "x" * 40  # > 36 chars: incompatible
     order = Order(
-        client_order_id="x" * 40,  # > 36 chars: incompatible
+        client_order_id=long_id,
         instrument=BTC_USDT,
         side=OrderSide.BUY,
         qty=money("1"),
         type=OrderType.MARKET,
     )
     params = broker._order_params(order)
-    assert "newClientOrderId" not in params
+    # Transformed to a valid, deterministic id — never dropped.
+    assert params["newClientOrderId"] == _binance_client_order_id(long_id)
+    assert params["newClientOrderId"] != long_id
+    assert _CLIENT_ORDER_ID_RE.match(params["newClientOrderId"])
 
 
 # --- private endpoints via mocks ------------------------------------------ #
@@ -252,8 +271,8 @@ async def test_place_order_signs_and_returns_composite_id(
     assert q["symbol"] == "BTCUSDT"
     assert q["side"] == "BUY"
     assert q["type"] == "LIMIT"
-    assert q["quantity"] == "1.25"
-    assert q["price"] == "37500"
+    assert q["quantity"] == "1.25000"
+    assert q["price"] == "37500.00"
     assert q["timeInForce"] == "GTC"
     assert q["newClientOrderId"] == "strat-1"
     assert q["recvWindow"] == "5000"

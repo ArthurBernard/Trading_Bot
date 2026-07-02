@@ -136,11 +136,15 @@ def test_add_order_params_market() -> None:
         type=OrderType.MARKET,
     )
     params = broker._add_order_params(order)
+    from trading_bot.brokers.kraken import _userref_for
+
     assert params == {
         "pair": "XBTUSD",
         "type": "buy",
         "ordertype": "market",
-        "volume": "0.5",
+        # Quantized to the lot (qty_precision=8 -> "0.50000000").
+        "volume": "0.50000000",
+        "userref": str(_userref_for("cid-mkt")),
     }
 
 
@@ -155,12 +159,17 @@ def test_add_order_params_limit() -> None:
         limit_price=money("37500"),
     )
     params = broker._add_order_params(order)
+    from trading_bot.brokers.kraken import _userref_for
+
     assert params == {
         "pair": "XBTUSD",
         "type": "sell",
         "ordertype": "limit",
-        "volume": "1.25",
-        "price": "37500",
+        # Quantized to the instrument tick (price_precision=1 -> "0.1" step) and
+        # lot (qty_precision=8): both carry the venue scale.
+        "volume": "1.25000000",
+        "price": "37500.0",
+        "userref": str(_userref_for("cid-lim")),
     }
 
 
@@ -175,12 +184,15 @@ def test_add_order_params_stop_loss() -> None:
         stop_price=money("28000"),
     )
     params = broker._add_order_params(order)
+    from trading_bot.brokers.kraken import _userref_for
+
     assert params == {
         "pair": "XBTUSD",
         "type": "sell",
         "ordertype": "stop-loss",
-        "volume": "2",
-        "price": "28000",
+        "volume": "2.00000000",
+        "price": "28000.0",
+        "userref": str(_userref_for("cid-stop")),
     }
 
 
@@ -219,7 +231,12 @@ async def test_place_order_signs_and_returns_txid(
     assert "ordertype=limit" in body
     assert "type=buy" in body
     assert "volume=1.25" in body
-    assert "price=37500" in body
+    # Price quantized to the instrument tick (price_precision=1 -> "37500.0").
+    assert "price=37500.0" in body
+    # The domain client_order_id is forwarded as a deterministic userref.
+    from trading_bot.brokers.kraken import _userref_for
+
+    assert f"userref={_userref_for('cid-1')}" in body
 
 
 async def test_cancel_order_posts_txid(
