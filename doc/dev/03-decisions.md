@@ -6,7 +6,7 @@ rejected approaches as tombstones.
 
 ---
 
-### 2026-07-02 Tooling/CI parity + format-the-tree (PR #PR)  [accepted]
+### 2026-07-02 Tooling/CI parity + format-the-tree (PR #152)  [accepted]
 - **Choice**: CI runs `ruff check` + `ruff format --check` + `mypy` + `interrogate`
   + pytest (actions SHA-pinned); pre-commit mirrors it; ruff pinned to a fixed
   version so formatting is byte-reproducible; pytest gains `filterwarnings=error`
