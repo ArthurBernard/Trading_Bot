@@ -205,8 +205,7 @@ def test_feed_for_parses_iso_datetime_start_to_start_ns() -> None:
     list(feed_for(cfg, client=client))
 
     expected = int(
-        datetime(2024, 3, 15, 12, 30, tzinfo=timezone.utc).timestamp()
-        * 1_000_000_000
+        datetime(2024, 3, 15, 12, 30, tzinfo=timezone.utc).timestamp() * 1_000_000_000
     )
     assert client.read_calls[0]["start_ns"] == expected
 

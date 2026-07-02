@@ -118,7 +118,9 @@ def test_warmup_returns_flat_below_lookback() -> None:
 
 
 def test_warmup_calls_fn_at_lookback() -> None:
-    pytest.importorskip("fynance")  # evaluate() at lookback invokes ma_crossover (fynance.sma)
+    pytest.importorskip(
+        "fynance"
+    )  # evaluate() at lookback invokes ma_crossover (fynance.sma)
     strat = Strategy(
         name="s",
         instrument=BTC_USD,
@@ -161,9 +163,7 @@ def test_ma_crossover_flips_at_crossover() -> None:
     fn = ma_crossover_signal(BTC_USD, fast=2, slow=4)
     # up then down: collect the exposure at each step (using only bars <= t).
     closes = [10.0, 11.0, 13.0, 16.0, 20.0, 25.0, 22.0, 17.0, 12.0, 9.0, 7.0]
-    targets = [
-        float(fn(_bars(closes[: t + 1])).target) for t in range(len(closes))
-    ]
+    targets = [float(fn(_bars(closes[: t + 1])).target) for t in range(len(closes))]
     # Goes long during the up-leg and turns short during the down-leg.
     assert any(t > 0 for t in targets), targets
     assert targets[-1] < 0, targets  # short by the end of the down-leg
@@ -262,9 +262,7 @@ def test_verify_on_realistic_series() -> None:
     fn = ma_crossover_signal(BTC_USD, fast=5, slow=20)
 
     # Step through; each step sees only bars <= t (causal by construction).
-    targets = [
-        float(fn(_bars(closes[: t + 1])).target) for t in range(len(closes))
-    ]
+    targets = [float(fn(_bars(closes[: t + 1])).target) for t in range(len(closes))]
 
     # Long somewhere in the up-leg, short somewhere in the down-leg.
     up_leg = targets[20:60]

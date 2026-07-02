@@ -42,7 +42,9 @@ class _FakeDccdClient:
     def __init__(self, frames: dict[str, pl.DataFrame]) -> None:
         self._frames = frames
 
-    def read(self, exchange, symbol, data_type="ohlc", span=None, start_ns=None, end_ns=None):  # noqa: ANN001, ANN201
+    def read(
+        self, exchange, symbol, data_type="ohlc", span=None, start_ns=None, end_ns=None
+    ):  # noqa: ANN001, ANN201
         return self._frames[symbol]
 
     def backfill(self, *a, **k):  # noqa: ANN002, ANN003, ANN201  # pragma: no cover
@@ -196,9 +198,12 @@ def test_auth_api_requires_a_token() -> None:
 def test_auth_bearer_and_query_token_work() -> None:
     """`/api/*` accepts a Bearer header or `?token=` (non-browser clients)."""
     client, token = _auth_client()
-    assert client.get(
-        "/api/strategies", headers={"Authorization": f"Bearer {token}"}
-    ).status_code == 200
+    assert (
+        client.get(
+            "/api/strategies", headers={"Authorization": f"Bearer {token}"}
+        ).status_code
+        == 200
+    )
     assert client.get(f"/api/strategies?token={token}").status_code == 200
 
 

@@ -92,7 +92,9 @@ class _ListFeed:
     real-feed path), not only by deriving it from the frames.
     """
 
-    def __init__(self, ticks: list[Mapping[Symbol, pl.DataFrame]], *, asof: int) -> None:
+    def __init__(
+        self, ticks: list[Mapping[Symbol, pl.DataFrame]], *, asof: int
+    ) -> None:
         self._ticks = ticks
         self._asof = asof
 
@@ -128,7 +130,11 @@ def _engine(
     broker = PaperBroker(
         fee_bps=money("0"),
         fill_model="immediate",
-        starting_balances={"USDT": money("100000000"), "BTC": money("0"), "ETH": money("0")},
+        starting_balances={
+            "USDT": money("100000000"),
+            "BTC": money("0"),
+            "ETH": money("0"),
+        },
         event_bus=bus,
     )
     risk_manager = (
@@ -258,7 +264,9 @@ async def test_second_rebalance_routes_delta_not_absolute() -> None:
     assert tracker.position(Instrument(ETH)).net_qty == Decimal("-10")
 
     # A *different* runner (fresh step index 0) re-allocates the shared book.
-    t1 = _strategy(_weights_signal({BTC: money("0.8"), ETH: money("0.1")}), name="book2")
+    t1 = _strategy(
+        _weights_signal({BTC: money("0.8"), ETH: money("0.1")}), name="book2"
+    )
     runner_1 = PortfolioRunner(t1, _ListFeed([], asof=1_701), router, tracker)
     result = await runner_1.rebalance(_frames())
 
@@ -430,7 +438,9 @@ async def test_run_drives_feed_and_tracker_matches_routed_qty() -> None:
     by_coin: dict[Symbol, Decimal] = {}
     for f in fills:
         signed = f.qty if f.side is OrderSide.BUY else -f.qty
-        by_coin[f.instrument.symbol] = by_coin.get(f.instrument.symbol, Decimal("0")) + signed
+        by_coin[f.instrument.symbol] = (
+            by_coin.get(f.instrument.symbol, Decimal("0")) + signed
+        )
     assert by_coin[BTC] == Decimal("1")
     assert by_coin[ETH] == Decimal("-10")
 
@@ -476,7 +486,9 @@ async def test_money_read_off_frame_is_exact_decimal() -> None:
 # --- rebalance_latest: single rebalance over the latest cross-section ------- #
 
 
-async def test_rebalance_latest_rebalances_over_the_feeds_latest_cross_section() -> None:
+async def test_rebalance_latest_rebalances_over_the_feeds_latest_cross_section() -> (
+    None
+):
     """`rebalance_latest` takes the feed's latest cross-section and rebalances once."""
     weights = {BTC: money("0.5"), ETH: money("-0.25")}
     router, tracker, bus, _broker = _engine()

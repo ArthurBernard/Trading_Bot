@@ -160,15 +160,12 @@ class Signal:
         if self.mode is SignalMode.EXPOSURE:
             if not (_NEG_ONE <= self.target <= _ONE):
                 raise SignalError(
-                    "exposure target must be in [-1, 1], got "
-                    f"{self.target}"
+                    f"exposure target must be in [-1, 1], got {self.target}"
                 )
         # TARGET_QTY accepts any finite signed Decimal (incl. 0 = flat); no bound.
 
         if self.strength is not None and not (0 <= self.strength <= 1):
-            raise SignalError(
-                f"strength must be in [0, 1], got {self.strength}"
-            )
+            raise SignalError(f"strength must be in [0, 1], got {self.strength}")
 
     # --- named constructors ------------------------------------------------ #
 
@@ -294,14 +291,10 @@ class Signal:
                 "into a target quantity"
             )
         if reference_qty <= 0:
-            raise SignalError(
-                f"reference_qty must be positive, got {reference_qty}"
-            )
+            raise SignalError(f"reference_qty must be positive, got {reference_qty}")
         return self.target * reference_qty
 
-    def delta_to(
-        self, position: Position, reference_qty: Money | None = None
-    ) -> Money:
+    def delta_to(self, position: Position, reference_qty: Money | None = None) -> Money:
         """The signed position change to reach this target from ``position``.
 
         ``delta = target_net_qty - position.net_qty``. A positive result means

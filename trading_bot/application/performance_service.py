@@ -132,9 +132,7 @@ class PerformanceService:
 
     """
 
-    def __init__(
-        self, *, v0: Money = _ZERO, event_bus: EventBus | None = None
-    ) -> None:
+    def __init__(self, *, v0: Money = _ZERO, event_bus: EventBus | None = None) -> None:
         self._v0: Money = v0
         # Running net position per instrument, advanced one fill at a time via
         # Position.with_fill (O(1) per fill — no full-history refold).

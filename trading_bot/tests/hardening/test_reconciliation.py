@@ -88,10 +88,7 @@ def _positions_from_broker_fills(
     by_instrument: dict[Instrument, list] = {}
     for f in broker_fills:
         by_instrument.setdefault(f.instrument, []).append(f)
-    return {
-        inst: Position.from_fills(fills)
-        for inst, fills in by_instrument.items()
-    }
+    return {inst: Position.from_fills(fills) for inst, fills in by_instrument.items()}
 
 
 async def test_reconcile_converges_after_disconnect() -> None:
@@ -119,8 +116,9 @@ async def test_reconcile_converges_after_disconnect() -> None:
     await broker.disconnect(_limit("disc-open", qty="4", price="30000"))
     # A standalone SELL on a second instrument (fully fills, closes).
     await broker.disconnect(
-        _limit("disc-eth", side=OrderSide.SELL, qty="3", price="2000",
-               instrument=ETH_USD)
+        _limit(
+            "disc-eth", side=OrderSide.SELL, qty="3", price="2000", instrument=ETH_USD
+        )
     )
 
     # The engine saw none of it.
@@ -140,9 +138,7 @@ async def test_reconcile_converges_after_disconnect() -> None:
 
     # No order duplicated or lost: the router tracks EXACTLY the venue's open set.
     tracked_nonterminal = {
-        cid
-        for cid, o in router.tracked_orders().items()
-        if not o.is_terminal
+        cid for cid, o in router.tracked_orders().items() if not o.is_terminal
     }
     assert tracked_nonterminal == venue_open_cids
     # The ingested order carries the venue's view (OPEN, venue id, partial fill).

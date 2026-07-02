@@ -225,15 +225,12 @@ class PaperBroker(Broker):
     ) -> None:
         if fill_model not in ("immediate", "partial"):
             raise BrokerError(
-                f"unknown fill_model {fill_model!r}; "
-                "expected 'immediate' or 'partial'"
+                f"unknown fill_model {fill_model!r}; expected 'immediate' or 'partial'"
             )
         if fee_bps < 0:
             raise BrokerError(f"fee_bps must be non-negative, got {fee_bps}")
         if partial_chunks < 1:
-            raise BrokerError(
-                f"partial_chunks must be >= 1, got {partial_chunks}"
-            )
+            raise BrokerError(f"partial_chunks must be >= 1, got {partial_chunks}")
         if not (0 < partial_fill_ratio <= 1):
             raise BrokerError(
                 f"partial_fill_ratio must be in (0, 1], got {partial_fill_ratio}"
@@ -329,9 +326,7 @@ class PaperBroker(Broker):
 
         """
         if not (0 < ratio < 1):
-            raise BrokerError(
-                f"arm_partial ratio must be in (0, 1), got {ratio}"
-            )
+            raise BrokerError(f"arm_partial ratio must be in (0, 1), got {ratio}")
         self._armed_ratio = ratio
 
     def seed_fills(self, fills: Iterable[Fill]) -> None:
@@ -441,9 +436,7 @@ class PaperBroker(Broker):
             self._open[venue_order_id] = record
         return venue_order_id
 
-    def _execution_price_for(
-        self, order: Order, limit_price: Money | None
-    ) -> Money:
+    def _execution_price_for(self, order: Order, limit_price: Money | None) -> Money:
         """Resolve the price ``order`` fills at, given its resolved limit price.
 
         A LIMIT (or priced BEST_LIMIT) fills at ``limit_price`` (which in strict

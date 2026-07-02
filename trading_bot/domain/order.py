@@ -273,9 +273,7 @@ class Order:
                     self.client_order_id, "LIMIT order requires limit_price"
                 )
             if self.stop_price is not None:
-                raise OrderError(
-                    self.client_order_id, "LIMIT order forbids stop_price"
-                )
+                raise OrderError(self.client_order_id, "LIMIT order forbids stop_price")
         elif otype is OrderType.STOP_LOSS:
             if self.stop_price is None:
                 raise OrderError(

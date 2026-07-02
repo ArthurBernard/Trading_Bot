@@ -378,9 +378,7 @@ class SqliteStore:
                     None if order.stop_price is None else str(order.stop_price),
                     order.status.value,
                     str(order.filled_qty),
-                    None
-                    if order.avg_fill_price is None
-                    else str(order.avg_fill_price),
+                    None if order.avg_fill_price is None else str(order.avg_fill_price),
                     _now_ms(),
                     order.reject_reason,
                     str(order.fill_tolerance),
@@ -517,9 +515,7 @@ class SqliteStore:
         """
         with self._conn() as conn:
             if since_ms is None:
-                rows = conn.execute(
-                    "SELECT * FROM fills ORDER BY rowid"
-                ).fetchall()
+                rows = conn.execute("SELECT * FROM fills ORDER BY rowid").fetchall()
             else:
                 rows = conn.execute(
                     "SELECT * FROM fills WHERE ts >= ? ORDER BY rowid",
@@ -553,9 +549,7 @@ class SqliteStore:
         """
         with self._conn() as conn:
             if since_ms is None:
-                rows = conn.execute(
-                    "SELECT * FROM fills ORDER BY rowid"
-                ).fetchall()
+                rows = conn.execute("SELECT * FROM fills ORDER BY rowid").fetchall()
             else:
                 rows = conn.execute(
                     "SELECT * FROM fills WHERE ts >= ? ORDER BY rowid",
@@ -811,8 +805,7 @@ def _migrate_fills_tags(conn: sqlite3.Connection) -> None:
     columns = {row["name"] for row in conn.execute("PRAGMA table_info(fills)")}
     if "mode" not in columns:
         conn.execute(
-            f"ALTER TABLE fills ADD COLUMN mode TEXT NOT NULL "
-            f"DEFAULT '{_DEFAULT_MODE}'"
+            f"ALTER TABLE fills ADD COLUMN mode TEXT NOT NULL DEFAULT '{_DEFAULT_MODE}'"
         )
     if "venue" not in columns:
         conn.execute("ALTER TABLE fills ADD COLUMN venue TEXT NOT NULL DEFAULT ''")
@@ -847,9 +840,7 @@ def _migrate_fills_pk(conn: sqlite3.Connection) -> None:
     of a migrated one). Must run *before* any composite-key write.
     """
     pk_columns = {
-        row["name"]
-        for row in conn.execute("PRAGMA table_info(fills)")
-        if row["pk"]
+        row["name"] for row in conn.execute("PRAGMA table_info(fills)") if row["pk"]
     }
     if pk_columns == set(_FILLS_PK):
         return  # already composite — fresh DB or already migrated

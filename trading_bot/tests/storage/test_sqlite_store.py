@@ -429,8 +429,7 @@ def test_migration_adds_columns_and_backfills_existing_rows(tmp_path) -> None:
     # The columns really exist on the table now (idempotent second open is fine).
     reopened = SqliteStore(db)
     cols = {
-        row[1]
-        for row in sqlite3.connect(str(db)).execute("PRAGMA table_info(fills)")
+        row[1] for row in sqlite3.connect(str(db)).execute("PRAGMA table_info(fills)")
     }
     assert {"mode", "venue"} <= cols
     # New fills on the migrated store are tagged normally.
@@ -481,8 +480,17 @@ def _legacy_orders_db(db, *, with_ts: bool = False) -> None:
         legacy.execute(f"CREATE TABLE orders ({', '.join(cols)})")
         ncols = len(cols)
         values = [
-            "OLD1", None, "BTC/USD", "buy", "limit", "0.5", "30000.5", None,
-            "rejected", "0", None,
+            "OLD1",
+            None,
+            "BTC/USD",
+            "buy",
+            "limit",
+            "0.5",
+            "30000.5",
+            None,
+            "rejected",
+            "0",
+            None,
         ]
         if with_ts:
             values.append(1_700)
@@ -529,8 +537,7 @@ def test_orders_migration_upgrades_old_schema_and_upsert_succeeds(tmp_path) -> N
 
     # The columns really exist on the table now.
     cols = {
-        row[1]
-        for row in sqlite3.connect(str(db)).execute("PRAGMA table_info(orders)")
+        row[1] for row in sqlite3.connect(str(db)).execute("PRAGMA table_info(orders)")
     }
     assert {"ts", "reject_reason", "fill_tolerance"} <= cols
 
@@ -856,8 +863,18 @@ def _legacy_single_pk_fills_db(db) -> None:
         )
         legacy.execute(
             "INSERT INTO fills VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            ("OLD1", "c1", "BTC/USD", "buy", "0.5", "30000.5", "1.25", 1_700,
-             "paper", ""),
+            (
+                "OLD1",
+                "c1",
+                "BTC/USD",
+                "buy",
+                "0.5",
+                "30000.5",
+                "1.25",
+                1_700,
+                "paper",
+                "",
+            ),
         )
         legacy.commit()
     finally:

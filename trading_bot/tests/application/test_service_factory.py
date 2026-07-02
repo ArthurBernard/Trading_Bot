@@ -93,9 +93,7 @@ def test_starting_capital_anchors_perf_equity_curve() -> None:
     engine = build_engine(cfg)
 
     # A fee-free flat buy has zero realised PnL → the equity point is exactly v0.
-    engine.bus.emit(
-        _fill_event("F0", OrderSide.BUY, qty="1", price="100", fee="0")
-    )
+    engine.bus.emit(_fill_event("F0", OrderSide.BUY, qty="1", price="100", fee="0"))
     curve = engine.perf.equity_curve()
     assert len(curve) == 1
     assert curve[0] == money("100000")
@@ -104,9 +102,7 @@ def test_starting_capital_anchors_perf_equity_curve() -> None:
 def test_default_starting_capital_flows_to_perf() -> None:
     """With no explicit ``starting_capital`` the perf anchor is the 100000 default."""
     engine = build_engine(AppConfig())
-    engine.bus.emit(
-        _fill_event("F0", OrderSide.BUY, qty="1", price="100", fee="0")
-    )
+    engine.bus.emit(_fill_event("F0", OrderSide.BUY, qty="1", price="100", fee="0"))
     assert engine.perf.equity_curve()[0] == money("100000")
 
 

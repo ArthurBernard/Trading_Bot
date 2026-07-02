@@ -48,9 +48,7 @@ class FakeWS:
     events (so the reconnect loop terminates instead of spinning).
     """
 
-    def __init__(
-        self, frames: list[str], on_exhaust: Any = None
-    ) -> None:
+    def __init__(self, frames: list[str], on_exhaust: Any = None) -> None:
         self._frames = frames
         self._on_exhaust = on_exhaust
         self.sent: list[Any] = []
@@ -220,9 +218,7 @@ def _make_ws(
     return private, connector, provider
 
 
-async def _drain(
-    private: KrakenPrivateWS, *, limit: int
-) -> list[Fill | OrderUpdate]:
+async def _drain(private: KrakenPrivateWS, *, limit: int) -> list[Fill | OrderUpdate]:
     """Collect up to *limit* events, then stop the stream."""
     out: list[Fill | OrderUpdate] = []
     async for event in private.events():
@@ -308,9 +304,7 @@ async def test_on_connect_fetches_token_and_subscribe_includes_it() -> None:
     provider = FakeTokenProvider(token="secret-token-xyz")
     ws = FakeWS([_TRADE_UPDATE_FRAME])
     connector = FakeConnector([ws])
-    private = KrakenPrivateWS(
-        provider, connect=connector, sleep=RecordingSleep()
-    )
+    private = KrakenPrivateWS(provider, connect=connector, sleep=RecordingSleep())
 
     await _drain(private, limit=1)
 
@@ -335,9 +329,7 @@ async def test_reconnect_refetches_token_and_resubscribes() -> None:
     ws1 = FakeWS([_SNAPSHOT_FRAME])
     ws2 = FakeWS([_TRADE_UPDATE_FRAME])
     connector = FakeConnector([ws1, ConnectionError("drop"), ws2])
-    private = KrakenPrivateWS(
-        provider, connect=connector, sleep=RecordingSleep()
-    )
+    private = KrakenPrivateWS(provider, connect=connector, sleep=RecordingSleep())
 
     events = await _drain(private, limit=2)
 
@@ -462,7 +454,9 @@ async def test_on_connected_hook_fires_after_subscribe_on_each_connect() -> None
 
     private = KrakenPrivateWS(
         FakeTokenProvider(),
-        connect=FakeConnector([FakeWS([_TRADE_UPDATE_FRAME]), FakeWS([_TRADE_UPDATE_FRAME])]),
+        connect=FakeConnector(
+            [FakeWS([_TRADE_UPDATE_FRAME]), FakeWS([_TRADE_UPDATE_FRAME])]
+        ),
         sleep=RecordingSleep(),
         on_connected=hook,
     )
@@ -533,9 +527,7 @@ async def test_sequence_gap_triggers_reconcile() -> None:
 
     private = KrakenPrivateWS(
         FakeTokenProvider(),
-        connect=FakeConnector(
-            [FakeWS([_trade_frame_seq(1), _trade_frame_seq(3)])]
-        ),
+        connect=FakeConnector([FakeWS([_trade_frame_seq(1), _trade_frame_seq(3)])]),
         sleep=RecordingSleep(),
         on_connected=hook,
     )
@@ -556,9 +548,7 @@ async def test_consecutive_sequence_does_not_reconcile_mid_stream() -> None:
 
     private = KrakenPrivateWS(
         FakeTokenProvider(),
-        connect=FakeConnector(
-            [FakeWS([_trade_frame_seq(1), _trade_frame_seq(2)])]
-        ),
+        connect=FakeConnector([FakeWS([_trade_frame_seq(1), _trade_frame_seq(2)])]),
         sleep=RecordingSleep(),
         on_connected=hook,
     )

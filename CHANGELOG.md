@@ -10,6 +10,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Tooling, CI & packaging hygiene.** CI now runs `ruff format --check` + `mypy` + `interrogate` alongside `ruff check`/pytest, with SHA-pinned actions; the tree is `ruff format`-clean; pytest polices warnings (`filterwarnings=error`) and pins the asyncio loop scope; dead `MANIFEST.in` directive, unused `interrogate` wiring and a doc install-extra inconsistency fixed; a flaky wall-clock daemon test made deterministic (audit T-5/T-6/T-7/T-8/T-9/T-10/T-11/G-13). (#152)
+
 ### Fixed
 
 - **Dashboard web-surface hardening.** `UIConfig` now rejects a non-loopback host without a token; `run --serve` gets the same bind guard; request bodies are capped, the session/rate-limit maps bounded, the login limiter keyed on the real peer; security headers (`no-store`/`nosniff`/frame/referrer) + login CSRF + `SameSite=strict` added; a client `X-Forwarded-Proto` is no longer trusted for the `Secure` cookie; a discarded deploy `mode` is rejected (audit A-4/I-4/I-5/I-6/I-7/I-9/I-10/I-11/I-13). (#147)

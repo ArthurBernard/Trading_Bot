@@ -8,6 +8,7 @@ and ``doc/dev/`` for the architecture and the developer brief.
 The pre-2026 implementation lives in git history only (no in-tree legacy
 package). See ``doc/dev/07-roadmap.md`` for the rewrite roadmap.
 """
+
 from __future__ import annotations
 
 from importlib import metadata

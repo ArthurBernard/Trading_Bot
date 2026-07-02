@@ -6,6 +6,7 @@ dated decision-journal entry. Stdout is injected into the session context by
 Claude Code. Reads paths from .claude/workflow.json; degrades gracefully if the
 descriptor or any target file is missing (prints what it can, never errors out).
 """
+
 from __future__ import annotations
 
 import json
@@ -28,7 +29,10 @@ def _branch() -> str:
     try:
         out = subprocess.run(
             ["git", "branch", "--show-current"],
-            cwd=ROOT, capture_output=True, text=True, timeout=5,
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            timeout=5,
         )
         return out.stdout.strip() or "(detached)"
     except Exception:

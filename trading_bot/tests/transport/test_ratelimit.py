@@ -92,9 +92,7 @@ async def test_slow_caller_never_waits() -> None:
 async def test_capacity_overrides_burst() -> None:
     # An explicit capacity sets the burst size independently of the rate.
     clock = FakeClock()
-    bucket = TokenBucket(
-        10.0, capacity=1.0, time_source=clock.time, sleep=clock.sleep
-    )
+    bucket = TokenBucket(10.0, capacity=1.0, time_source=clock.time, sleep=clock.sleep)
 
     await bucket.acquire()  # spends the single token of capacity
     await bucket.acquire()  # must wait one interval: 1/rate = 0.1s
@@ -116,9 +114,7 @@ async def test_weighted_calls_deplete_budget_at_correct_rate() -> None:
     # 60 weight / 60s window => 1 weight/s refill. A burst up to the limit is
     # free; the next weighted call waits exactly ``overshoot / refill_rate``.
     clock = FakeClock()
-    bucket = WeightBucket(
-        60.0, window=60.0, time_source=clock.time, sleep=clock.sleep
-    )
+    bucket = WeightBucket(60.0, window=60.0, time_source=clock.time, sleep=clock.sleep)
 
     # Spend 50 weight (5 x weight-10 calls) — all within the 60 budget, no wait.
     for _ in range(5):
@@ -178,9 +174,7 @@ async def test_weight_ages_out_during_ban() -> None:
     # Weight spent before a ban should decay *during* the ban wait, so a long
     # ban does not leave the bucket over-throttled once it lifts.
     clock = FakeClock()
-    bucket = WeightBucket(
-        60.0, window=60.0, time_source=clock.time, sleep=clock.sleep
-    )
+    bucket = WeightBucket(60.0, window=60.0, time_source=clock.time, sleep=clock.sleep)
     await bucket.acquire(60.0)  # fully spent (used = 60), no wait yet
     bucket.back_off(60.0)  # ban for 60s → 60 weight ages out at 1/s in that time
     # The next call waits only the 60s ban; the budget has fully refilled during
@@ -206,9 +200,7 @@ async def test_observe_used_weight_resyncs_to_venue() -> None:
     # The venue header ``X-MBX-USED-WEIGHT-1M`` is authoritative: observing a
     # higher used-weight than we tracked throttles the next call accordingly.
     clock = FakeClock()
-    bucket = WeightBucket(
-        60.0, window=60.0, time_source=clock.time, sleep=clock.sleep
-    )
+    bucket = WeightBucket(60.0, window=60.0, time_source=clock.time, sleep=clock.sleep)
 
     await bucket.acquire(10.0)  # local used = 10, no wait
     assert clock.waits == []
@@ -224,9 +216,7 @@ async def test_observe_lower_used_weight_ignored() -> None:
     # A venue figure LOWER than the local charge is ignored (stay conservative,
     # never loosen below what we have already spent).
     clock = FakeClock()
-    bucket = WeightBucket(
-        60.0, window=60.0, time_source=clock.time, sleep=clock.sleep
-    )
+    bucket = WeightBucket(60.0, window=60.0, time_source=clock.time, sleep=clock.sleep)
     await bucket.acquire(50.0)  # local used = 50
     bucket.observe_used_weight(5.0)  # venue lower → ignored
     # A weight-20 call still overshoots by 50 + 20 - 60 = 10 → 10s wait.
@@ -323,9 +313,7 @@ async def test_unknown_exchange_uses_fallback_rate() -> None:
 
 async def test_custom_rates_merge_over_defaults() -> None:
     clock = FakeClock()
-    limiter = RateLimiter(
-        {"kraken": 4.0}, time_source=clock.time, sleep=clock.sleep
-    )
+    limiter = RateLimiter({"kraken": 4.0}, time_source=clock.time, sleep=clock.sleep)
 
     # Overridden kraken rate 4/s (capacity 4): four free, fifth waits 0.25s.
     for _ in range(4):

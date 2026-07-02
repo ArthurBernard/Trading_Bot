@@ -134,9 +134,7 @@ def _broker_token_provider(broker: KrakenBroker) -> Callable[[], Awaitable[str]]
         if not token:
             from trading_bot.domain.errors import BrokerError
 
-            raise BrokerError(
-                "Kraken GetWebSocketsToken: no token in response"
-            )
+            raise BrokerError("Kraken GetWebSocketsToken: no token in response")
         return str(token)
 
     return _provider
@@ -479,9 +477,7 @@ class KrakenPrivateWS(WebSocketBase):
         client_order_id = str(userref) if userref else venue_order_id
 
         fill_id = str(
-            entry.get("exec_id")
-            or entry.get("trade_id")
-            or entry.get("order_id", "")
+            entry.get("exec_id") or entry.get("trade_id") or entry.get("order_id", "")
         )
         side = OrderSide(str(entry.get("side", "buy")))
         return Fill(
@@ -495,9 +491,7 @@ class KrakenPrivateWS(WebSocketBase):
             ts=_parse_iso_ms(str(entry.get("timestamp", ""))),
         )
 
-    def _build_order_update(
-        self, entry: dict[str, Any], exec_type: str
-    ) -> OrderUpdate:
+    def _build_order_update(self, entry: dict[str, Any], exec_type: str) -> OrderUpdate:
         """Build an :class:`OrderUpdate` from a non-trade execution entry."""
         venue_order_id = str(entry.get("order_id", ""))
         userref = entry.get("cl_ord_id") or entry.get("order_userref")

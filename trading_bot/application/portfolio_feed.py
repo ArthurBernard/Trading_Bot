@@ -235,14 +235,17 @@ class PortfolioFeed:
                 if latest is None:
                     logger.warning(
                         "portfolio feed: %s has no bars; it cannot enter the "
-                        "cross-section", sym,
+                        "cross-section",
+                        sym,
                     )
                 elif latest < universe_max:
                     logger.warning(
                         "portfolio feed: %s lags the universe (latest bar %d < "
                         "%d); the cross-section stops at the last common date "
                         "(stale day not emitted, never forward-filled)",
-                        sym, latest, universe_max,
+                        sym,
+                        latest,
+                        universe_max,
                     )
 
         return sorted(common)

@@ -171,9 +171,7 @@ async def test_on_connect_called_on_every_reconnect() -> None:
     ws1 = FakeWS(["a"])
     ws2 = FakeWS(["b"])
     # fail, success, fail, success → two successful connects → two on_connect.
-    connector = FakeConnector(
-        [ConnectionError("x"), ws1, ConnectionError("y"), ws2]
-    )
+    connector = FakeConnector([ConnectionError("x"), ws1, ConnectionError("y"), ws2])
     sleep = RecordingSleep()
     base = Counting("wss://example.test", connect=connector, sleep=sleep)
 

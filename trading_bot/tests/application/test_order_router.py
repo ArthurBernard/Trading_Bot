@@ -379,6 +379,8 @@ async def test_cancel_of_filled_order_is_a_noop() -> None:
     assert returned is order
     assert order.status is OrderStatus.FILLED  # unchanged
     assert broker.cancel_calls == 0, "a filled order must not be cancelled at the venue"
+
+
 async def test_cancel_tracked_order_without_venue_id_raises_missing_order() -> None:
     """A tracked-but-never-placed order (no venue id) cannot be cancelled.
 

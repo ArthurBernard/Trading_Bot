@@ -22,10 +22,12 @@ def position_with(net_qty: str, *, entry: str = "30000") -> Position:
     qty = money(net_qty)
     if qty == 0:
         # A flat position: open then fully close.
-        buy = Fill("T1", "cid", BTCUSD, OrderSide.BUY, money("1"), money(entry),
-                   money("0"), 1)
-        sell = Fill("T2", "cid", BTCUSD, OrderSide.SELL, money("1"), money(entry),
-                    money("0"), 2)
+        buy = Fill(
+            "T1", "cid", BTCUSD, OrderSide.BUY, money("1"), money(entry), money("0"), 1
+        )
+        sell = Fill(
+            "T2", "cid", BTCUSD, OrderSide.SELL, money("1"), money(entry), money("0"), 2
+        )
         return Position.from_fills([buy, sell])
     side = OrderSide.BUY if qty > 0 else OrderSide.SELL
     fill = Fill("T1", "cid", BTCUSD, side, abs(qty), money(entry), money("0"), 1)
@@ -103,7 +105,10 @@ class TestMoneyFieldGuard:
     def test_float_strength_rejected(self) -> None:
         with pytest.raises(TypeError, match="float"):
             Signal.target_qty(
-                BTCUSD, money("1"), ts=1, strength=0.5  # type: ignore[arg-type]
+                BTCUSD,
+                money("1"),
+                ts=1,
+                strength=0.5,  # type: ignore[arg-type]
             )
 
     def test_nan_target_qty_rejected(self) -> None:
@@ -242,11 +247,11 @@ class TestRealDataSeries:
         # Position series and the target each step should drive toward.
         steps: list[tuple[str, str, str]] = [
             # (current net_qty, target_qty, expected delta)
-            ("0", "5", "5"),     # open long
-            ("5", "8", "3"),     # add to long
+            ("0", "5", "5"),  # open long
+            ("5", "8", "3"),  # add to long
             ("8", "-4", "-12"),  # flip to short
-            ("-4", "0", "4"),    # close to flat
-            ("0", "-3", "-3"),   # open short
+            ("-4", "0", "4"),  # close to flat
+            ("0", "-3", "-3"),  # open short
         ]
         for cur, tgt, expected in steps:
             sig = Signal.target_qty(BTCUSD, money(tgt), ts=1)
@@ -256,11 +261,11 @@ class TestRealDataSeries:
         ref = money("20")
         steps: list[tuple[str, str, str]] = [
             # (current net_qty, exposure, expected delta) with ref=20
-            ("0", "1", "20"),       # full long
-            ("20", "0.5", "-10"),   # halve exposure
-            ("10", "-1", "-30"),    # flip to full short
-            ("-20", "0", "20"),     # flat
-            ("0", "-0.25", "-5"),   # quarter short
+            ("0", "1", "20"),  # full long
+            ("20", "0.5", "-10"),  # halve exposure
+            ("10", "-1", "-30"),  # flip to full short
+            ("-20", "0", "20"),  # flat
+            ("0", "-0.25", "-5"),  # quarter short
         ]
         for cur, exp, expected in steps:
             sig = Signal.exposure(BTCUSD, money(exp), ts=1)

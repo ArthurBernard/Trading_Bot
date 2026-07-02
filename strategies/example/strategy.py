@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # coding: utf-8
 
-""" Example of random strategy. """
+"""Example of random strategy."""
 
 # Import built-in packages
 
@@ -12,11 +12,11 @@ import fynance as fy
 # Import internal packages
 from trading_bot.data_requests import DataRequests
 
-__all__ = ['get_signal']
+__all__ = ["get_signal"]
 
 
 def get_order_params(data, *args, **kwargs):
-    """ Return signal, price and volume. """
+    """Return signal, price and volume."""
     # Get parameters
     params = {}
 
@@ -24,24 +24,24 @@ def get_order_params(data, *args, **kwargs):
     signal = get_signal(data, *args, **kwargs)
 
     # Set paramaters
-    params['price'] = get_price(data, signal, *args, **kwargs)
+    params["price"] = get_price(data, signal, *args, **kwargs)
     # params['volume'] *= 1.5 + signal
 
     return signal, params
 
 
 def get_signal(data, *args, **kwargs):
-    """ Compute signal. """
+    """Compute signal."""
     return int(np.random.choice(args))
 
 
 def get_coef_volume(data, *args, **kwargs):
-    """ Compute volume. """
-    if 'c' in data.columns:
-        series = data.loc[:, 'c']
+    """Compute volume."""
+    if "c" in data.columns:
+        series = data.loc[:, "c"]
 
-    elif 'o' in data.columns:
-        series = data.loc[:, 'o']
+    elif "o" in data.columns:
+        series = data.loc[:, "o"]
 
     else:
         series = data.iloc[:, 0]
@@ -52,28 +52,29 @@ def get_coef_volume(data, *args, **kwargs):
 
 
 def get_price(data, signal, *args, **kwargs):
-    """ Compute price. """
+    """Compute price."""
     req = DataRequests("https://api.kraken.com/0/public", stop_step=1)
-    ans = req.get_data('Ticker', pair='ETHUSD')
-    marge = float(np.random.rand(1) - 0.4) / 10.
+    ans = req.get_data("Ticker", pair="ETHUSD")
+    marge = float(np.random.rand(1) - 0.4) / 10.0
 
     if signal > 0:
-        price = float(ans['result']['XETHZUSD']['a'][0])
+        price = float(ans["result"]["XETHZUSD"]["a"][0])
         price /= 1 + marge
 
     elif signal < 0:
-        price = float(ans['result']['XETHZUSD']['b'][0])
+        price = float(ans["result"]["XETHZUSD"]["b"][0])
         price *= 1 + marge
 
     else:
-        price = float(ans['result']['XETHZUSD']['c'][0])
+        price = float(ans["result"]["XETHZUSD"]["c"][0])
 
     return round(price, 2)
 
 
-def set_iso_vol(series, *args, target_vol=0.20, leverage=1.,
-                period=252, half_life=11, **kwargs):
-    """ Compute iso-volatility coefficient.
+def set_iso_vol(
+    series, *args, target_vol=0.20, leverage=1.0, period=252, half_life=11, **kwargs
+):
+    """Compute iso-volatility coefficient.
 
     Iso-volatility coefficient is computed such that to target a
     specified volatility of underlying.
@@ -99,7 +100,12 @@ def set_iso_vol(series, *args, target_vol=0.20, leverage=1.,
     """
     # period = int(period * 86400 / frequency)
     # print('ok')
-    iv_series = fy.iso_vol(series, target_vol=target_vol, leverage=leverage,
-                           period=period, half_life=half_life)
+    iv_series = fy.iso_vol(
+        series,
+        target_vol=target_vol,
+        leverage=leverage,
+        period=period,
+        half_life=half_life,
+    )
 
     return iv_series[-1]

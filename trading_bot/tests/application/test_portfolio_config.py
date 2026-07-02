@@ -306,9 +306,7 @@ def test_source_span_must_be_finer_than_span() -> None:
     """A ``source_span`` not strictly finer than ``span`` is rejected."""
     with pytest.raises(ValidationError):
         AppConfig.model_validate(
-            _pf_with_data(
-                {"exchange": "binance", "span": 86400, "source_span": 86400}
-            )
+            _pf_with_data({"exchange": "binance", "span": 86400, "source_span": 86400})
         )
 
 
@@ -392,9 +390,7 @@ async def test_portfolio_reads_hyphen_keyed_store_when_configured() -> None:
 
     btc_price, eth_price = 50000.0, 2500.0
     cfg = _one_portfolio_config(capital="100000", store_key_format="hyphen")
-    client = _daily_client(
-        {"BTC-USDT": [btc_price] * 4, "ETH-USDT": [eth_price] * 4}
-    )
+    client = _daily_client({"BTC-USDT": [btc_price] * 4, "ETH-USDT": [eth_price] * 4})
 
     engine = build_engine(cfg, db_path=None)
     runners = build_portfolio_runners(cfg, engine, dccd_client=client)
@@ -850,7 +846,9 @@ def test_resample_adapter_against_real_binance_1m_store() -> None:
     """
     from pathlib import Path
 
-    base = Path.home() / "data" / "arthurserver" / "binance" / "ohlc" / "BTC-USDT" / "1m"
+    base = (
+        Path.home() / "data" / "arthurserver" / "binance" / "ohlc" / "BTC-USDT" / "1m"
+    )
     files = sorted(base.glob("2024.parquet")) or sorted(base.glob("*.parquet"))
     if not files:
         pytest.skip(

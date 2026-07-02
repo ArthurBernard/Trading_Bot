@@ -54,7 +54,9 @@ class _FakeDccdClient:
     def __init__(self, frames: dict[str, pl.DataFrame]) -> None:
         self._frames = frames
 
-    def read(self, exchange, symbol, data_type="ohlc", span=None, start_ns=None, end_ns=None):  # noqa: ANN001, ANN201
+    def read(
+        self, exchange, symbol, data_type="ohlc", span=None, start_ns=None, end_ns=None
+    ):  # noqa: ANN001, ANN201
         return self._frames[symbol]
 
     def backfill(self, *a, **k):  # noqa: ANN002, ANN003, ANN201  # pragma: no cover
@@ -276,14 +278,30 @@ def _seed_fills(sup: StrategySupervisor, name: str, symbol: Symbol) -> None:
     bus = sup._units[name].engine.bus  # noqa: SLF001 — seed the wired bus
     bus.emit(
         FillEvent(
-            Fill(f"{name}-F1", f"{name}-c1", inst, OrderSide.BUY,
-                 money("1"), money("100"), money("1"), 1)
+            Fill(
+                f"{name}-F1",
+                f"{name}-c1",
+                inst,
+                OrderSide.BUY,
+                money("1"),
+                money("100"),
+                money("1"),
+                1,
+            )
         )
     )
     bus.emit(
         FillEvent(
-            Fill(f"{name}-F2", f"{name}-c2", inst, OrderSide.SELL,
-                 money("1"), money("110"), money("1"), 2)
+            Fill(
+                f"{name}-F2",
+                f"{name}-c2",
+                inst,
+                OrderSide.SELL,
+                money("1"),
+                money("110"),
+                money("1"),
+                2,
+            )
         )
     )
 
@@ -347,8 +365,16 @@ async def test_positions_carry_strategy_and_exchange_tags() -> None:
     inst = Instrument(Symbol("BTC", "USD"))
     sup._units["btc-kraken"].engine.bus.emit(  # noqa: SLF001
         FillEvent(
-            Fill("k-F1", "k-c1", inst, OrderSide.BUY,
-                 money("3"), money("100"), money("1"), 1)
+            Fill(
+                "k-F1",
+                "k-c1",
+                inst,
+                OrderSide.BUY,
+                money("3"),
+                money("100"),
+                money("1"),
+                1,
+            )
         )
     )
     rows = sup.positions()
@@ -534,7 +560,9 @@ def _seed_store(db_path: str) -> None:
         Fill("SF1", "sc1", inst, OrderSide.BUY, money("1"), money("100"), money("1"), 1)
     )
     store.record_fill(
-        Fill("SF2", "sc2", inst, OrderSide.SELL, money("1"), money("110"), money("1"), 2)
+        Fill(
+            "SF2", "sc2", inst, OrderSide.SELL, money("1"), money("110"), money("1"), 2
+        )
     )
 
 
@@ -605,7 +633,9 @@ async def test_paper_start_replays_only_paper_tagged_fills(tmp_path) -> None:  #
         Fill("PF1", "pc1", inst, OrderSide.BUY, money("1"), money("100"), money("1"), 1)
     )
     store.record_fill(
-        Fill("PF2", "pc2", inst, OrderSide.SELL, money("1"), money("110"), money("1"), 2)
+        Fill(
+            "PF2", "pc2", inst, OrderSide.SELL, money("1"), money("110"), money("1"), 2
+        )
     )
     # A testnet round trip on the SAME instrument (fake money — must be ignored by
     # the paper replay): would otherwise add +18.
@@ -614,7 +644,9 @@ async def test_paper_start_replays_only_paper_tagged_fills(tmp_path) -> None:  #
         Fill("TF1", "tc1", inst, OrderSide.BUY, money("1"), money("100"), money("1"), 3)
     )
     store.record_fill(
-        Fill("TF2", "tc2", inst, OrderSide.SELL, money("1"), money("120"), money("1"), 4)
+        Fill(
+            "TF2", "tc2", inst, OrderSide.SELL, money("1"), money("120"), money("1"), 4
+        )
     )
 
     sup = StrategySupervisor(
@@ -681,7 +713,9 @@ async def test_pnl_series_splits_live_and_testnet(tmp_path) -> None:  # noqa: AN
         Fill("PF1", "pc1", inst, OrderSide.BUY, money("1"), money("100"), money("1"), 1)
     )
     store.record_fill(
-        Fill("PF2", "pc2", inst, OrderSide.SELL, money("1"), money("110"), money("1"), 2)
+        Fill(
+            "PF2", "pc2", inst, OrderSide.SELL, money("1"), money("110"), money("1"), 2
+        )
     )
     # Testnet round trip on the same book (fake money, separate series): +18.
     store.set_context(mode="testnet", venue="binance")
@@ -689,7 +723,9 @@ async def test_pnl_series_splits_live_and_testnet(tmp_path) -> None:  # noqa: AN
         Fill("TF1", "tc1", inst, OrderSide.BUY, money("1"), money("100"), money("1"), 3)
     )
     store.record_fill(
-        Fill("TF2", "tc2", inst, OrderSide.SELL, money("1"), money("120"), money("1"), 4)
+        Fill(
+            "TF2", "tc2", inst, OrderSide.SELL, money("1"), money("120"), money("1"), 4
+        )
     )
 
     # Read via a stopped unit (reads the configured db_path store).
@@ -735,12 +771,28 @@ async def test_combined_equity_series_sums_v0_and_merges_fills(tmp_path) -> None
     for db in (db_a, db_b):
         store = SqliteStore(db, mode="paper", venue="kraken")
         store.record_fill(
-            Fill(f"{db}-F1", f"{db}-c1", inst, OrderSide.BUY,
-                 money("1"), money("100"), money("0"), 1)
+            Fill(
+                f"{db}-F1",
+                f"{db}-c1",
+                inst,
+                OrderSide.BUY,
+                money("1"),
+                money("100"),
+                money("0"),
+                1,
+            )
         )
         store.record_fill(
-            Fill(f"{db}-F2", f"{db}-c2", inst, OrderSide.SELL,
-                 money("1"), money("110"), money("0"), 2)
+            Fill(
+                f"{db}-F2",
+                f"{db}-c2",
+                inst,
+                OrderSide.SELL,
+                money("1"),
+                money("110"),
+                money("0"),
+                2,
+            )
         )
     cfg = AppConfig.model_validate(
         {
@@ -788,12 +840,10 @@ async def test_combined_equity_series_ignores_zero_fill_in_mode_units(  # noqa: 
     # 'traded': a +10 paper round trip. 'idle': an empty store (no fills at all).
     store = SqliteStore(db_traded, mode="paper", venue="kraken")
     store.record_fill(
-        Fill("F1", "c1", inst, OrderSide.BUY,
-             money("1"), money("100"), money("0"), 1)
+        Fill("F1", "c1", inst, OrderSide.BUY, money("1"), money("100"), money("0"), 1)
     )
     store.record_fill(
-        Fill("F2", "c2", inst, OrderSide.SELL,
-             money("1"), money("110"), money("0"), 2)
+        Fill("F2", "c2", inst, OrderSide.SELL, money("1"), money("110"), money("0"), 2)
     )
     SqliteStore(db_idle, mode="paper", venue="kraken")  # created empty
 
@@ -863,12 +913,28 @@ def _kpi_ratio_supervisor(db_path: str) -> StrategySupervisor:
     prices = [(100, 108), (108, 104), (104, 112), (112, 106), (106, 115)]
     for i, (buy_px, sell_px) in enumerate(prices):
         store.record_fill(
-            Fill(f"B{i}", f"cB{i}", inst, OrderSide.BUY,
-                 money("1"), money(str(buy_px)), money("0"), 2 * i + 1)
+            Fill(
+                f"B{i}",
+                f"cB{i}",
+                inst,
+                OrderSide.BUY,
+                money("1"),
+                money(str(buy_px)),
+                money("0"),
+                2 * i + 1,
+            )
         )
         store.record_fill(
-            Fill(f"S{i}", f"cS{i}", inst, OrderSide.SELL,
-                 money("1"), money(str(sell_px)), money("0"), 2 * i + 2)
+            Fill(
+                f"S{i}",
+                f"cS{i}",
+                inst,
+                OrderSide.SELL,
+                money("1"),
+                money(str(sell_px)),
+                money("0"),
+                2 * i + 2,
+            )
         )
     cfg = AppConfig.model_validate(
         {
@@ -1003,14 +1069,30 @@ def _seed_portfolio_fills(
     bus = sup._units[name].engine.bus  # noqa: SLF001 — seed the wired bus
     bus.emit(
         FillEvent(
-            Fill(f"{name}-F1", f"{name}-c1", inst, OrderSide.BUY,
-                 money("1"), money("100"), money("1"), 1)
+            Fill(
+                f"{name}-F1",
+                f"{name}-c1",
+                inst,
+                OrderSide.BUY,
+                money("1"),
+                money("100"),
+                money("1"),
+                1,
+            )
         )
     )
     bus.emit(
         FillEvent(
-            Fill(f"{name}-F2", f"{name}-c2", inst, OrderSide.SELL,
-                 money("1"), money(exit_price), money("1"), 2)
+            Fill(
+                f"{name}-F2",
+                f"{name}-c2",
+                inst,
+                OrderSide.SELL,
+                money("1"),
+                money(exit_price),
+                money("1"),
+                2,
+            )
         )
     )
 

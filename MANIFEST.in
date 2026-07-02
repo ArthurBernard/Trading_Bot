@@ -1,2 +1,6 @@
 include LICENSE.txt README.md CHANGELOG.md
-recursive-include trading_bot *.ini
+# Ship the web-UI assets in the sdist too (belt-and-suspenders with the
+# [tool.setuptools.package-data] globs in pyproject.toml) so a source build keeps
+# the dashboard templates + static assets even if package-data inclusion ever changes.
+recursive-include trading_bot/interfaces/ui/templates *.html
+recursive-include trading_bot/interfaces/ui/static *

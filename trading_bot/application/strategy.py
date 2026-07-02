@@ -183,15 +183,11 @@ class Strategy:
 
         """
         if bars.height < self.lookback:
-            return Signal.exposure(
-                self.instrument, money("0"), ts=_bar_ts_ms(bars)
-            )
+            return Signal.exposure(self.instrument, money("0"), ts=_bar_ts_ms(bars))
 
         signal = self.signal_fn(bars)
         if signal.instrument != self.instrument:
-            raise InstrumentMismatch(
-                str(self.instrument), str(signal.instrument)
-            )
+            raise InstrumentMismatch(str(self.instrument), str(signal.instrument))
         return signal
 
 
@@ -208,9 +204,7 @@ def _instrument_from_symbol(symbol: str) -> Instrument:
     return Instrument(sym)
 
 
-def load_strategy(
-    config: StrategyConfig, signal_fn: SignalFn | str
-) -> Strategy:
+def load_strategy(config: StrategyConfig, signal_fn: SignalFn | str) -> Strategy:
     """Build a :class:`Strategy` from a config and a resolvable signal callable.
 
     The instrument is built from ``config.symbol`` (canonical ``BASE/QUOTE`` or a
@@ -258,14 +252,10 @@ def _resolve_ref(ref: str) -> SignalFn:
     ``AttributeError`` escape) with a message naming the offending reference.
     """
     if ":" not in ref:
-        raise SignalError(
-            f"signal_fn reference {ref!r} must be 'module:function'"
-        )
+        raise SignalError(f"signal_fn reference {ref!r} must be 'module:function'")
     module_name, _, attr = ref.partition(":")
     if not module_name or not attr:
-        raise SignalError(
-            f"signal_fn reference {ref!r} must be 'module:function'"
-        )
+        raise SignalError(f"signal_fn reference {ref!r} must be 'module:function'")
     # Audit trail (I-1): resolving a dotted ref imports an arbitrary module (runs its
     # top level) — log which one, at which callable, so a deploy's import is traceable.
     # The ref carries no secret; the API boundary allow-lists the module prefix.
@@ -282,8 +272,7 @@ def _resolve_ref(ref: str) -> SignalFn:
         fn = getattr(module, attr)
     except AttributeError as exc:
         raise SignalError(
-            f"module {module_name!r} has no attribute {attr!r} "
-            f"for signal_fn {ref!r}"
+            f"module {module_name!r} has no attribute {attr!r} for signal_fn {ref!r}"
         ) from exc
     if not callable(fn):
         raise SignalError(
@@ -338,9 +327,7 @@ def ma_crossover_signal(
 
     """
     if fast < 1 or slow <= fast:
-        raise ValueError(
-            f"need 1 <= fast < slow, got fast={fast}, slow={slow}"
-        )
+        raise ValueError(f"need 1 <= fast < slow, got fast={fast}, slow={slow}")
 
     def _signal(bars: pl.DataFrame) -> Signal:
         # fynance is an optional [triptych] dependency: import it here, when the

@@ -66,9 +66,7 @@ _VECTOR_QUERY = (
     "symbol=LTCBTC&side=BUY&type=LIMIT&timeInForce=GTC&quantity=1&price=0.1"
     "&recvWindow=5000&timestamp=1499827319559"
 )
-_VECTOR_EXPECTED = (
-    "c8db56825ae71d6d79447849e617115f4a920fa2acdcab2b053c4b2838bd6b71"
-)
+_VECTOR_EXPECTED = "c8db56825ae71d6d79447849e617115f4a920fa2acdcab2b053c4b2838bd6b71"
 
 
 def _broker(
@@ -788,9 +786,7 @@ def test_raise_on_error_maps_array_wrapped_codes_to_domain_errors() -> None:
     ]
     for code, msg, exc_type in cases:
         with pytest.raises(exc_type):
-            _BinanceBroker._raise_on_error(
-                [{"code": code, "msg": msg}], context="ctx"
-            )
+            _BinanceBroker._raise_on_error([{"code": code, "msg": msg}], context="ctx")
 
 
 def test_raise_on_error_finds_error_in_mixed_batch() -> None:
@@ -1027,9 +1023,7 @@ async def test_real_binance_testnet_round_trip(
     """
     import os
 
-    key = os.environ.get("BINANCE_TESTNET_API_KEY") or os.environ.get(
-        "BINANCE_API_KEY"
-    )
+    key = os.environ.get("BINANCE_TESTNET_API_KEY") or os.environ.get("BINANCE_API_KEY")
     secret = os.environ.get("BINANCE_TESTNET_API_SECRET") or os.environ.get(
         "BINANCE_API_SECRET"
     )

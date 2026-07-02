@@ -85,8 +85,11 @@ def _wire(
         prices={instrument: money(mark)},
         fee_bps=money("0"),
         fill_model="immediate",
-        starting_balances={"USD": money("10000000"), "BTC": money("0"),
-                           "ETH": money("0")},
+        starting_balances={
+            "USD": money("10000000"),
+            "BTC": money("0"),
+            "ETH": money("0"),
+        },
         event_bus=bus,
     )
     router = OrderRouter(broker, bus)
@@ -282,7 +285,9 @@ async def test_one_runner_raising_does_not_hang_siblings() -> None:
     runs to completion, and the orchestrator re-raises the lone failure (not a
     group error). The sibling is never left hung.
     """
-    pytest.importorskip("fynance")  # the good runner's ma_crossover evaluates fynance.sma
+    pytest.importorskip(
+        "fynance"
+    )  # the good runner's ma_crossover evaluates fynance.sma
 
     class _BoomFeed:
         def __iter__(self) -> Iterator[pl.DataFrame]:
@@ -306,9 +311,7 @@ async def test_one_runner_raising_does_not_hang_siblings() -> None:
         signal_fn=_always_long(BTC_USD),  # type: ignore[arg-type]
         reference_qty=money("1"),
     )
-    good_runner, _gb, good_tracker = _wire(
-        good_strat, InMemoryFeed(_bars(up)), ETH_USD
-    )
+    good_runner, _gb, good_tracker = _wire(good_strat, InMemoryFeed(_bars(up)), ETH_USD)
     bad_runner, _bb, _bt = _wire(bad_strat, _BoomFeed(), BTC_USD)
 
     orch = Orchestrator()
@@ -343,12 +346,18 @@ async def test_multiple_runners_failing_aggregate_into_group_error() -> None:
         def latest(self) -> pl.DataFrame:
             return _bars([100.0])
 
-    strat1 = Strategy(name="b1", instrument=BTC_USD,
-                      signal_fn=_always_long(BTC_USD),  # type: ignore[arg-type]
-                      reference_qty=money("1"))
-    strat2 = Strategy(name="b2", instrument=ETH_USD,
-                      signal_fn=_always_long(ETH_USD),  # type: ignore[arg-type]
-                      reference_qty=money("1"))
+    strat1 = Strategy(
+        name="b1",
+        instrument=BTC_USD,
+        signal_fn=_always_long(BTC_USD),  # type: ignore[arg-type]
+        reference_qty=money("1"),
+    )
+    strat2 = Strategy(
+        name="b2",
+        instrument=ETH_USD,
+        signal_fn=_always_long(ETH_USD),  # type: ignore[arg-type]
+        reference_qty=money("1"),
+    )
     r1, _b1, _t1 = _wire(strat1, _BoomFeed("boom-1"), BTC_USD)
     r2, _b2, _t2 = _wire(strat2, _BoomFeed("boom-2"), ETH_USD)
 
@@ -367,8 +376,7 @@ async def test_multiple_runners_failing_aggregate_into_group_error() -> None:
 # --- signal handling (injected; no real signal) ---------------------------- #
 
 
-async def test_install_signal_handlers_registers_handler_triggering_shutdown(
-) -> None:
+async def test_install_signal_handlers_registers_handler_triggering_shutdown() -> None:
     """The injected hook registers a handler that triggers :meth:`shutdown`.
 
     A *fake* loop captures the ``add_signal_handler`` registrations; we then call

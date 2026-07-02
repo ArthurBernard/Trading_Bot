@@ -747,13 +747,10 @@ class AppConfig(BaseModel):
         """
         strategies = [s for s in self.strategies if s.name != name]
         portfolios = [p for p in self.portfolios if p.name != name]
-        if (
-            len(strategies) == len(self.strategies)
-            and len(portfolios) == len(self.portfolios)
+        if len(strategies) == len(self.strategies) and len(portfolios) == len(
+            self.portfolios
         ):
-            raise ValueError(
-                f"no strategy or portfolio named {name!r} to remove"
-            )
+            raise ValueError(f"no strategy or portfolio named {name!r} to remove")
         return self.model_validate(
             {
                 **self.model_dump(),
@@ -764,9 +761,7 @@ class AppConfig(BaseModel):
 
     def _reject_duplicate_name(self, name: str) -> None:
         """Raise if ``name`` is already a strategy or portfolio (shared name space)."""
-        existing = {s.name for s in self.strategies} | {
-            p.name for p in self.portfolios
-        }
+        existing = {s.name for s in self.strategies} | {p.name for p in self.portfolios}
         if name in existing:
             raise ValueError(
                 f"duplicate name {name!r}: a strategy or portfolio with that "
