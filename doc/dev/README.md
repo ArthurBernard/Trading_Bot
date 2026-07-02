@@ -10,21 +10,23 @@ done. The authoritative working rules live in the repo-root `CLAUDE.md`.
 > folder is the *narrative and depth* around it. When the two disagree, trust
 > `CLAUDE.md` and fix this folder.
 
-> **Rewrite in progress.** Much of the architecture here is the **target**, not
-> the current reality. The pre-2026 code is parked under `trading_bot/legacy/`.
-> [`06-status.md`](06-status.md) and [`07-roadmap.md`](07-roadmap.md) are the
-> honest record of what has actually landed.
+> **Rewrite complete through the MVP.** The hexagonal layers exist natively
+> (domain, transport, brokers, storage, application, interfaces). The pre-2026
+> implementation has been retired — it lives in git history only (no in-tree
+> `legacy/` package). [`06-status.md`](06-status.md) and
+> [`07-roadmap.md`](07-roadmap.md) are the honest record of what has landed and
+> the one maintainer step (real-key live enablement) that remains.
 
 ## Read in this order
 
 1. [`01-overview.md`](01-overview.md) — what trading_bot is, its place in the
    triptych, the current state, the repo map.
-2. [`02-architecture.md`](02-architecture.md) — the target hexagonal layers and
+2. [`02-architecture.md`](02-architecture.md) — the hexagonal layers and
    where each responsibility lives.
 3. [`03-decisions.md`](03-decisions.md) — the design choices and *why* (rewrite,
    hexagonal, multi-exchange-ready/Kraken-first, paper-first, Decimal money).
 4. [`04-brokers.md`](04-brokers.md) — the per-broker capability matrix (Kraken
-   implemented; others declared).
+   and Binance shipped; PaperBroker default; others declared).
 5. [`05-testing.md`](05-testing.md) — testing layers and the "test the chain on
    real data" discipline for an execution engine.
 6. [`06-status.md`](06-status.md) — what's done, what's pending, known gaps.

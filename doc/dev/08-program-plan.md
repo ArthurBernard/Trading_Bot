@@ -1,17 +1,24 @@
 # 08 — Program plan (E1 → E10)
 
+> **Status: the E1–E10 rewrite is complete** (plus E11 Binance and the
+> multi-asset / portfolio unit — see [`06-status.md`](06-status.md)). This file is
+> kept as the historical **map** of how the rewrite was decomposed; the executable
+> trees have been archived to `_archive/plans/`. The one maintainer step left
+> (real-key live enablement) lives in [`07-roadmap.md`](07-roadmap.md).
+
 The **complete map** of the rewrite: every epic decomposed into its leaves, each
 leaf with its **branch**, **complexity**, **dependencies** and one-line intent.
-This removes grey zones about *direction and structure* up front. The precise,
-file-by-file **executable specs** for each leaf are written **epic by epic, just
-before that epic is executed** (via `/plan`), because the late epics depend on what
-the early ones produce — over-specifying them now would be speculation.
+This removed grey zones about *direction and structure* up front. The precise,
+file-by-file **executable specs** for each leaf were written **epic by epic, just
+before that epic was executed** (via `/plan`), because the late epics depended on
+what the early ones produced — over-specifying them up front would have been
+speculation.
 
 > Relationship to the other docs: [`07-roadmap.md`](07-roadmap.md) is the terse
-> `- [ ]` index the skills read; **this file** is its full decomposition;
-> [`plans/<epic>/`](plans/) holds the executable trees (E1 = `plans/domain-core/`
-> already written). [`02-architecture.md`](02-architecture.md) is the layer map
-> these epics build out.
+> `- [ ]` index the skills read; **this file** is its full decomposition; the
+> executable trees for these (now-complete) epics have been archived to
+> `_archive/plans/`. [`02-architecture.md`](02-architecture.md) is the layer map
+> these epics built out.
 
 ## Legend
 
@@ -38,10 +45,13 @@ E1 domain ─▶ E2 transport ─▶ E3 brokers ─▶ E4 engine ─┬─▶ E5
 
 ## Executable-tree status
 
-| Epic | Tree written? |
-|------|---------------|
-| E1 domain-core | ✅ `plans/domain-core/` (PR #4) |
-| E2 … E10 | ⏳ written via `/plan` at the start of each epic |
+All epics are **complete**; their executable trees have been archived to
+`_archive/plans/<epic>/` (the gitignored, local-reference archive). `plans/`
+holds only in-flight work.
+
+| Epic | Tree |
+|------|------|
+| E1 … E10 (+ E11 Binance, portfolio) | ✅ complete — archived to `_archive/plans/` |
 
 ---
 
@@ -74,7 +84,7 @@ The central exchange contract + the one implemented venue.
 
 | Leaf | Branch | Cx | Deps | Intent |
 |------|--------|----|------|--------|
-| 01 broker-port | feat/broker-port | high | E1, E2 | `Broker` protocol (place/cancel/replace, open orders, balances, fills, market data) + `registry` + capability declaration |
+| 01 broker-port | feat/broker-port | high | E1, E2 | `Broker` protocol (place/cancel/replace, open orders, balances, fills, market data) + capability declaration (a `registry` was planned but later removed as unused — ADR #77; `service_factory` does per-venue dispatch) |
 | 02 kraken-rest | feat/broker-kraken-rest | high | 01 | Kraken REST: auth/signing/nonce, place/cancel, open orders, balances, fills; map domain Order ↔ Kraken |
 | 03 kraken-ws | feat/broker-kraken-ws | high | 02 | Kraken private WS: own-trades (fills) + order updates |
 
@@ -136,7 +146,7 @@ Opens `application/`. Idempotent routing, simulation, position tracking, reconci
 |------|--------|----|------|--------|
 | 01 fault-injection | test/go-live-hardening | high | E8 | Prove reconnection, idempotency, reconciliation, kill-switch under fault injection |
 | 02 live-enablement | feat/live-enablement | high | 01 | **Resolves: paper-vs-live default**; explicit live opt-in + credentials + go-live runbook |
-| 03 rename | chore/rename | medium | 02 | **Resolves: final project name**; apply to package/repo/docs (do last) |
+| 03 name decision | — | — | 02 | **Resolved: final project name** — kept as `trading_bot` (with `dccd` / `fynance`); **no rename** (leaf closed, no branch) |
 
 ---
 
@@ -145,13 +155,13 @@ Opens `application/`. Idempotent routing, simulation, position tracking, reconci
 | Deferred decision | Resolved at |
 |-------------------|-------------|
 | fynance (untyped) vs mypy-strict domain | E1-05 (typed wrapper or narrow override) |
-| dccd integration depth (library import vs driving a service) | E8-02 |
-| paper-vs-live default beyond the MVP | E10-02 |
-| final project name | E10-03 |
+| dccd integration depth (library import vs driving a service) | E8-02 (library import) |
+| paper-vs-live default beyond the MVP | E10-02 (paper default; live behind opt-in) |
+| final project name | E10-03 — **kept `trading_bot`; no rename** |
 
 ## Totals
 
 34 leaves across 10 epics. Counts: E1 5 · E2 3 · E3 3 · E4 5 · E5 3 · E6 3 ·
-E7 4 · E8 3 · E9 2 · E10 3. This is the structural contract; each epic's executable
-tree is written just before it runs, and `/finish-task` ticks the roadmap as leaves
-land.
+E7 4 · E8 3 · E9 2 · E10 3. This was the structural contract; every epic shipped
+(plus E11 Binance and the multi-asset / portfolio unit), and its executable tree
+was archived to `_archive/plans/` as it landed.

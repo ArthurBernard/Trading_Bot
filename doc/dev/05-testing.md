@@ -1,11 +1,13 @@
 # 05 — Testing
 
-Tests live in `trading_bot/tests/`. The legacy tree is excluded from collection
-(`--ignore=trading_bot/legacy`). Coverage is measured on every run
-(`--cov=trading_bot`). CI matrix: Python 3.11–3.13.
+Tests live in `trading_bot/tests/`. The default `pytest` invocation is configured
+in `pyproject.toml` (`[tool.pytest.ini_options]`): network E2E is deselected
+(`-m 'not network'`), coverage is measured on every run
+(`--cov=trading_bot --cov-report=term-missing`), and `--exitfirst -vv` stop on the
+first failure with verbose output. CI matrix: Python 3.11–3.13.
 
 ```bash
-pytest                                 # full suite (legacy & network excluded)
+pytest                                 # full suite (network deselected by default)
 pytest trading_bot/tests/test_smoke.py -v
 pytest -m network                      # opt-in: real broker/sandbox E2E
 ```
