@@ -898,7 +898,7 @@ def _ensure_cwd_importable() -> None:
     """Put the current working directory on ``sys.path``.
 
     A manifest's ``signal.ref`` may point at a **local** strategy package — the
-    gitignored ``strategies/`` tree (e.g. ``strategies.alloc1.signal:...``) that
+    gitignored ``strategies/`` tree (e.g. ``strategies.<yourpkg>.signal:...``) that
     lives in the project root and is deliberately never committed. Resolving that
     dotted ref (``importlib.import_module``) needs the project root on
     ``sys.path``. A console-script entry point (``trading-bot``) does **not** add

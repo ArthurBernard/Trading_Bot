@@ -393,13 +393,13 @@ def test_kpi_rejects_an_unknown_level() -> None:
 # --- dynamic membership: add_unit / remove_unit / manifest ----------------- #
 
 
-def _portfolio_entry(name: str = "alloc1") -> PortfolioStrategyConfig:
+def _portfolio_entry(name: str = "demo1") -> PortfolioStrategyConfig:
     """A deployable portfolio entry pointing at an existing signal ref."""
     return PortfolioStrategyConfig(
         name=name,
         venue="binance",
         universe=["BTC/USDT", "ETH/USDT"],
-        signal=SignalRefConfig(ref="strategies.alloc1.signal:alloc1_portfolio_signal"),
+        signal=SignalRefConfig(ref="strategies.demo.signal:portfolio_signal"),
         capital=money("100000"),
         data=DataSourceConfig(exchange="binance", span=86400),
     )
@@ -409,9 +409,9 @@ def test_add_unit_appends_a_stopped_unit() -> None:
     """`add_unit` deploys a new **stopped** unit reflected in status() + names()."""
     sup = _supervisor()
     name = sup.add_unit(_portfolio_entry())
-    assert name == "alloc1"
-    assert sup.names() == ["btc-ma", "alloc1"]
-    [st] = [s for s in sup.status() if s.name == "alloc1"]
+    assert name == "demo1"
+    assert sup.names() == ["btc-ma", "demo1"]
+    [st] = [s for s in sup.status() if s.name == "demo1"]
     assert st.kind == "portfolio"
     assert st.exchange == "binance"
     assert st.running is False  # never auto-started (paper-safe)
@@ -473,7 +473,7 @@ def test_manifest_reflects_the_current_units() -> None:
     sup.add_unit(_portfolio_entry())
     man = sup.manifest()
     assert [s.name for s in man.strategies] == ["btc-ma"]
-    assert [p.name for p in man.portfolios] == ["alloc1"]
+    assert [p.name for p in man.portfolios] == ["demo1"]
 
 
 async def test_remove_unit_stops_and_drops() -> None:
@@ -878,8 +878,8 @@ def _fake_portfolio_signal(asof_ms, frames):  # noqa: ANN001, ANN201, ARG001
 def _two_portfolio_config(db_a: str, db_b: str) -> AppConfig:
     """A manifest with two portfolios, each declaring its OWN ``db_path``.
 
-    Reproduces the deploy-two-portfolios-in-one-manifest shape (alloc1-binance +
-    alloc1-kraken): both paper, disjoint universes/venues, each with a per-strategy
+    Reproduces the deploy-two-portfolios-in-one-manifest shape (demo-binance +
+    demo-kraken): both paper, disjoint universes/venues, each with a per-strategy
     store path so their books never commingle. The signal is a local no-op ref (so it
     resolves offline, no ``strategies/`` import); the units are never stepped.
     """

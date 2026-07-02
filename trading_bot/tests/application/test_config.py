@@ -446,7 +446,7 @@ def _full_config() -> AppConfig:
             ],
             "portfolios": [
                 {
-                    "name": "alloc1",
+                    "name": "demo1",
                     "venue": "binance",
                     "universe": ["BTC/USDT", "ETH/USDT"],
                     "signal": {"ref": "pkg.mod:sig"},
@@ -546,8 +546,8 @@ def test_remove_entry_drops_a_strategy_or_portfolio() -> None:
     cfg = _full_config()
     without_strat = cfg.remove_entry("btc-ma")
     assert [s.name for s in without_strat.strategies] == []
-    assert [p.name for p in without_strat.portfolios] == ["alloc1"]
-    without_pf = cfg.remove_entry("alloc1")
+    assert [p.name for p in without_strat.portfolios] == ["demo1"]
+    without_pf = cfg.remove_entry("demo1")
     assert [p.name for p in without_pf.portfolios] == []
     assert [s.name for s in without_pf.strategies] == ["btc-ma"]
 

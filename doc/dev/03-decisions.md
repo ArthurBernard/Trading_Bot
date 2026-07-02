@@ -6,11 +6,11 @@ rejected approaches as tombstones.
 
 ---
 
-### 2026-07-02 Resolve local strategy signal refs by putting the CWD on sys.path (PR #PR)  [accepted]
+### 2026-07-02 Resolve local strategy signal refs by putting the CWD on sys.path (PR #135)  [accepted]
 - **Choice**: the CLI group callback runs `_ensure_cwd_importable()` before every
   command, inserting the current working directory into `sys.path` so a manifest's
   `signal.ref` pointing at the gitignored local `strategies/` tree (e.g.
-  `strategies.alloc1.signal:...`) resolves.
+  `strategies.<yourpkg>.signal:...`) resolves.
 - **Why**: a console-script entry point (`trading-bot`) does not add the CWD to
   `sys.path` the way `python script.py` / `python -m` do, so importing a local
   strategy module failed and `_start_dashboard_units` silently skipped the unit —
@@ -21,7 +21,7 @@ rejected approaches as tombstones.
   requiring `PYTHONPATH=.` — undiscoverable and easy to forget. The interface layer
   is the right place to set up the import environment.
 
-### 2026-07-02 Make the pytest gate hermetic and enforced (PR #PR)  [accepted]
+### 2026-07-02 Make the pytest gate hermetic and enforced (PR #132)  [accepted]
 - **Choice**: add a repo `conftest.py` with an autouse fixture that runs every test
   from a temp CWD and scrubs `TRADING_BOT_*` env; drop `--exitfirst` from `addopts`;
   add `--cov-fail-under=90`.
@@ -32,7 +32,7 @@ rejected approaches as tombstones.
 - **Rejected alternatives**: patching the five individual tests to look elsewhere —
   leaves the whole class of CWD/env bleed unaddressed; the autouse fixture fixes it
   once for the whole suite.
-### 2026-07-02 Domain applies its own money() guard at construction (PR #PR)  [accepted]
+### 2026-07-02 Domain applies its own money() guard at construction (PR #128)  [accepted]
 - **Choice**: route every money field through `money()` inside `Order`/`Fill`/`Signal`
   `__post_init__` and **reject** a raw `float` (fail-fast) rather than coerce it; pin an
   explicit `decimal.localcontext` on the average-price / average-entry divisions; reject
@@ -45,7 +45,7 @@ rejected approaches as tombstones.
   non-deterministically; a pinned context makes average prices deterministic.
 - **Rejected alternatives**: silent float→Decimal coercion (hides caller bugs and the
   `float(x)` precision loss it's meant to prevent).
-### 2026-07-02 Broker order-path live-readiness (PR #PR)  [accepted]
+### 2026-07-02 Broker order-path live-readiness (PR #129)  [accepted]
 - **Choice**: quantize qty/price to the venue lot/tick (`ROUND_DOWN`, reject
   sub-min-lot/notional with `OrderTooSmall`) before submit on both venues; give Kraken
   a monotonic, lock-guarded nonce; map venue error codes to domain errors and retry
@@ -61,7 +61,7 @@ rejected approaches as tombstones.
   would break the ambiguous-submit→reconcile idempotency guarantee, so submit still
   raises `AmbiguousRequestError`; (b) rounding size up — can oversell holdings; (c)
   silently dropping an out-of-charset client-order-id.
-### 2026-07-02 Redact secrets at the transport boundary (PR #PR)  [accepted]
+### 2026-07-02 Redact secrets at the transport boundary (PR #127)  [accepted]
 - **Choice**: a redaction helper in `transport/http.py` masks the values of
   sensitive query params (`signature`, api key, `token`, `nonce`) in every log line
   and exception message, and the `HTTPError`/`AmbiguousRequestError` objects store the
@@ -73,7 +73,7 @@ rejected approaches as tombstones.
 - **Rejected alternatives**: (a) sign in headers only — not all Binance endpoints
   support it; (b) scrub at the logging formatter — misses exception `__str__` paths
   that get logged far from the transport.
-### 2026-07-02 Enforce dashboard live/filesystem/import gates server-side (PR #PR)  [accepted]
+### 2026-07-02 Enforce dashboard live/filesystem/import gates server-side (PR #130)  [accepted]
 - **Choice**: validate the typed live-acknowledgement (`I UNDERSTAND`) on the server
   with a constant-time compare (a bare `confirm:true` no longer flips to live); reject
   absolute or `..`-traversal `db_path` in the deploy body (400); allow-list the deploy
@@ -87,7 +87,7 @@ rejected approaches as tombstones.
   sanitising only the auto-derived `db_path` (the explicit one bypassed it). Residual
   blast radius documented in code: allow-listed modules still run import-time code — the
   auth token remains the real trust boundary.
-### 2026-07-02 Daily-loss breaker is UTC-day-scoped; orders table gets a migration (PR #PR)  [accepted]
+### 2026-07-02 Daily-loss breaker is UTC-day-scoped; orders table gets a migration (PR #131)  [accepted]
 - **Choice**: wire `max_daily_loss` to realised PnL **since UTC midnight** via an
   injectable clock, so the breaker resets automatically at the day boundary; add an
   idempotent `orders`-table column migration mirroring `_migrate_fills_tags`.
