@@ -6,7 +6,7 @@ rejected approaches as tombstones.
 
 ---
 
-### 2026-07-02 Bounded uvicorn graceful-shutdown so Ctrl-C quits promptly (PR #PR)  [accepted]
+### 2026-07-02 Bounded uvicorn graceful-shutdown so Ctrl-C quits promptly (PR #145)  [accepted]
 - **Choice**: every uvicorn serve path (`dashboard`, `serve`, `run --serve`,
   `start --serve`) sets `timeout_graceful_shutdown=_SHUTDOWN_GRACE_SECONDS` (3s).
 - **Why**: the dashboard's `/api/events` **SSE** stream is a long-lived request that
