@@ -1225,6 +1225,67 @@ def test_dashboard_default_config_is_paper(
     assert test_client.get("/api/health").json()["mode"] == "paper"
 
 
+def test_dashboard_ignores_a_repo_root_default_manifest(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A stray, secret-bearing ``configs/dashboard.yaml`` in the repo root is ignored.
+
+    Proves the suite's hermeticity fixture (``trading_bot/tests/conftest.py``): the
+    dashboard default-manifest path is CWD-relative, so a developer's real
+    ``configs/dashboard.yaml`` — here declaring a strategy AND a ``ui.token`` that
+    would enable auth — must NOT be picked up. The autouse fixture runs each test
+    from a temp CWD, so a bare ``dashboard`` reads a fresh empty-paper manifest
+    (no strategies, no auth), not the poison file. We drop the poison into the
+    real repo root (derived from the CLI module's location), then rely on the
+    fixture having already moved the CWD elsewhere.
+    """
+    import pathlib
+
+    import uvicorn
+
+    import trading_bot.interfaces.cli.main as cli_main
+
+    # The repo root is three parents up from trading_bot/interfaces/cli/main.py.
+    repo_root = pathlib.Path(cli_main.__file__).resolve().parents[3]
+    configs = repo_root / "configs"
+    poison = configs / "dashboard.yaml"
+    preexisting_dir = configs.is_dir()
+    preexisting_file = poison.is_file()
+    if preexisting_file:  # never clobber a real developer manifest
+        pytest.skip("a real configs/dashboard.yaml exists; refusing to touch it")
+
+    captured: dict[str, object] = {}
+    monkeypatch.setattr(uvicorn, "run", lambda app, **kw: captured.update(app=app))
+
+    configs.mkdir(exist_ok=True)
+    try:
+        poison.write_text(
+            "mode: paper\n"
+            "ui:\n"
+            "  token: poison-token-would-enable-auth\n"
+            "strategies:\n"
+            "  - name: poison-strategy\n"
+            "    symbol: BTC/USD\n"
+            "    data: {exchange: kraken, span: 60}\n"
+            "    signal: {ref: ma_crossover, params: {fast: 3, slow: 6}}\n"
+            "    reference_qty: '2'\n"
+            "    lookback: 6\n"
+        )
+        result = runner.invoke(cli_app, ["dashboard"])
+    finally:
+        poison.unlink(missing_ok=True)
+        if not preexisting_dir:
+            configs.rmdir()
+
+    assert result.exit_code == 0, result.output
+    client = TestClient(captured["app"])
+    # Auth is OFF (the poison's ui.token was never read) — /api/health is open.
+    health = client.get("/api/health")
+    assert health.status_code == 200
+    # And the fresh empty-paper manifest declares no strategies (not the poison's).
+    assert client.get("/api/strategies").json() == []
+
+
 def _write_ui_manifest(tmp_path, ui: dict) -> str:  # noqa: ANN001
     """A minimal paper manifest carrying a ``ui:`` section, as a file path str."""
     from trading_bot.application.config import AppConfig
