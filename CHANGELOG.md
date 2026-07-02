@@ -10,6 +10,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+### Fixed
+
+### Deprecated
+
+### Removed
+
+## [0.10.0] - 2026-07-02
+
+### Added
+
+### Changed
+
 - **Tooling, CI & packaging hygiene.** CI now runs `ruff format --check` + `mypy` + `interrogate` alongside `ruff check`/pytest, with SHA-pinned actions; the tree is `ruff format`-clean; pytest polices warnings (`filterwarnings=error`) and pins the asyncio loop scope; dead `MANIFEST.in` directive, unused `interrogate` wiring and a doc install-extra inconsistency fixed; a flaky wall-clock daemon test made deterministic (audit T-5/T-6/T-7/T-8/T-9/T-10/T-11/G-13). (#152)
 
 ### Fixed
