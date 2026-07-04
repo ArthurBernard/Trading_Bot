@@ -6,6 +6,35 @@ rejected approaches as tombstones.
 
 ---
 
+### 2026-07-04 Display-only rounding, exact value on hover (PR #160)  [accepted]
+- **Choice**: a single dependency-free `static/format.js` (the `tbFmt` namespace)
+  owns every display transform — grouped/rounded money by quote currency
+  (`moneyCell`), trimmed quantities by base asset (`qtyCell`), adaptive-precision
+  prices (`priceCell`), max-drawdown as `%` (`pctCell`) and fixed-precision ratios
+  (`ratioCell`). Every `*Cell()` helper returns a `<span title="<exact raw> <unit>">`
+  fragment: the rounded text is what an operator reads, the exact string the API
+  sent is one hover away, and a mixed-quote aggregate row (`quote: null`) renders
+  with no suffix and `title="mixed quote currencies"` instead of a wrong single
+  label. `base.html`'s existing `fmtMoney`/`fmtNum` become thin wrappers over
+  `tbFmt` (back-compat only); every page's own rendering migrated to the `*Cell()`
+  helpers directly, deriving unit context client-side by splitting an
+  `instrument` string (`"BASE/QUOTE"`) or reading leaf 01's `quote`/`span`.
+- **Why**: the dashboard's raw, unrounded Decimal strings were unreadable
+  (`fmtMoney` passed them through verbatim, no thousands grouping, no currency),
+  but the non-negotiable invariant is that rounding must never touch
+  money-exactness — the API keeps serving exact Decimal strings, and no
+  formatted value is ever parsed back into a computation. A tooltip is the
+  cheapest way to keep the exact value one interaction away without cluttering
+  every cell, and a single namespace applied identically across all five unified
+  pages *and* the legacy single-engine dashboard avoids five slightly-different
+  ad hoc formatters drifting apart.
+- **Rejected alternatives**: embedding the currency directly in the number text
+  (e.g. `"$1,234.56"`) — crypto quote currencies (`USDT`, `USD`, …) are not valid
+  `Intl.NumberFormat` currency codes and a hardcoded `$` would lie for non-USD
+  pairs; a server-side rounding pass — would need a second "exact" field
+  round-tripped anyway to satisfy the tooltip invariant, for no real benefit over
+  formatting once, client-side, from the value already on the page.
+
 ### 2026-07-04 Dashboard read-API: scheduler-agnostic health hook + server-tagged SSE (PR #157)  [accepted]
 - **Choice**: `create_dashboard_app` accepts an optional `schedule_info: Callable[[],
   dict] | None` hook, stored on `app.state` and read by `/api/health` under a

@@ -97,7 +97,8 @@
   // managed strategies grouped by exchange, and (unless the dashboard is read-only)
   // lets you start/stop them and switch mode. Switching to LIVE opens a typed
   // confirmation that maps to {confirm:true}. Dependency-free vanilla JS; reuses
-  // base.html's api()/escapeHtml()/toast()/connect() and the TB_READ_ONLY flag.
+  // base.html's api()/escapeHtml()/toast()/connect() and the TB_READ_ONLY flag,
+  // plus format.js's tbFmt.moneyCell() for the row's quote-labelled PnL.
 
   const MODES = ['paper', 'testnet', 'live'];
   const PHRASE = 'I UNDERSTAND';
@@ -146,7 +147,7 @@
       const remove = '<button data-name="' + escapeHtml(s.name) + '" data-act="remove" class="btn-stop" title="Remove deployment">Remove</button>';
       action = toggle + ' ' + remove;
     }
-    const pnl = s.realised_pnl == null ? '<span class="muted">—</span>' : escapeHtml(s.realised_pnl);
+    const pnl = tbFmt.moneyCell(s.realised_pnl, { quote: s.quote });
     return '<tr>' +
       '<td>' + escapeHtml(s.name) + '</td>' +
       '<td>' + escapeHtml(s.kind) + '</td>' +

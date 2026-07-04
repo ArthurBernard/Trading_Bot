@@ -7,11 +7,13 @@
 // has no mutation path — the dashboard can only observe the engine.
 //
 // Money rule: every money field arrives from the API as an exact Decimal STRING
-// (the API stringifies Decimals precisely; JSON has no decimal type). This JS
-// renders those strings VERBATIM and never parseFloat()s a money field — doing
-// so would reintroduce the binary-float rounding the API took care to avoid.
+// (the API stringifies Decimals precisely; JSON has no decimal type). Display
+// formatting is handed to format.js's `tbFmt` namespace (loaded before this
+// file): figures are rounded + thousands-grouped for readability, but the exact
+// string the API sent always survives in a `title` tooltip and is NEVER parsed
+// back into a computation — display rounding never touches money-exactness.
 // The KPI ratios (Sharpe/Sortino/…) are statistical estimators, not money, so
-// they come back as JSON numbers and are shown as-is.
+// they come back as JSON numbers and are formatted (not re-derived) likewise.
 
 (function () {
   "use strict";
@@ -31,18 +33,6 @@
         "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
       }[c];
     });
-  }
-
-  // Render a money STRING verbatim (no numeric parsing). A null optional shows
-  // as an em dash.
-  function money(value) {
-    return value === null || value === undefined ? "—" : esc(value);
-  }
-
-  // A KPI ratio is a plain JSON number — show a few significant digits.
-  function ratio(value) {
-    if (value === null || value === undefined || isNaN(value)) return "—";
-    return Number(value).toFixed(4);
   }
 
   function setConn(state, label) {
@@ -70,12 +60,13 @@
       return;
     }
     body.innerHTML = rows.map(function (p) {
+      var unit = tbFmt.splitInstrument(p.instrument);
       return "<tr>" +
         "<td>" + esc(p.instrument) + "</td>" +
-        '<td class="num">' + money(p.net_qty) + "</td>" +
-        '<td class="num">' + money(p.avg_entry_price) + "</td>" +
-        '<td class="num">' + money(p.realised_pnl) + "</td>" +
-        '<td class="num">' + money(p.fees_paid) + "</td>" +
+        '<td class="num">' + tbFmt.qtyCell(p.net_qty, { base: unit.base }) + "</td>" +
+        '<td class="num">' + tbFmt.priceCell(p.avg_entry_price, { quote: unit.quote }) + "</td>" +
+        '<td class="num">' + tbFmt.moneyCell(p.realised_pnl, { quote: unit.quote }) + "</td>" +
+        '<td class="num">' + tbFmt.moneyCell(p.fees_paid, { quote: unit.quote }) + "</td>" +
         "</tr>";
     }).join("");
   }
@@ -88,14 +79,15 @@
       return;
     }
     body.innerHTML = rows.map(function (o) {
+      var unit = tbFmt.splitInstrument(o.instrument);
       return "<tr>" +
         "<td>" + esc(o.client_order_id) + "</td>" +
         "<td>" + esc(o.instrument) + "</td>" +
         '<td class="side-' + esc(o.side) + '">' + esc(o.side) + "</td>" +
         "<td>" + esc(o.type) + "</td>" +
-        '<td class="num">' + money(o.qty) + "</td>" +
-        '<td class="num">' + money(o.limit_price) + "</td>" +
-        '<td class="num">' + money(o.filled_qty) + "</td>" +
+        '<td class="num">' + tbFmt.qtyCell(o.qty, { base: unit.base }) + "</td>" +
+        '<td class="num">' + tbFmt.priceCell(o.limit_price, { quote: unit.quote }) + "</td>" +
+        '<td class="num">' + tbFmt.qtyCell(o.filled_qty, { base: unit.base }) + "</td>" +
         "<td>" + esc(o.status) + "</td>" +
         "</tr>";
     }).join("");
@@ -104,14 +96,17 @@
   function renderKpi(kpi) {
     var body = el("kpi-body");
     if (!body) return;
+    // No quote is known at this (single-engine, cross-instrument) KPI level, so
+    // the money cells carry no unit suffix — the exact value still survives in
+    // the title tooltip via tbFmt.moneyCell().
     var rows = [
-      ["Realised PnL", money(kpi.realised_pnl)],
-      ["Fees paid", money(kpi.fees_paid)],
-      ["Equity end", money(kpi.equity_end)],
-      ["Sharpe", ratio(kpi.sharpe)],
-      ["Sortino", ratio(kpi.sortino)],
-      ["Max drawdown", ratio(kpi.max_drawdown)],
-      ["Calmar", ratio(kpi.calmar)]
+      ["Realised PnL", tbFmt.moneyCell(kpi.realised_pnl)],
+      ["Fees paid", tbFmt.moneyCell(kpi.fees_paid)],
+      ["Equity end", tbFmt.moneyCell(kpi.equity_end)],
+      ["Sharpe", tbFmt.ratioCell(kpi.sharpe)],
+      ["Sortino", tbFmt.ratioCell(kpi.sortino)],
+      ["Max drawdown (%)", tbFmt.pctCell(kpi.max_drawdown)],
+      ["Calmar", tbFmt.ratioCell(kpi.calmar)]
     ];
     body.innerHTML = rows.map(function (r) {
       return "<tr><th>" + esc(r[0]) + '</th><td class="num">' + r[1] + "</td></tr>";

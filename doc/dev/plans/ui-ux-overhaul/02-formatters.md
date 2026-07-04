@@ -1,12 +1,12 @@
 ---
 plan: ui-ux-overhaul/02-formatters
 kind: leaf
-status: planned
+status: done
 complexity: medium
 depends: [01]
 parallel: false
 branch: feat/ui-formatters
-pr: ""
+pr: "https://github.com/ArthurBernard/Trading_Bot/pull/160"
 ---
 
 # Leaf 02 — Shared display formatters: rounding, units, currency

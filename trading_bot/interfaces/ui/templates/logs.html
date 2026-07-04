@@ -29,8 +29,9 @@
   // Each order/fill/log event the dashboard fans in from every running unit's bus
   // is appended as a compact, timestamped line, with a bounded recent-history
   // buffer so the feed never grows unbounded. Dependency-free vanilla JS; reuses
-  // base.html's connect()/escapeHtml()/fmtMoney(). Money stays an EXACT Decimal
-  // string (rendered verbatim; never parseFloat'd).
+  // base.html's connect()/escapeHtml()/fmtDate() and format.js's tbFmt.*Cell()
+  // helpers. Money stays an EXACT Decimal string; Number() is used only for the
+  // rounded DISPLAY text — the exact string always survives in a title tooltip.
 
   // Cap the on-screen history so a long-running session cannot grow the DOM
   // unbounded (dccd keeps a small rolling buffer likewise).
@@ -45,25 +46,27 @@
     if (ev.type === 'fill') {
       var f = ev.fill;
       var sideCls = f.side === 'buy' ? 'side-buy' : 'side-sell';
+      var funit = tbFmt.splitInstrument(f.instrument);
       return '<div class="log-line log-fill">' +
         '<span class="log-ts">' + escapeHtml(now) + '</span>' +
         '<span class="log-tag tag-fill">FILL</span>' +
         '<span class="log-msg">' +
           '<span class="' + sideCls + '">' + escapeHtml(f.side) + '</span> ' +
-          fmtMoney(f.qty) + ' ' + escapeHtml(f.instrument) +
-          ' @ ' + fmtMoney(f.price) +
-          ' <span class="muted">(fee ' + fmtMoney(f.fee) + ')</span>' +
+          tbFmt.qtyCell(f.qty, { base: funit.base }) + ' ' + escapeHtml(f.instrument) +
+          ' @ ' + tbFmt.priceCell(f.price, { quote: funit.quote }) +
+          ' <span class="muted">(fee ' + tbFmt.moneyCell(f.fee, { quote: funit.quote }) + ')</span>' +
         '</span></div>';
     }
     if (ev.type === 'order') {
       var o = ev.order;
       var sc = o.side === 'buy' ? 'side-buy' : 'side-sell';
+      var ounit = tbFmt.splitInstrument(o.instrument);
       return '<div class="log-line log-order">' +
         '<span class="log-ts">' + escapeHtml(now) + '</span>' +
         '<span class="log-tag tag-order">ORDER</span>' +
         '<span class="log-msg">' +
           '<span class="' + sc + '">' + escapeHtml(o.side) + '</span> ' +
-          fmtMoney(o.qty) + ' ' + escapeHtml(o.instrument) +
+          tbFmt.qtyCell(o.qty, { base: ounit.base }) + ' ' + escapeHtml(o.instrument) +
           ' <span class="muted">[' + escapeHtml(o.status) + ']</span>' +
         '</span></div>';
     }

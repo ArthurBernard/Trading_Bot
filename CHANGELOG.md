@@ -18,6 +18,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Dashboard display formatting.** A new dependency-free `static/format.js`
+  (`tbFmt` namespace) rounds, thousands-groups and unit-labels every figure on
+  every page (money by quote currency, quantities by base asset, max-drawdown as
+  a `%`, ratios fixed-precision) while the exact Decimal string the API sent
+  always survives in a `title` tooltip; applied across Overview / Strategies /
+  Orders / PnL / Logs and the legacy single-engine dashboard (ui-ux-overhaul
+  leaf 02).
+
 ### Fixed
 
 ### Deprecated

@@ -99,6 +99,9 @@
             box-shadow:inset 0 1px 0 var(--panel-hi), 0 1px 2px rgba(0,0,0,.35); }
     .row { display:flex; gap:.5rem; align-items:center; flex-wrap:wrap; }
     .muted { color:var(--muted); }
+    /* The muted unit suffix format.js's tbFmt.*Cell() helpers append to a
+       formatted figure (e.g. quote currency, base asset, "%"). */
+    .unit { color:var(--muted); font-size:.85em; margin-left:.18em; }
     .ok { color:var(--ok); } .err { color:var(--err); }
     /* Tables — a horizontally-scrollable wrapper keeps wide tables from pushing
        the page wide on a narrow viewport. */
@@ -253,6 +256,7 @@
     <a href="https://github.com/ArthurBernard/Trading_Bot">GitHub</a>
   </footer>
   <div id="toast-root"></div>
+  <script src="/static/format.js"></script>
   <script>
     // Shared vanilla helpers used across every page — no JS framework. The
     // read_only flag is surfaced so pages can hide/disable control affordances.
@@ -274,19 +278,15 @@
       return data;
     }
 
-    // Format a number with thousands separators (no scientific notation),
-    // trimming needless decimals — e.g. 1000 -> "1,000", 42153.7 -> "42,153.7".
+    // Back-compat thin wrappers over format.js's tbFmt namespace — kept so
+    // nothing silently breaks mid-migration, but every page's own rendering
+    // code now calls tbFmt.*Cell() directly (rounded, unit-labelled, exact
+    // value on hover). These two stay plain-text (no tooltip, no unit).
     function fmtNum(n) {
-      if (n == null || isNaN(n)) return '—';
-      return Number(n).toLocaleString('en-US', { maximumFractionDigits: 8 });
+      return tbFmt.qty(n, { maxDp: 8 });
     }
-    // Render a money value verbatim. The API sends money as EXACT Decimal strings;
-    // never parseFloat a money field (that would reintroduce binary-float error).
-    // A bare number is grouped for readability; a string passes through unchanged.
     function fmtMoney(v) {
-      if (v == null) return '—';
-      if (typeof v === 'number') return fmtNum(v);
-      return String(v);
+      return tbFmt.money(v);
     }
     // Format a ms epoch as "YYYY-MM-DD HH:mm" in the browser's local zone.
     function fmtDate(ms) {
