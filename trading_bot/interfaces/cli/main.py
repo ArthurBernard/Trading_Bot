@@ -54,7 +54,7 @@ import signal
 import sys
 from collections.abc import Callable
 from decimal import Decimal
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import polars as pl
 import typer
@@ -774,7 +774,10 @@ async def _run_daemon(
     and **uvicorn owns the signal** (Ctrl-C ends serve, then the daemon tears down);
     headless, the daemon installs its own ``SIGINT``/``SIGTERM`` handlers. Each step
     is idempotent over unchanged data, so a tick that finds nothing to do trades
-    nothing.
+    nothing. The scheduler's cadence (next run time + trigger description) is
+    wired into the served dashboard's ``/api/health`` via a ``schedule_info``
+    hook — the plain ``dashboard`` command has no scheduler, so its health always
+    reports ``next_tick_ts``/``tick`` as ``null``.
     """
     from apscheduler.schedulers.asyncio import AsyncIOScheduler
     from apscheduler.triggers.cron import CronTrigger
@@ -801,13 +804,25 @@ async def _run_daemon(
         else IntervalTrigger(seconds=interval)
     )
     scheduler = AsyncIOScheduler()
-    scheduler.add_job(_tick, trigger)
+    job = scheduler.add_job(_tick, trigger)
     scheduler.start()
     _console.print(
         f"[green]daemon started[/green] (mode={config.mode}): "
         f"{len(supervisor.names())} strateg(ies), "
         f"tick={cron or f'every {interval:g}s'}"
     )
+
+    def _schedule_info() -> dict[str, Any]:
+        """The scheduler's cadence, for the dashboard's ``/api/health`` hook.
+
+        ``next_run_time`` is a tz-aware ``datetime`` (or ``None`` between ticks /
+        once exhausted); converted to epoch **ms** for JSON. ``tick`` is the same
+        human trigger description the startup banner above prints.
+        """
+        next_run = job.next_run_time
+        next_tick_ts = int(next_run.timestamp() * 1000) if next_run is not None else None
+        return {"next_tick_ts": next_tick_ts, "tick": cron or f"every {interval:g}s"}
+
     try:
         if serve:
             import uvicorn
@@ -824,8 +839,12 @@ async def _run_daemon(
             # The daemon's --serve dashboard is the single unified dashboard (the
             # same one `trading-bot dashboard` serves) — one code path, one set of
             # gates. The daemon owns the scheduler/lifecycle here, so no on_change
-            # manifest hook is wired (the daemon reads a static config).
-            api = create_dashboard_app(supervisor, auth_token=auth_token)
+            # manifest hook is wired (the daemon reads a static config); the
+            # scheduler cadence IS wired via `schedule_info` (this app owns the
+            # scheduler, unlike the plain `dashboard` command).
+            api = create_dashboard_app(
+                supervisor, auth_token=auth_token, schedule_info=_schedule_info
+            )
             if auth_token:
                 _console.print("[dim]control dashboard auth: token login enabled[/dim]")
             server = uvicorn.Server(

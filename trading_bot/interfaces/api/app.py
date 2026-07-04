@@ -65,6 +65,7 @@ import logging
 import math
 import re
 import secrets
+import time
 from collections.abc import Callable
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any, Literal
@@ -286,6 +287,16 @@ def _event_key(event: Event) -> str | None:
     return None
 
 
+def _epoch_ms() -> int:
+    """The current server time, as integer epoch milliseconds.
+
+    Stamps every SSE frame with a server-side ``ts`` so the Logs page shows *when
+    the server emitted the event*, not the client's receive time (which drifts
+    under latency / reconnects).
+    """
+    return int(time.time() * 1000)
+
+
 # ---------------------------------------------------------------------------
 # Serialization — supervisor aggregate rows -> JSON-ready dicts
 # ---------------------------------------------------------------------------
@@ -338,13 +349,15 @@ def _kpi_row_dict(row: KpiRow) -> dict[str, Any]:
     Money (``realised_pnl`` / ``fees_paid``) as exact Decimal strings; the ratios
     (``sharpe`` / ``sortino`` / ``calmar`` / ``max_drawdown``) as JSON numbers at
     ``level="strategy"`` and JSON ``null`` at the aggregate levels (no combined
-    curve yet).
+    curve yet); ``quote`` is the row's quote currency, or ``null`` when the row
+    folds units that mix quote currencies (the UI renders "mixed").
     """
     return {
         "level": row.level,
         "key": row.key,
         "strategy": row.strategy,
         "exchange": row.exchange,
+        "quote": row.quote,
         "realised_pnl": _money_str(row.realised_pnl),
         "fees_paid": _money_str(row.fees_paid),
         "sharpe": _finite_or_none(row.sharpe),
@@ -641,9 +654,8 @@ def create_app(engine: Engine) -> FastAPI:
                         # queue forever); on timeout, send an SSE heartbeat
                         # comment. Mirrors dccd's /api/events.
                         event = await asyncio.wait_for(queue.get(), timeout=15.0)
-                        yield (
-                            f"data: {json.dumps(_event_dict(event), default=_default)}\n\n"
-                        )
+                        frame = {**_event_dict(event), "ts": _epoch_ms()}
+                        yield f"data: {json.dumps(frame, default=_default)}\n\n"
                     except asyncio.TimeoutError:
                         yield ": heartbeat\n\n"
             finally:
@@ -1104,6 +1116,8 @@ def _status_dict(status: StrategyStatus) -> dict[str, Any]:
         "name": status.name,
         "kind": status.kind,
         "exchange": status.exchange,
+        "span": status.span,
+        "quote": status.quote,
         "mode": status.mode,
         "running": status.running,
         "realised_pnl": (
@@ -1579,6 +1593,7 @@ def create_dashboard_app(
     auth_token: str | None = None,
     read_only: bool = False,
     on_change: Callable[[], None] | None = None,
+    schedule_info: Callable[[], dict[str, Any]] | None = None,
 ) -> FastAPI:
     """Build the **unified dashboard** FastAPI over a :class:`StrategySupervisor`.
 
@@ -1591,7 +1606,8 @@ def create_dashboard_app(
     Every page renders a server-side *shell only* (version + ``read_only`` + auth
     flags); no supervisor data is rendered server-side, so the pages are pure HTTP
     clients of the API. ``GET /api/health`` reports liveness + a snapshot of what
-    the supervisor manages (``{status, mode, strategies, read_only}``).
+    the supervisor manages (``{status, mode, strategies, read_only, next_tick_ts,
+    tick}``).
 
     **Authentication (for remote exposure).** With ``auth_token`` set, the app is
     gated behind the same token login as the control app
@@ -1619,6 +1635,14 @@ def create_dashboard_app(
         manifest to disk (the control plane owns the manifest). ``None`` (default)
         skips persistence — the in-memory supervisor still mutates, nothing is
         written. Typically ``lambda: supervisor.manifest().to_yaml(path)``.
+    schedule_info : Callable[[], dict] or None, optional
+        A hook returning ``{"next_tick_ts": <epoch ms int or None>, "tick": <str
+        or None>}`` — the daemon's scheduler cadence, surfaced on ``/api/health``.
+        Keeps this app **scheduler-agnostic**: only the daemon (``_run_daemon``)
+        has an ``apscheduler`` job to report, so it injects this hook; the plain
+        ``dashboard`` command (no scheduler) passes ``None`` and both fields stay
+        ``null``. The hook is called under a ``try``/``except`` — a raising or
+        absent hook degrades to ``null``/``null``, never breaking health.
 
     Returns
     -------
@@ -1637,6 +1661,7 @@ def create_dashboard_app(
     app.state.read_only = read_only
     app.state.auth_enabled = bool(auth_token)
     app.state.on_change = on_change
+    app.state.schedule_info = schedule_info
 
     def _sup(request: Request) -> StrategySupervisor:
         """Read the wired supervisor off ``app.state`` (explicit, testable access)."""
@@ -1680,13 +1705,33 @@ def create_dashboard_app(
 
     @app.get("/api/health")
     async def health(request: Request) -> dict[str, Any]:
-        """Liveness + a snapshot of what the supervisor manages."""
+        """Liveness + a snapshot of what the supervisor manages.
+
+        ``next_tick_ts`` (epoch ms) / ``tick`` (human trigger description) come
+        from the ``schedule_info`` hook when one was injected (the daemon's
+        cadence); both stay ``null`` with no hook, and a hook that raises
+        degrades to ``null``/``null`` too — health must never 500 because the
+        scheduler hiccuped.
+        """
         sup = _sup(request)
+        next_tick_ts: int | None = None
+        tick: str | None = None
+        hook = request.app.state.schedule_info
+        if hook is not None:
+            try:
+                info = hook() or {}
+                next_tick_ts = info.get("next_tick_ts")
+                tick = info.get("tick")
+            except Exception:  # noqa: BLE001 - health must degrade, never 500
+                next_tick_ts = None
+                tick = None
         return {
             "status": "ok",
             "mode": sup.mode,
             "strategies": len(sup.names()),
             "read_only": request.app.state.read_only,
+            "next_tick_ts": next_tick_ts,
+            "tick": tick,
         }
 
     # -- Positions (aggregated across the units, groupable) ------------------ #
@@ -1837,20 +1882,25 @@ def create_dashboard_app(
         Registers a fresh queue on each running unit's engine
         :class:`~trading_bot.application.events.EventBus` and multiplexes them onto
         a single generator, yielding each event as a ``data: <json>\\n\\n`` frame
-        (money as Decimal strings, tagged with a ``type``). Order and fill events
-        are de-duplicated by their domain id so an execution seen on two buses is
-        emitted once. Every registered queue is unregistered in a ``finally`` on
-        disconnect. Read-only — subscribing observes; it never trades.
+        (money as Decimal strings, tagged with a ``type``, the emitting unit's
+        ``strategy`` name, and a server ``ts`` epoch-ms — the Logs page's
+        attribution + timestamp). Order and fill events are de-duplicated by
+        their domain id so an execution seen on two buses is emitted once. Every
+        registered queue is unregistered in a ``finally`` on disconnect.
+        Read-only — subscribing observes; it never trades.
         """
         sup = _sup(request)
-        # Snapshot the running engines' buses now; the merged stream is over the
-        # set live at connect time (a unit started later is picked up on reconnect,
-        # like the single-engine SSE view).
-        buses = [
-            unit.engine.bus
+        # Snapshot the running units' (name, bus) pairs now; the merged stream is
+        # over the set live at connect time (a unit started later is picked up on
+        # reconnect, like the single-engine SSE view). The name travels alongside
+        # its bus/queue so every frame can be tagged with the emitting strategy.
+        units = [
+            (unit.name, unit.engine.bus)
             for unit in sup._running_units()  # noqa: SLF001 — read the wired buses
             if unit.engine is not None
         ]
+        names = [name for name, _ in units]
+        buses = [bus for _, bus in units]
         queues = [bus.add_queue() for bus in buses]
 
         async def _generator() -> Any:
@@ -1868,8 +1918,11 @@ def create_dashboard_app(
                     if await request.is_disconnected():
                         break
                     # Wait on whichever queue produces first (bounded, so the loop
-                    # periodically re-checks disconnection and heartbeats).
+                    # periodically re-checks disconnection and heartbeats). Rebuilt
+                    # every iteration, so map each fresh getter task back to its
+                    # unit name for the frame tag below.
                     getters = [asyncio.ensure_future(q.get()) for q in queues]
+                    task_name = dict(zip(getters, names, strict=True))
                     done, pending = await asyncio.wait(
                         getters,
                         timeout=15.0,
@@ -1887,9 +1940,12 @@ def create_dashboard_app(
                             continue  # same execution on two buses — emit once.
                         if key is not None:
                             seen.add(key)
-                        yield (
-                            f"data: {json.dumps(_event_dict(event), default=_default)}\n\n"
-                        )
+                        frame = {
+                            **_event_dict(event),
+                            "strategy": task_name[task],
+                            "ts": _epoch_ms(),
+                        }
+                        yield f"data: {json.dumps(frame, default=_default)}\n\n"
             finally:
                 for bus, queue in zip(buses, queues, strict=True):
                     bus.remove_queue(queue)

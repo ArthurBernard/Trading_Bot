@@ -8,6 +8,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Dashboard read-API enrichment.** `/api/strategies` rows and `/api/kpi` rows now
+  carry `span` (bar cadence, seconds) and `quote` (currency; `null` when an
+  aggregate row folds mixed quote currencies); `/api/health` gains `next_tick_ts`
+  / `tick` (the daemon's APScheduler cadence, wired through a new
+  `schedule_info` hook — `null`/`null` outside the daemon); merged SSE frames on
+  `/api/events` are tagged with `strategy` and a server-side `ts` (epoch ms) so
+  the Logs page can attribute and timestamp events (ui-ux-overhaul leaf 01).
+
 ### Changed
 
 ### Fixed
