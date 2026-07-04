@@ -339,6 +339,10 @@ async def test_events_stream_delivers_fill_event_and_removes_queue(
         assert payload["fill"]["price"] == "30000.5"
         assert payload["fill"]["fee"] == "0.3"
         assert payload["fill"]["side"] == "buy"
+        # Tagged with a server-side epoch-ms timestamp (no `strategy` tag here —
+        # this is the single-engine view, one engine, nothing to attribute to).
+        assert isinstance(payload["ts"], int)
+        assert "strategy" not in payload
     finally:
         # Closing the stream (client disconnect) runs the generator's `finally`,
         # which removes the queue from the bus.

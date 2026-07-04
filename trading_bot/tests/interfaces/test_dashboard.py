@@ -110,7 +110,11 @@ def test_active_tab_is_highlighted() -> None:
 
 
 def test_health_shape_and_values() -> None:
-    """`GET /api/health` returns ``{status, mode, strategies, read_only}``."""
+    """`GET /api/health` returns the health shape; `next_tick_ts`/`tick` null by default.
+
+    With no `schedule_info` hook (the plain `dashboard` command has no scheduler),
+    the cadence fields stay `null` — a scheduler-agnostic health payload.
+    """
     resp = _client().get("/api/health")
     assert resp.status_code == 200
     body = resp.json()
@@ -119,7 +123,34 @@ def test_health_shape_and_values() -> None:
         "mode": "paper",
         "strategies": 1,
         "read_only": False,
+        "next_tick_ts": None,
+        "tick": None,
     }
+
+
+def test_health_schedule_info_hook_surfaces_cadence() -> None:
+    """A `schedule_info` hook's `next_tick_ts` / `tick` surface on `/api/health`."""
+    app = create_dashboard_app(
+        _supervisor(),
+        schedule_info=lambda: {"next_tick_ts": 1_700_000_000_000, "tick": "every 60s"},
+    )
+    body = TestClient(app).get("/api/health").json()
+    assert body["next_tick_ts"] == 1_700_000_000_000
+    assert body["tick"] == "every 60s"
+
+
+def test_health_schedule_info_hook_that_raises_degrades_to_nulls() -> None:
+    """A raising `schedule_info` hook never breaks health — it degrades to nulls."""
+
+    def _boom() -> dict[str, object]:
+        raise RuntimeError("scheduler unavailable")
+
+    app = create_dashboard_app(_supervisor(), schedule_info=_boom)
+    resp = TestClient(app).get("/api/health")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["next_tick_ts"] is None
+    assert body["tick"] is None
 
 
 def test_read_only_reflected_everywhere() -> None:
@@ -263,6 +294,7 @@ async def test_kpi_strategy_level_shape() -> None:
     assert row["realised_pnl"] == "8"  # exact Decimal string, not 8.0
     assert row["fees_paid"] == "2"
     assert row["exchange"] == "kraken"
+    assert row["quote"] == "USD"  # from the unit's own symbol (BTC/USD)
     assert isinstance(row["sharpe"], (int, float)) or row["sharpe"] is None
 
 
@@ -274,15 +306,21 @@ async def test_kpi_exchange_level_folds_and_nulls_ratios() -> None:
     assert set(by_venue) == {"kraken", "binance"}
     assert by_venue["kraken"]["realised_pnl"] == "8"
     assert by_venue["kraken"]["sharpe"] is None  # aggregate ratio → null
+    # A single-strategy venue folds to that strategy's own (non-mixed) quote.
+    assert by_venue["kraken"]["quote"] == "USD"
+    assert by_venue["binance"]["quote"] == "USDT"
 
 
 async def test_kpi_total_level_sums() -> None:
-    """`level=total` is one row summing every unit."""
+    """`level=total` is one row summing every unit; a mixed-quote group is null."""
     client = await _seeded_client()
     [total] = client.get("/api/kpi?level=total").json()
     assert total["key"] == "total"
     assert total["realised_pnl"] == "16"
     assert total["fees_paid"] == "4"
+    # btc-kraken trades USD, eth-binance USDT — the folded total mixes quote
+    # currencies, so the UI must render "mixed" rather than a wrong single label.
+    assert total["quote"] is None
 
 
 def test_kpi_unknown_level_is_422() -> None:
@@ -869,6 +907,10 @@ async def test_events_stream_merges_and_yields_a_fill() -> None:
         payload = json.loads(frame[len("data:") :].strip())
         assert payload["type"] == "fill"
         assert payload["fill"]["fill_id"] == "SF1"
+        # Tagged with the emitting unit's name + a server-side epoch-ms timestamp
+        # (the Logs page's attribution + event time, not the client receive time).
+        assert payload["strategy"] == "eth-binance"  # emitted on buses[1]
+        assert isinstance(payload["ts"], int)
     finally:
         await frames.aclose()  # disconnect → generator finally removes every queue
     assert [len(b._queues) for b in buses] == before  # noqa: SLF001
@@ -878,7 +920,12 @@ async def test_events_stream_merges_and_yields_a_fill() -> None:
 
 
 def test_strategies_endpoint_lists_units_with_exchange() -> None:
-    """`GET /api/strategies` lists the managed units, tagged with their exchange."""
+    """`GET /api/strategies` lists the managed units, tagged with their exchange.
+
+    Also carries `span` (the unit's `data.span`, seconds) and `quote` (the part
+    after `/` of its `symbol`) — read from the actually-wired config, not
+    hardcoded (`_config()` declares `data.span: 60` and `symbol: "BTC/USD"`).
+    """
     resp = _client().get("/api/strategies")
     assert resp.status_code == 200
     [s] = resp.json()
@@ -886,6 +933,8 @@ def test_strategies_endpoint_lists_units_with_exchange() -> None:
     assert s["exchange"] == "kraken"  # grouped/displayed by exchange
     assert s["mode"] == "paper"
     assert s["running"] is False
+    assert s["span"] == 60
+    assert s["quote"] == "USD"
 
 
 def test_set_mode_testnet_then_paper() -> None:
@@ -1912,6 +1961,19 @@ def test_start_serve_folds_onto_create_dashboard_app(
     assert "app" in built  # the unified dashboard was built for --serve
     client = TestClient(built["app"])
     assert "Overview" in client.get("/").text  # the unified shell
+
+    # The daemon wires its scheduler cadence into `/api/health` via the
+    # `schedule_info` hook — unlike the plain `dashboard` command (no scheduler).
+    kwargs = built["kwargs"]
+    assert isinstance(kwargs, dict)
+    hook = kwargs["schedule_info"]
+    assert callable(hook)
+    info = hook()
+    assert isinstance(info["next_tick_ts"], int)  # apscheduler already scheduled it
+    assert info["tick"] == "every 0.05s"
+    health = client.get("/api/health").json()
+    assert isinstance(health["next_tick_ts"], int)
+    assert health["tick"] == "every 0.05s"
 
 
 # --- web hardening (audit wave 3: I-4, I-6, I-7, I-9, I-10, I-11, I-13) ----- #

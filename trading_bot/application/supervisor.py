@@ -105,6 +105,15 @@ class StrategyStatus:
         The venue this strategy is for (a single-instrument strategy's
         ``data.exchange``; a portfolio's ``venue``) — the key the dashboard groups
         by, and the broker the unit uses on testnet/live.
+    span : int
+        The unit's bar width in **seconds** (its ``data.span``) — the evaluation
+        cadence the dashboard shows next to the strategy. ``0`` when the entry
+        declares no data source (the runner supplies a feed by other means).
+    quote : str or None
+        The quote currency the unit trades in: a single-instrument strategy's
+        ``symbol``'s part after ``/``; a portfolio's common quote across its
+        ``universe``, or ``None`` when the universe mixes quote currencies (the
+        dashboard then renders "mixed").
     mode : StrategyMode
         Its current deployment mode (``paper`` / ``testnet`` / ``live``).
     running : bool
@@ -120,6 +129,8 @@ class StrategyStatus:
     name: str
     kind: _KIND
     exchange: str
+    span: int
+    quote: str | None
     mode: StrategyMode
     running: bool
     realised_pnl: Money | None
@@ -254,6 +265,11 @@ class KpiRow:
     exchange : str or None
         The venue at ``level`` in ``{"strategy", "exchange"}``; ``None`` for the
         total row.
+    quote : str or None
+        The row's quote currency: the unit's own at ``level="strategy"`` (see
+        :class:`StrategyStatus`); the single quote common to every folded unit at
+        ``level="exchange"`` / ``"total"``, or ``None`` when the group mixes quote
+        currencies (the dashboard then renders "mixed").
     realised_pnl : Money
         Realised PnL, net of fees, summed over the folded units (exact).
     fees_paid : Money
@@ -269,6 +285,7 @@ class KpiRow:
     key: str
     strategy: str | None
     exchange: str | None
+    quote: str | None
     realised_pnl: Money
     fees_paid: Money
     sharpe: float | None
@@ -796,10 +813,13 @@ class StrategySupervisor:
                 for order in unit.engine.router.tracked_orders().values()
                 if not order.is_terminal
             )
+        entry = _unit_entry(unit)
         return StrategyStatus(
             name=unit.name,
             kind=unit.kind,
             exchange=unit.exchange,
+            span=entry.data.span if entry.data is not None else 0,
+            quote=_entry_quote(entry),
             mode=unit.mode,
             running=unit.running,
             realised_pnl=realised,
@@ -1095,6 +1115,7 @@ class StrategySupervisor:
             key=unit.name,
             strategy=unit.name,
             exchange=unit.exchange,
+            quote=_entry_quote(_unit_entry(unit)),
             realised_pnl=perf.realised_pnl(),
             fees_paid=perf.fees_paid(),
             sharpe=_ratio(perf.sharpe),
@@ -1134,6 +1155,7 @@ class StrategySupervisor:
                     key=venue,
                     strategy=None,
                     exchange=venue,
+                    quote=_common_quote(by_venue[venue]),
                     realised_pnl=pnl[venue],
                     fees_paid=fees[venue],
                     sharpe=sh,
@@ -1164,6 +1186,7 @@ class StrategySupervisor:
                 key="total",
                 strategy=None,
                 exchange=None,
+                quote=_common_quote(units),
                 realised_pnl=total_pnl,
                 fees_paid=total_fees,
                 sharpe=sh,
@@ -1343,6 +1366,52 @@ class StrategySupervisor:
             unrealised += (mark - position.avg_entry_price) * position.net_qty
             marked = True
         return unrealised if marked else None
+
+
+def _unit_entry(unit: _Unit) -> StrategyConfig | PortfolioStrategyConfig:
+    """The single config entry (strategy or portfolio) a unit's sliced config carries.
+
+    :meth:`StrategySupervisor._slice_for` folds the unit's own declared entry into
+    a single-entry :class:`AppConfig` slice (``strategies`` or ``portfolios``
+    holding exactly that one item) — the same entry :meth:`StrategySupervisor.
+    _exchange_of` reads. Reused here for the ``span`` / ``quote`` fields exposed
+    on :class:`StrategyStatus` and :class:`KpiRow`.
+    """
+    if unit.kind == "strategy":
+        return unit.config.strategies[0]
+    return unit.config.portfolios[0]
+
+
+def _entry_quote(entry: StrategyConfig | PortfolioStrategyConfig) -> str | None:
+    """The quote currency of one strategy/portfolio config entry.
+
+    A single-instrument :class:`StrategyConfig`'s quote is the part after ``/``
+    in its ``symbol`` (e.g. ``"USD"`` for ``"BTC/USD"``). A
+    :class:`PortfolioStrategyConfig`'s quote is the common quote across its
+    ``universe`` pairs, or ``None`` when the universe mixes quote currencies (the
+    dashboard then renders "mixed").
+    """
+    # Local import (not at module top): PortfolioStrategyConfig is a
+    # TYPE_CHECKING-only import above; the concrete class is needed at runtime
+    # only for this isinstance dispatch (mirrors `add_unit`'s pattern).
+    from trading_bot.application.config import PortfolioStrategyConfig
+
+    if isinstance(entry, PortfolioStrategyConfig):
+        quotes = {pair.split("/", 1)[1] for pair in entry.universe if "/" in pair}
+        return next(iter(quotes)) if len(quotes) == 1 else None
+    return entry.symbol.split("/", 1)[1] if "/" in entry.symbol else None
+
+
+def _common_quote(units: list[_Unit]) -> str | None:
+    """The quote common to every unit's entry, or ``None`` when the group mixes.
+
+    The KPI aggregate rows' (``level="exchange"`` / ``"total"``) quote: folds
+    :func:`_entry_quote` over every unit in the group and returns it only when
+    every unit agrees; otherwise (or on an empty group) ``None`` — the dashboard
+    then renders "mixed".
+    """
+    quotes = {_entry_quote(_unit_entry(unit)) for unit in units}
+    return next(iter(quotes)) if len(quotes) == 1 else None
 
 
 def _mode_of(config: AppConfig) -> StrategyMode:
