@@ -1,18 +1,16 @@
 #!/usr/bin/env python3
 """PreToolUse(Bash) safety net for `gh pr create`.
 
-If the branch changes structural code under <package_dir>/ (excluding tests and
-the reference-only legacy/ tree) but adds no entry to the decision journal
-(<decisions>), ask the user to confirm before the PR is opened. This is only a
-net — the real capture is the `/finish-task` "décision" step; here we just make
-the omission visible.
+If the branch changes structural code under <package_dir>/ (excluding tests) but
+adds no entry to the decision journal (<decisions>), ask the user to confirm
+before the PR is opened. This is only a net — the real capture is the
+`/finish-task` decision step; here we just make the omission visible.
 
 Emits a PreToolUse "ask" decision (human confirms / overrides) rather than a hard
 deny, so a genuinely decision-free PR isn't deterministically blocked. No-op for
 any command other than `gh pr create`, or if the project doesn't declare both a
 `package_dir` and a `decisions` path in .claude/workflow.json.
 """
-
 from __future__ import annotations
 
 import json
@@ -52,10 +50,7 @@ def main() -> None:
     try:
         changed = subprocess.run(
             ["git", "diff", f"{base}...HEAD", "--name-only"],
-            cwd=ROOT,
-            capture_output=True,
-            text=True,
-            timeout=10,
+            cwd=ROOT, capture_output=True, text=True, timeout=10,
         ).stdout.split()
     except Exception:
         _allow()
@@ -65,7 +60,6 @@ def main() -> None:
         return (
             path.startswith(f"{pkg}/")
             and "/tests/" not in path
-            and not path.startswith(f"{pkg}/legacy/")
             and not name.startswith("test_")
         )
 
@@ -73,21 +67,17 @@ def main() -> None:
     if touched_code and decisions not in changed:
         reason = (
             f"This branch changes structural code under {pkg}/ but adds no entry "
-            f"to {decisions}. Capture the *why* (the /finish-task 'décision' step) "
+            f"to {decisions}. Capture the *why* (the /finish-task decision step) "
             f"before opening the PR — or confirm this PR genuinely needs no "
             f"decision entry."
         )
-        print(
-            json.dumps(
-                {
-                    "hookSpecificOutput": {
-                        "hookEventName": "PreToolUse",
-                        "permissionDecision": "ask",
-                        "permissionDecisionReason": reason,
-                    }
-                }
-            )
-        )
+        print(json.dumps({
+            "hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "permissionDecision": "ask",
+                "permissionDecisionReason": reason,
+            }
+        }))
         sys.exit(0)
 
     _allow()
