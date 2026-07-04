@@ -62,6 +62,33 @@ fully remediated** — only pure Info observations remain in `doc/dev/audit/`.
 > WS (re)connect, and fills are de-duplicated by id. Validated **read-only** against
 > real Kraken (no order sent). See `03-decisions.md`.
 
+## Next epic — E12: Interactive Brokers adapter (multi-asset execution)
+
+Filed 2026-07-04, driven by fynance-research's non-crypto direction: trade more
+assets, in particular ETF/equities/FX — and IBKR is the venue that opens them. The
+`Broker` port fits **as-is** (async `Protocol`, capability-gated, domain types); the
+real work is operational and domain, not the port.
+
+- [ ] **Gateway ops.** The TWS API is a stateful socket to a local Java process
+  (TWS / IB Gateway) with interactive 2FA login and daily/weekly restarts — the
+  adapter sits on **`ib_async`** (the maintained `ib_insync` fork, asyncio-native)
+  and does NOT use `trading_bot.transport` (which assumes stateless REST + API
+  keys; the port doc already allows this). Deploy IB Gateway headless in Docker
+  (`gnzsnz/ib-gateway` + IBC auto-login/restart). *(A retail OAuth Web API has been
+  rolling out since ~2024–25 — re-check at build time; `ib_async` remains the
+  mature path.)*
+- [ ] **Adapter, paper first.** Paper account (Gateway port 4002); all six port
+  methods map one-to-one onto TWS calls. `ib_async` speaks *float* — exact
+  `Decimal` conversion at the boundary is part of the adapter's contract.
+  Slice 1 can be **crypto-only via Paxos** (`BTC/USD` maps onto the existing
+  `Symbol` as-is) to land gateway + adapter plumbing before any domain change.
+- [ ] **`Instrument` extension.** IBKR trades *contracts* — `secType`
+  (STK/CASH/FUT/…), `conId`, exchange, currency, expiry — while the domain
+  `Symbol` is a crypto pair. Extend `Instrument` for at least STK + CASH (the
+  ETF/FX slice fynance-research targets); market-data subscriptions (paid, per
+  exchange, shared with paper) are only needed for live intraday — delayed is
+  enough for the paper loop.
+
 ## Open / deferred (maintainer decisions)
 
 - [ ] **Real-key live enablement.** Validate Kraken private endpoints + venue-level
