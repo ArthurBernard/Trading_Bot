@@ -47,6 +47,10 @@ fully remediated** — only pure Info observations remain in `doc/dev/audit/`.
 
 ## Known issues / follow-ups
 
+- [ ] **Dashboard UX overhaul** — readable numbers (display rounding, units,
+  currency), visible evaluation cadence (next tick / next bar close), positions
+  grouped by strategy, table/feed polish. Plan tree:
+  [`plans/ui-ux-overhaul/`](plans/ui-ux-overhaul/00-plan.md).
 - [ ] **Binance futures/margin testnet adapter (for a faithful long/short testnet
   live-test).** The `BinanceBroker` is **spot** (`/api/v3`), and the Binance testnet
   it reaches (`testnet.binance.vision`) is spot-only — it **cannot short**.
