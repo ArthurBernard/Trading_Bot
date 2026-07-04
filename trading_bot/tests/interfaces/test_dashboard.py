@@ -15,6 +15,10 @@ non-loopback ``--host`` without a token is refused — mirroring the ``serve`` t
 
 from __future__ import annotations
 
+# Built-in
+import time
+
+# Third-party
 import pytest
 from fastapi.testclient import TestClient
 from typer.testing import CliRunner
@@ -2001,7 +2005,13 @@ def test_session_and_rate_maps_are_pruned() -> None:
     old_ns = 0  # epoch — far past any TTL cutoff
     app.state.sessions = {sid: old_ns for sid in app.state.sessions}
     stale_key = next(iter(app.state.login_buckets))
-    app.state.login_buckets[stale_key] = (float(appmod._LOGIN_RATE_PER_MIN), 0.0)
+    # `time.monotonic()` counts machine uptime, not wall clock — backdate relative
+    # to "now" (not to epoch 0) so the bucket is stale even on a freshly booted VM.
+    stale_last_seen = time.monotonic() - appmod._RATE_BUCKET_TTL_SECONDS - 1
+    app.state.login_buckets[stale_key] = (
+        float(appmod._LOGIN_RATE_PER_MIN),
+        stale_last_seen,
+    )
 
     # Any auth check runs the prune sweep (session gone → 401; bucket swept).
     assert client.get("/api/health").status_code == 401

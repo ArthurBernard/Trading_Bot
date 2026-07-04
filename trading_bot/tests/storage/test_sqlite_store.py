@@ -428,9 +428,11 @@ def test_migration_adds_columns_and_backfills_existing_rows(tmp_path) -> None:
 
     # The columns really exist on the table now (idempotent second open is fine).
     reopened = SqliteStore(db)
-    cols = {
-        row[1] for row in sqlite3.connect(str(db)).execute("PRAGMA table_info(fills)")
-    }
+    raw = sqlite3.connect(str(db))
+    try:
+        cols = {row[1] for row in raw.execute("PRAGMA table_info(fills)")}
+    finally:
+        raw.close()
     assert {"mode", "venue"} <= cols
     # New fills on the migrated store are tagged normally.
     reopened.set_context(mode="testnet", venue="binance")
@@ -536,9 +538,11 @@ def test_orders_migration_upgrades_old_schema_and_upsert_succeeds(tmp_path) -> N
     assert got.qty == money("2")
 
     # The columns really exist on the table now.
-    cols = {
-        row[1] for row in sqlite3.connect(str(db)).execute("PRAGMA table_info(orders)")
-    }
+    raw = sqlite3.connect(str(db))
+    try:
+        cols = {row[1] for row in raw.execute("PRAGMA table_info(orders)")}
+    finally:
+        raw.close()
     assert {"ts", "reject_reason", "fill_tolerance"} <= cols
 
 
@@ -909,11 +913,15 @@ def test_fills_pk_migration_upgrades_old_single_pk_db(tmp_path) -> None:
     }
 
     # The table's declared PK is the composite one.
-    pk_cols = {
-        row[1]
-        for row in sqlite3.connect(str(db)).execute("PRAGMA table_info(fills)")
-        if row[5]  # the `pk` flag column
-    }
+    raw = sqlite3.connect(str(db))
+    try:
+        pk_cols = {
+            row[1]
+            for row in raw.execute("PRAGMA table_info(fills)")
+            if row[5]  # the `pk` flag column
+        }
+    finally:
+        raw.close()
     assert pk_cols == {"fill_id", "venue", "mode"}
 
 
