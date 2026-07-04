@@ -25,6 +25,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   always survives in a `title` tooltip; applied across Overview / Strategies /
   Orders / PnL / Logs and the legacy single-engine dashboard (ui-ux-overhaul
   leaf 02).
+- **Overview: positions by strategy + summary strip.** Positions now group by
+  strategy by default (dropping the redundant Strategy column from both header
+  and rows in that view), the group-by and KPI-level choices persist across
+  reloads (`localStorage`), and a summary strip above the KPI card shows
+  running/total strategies, open orders, total realised PnL (server-exact, no
+  client-side math) and the next scheduled tick (ui-ux-overhaul leaf 03).
 
 ### Fixed
 

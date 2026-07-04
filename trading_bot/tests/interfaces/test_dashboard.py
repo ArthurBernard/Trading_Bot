@@ -865,7 +865,20 @@ def test_overview_page_has_kpi_strip_and_tables() -> None:
     assert 'id="positions-table"' in html
     assert "pos-group" in html  # the group-by control
     assert 'data-group="crypto"' in html and 'data-group="exchange"' in html
+    # The "By strategy" grouping is present and the default (ui-ux leaf 03).
+    assert 'data-group="strategy"' in html
+    assert 'class="btn pos-group is-active" data-group="strategy"' in html
     assert 'id="orders-table"' in html
+    # The summary strip (running/total strategies, open orders, total PnL, next
+    # tick) sits above the KPI card.
+    assert 'id="summary-strip"' in html
+    assert 'id="sum-running"' in html and 'id="sum-total"' in html
+    assert 'id="sum-open-orders"' in html
+    assert 'id="sum-pnl"' in html
+    assert 'id="sum-next-tick"' in html
+    # View preferences persist across reloads.
+    assert "tb.overview.posGroup" in html
+    assert "tb.overview.kpiLevel" in html
     # It wires the merged SSE stream + polling fallback.
     assert "/api/events" in html
     assert "/api/positions" in html

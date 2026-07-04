@@ -1,7 +1,7 @@
 ---
 plan: ui-ux-overhaul/03-overview-groups
 kind: leaf
-status: planned
+status: done
 complexity: low
 depends: [02]
 parallel: false
