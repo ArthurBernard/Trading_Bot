@@ -1,7 +1,7 @@
 ---
 plan: ui-ux-overhaul
 kind: global
-status: planning
+status: executing
 roadmap: "**Dashboard UX overhaul** — readable numbers (display rounding, units, currency), visible evaluation cadence (next tick / next bar close), positions grouped by strategy, table/feed polish."
 release_on_done: false
 ---
@@ -53,7 +53,7 @@ ever parsed back into a computation.
 
 ## Leaf checklist
 
-- [ ] 01 api-read-model — feat/ui-api-read-model — medium
+- [x] 01 api-read-model — feat/ui-api-read-model — medium
 - [ ] 02 formatters — feat/ui-formatters — medium
 - [ ] 03 overview-groups — feat/ui-overview-groups — low
 - [ ] 04 cadence — feat/ui-cadence — medium

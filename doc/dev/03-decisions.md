@@ -6,6 +6,28 @@ rejected approaches as tombstones.
 
 ---
 
+### 2026-07-04 Dashboard read-API: scheduler-agnostic health hook + server-tagged SSE (PR #157)  [accepted]
+- **Choice**: `create_dashboard_app` accepts an optional `schedule_info: Callable[[],
+  dict] | None` hook, stored on `app.state` and read by `/api/health` under a
+  try/except (a raising or absent hook degrades to `next_tick_ts`/`tick` = `null`,
+  never a 500). Only `_run_daemon` (the `--serve`/daemon path, which owns an
+  `apscheduler` job) injects it; the plain `dashboard` command passes nothing. The
+  merged `/api/events` SSE handler now tags every frame with the emitting unit's
+  `strategy` name and a server-computed `ts` (epoch ms) — both derived inside the
+  handler, not trusted from the client.
+- **Why**: the dashboard app (`create_dashboard_app`) is used by both `dashboard`
+  (no scheduler) and the daemon's `--serve` (an `apscheduler.AsyncIOScheduler`);
+  threading a scheduler dependency into the factory itself would make the plain
+  command carry dead scheduler wiring. A hook keeps the app scheduler-agnostic and
+  the daemon the single owner of "what the next tick is". Tagging SSE frames
+  server-side (not asking the client to guess `strategy` from context, and not
+  trusting a client-supplied timestamp) is what lets the Logs page (a later leaf)
+  attribute and order events correctly across a merged, multi-unit stream.
+- **Rejected alternatives**: passing the `AsyncIOScheduler`/job object itself into
+  `create_dashboard_app` — leaks an implementation detail (apscheduler) into the API
+  layer and couples it to a scheduler library the plain `dashboard` command has no
+  use for.
+
 ### 2026-07-02 Tooling/CI parity + format-the-tree (PR #152)  [accepted]
 - **Choice**: CI runs `ruff check` + `ruff format --check` + `mypy` + `interrogate`
   + pytest (actions SHA-pinned); pre-commit mirrors it; ruff pinned to a fixed

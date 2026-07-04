@@ -1,12 +1,12 @@
 ---
 plan: ui-ux-overhaul/01-api-read-model
 kind: leaf
-status: planned
+status: done
 complexity: medium
 depends: []
 parallel: false
 branch: feat/ui-api-read-model
-pr: ""
+pr: "https://github.com/ArthurBernard/Trading_Bot/pull/157"
 ---
 
 # Leaf 01 — API read-model enrichment (backend only, no visual change)
