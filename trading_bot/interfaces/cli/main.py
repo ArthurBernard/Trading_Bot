@@ -820,7 +820,9 @@ async def _run_daemon(
         human trigger description the startup banner above prints.
         """
         next_run = job.next_run_time
-        next_tick_ts = int(next_run.timestamp() * 1000) if next_run is not None else None
+        next_tick_ts = (
+            int(next_run.timestamp() * 1000) if next_run is not None else None
+        )
         return {"next_tick_ts": next_tick_ts, "tick": cron or f"every {interval:g}s"}
 
     try:
