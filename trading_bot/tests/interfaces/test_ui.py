@@ -143,8 +143,13 @@ def test_dashboard_is_a_shell_no_engine_money_baked_in(client: TestClient) -> No
     The seeded engine holds a 0.1 BTC buy at 30000; those values must NOT appear
     in the served HTML (they only arrive client-side over ``/api/*``). Proves the
     page is not a server-rendered data dump.
+
+    The version badge (``f"v{__version__}"``) legitimately appears in the shell
+    and its digits can collide with the money substrings being guarded against
+    (e.g. version ``0.10.0`` contains ``"0.1"``), so it is stripped out first to
+    keep the assertions version-proof without weakening the guard's intent.
     """
-    html = client.get("/").text
+    html = client.get("/").text.replace(f"v{__version__}", "")
     assert "30000" not in html
     assert "0.1" not in html
     assert "31000" not in html
