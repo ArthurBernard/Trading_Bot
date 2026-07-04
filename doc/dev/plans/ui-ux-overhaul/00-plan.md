@@ -55,7 +55,7 @@ ever parsed back into a computation.
 
 - [x] 01 api-read-model — feat/ui-api-read-model — medium
 - [x] 02 formatters — feat/ui-formatters — medium
-- [ ] 03 overview-groups — feat/ui-overview-groups — low
+- [x] 03 overview-groups — feat/ui-overview-groups — low
 - [ ] 04 cadence — feat/ui-cadence — medium
 - [ ] 05 tables-polish — feat/ui-tables-polish — medium
 
