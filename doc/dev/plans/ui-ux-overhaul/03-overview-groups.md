@@ -6,7 +6,7 @@ complexity: low
 depends: [02]
 parallel: false
 branch: feat/ui-overview-groups
-pr: ""
+pr: "https://github.com/ArthurBernard/Trading_Bot/pull/161"
 ---
 
 # Leaf 03 — Overview: positions by strategy + summary strip
