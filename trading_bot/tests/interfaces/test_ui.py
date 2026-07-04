@@ -165,6 +165,30 @@ def test_app_js_serves_as_javascript(client: TestClient) -> None:
     assert "javascript" in resp.headers["content-type"]
 
 
+def test_format_js_is_loaded_and_served(client: TestClient) -> None:
+    """The legacy shell loads format.js; the static mount serves the `tbFmt` namespace.
+
+    Leaf 02 (ui-ux-overhaul): the single-engine dashboard gets the same display
+    formatters (rounding, units, exact value on hover) as the unified pages.
+    """
+    html = client.get("/").text
+    assert "/static/format.js" in html
+    resp = client.get("/static/format.js")
+    assert resp.status_code == 200
+    assert "javascript" in resp.headers["content-type"]
+    assert "global.tbFmt = {" in resp.text  # the namespace object attached to `window`
+
+
+def test_app_js_uses_the_shared_tbfmt_formatters(client: TestClient) -> None:
+    """``app.js`` renders money/qty/price/ratios through `tbFmt`, not ad hoc helpers."""
+    js = client.get("/static/app.js").text
+    assert "tbFmt.moneyCell" in js
+    assert "tbFmt.qtyCell" in js
+    assert "tbFmt.priceCell" in js
+    assert "tbFmt.ratioCell" in js
+    assert "tbFmt.pctCell" in js
+
+
 def test_style_css_serves_as_css(client: TestClient) -> None:
     """``/static/style.css`` → 200 with a CSS content type."""
     resp = client.get("/static/style.css")

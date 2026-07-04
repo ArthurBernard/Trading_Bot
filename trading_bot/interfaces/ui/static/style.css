@@ -102,6 +102,11 @@ tbody tr:last-child td, tbody tr:last-child th { border-bottom: 0; }
 .side-buy { color: var(--ok); }
 .side-sell { color: var(--err); }
 
+.muted { color: var(--muted); }
+/* The muted unit suffix format.js's tbFmt.*Cell() helpers append to a
+   formatted figure (e.g. quote currency, base asset, "%"). */
+.unit { color: var(--muted); font-size: .85em; margin-left: .18em; }
+
 footer {
   color: var(--muted);
   font-size: .8rem;

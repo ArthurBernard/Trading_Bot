@@ -60,9 +60,11 @@
 <script>
   // PnL page — an interactive equity chart (uPlot) over /api/pnl, with live and
   // testnet drawn as separate colour-coded series. Dependency-free vanilla JS;
-  // reuses base.html's api()/fmtMoney()/escapeHtml()/fmtDate(). Money arrives as
-  // EXACT Decimal strings; Number() is used ONLY for plotting (display), never to
-  // re-render a money figure (fmtMoney keeps the exact string).
+  // reuses base.html's api()/escapeHtml()/fmtDate() and format.js's tbFmt
+  // helpers. Money arrives as EXACT Decimal strings; Number() is used ONLY for
+  // plotting/display (chart tooltip, axis ticks, stats table) — the exact string
+  // always survives in a title tooltip on the stats table, never fed back into a
+  // computation.
 
   // The three deployment modes, colour-coded to match the mode badges
   // (paper=accent/blue, testnet=amber, live=red). The plot order is stable.
@@ -74,11 +76,14 @@
   };
 
   var CURRENT_STRATEGY = null;  // the selected strategy name
+  var CURRENT_QUOTE = null;     // the selected strategy's quote currency, or null
+  var STRATEGIES = [];          // the last /api/strategies list (for quote lookup)
   var chart = null;             // the live uPlot instance (rebuilt on data shape change)
   var HIDDEN = {};              // mode -> true when its series is toggled off
 
   // Plot a money Decimal string as a Number — for the canvas only. This never
-  // feeds back into a displayed money figure (those stay exact via fmtMoney).
+  // feeds back into a computation; the stats table keeps the exact string in
+  // its title tooltip via tbFmt.moneyCell().
   function plotNum(s) {
     if (s == null) return null;
     var n = Number(s);
@@ -129,8 +134,10 @@
         stroke: MODE_COLOR[mode],
         width: 2,
         show: !HIDDEN[mode],
-        // Money is exact; the tooltip value is display-only (Number formatting).
-        value: function (self, v) { return v == null ? '—' : fmtMoney(v); },
+        // Money is exact; the tooltip value is display-only (rounded + grouped,
+        // no unit suffix inside the canvas — the section heading names the
+        // currency instead).
+        value: function (self, v) { return tbFmt.money(v); },
       });
     });
     return series;
@@ -160,12 +167,17 @@
     var opts = {
       width: size.width,
       height: size.height,
-      // A dark, legible axis/grid matching the shell palette.
+      // A dark, legible axis/grid matching the shell palette. The y axis
+      // (equity) reuses tbFmt.money for its tick labels — display-rounded and
+      // thousands-grouped, whole units (the tooltip carries the full precision).
       axes: [
         { stroke: '#8b97a7', grid: { stroke: 'rgba(255,255,255,.06)' },
           ticks: { stroke: 'rgba(255,255,255,.06)' } },
         { stroke: '#8b97a7', grid: { stroke: 'rgba(255,255,255,.06)' },
-          ticks: { stroke: 'rgba(255,255,255,.06)' } },
+          ticks: { stroke: 'rgba(255,255,255,.06)' },
+          values: function (self, ticks) {
+            return ticks.map(function (t) { return tbFmt.money(t, { dp: 0 }); });
+          } },
       ],
       series: buildSeries(modes),
       legend: { show: false },  // we render our own colour-coded legend/toggle
@@ -214,11 +226,20 @@
       return '<tr>' +
         '<td><span class="badge badge-' + escapeHtml(mode) + '">' +
           escapeHtml(mode) + '</span></td>' +
-        '<td class="num">' + fmtMoney(cur.equity) + '</td>' +
-        '<td class="num ' + pnlCls + '">' + fmtMoney(lastPnl) + '</td>' +
-        '<td class="num">' + fmtMoney(cur.unrealised) + '</td>' +
+        '<td class="num">' + tbFmt.moneyCell(cur.equity, { quote: CURRENT_QUOTE }) + '</td>' +
+        '<td class="num ' + pnlCls + '">' +
+          tbFmt.moneyCell(lastPnl, { quote: CURRENT_QUOTE }) + '</td>' +
+        '<td class="num">' + tbFmt.moneyCell(cur.unrealised, { quote: CURRENT_QUOTE }) + '</td>' +
         '</tr>';
     }).join('');
+  }
+
+  // Set the chart heading to name the quote currency when known, e.g.
+  // "Equity over time — USDT" (the canvas/tooltip itself stays unit-free).
+  function renderChartHeading() {
+    var h = document.querySelector('#pnl-chart-card h2');
+    if (!h) return;
+    h.textContent = CURRENT_QUOTE ? 'Equity over time — ' + CURRENT_QUOTE : 'Equity over time';
   }
 
   // Load /api/pnl for the current strategy and (re)draw everything.
@@ -239,12 +260,15 @@
     var modes = MODES.filter(function (m) {
       return payload.series && payload.series[m] && payload.series[m].length;
     });
+    renderChartHeading();
     renderChart(payload, modes);
     renderLegend(modes);
     renderStats(payload, modes);
   }
 
-  // Populate the strategy selector from /api/strategies.
+  // Populate the strategy selector from /api/strategies. Also tracks the
+  // selected strategy's quote currency (leaf 01's `quote` field) so the chart
+  // heading + stats table can label money with it.
   async function loadStrategies() {
     var sel = document.getElementById('pnl-strategy');
     var list;
@@ -257,10 +281,13 @@
     if (!list.length) {
       sel.innerHTML = '<option value="">(no strategies)</option>';
       CURRENT_STRATEGY = null;
+      CURRENT_QUOTE = null;
+      renderChartHeading();
       renderChart({ series: {} }, []);
       renderStats({ series: {} }, []);
       return;
     }
+    STRATEGIES = list;
     var prev = CURRENT_STRATEGY;
     sel.innerHTML = list.map(function (s) {
       return '<option value="' + escapeHtml(s.name) + '">' +
@@ -270,12 +297,20 @@
     var names = list.map(function (s) { return s.name; });
     CURRENT_STRATEGY = (prev && names.indexOf(prev) !== -1) ? prev : names[0];
     sel.value = CURRENT_STRATEGY;
+    CURRENT_QUOTE = quoteOf(CURRENT_STRATEGY);
+  }
+
+  // Look up a strategy's quote currency from the last-loaded /api/strategies list.
+  function quoteOf(name) {
+    var s = STRATEGIES.find(function (s) { return s.name === name; });
+    return (s && s.quote) || null;
   }
 
   document.addEventListener('DOMContentLoaded', function () {
     var sel = document.getElementById('pnl-strategy');
     sel.addEventListener('change', function () {
       CURRENT_STRATEGY = sel.value || null;
+      CURRENT_QUOTE = quoteOf(CURRENT_STRATEGY);
       HIDDEN = {};  // reset per-mode toggles when the strategy changes
       loadPnl();
     });

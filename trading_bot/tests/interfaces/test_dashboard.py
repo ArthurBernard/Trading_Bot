@@ -97,6 +97,18 @@ def test_every_page_renders_the_shared_nav(path: str) -> None:
         assert label in html, f"{label} missing from {path}"
 
 
+@pytest.mark.parametrize("path", _PAGES)
+def test_every_page_references_format_js(path: str) -> None:
+    """Each page's shell (base.html) loads format.js before the inline helpers.
+
+    Leaf 02 (ui-ux-overhaul): the shared `tbFmt` display formatters (rounding,
+    units, currency) must be available on every page, not just the ones that
+    happen to render money — base.html is the single include point.
+    """
+    html = _client().get(path).text
+    assert "/static/format.js" in html, path
+
+
 def test_active_tab_is_highlighted() -> None:
     """The nav marks the current route active (Overview on ``/``, Orders on ``/orders``)."""
     overview = _client().get("/").text
@@ -449,6 +461,35 @@ def test_pnl_page_has_chart_container_and_selector() -> None:
     assert "/static/uplot.min.css" in html  # its stylesheet
     assert "/api/pnl" in html  # it fetches the per-mode series
     assert "/api/strategies" in html  # it populates the selector
+
+
+def test_format_js_is_served_with_the_tbfmt_namespace() -> None:
+    """`GET /static/format.js` is 200 and defines the `tbFmt` display formatters.
+
+    Leaf 02: display-only rounding/units/currency, with the exact raw value
+    preserved in a `title` tooltip. String containment is enough here — the
+    formatters' numeric behaviour has no server-side test surface.
+    """
+    resp = _client().get("/static/format.js")
+    assert resp.status_code == 200
+    assert "javascript" in resp.headers["content-type"]
+    js = resp.text
+    assert "global.tbFmt = {" in js  # the namespace object attached to `window`
+    for symbol in (
+        "money",
+        "qty",
+        "price",
+        "pct",
+        "ratio",
+        "cell",
+        "moneyCell",
+        "qtyCell",
+        "priceCell",
+        "pctCell",
+        "ratioCell",
+        "splitInstrument",
+    ):
+        assert symbol in js, symbol
 
 
 def test_vendored_uplot_assets_are_served() -> None:
