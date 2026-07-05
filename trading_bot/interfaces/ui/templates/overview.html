@@ -20,10 +20,13 @@
 <section class="card" id="kpi-card">
   <div class="row" style="justify-content:space-between;">
     <h2 style="margin:0;">Performance</h2>
-    <div class="row" id="kpi-levels" role="tablist" aria-label="KPI level">
-      <button type="button" class="btn kpi-level is-active" data-level="strategy">Strategy</button>
-      <button type="button" class="btn kpi-level" data-level="exchange">Exchange</button>
-      <button type="button" class="btn kpi-level" data-level="total">Total</button>
+    <div class="row">
+      <span class="updated" id="kpi-updated"></span>
+      <div class="row" id="kpi-levels" role="tablist" aria-label="KPI level">
+        <button type="button" class="btn kpi-level is-active" data-level="strategy">Strategy</button>
+        <button type="button" class="btn kpi-level" data-level="exchange">Exchange</button>
+        <button type="button" class="btn kpi-level" data-level="total">Total</button>
+      </div>
     </div>
   </div>
   <div class="table-wrap">
@@ -54,11 +57,14 @@
 <section class="card" id="positions-card">
   <div class="row" style="justify-content:space-between;">
     <h2 style="margin:0;">Positions</h2>
-    <div class="row" id="pos-groups" role="tablist" aria-label="Group positions by">
-      <button type="button" class="btn pos-group" data-group="">Flat</button>
-      <button type="button" class="btn pos-group is-active" data-group="strategy">By strategy</button>
-      <button type="button" class="btn pos-group" data-group="crypto">By crypto</button>
-      <button type="button" class="btn pos-group" data-group="exchange">By exchange</button>
+    <div class="row">
+      <span class="updated" id="positions-updated"></span>
+      <div class="row" id="pos-groups" role="tablist" aria-label="Group positions by">
+        <button type="button" class="btn pos-group" data-group="">Flat</button>
+        <button type="button" class="btn pos-group is-active" data-group="strategy">By strategy</button>
+        <button type="button" class="btn pos-group" data-group="crypto">By crypto</button>
+        <button type="button" class="btn pos-group" data-group="exchange">By exchange</button>
+      </div>
     </div>
   </div>
   <div class="table-wrap">
@@ -82,7 +88,10 @@
 
 <!-- Open orders — non-terminal orders across the units. -->
 <section class="card" id="orders-card">
-  <h2>Open orders</h2>
+  <div class="row" style="justify-content:space-between;">
+    <h2 style="margin:0;">Open orders</h2>
+    <span class="updated" id="overview-orders-updated"></span>
+  </div>
   <div class="table-wrap">
     <table id="orders-table">
       <thead>
@@ -187,25 +196,25 @@
     }
   }
 
-  // A compact "in Xs/Xm/Xh" label from /api/health's next_tick_ts (epoch ms),
-  // recomputed at each refresh — a static render only; the live 1-second
-  // countdown is leaf 04's job.
-  function nextTickLabel(nextTickTs) {
-    if (nextTickTs == null) return '—';
-    const deltaS = Math.round((nextTickTs - Date.now()) / 1000);
-    if (deltaS <= 0) return 'due now';
-    if (deltaS < 60) return 'in ' + deltaS + 's';
-    const deltaM = Math.round(deltaS / 60);
-    if (deltaM < 60) return 'in ' + deltaM + 'm';
-    return 'in ' + Math.round(deltaM / 60) + 'h';
-  }
-
+  // Hooked into base.html's shared countdown mechanism: a `data-countdown-ts`
+  // span is re-rendered every second by the page-wide tickCountdowns() tick, so
+  // this only needs to (re)stamp the attribute + fall back text whenever the
+  // health payload is (re)fetched, not compute the label itself.
   async function loadSummaryNextTick() {
     const el = document.getElementById('sum-next-tick');
     try {
       const h = await api('GET', '/api/health');
-      el.textContent = nextTickLabel(h.next_tick_ts);
+      if (h.next_tick_ts != null) {
+        el.setAttribute('data-countdown-ts', String(h.next_tick_ts));
+        if (h.tick) { el.title = h.tick; } else { el.removeAttribute('title'); }
+        el.textContent = tbTime.countdown(h.next_tick_ts);
+      } else {
+        el.removeAttribute('data-countdown-ts');
+        el.title = 'no scheduler — the daemon (start --serve) steps strategies; serve-only mode does not';
+        el.textContent = '—';
+      }
     } catch (e) {
+      el.removeAttribute('data-countdown-ts');
       el.textContent = '—';
     }
   }
@@ -223,6 +232,7 @@
         '<tr class="empty"><td colspan="7">' + escapeHtml(e.message) + '</td></tr>';
       return;
     }
+    stampUpdated('kpi-updated');
     const body = document.getElementById('kpi-body');
     if (!rows.length) {
       body.innerHTML = '<tr class="empty"><td colspan="7">No running strategy.</td></tr>';
@@ -291,6 +301,7 @@
         '<tr class="empty"><td colspan="' + colspan + '">' + escapeHtml(e.message) + '</td></tr>';
       return;
     }
+    stampUpdated('positions-updated');
     const body = document.getElementById('positions-body');
     let html = '';
     if (POS_GROUP) {
@@ -326,6 +337,7 @@
     }
     // Feeds the summary strip's open-orders count — no separate fetch for it.
     document.getElementById('sum-open-orders').textContent = rows.length;
+    stampUpdated('overview-orders-updated');
     const body = document.getElementById('orders-body');
     if (!rows.length) {
       body.innerHTML = '<tr class="empty"><td colspan="8">No open orders.</td></tr>';

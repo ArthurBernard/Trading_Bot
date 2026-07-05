@@ -15,6 +15,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `schedule_info` hook — `null`/`null` outside the daemon); merged SSE frames on
   `/api/events` are tagged with `strategy` and a server-side `ts` (epoch ms) so
   the Logs page can attribute and timestamp events (ui-ux-overhaul leaf 01).
+- **Dashboard: visible evaluation cadence + freshness.** The health chip counts
+  down live (1 s tick) to the daemon's next scheduler check (`next check 42s` /
+  `12m05s`; a tooltip explains serve-only mode when there is no scheduler), the
+  Overview summary strip's next-check chip reuses the same shared countdown, the
+  Strategies table gains **Cadence** (humanized bar span) and **Next bar**
+  (countdown to the next epoch-aligned bar close, absolute local time on hover)
+  columns, and every data card on Overview / Strategies / Orders carries a muted
+  `updated HH:MM:SS` stamp set after each successful load — all driven by one
+  shared per-page 1 s interval over `data-countdown-ts` elements (`tbTime`
+  helpers in base.html), never a timer per cell (ui-ux-overhaul leaf 04).
 
 ### Changed
 

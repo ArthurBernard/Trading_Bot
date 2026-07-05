@@ -1,7 +1,7 @@
 ---
 plan: ui-ux-overhaul/04-cadence
 kind: leaf
-status: planned
+status: done
 complexity: medium
 depends: [03]
 parallel: false
