@@ -770,14 +770,36 @@ async def _run_daemon(
     running units on an **interval** (or **cron**) via an ``apscheduler``
     ``AsyncIOScheduler``. When ``serve`` is set, the control dashboard
     (:func:`~trading_bot.interfaces.api.create_control_app`) is served over the same
-    supervisor on ``host:port`` (loopback by default — it can change what trades),
-    and **uvicorn owns the signal** (Ctrl-C ends serve, then the daemon tears down);
+    supervisor on ``host:port`` (loopback by default — it can change what trades);
     headless, the daemon installs its own ``SIGINT``/``SIGTERM`` handlers. Each step
     is idempotent over unchanged data, so a tick that finds nothing to do trades
     nothing. The scheduler's cadence (next run time + trigger description) is
     wired into the served dashboard's ``/api/health`` via a ``schedule_info``
     hook — the plain ``dashboard`` command has no scheduler, so its health always
     reports ``next_tick_ts``/``tick`` as ``null``.
+
+    Signal ownership (``serve``) — **the daemon owns the signal, not uvicorn**
+    ---------------------------------------------------------------------------
+    uvicorn 0.49's ``Server.serve()`` unconditionally wraps its execution in a
+    ``capture_signals()`` context manager that installs its own ``SIGINT``/
+    ``SIGTERM`` handler for the duration of ``serve()`` and, in its ``finally``,
+    restores the pre-``serve()`` signal disposition and **re-raises the captured
+    signal** (``signal.raise_signal``) so an embedding app's own handler gets a
+    chance to react. With nothing installed beforehand, the restored disposition
+    is Python's default one, so the re-raised signal kills the process outright —
+    *before* this function's ``finally`` (scheduler + supervisor teardown) gets a
+    chance to run. There is no public config flag to opt out of this (the older
+    ``install_signal_handlers`` flag no longer exists), so the *instance's*
+    ``capture_signals`` is overridden with a no-op context manager, disabling
+    that capture/re-raise entirely; this function then installs its *own*
+    ``SIGINT``/``SIGTERM`` handlers on the running loop around
+    ``await server.serve()``: the first signal asks uvicorn to exit gracefully
+    (``server.should_exit = True`` — uvicorn's main loop polls this regardless of
+    who sets it), a second forces it (``server.force_exit = True``); the handlers
+    are removed in a ``finally`` once ``serve()`` returns. With uvicorn's own
+    signal capture disabled there is nothing left to re-raise, so this function's
+    outer ``finally`` (scheduler shutdown + ``supervisor.shutdown()``) always runs
+    to completion and the process exits normally.
     """
     from apscheduler.schedulers.asyncio import AsyncIOScheduler
     from apscheduler.triggers.cron import CronTrigger
@@ -858,11 +880,54 @@ async def _run_daemon(
                     timeout_graceful_shutdown=_SHUTDOWN_GRACE_SECONDS,
                 )
             )
+            # uvicorn 0.49 has no public switch to opt out of its own signal
+            # handling (the older `install_signal_handlers` config flag is gone):
+            # `Server.serve()` unconditionally wraps itself in
+            # `with self.capture_signals(): ...`, which installs `self.handle_exit`
+            # via raw `signal.signal()`, and — once `serve()` returns — restores
+            # the pre-serve() disposition and **re-raises the captured signal**
+            # (`signal.raise_signal`) so an embedding app's own handler can react.
+            # With nothing installed beforehand that restored disposition is
+            # Python's default one, so the re-raised SIGINT/SIGTERM kills the
+            # process outright — before this function's `finally` (scheduler +
+            # supervisor teardown) can run. Overriding the *instance's*
+            # `capture_signals` with a no-op context manager disables that
+            # capture/re-raise entirely, so the daemon below is the only thing
+            # that ever touches SIGINT/SIGTERM on this path (see the docstring's
+            # "Signal ownership" note).
+            server.capture_signals = contextlib.nullcontext  # type: ignore[method-assign,assignment]
             _console.print(
                 f"[green]control dashboard[/green] on http://{host}:{port}"
                 "  —  Ctrl-C to stop"
             )
-            await server.serve()  # uvicorn owns SIGINT; blocks until Ctrl-C
+
+            loop = asyncio.get_running_loop()
+            graceful_requested = False
+
+            def _on_shutdown_signal() -> None:
+                # First signal: ask uvicorn to drain and exit gracefully (subject
+                # to timeout_graceful_shutdown; uvicorn's main loop polls
+                # `should_exit` regardless of how it was set). A second signal
+                # forces an immediate exit for an operator who really wants out
+                # now — the same should_exit/force_exit semantics uvicorn's own
+                # (now-disabled) handler would have applied.
+                nonlocal graceful_requested
+                if not graceful_requested:
+                    graceful_requested = True
+                    server.should_exit = True
+                else:
+                    server.force_exit = True
+
+            installed_signals: list[signal.Signals] = []
+            for sig in (signal.SIGINT, signal.SIGTERM):
+                with contextlib.suppress(NotImplementedError, RuntimeError):
+                    loop.add_signal_handler(sig, _on_shutdown_signal)
+                    installed_signals.append(sig)
+            try:
+                await server.serve()  # the daemon owns the signal; blocks until stopped
+            finally:
+                for sig in installed_signals:
+                    loop.remove_signal_handler(sig)
         else:
             stop = asyncio.Event()
             loop = asyncio.get_running_loop()
@@ -1065,8 +1130,15 @@ def dashboard(
     daemon's ``start`` steps strategies on a tick; the dashboard just serves the
     restored + controllable units), so a plain ``uvicorn.run`` inside ``try/finally``
     is the whole loop — we deliberately do **not** also register a competing
-    ``loop.add_signal_handler(SIGINT, …)`` (that override is what makes
-    ``start --serve`` feel unquittable).
+    ``loop.add_signal_handler(SIGINT, …)`` here (an *additional* handler racing
+    uvicorn's own is what used to make a plain ``uvicorn.run``/``server.serve()``
+    feel unquittable, needing a second Ctrl-C). ``start --serve`` no longer has
+    that problem either — it now disables uvicorn's own signal capture (its
+    ``Server.capture_signals`` is overridden to a no-op) and installs the *only*
+    handler itself, so there is nothing left to compete with (see
+    ``_run_daemon``'s "Signal ownership" docstring note for why: uvicorn 0.49
+    otherwise re-raises the captured signal after ``serve()`` returns, killing
+    the process before its teardown ``finally`` runs).
     """
     import uvicorn
 
