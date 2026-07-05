@@ -58,6 +58,23 @@ and injectable**: :class:`DccdFeed` takes the client as a constructor argument
 typed against the tiny :class:`_DccdClient` protocol, so tests pass a fake
 client returning a canned frame and never need real dccd installed.
 
+The freshness-gate probe: :meth:`DccdFeed.tail` / :meth:`DccdFeed.tail_asof_ms`
+------------------------------------------------------------------------------
+:meth:`DccdFeed.latest` re-reads the **whole** stored history every call — fine
+for a one-shot backtest snapshot, expensive for a scheduler-driven daemon that
+calls it every tick regardless of whether new data actually landed.
+:meth:`DccdFeed.tail` reads a **bounded** ``start_ns`` window instead (a dccd
+parquet store is date-keyed, so a narrow window is proportional to the window
+asked for, not the dataset's length), and :meth:`DccdFeed.tail_asof_ms` wraps it
+into "what is the newest bar in the last few bar-widths?" — the cheap probe a
+runner's idle-tick freshness gate consults before paying for :meth:`latest`
+(see :meth:`~trading_bot.application.strategy_runner.StrategyRunner.step_latest`
+and its portfolio analogue,
+:meth:`~trading_bot.application.portfolio_runner.PortfolioRunner
+.rebalance_latest`). The probe makes no correctness promise on its own — a
+caller in doubt (no probe available, an empty tail, a read error) always falls
+back to the full read.
+
 This module lives in the application layer: it depends on :mod:`polars` and may
 import the pure domain. It performs no I/O of its own — only the injected dccd
 client does (and only inside :class:`DccdFeed`).
@@ -65,6 +82,7 @@ client does (and only inside :class:`DccdFeed`).
 
 from __future__ import annotations
 
+import time
 from collections.abc import AsyncIterator, Iterator
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
@@ -339,6 +357,99 @@ class DccdFeed:
     def latest(self) -> pl.DataFrame:
         """Read and return the full normalised bars frame (historical snapshot)."""
         return self._read_normalised()
+
+    def tail(self, *, start_ns: int) -> pl.DataFrame:
+        """Read a bounded **tail** window from ``start_ns`` — not the full history.
+
+        Overrides only the read's *start* bound for this one call; the end bound
+        stays the feed's own configured ``end_ns`` (usually ``None`` — read to the
+        present). This is the freshness-gate probe's primitive
+        (:meth:`tail_asof_ms`): a scheduler-driven daemon calling :meth:`latest`
+        every tick pays for the *whole* stored history on every call, even when
+        the strategy is daily and at most one new bar can exist per day. Reading
+        a bounded ``start_ns`` window instead is proportional to the window asked
+        for, not the dataset's full length (dccd's parquet store is date-keyed,
+        so a narrow window reads far fewer files/rows).
+
+        Parameters
+        ----------
+        start_ns : int
+            The read's start bound, epoch nanoseconds (inclusive). Not clamped
+            against the feed's own configured ``start_ns`` here — the caller
+            (:meth:`tail_asof_ms`) does that, so a narrow probe window never
+            reads before the feed's declared history start.
+
+        Returns
+        -------
+        polars.DataFrame
+            The normalised bars-schema frame over ``[start_ns, end_ns]``, oldest
+            → newest (empty if nothing falls in the window).
+
+        """
+        raw = self._client.read(
+            self._exchange, self._symbol, "ohlc", self._span, start_ns, self._end_ns
+        )
+        return normalise_dccd_ohlc(raw)
+
+    def tail_asof_ms(
+        self, *, since_ms: int | None = None, spans: int = 3
+    ) -> int | None:
+        """Cheaply probe the newest bar's time (ms) via a short :meth:`tail` read.
+
+        The freshness-gate primitive a scheduler-driven daemon uses to answer
+        "did a new bar appear since I last evaluated?" without paying for
+        :meth:`latest`'s full history read — see
+        :meth:`~trading_bot.application.strategy_runner.StrategyRunner
+        .step_latest`. Reads only a short window (``spans`` bar-widths *before*
+        the anchor point) and returns the newest bar's time in it, or ``None``
+        when the window holds no bar (either genuinely nothing new, or the
+        window was too narrow — the caller treats ``None`` conservatively, the
+        same as a probe failure).
+
+        The anchor is deliberately the **caller's own last-known as-of**
+        (``since_ms``), never wall-clock time: a store that lags real time by
+        more than a few bar-widths (a paused collector, a slow venue, a daemon
+        restarted after being off for a while) would otherwise make this probe
+        come back empty on *every* tick, permanently defeating the freshness
+        gate (it would always fall through to the full read — safe, but exactly
+        the cost this method exists to avoid). Anchoring at ``since_ms`` instead
+        keeps the read proportional to *how stale the caller is*, which under
+        normal operation is at most one tick's worth of data, regardless of how
+        far behind wall-clock the store happens to be.
+
+        This method makes **no correctness promise on its own** — it is purely
+        an optimisation probe. A read error from the underlying client
+        propagates; the caller is responsible for catching it and falling back
+        to :meth:`latest`.
+
+        Parameters
+        ----------
+        since_ms : int or None, optional
+            Anchor the tail window just before this timestamp (**milliseconds**
+            since the epoch) — typically the caller's last completed as-of.
+            ``None`` (default) anchors at the wall clock instead
+            (``time.time_ns()``) — a "what's fresh right now" standalone probe
+            with no prior baseline to stay proportional to.
+        spans : int, optional
+            How many ``span``-widths *before* the anchor to start reading.
+            Defaults to ``3`` — a small safety margin, cheap either way since
+            the anchor already keeps the window close to the data's edge.
+
+        Returns
+        -------
+        int or None
+            The tail window's newest bar time in **milliseconds**, or ``None``
+            if the window holds no bar.
+
+        """
+        anchor_ns = time.time_ns() if since_ms is None else since_ms * 1_000_000
+        tail_start_ns = anchor_ns - spans * self._span * 1_000_000_000
+        if self._start_ns is not None:
+            tail_start_ns = max(tail_start_ns, self._start_ns)
+        frame = self.tail(start_ns=tail_start_ns)
+        if frame.height == 0:
+            return None
+        return int(frame["time"][-1]) // 1_000_000
 
     async def live_windows(
         self,

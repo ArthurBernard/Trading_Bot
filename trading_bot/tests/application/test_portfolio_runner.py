@@ -26,6 +26,8 @@ Async tests run un-decorated (``asyncio_mode = "auto"``).
 
 from __future__ import annotations
 
+import asyncio
+import time
 from collections.abc import Mapping
 from decimal import Decimal
 
@@ -34,6 +36,7 @@ import polars as pl
 from trading_bot.application import (
     EventBus,
     OrderRouter,
+    PortfolioFeed,
     PortfolioRunner,
     PortfolioStrategy,
     PositionTracker,
@@ -591,3 +594,238 @@ async def test_rebalance_latest_returns_none_when_latest_window_is_empty() -> No
     assert await runner.rebalance_latest() is None
     assert feed.latest_calls == 1
     assert feed.bars_iterated == 0
+
+
+# --- rebalance_latest: the idle-tick freshness gate ------------------------- #
+
+_DAY_NS = 86_400 * 1_000_000_000
+
+
+def _dccd_ohlc(
+    closes: list[float], *, start_ns: int, span_ns: int = _DAY_NS
+) -> pl.DataFrame:
+    """A frame mimicking ``dccd.Client.read(..., 'ohlc')`` (dccd's column names)."""
+    n = len(closes)
+    return pl.DataFrame(
+        {
+            "TS": [start_ns + span_ns * i for i in range(n)],
+            "open": closes,
+            "high": closes,
+            "low": closes,
+            "close": closes,
+            "volume": [1.0] * n,
+            "quote_volume": [10.0] * n,
+            "trades": [5] * n,
+        }
+    )
+
+
+class _CountingDccdClient:
+    """A fake dccd client, keyed by venue symbol, counting full vs tail reads.
+
+    ``start_ns is None`` means a **full** (whole-history) read — the cost
+    :class:`~trading_bot.application.portfolio_feed.PortfolioFeed`'s
+    ``_read_all``/``latest`` pays every call; a non-``None`` ``start_ns`` means
+    the freshness gate's bounded **tail** probe. A 2-coin universe's one full
+    evaluation increments ``full_reads`` by 2 (one read per coin), likewise for
+    one tail probe.
+    """
+
+    def __init__(self, frames: dict[str, pl.DataFrame]) -> None:
+        self.frames = frames
+        self.full_reads = 0
+        self.tail_reads = 0
+        self.raise_on_tail = False
+
+    def read(
+        self,
+        exchange: str,
+        symbol: str,
+        data_type: str = "ohlc",
+        span: int | None = None,
+        start_ns: int | None = None,
+        end_ns: int | None = None,
+    ) -> pl.DataFrame:
+        if start_ns is None:
+            self.full_reads += 1
+        else:
+            self.tail_reads += 1
+            if self.raise_on_tail:
+                raise RuntimeError("tail read boom")
+        frame = self.frames[symbol]
+        if start_ns is not None:
+            frame = frame.filter(pl.col("TS") >= start_ns)
+        if end_ns is not None:
+            frame = frame.filter(pl.col("TS") <= end_ns)
+        return frame
+
+
+def _counting_client(
+    btc_closes: list[float], eth_closes: list[float], *, start_ns: int = 0
+) -> _CountingDccdClient:
+    return _CountingDccdClient(
+        {
+            BTC.to_venue_symbol("binance"): _dccd_ohlc(btc_closes, start_ns=start_ns),
+            ETH.to_venue_symbol("binance"): _dccd_ohlc(eth_closes, start_ns=start_ns),
+        }
+    )
+
+
+def _portfolio_feed_over(client: _CountingDccdClient) -> PortfolioFeed:
+    return PortfolioFeed(list(UNIVERSE), exchange="binance", client=client, span=86_400)
+
+
+def _weights_signal_spy(weights: Mapping[Symbol, Decimal], calls: list[int]):  # type: ignore[no-untyped-def]
+    """Like `_weights_signal`, but records every `asof_ms` it is called with."""
+
+    def _fn(
+        asof_ms: int, frames: Mapping[Symbol, pl.DataFrame]
+    ) -> Mapping[Symbol, Decimal]:
+        calls.append(asof_ms)
+        return dict(weights)
+
+    return _fn
+
+
+async def test_rebalance_latest_gate_skips_full_read_when_no_new_common_date() -> None:
+    """A second tick over an unchanged store skips the full read and the signal.
+
+    The first-ever tick has no baseline, so it always runs the full path. A
+    second tick where the tail probe finds nothing newer than that baseline
+    must return ``None`` **without** a second full read and **without**
+    invoking ``signal_fn``.
+    """
+    client = _counting_client([100.0], [50.0])  # a single common day only
+    feed = _portfolio_feed_over(client)
+    calls: list[int] = []
+    strat = _strategy(
+        _weights_signal_spy({BTC: money("0.5"), ETH: money("-0.25")}, calls)
+    )
+    router, tracker, bus, _broker = _engine()
+    runner = PortfolioRunner(strat, feed, router, tracker, event_bus=bus)
+
+    first = await runner.rebalance_latest()
+    assert first is not None
+    assert first.submitted == 2
+    assert client.full_reads == 2  # one _read_all() over the 2-coin universe
+    assert client.tail_reads == 0  # first-ever tick: no baseline yet
+    assert len(calls) == 1
+    assert runner.last_asof_ms == 0  # day 0's asof
+    assert runner.last_eval_ms is not None
+
+    second = await runner.rebalance_latest()
+    assert second is None  # nothing new -> the gate skips
+    assert client.full_reads == 2  # NOT read again
+    assert client.tail_reads == 2  # exactly one probe over the 2-coin universe
+    assert len(calls) == 1  # the signal was never invoked on the skipped tick
+
+
+async def test_rebalance_latest_gate_falls_through_when_new_common_date_appears() -> (
+    None
+):
+    """A tail probe that finds a newer common date runs the full path once more."""
+    client = _counting_client([100.0], [50.0])
+    feed = _portfolio_feed_over(client)
+    strat = _strategy(_weights_signal({BTC: money("0.5"), ETH: money("-0.25")}))
+    router, tracker, bus, _broker = _engine()
+    runner = PortfolioRunner(strat, feed, router, tracker, event_bus=bus)
+
+    await runner.rebalance_latest()
+    assert client.full_reads == 2
+    assert runner.last_asof_ms == 0
+
+    # A new common day lands for both coins.
+    client.frames = {
+        BTC.to_venue_symbol("binance"): _dccd_ohlc([100.0, 101.0], start_ns=0),
+        ETH.to_venue_symbol("binance"): _dccd_ohlc([50.0, 51.0], start_ns=0),
+    }
+
+    result = await runner.rebalance_latest()
+
+    assert result is not None
+    assert client.full_reads == 4  # exactly one more full read (2 coins)
+    assert client.tail_reads == 2  # exactly one probe (2 coins), saw the advance
+    assert runner.last_asof_ms == _DAY_NS // 1_000_000  # day 1's asof
+
+
+async def test_rebalance_latest_gate_falls_through_on_tail_probe_error() -> None:
+    """A tail-read failure is conservative: fall through to the full path."""
+    client = _counting_client([100.0], [50.0])
+    feed = _portfolio_feed_over(client)
+    strat = _strategy(_weights_signal({BTC: money("0.5"), ETH: money("-0.25")}))
+    router, tracker, bus, _broker = _engine()
+    runner = PortfolioRunner(strat, feed, router, tracker, event_bus=bus)
+
+    await runner.rebalance_latest()
+    assert client.full_reads == 2
+
+    client.raise_on_tail = True
+    result = await runner.rebalance_latest()
+
+    # Fell through to the full path (correctness over speed); same weights on
+    # unchanged prices -> already on target -> nothing new submitted.
+    assert result is not None
+    assert result.submitted == 0
+    assert client.tail_reads == 1  # the probe raised on the first coin it tried
+    assert client.full_reads == 4  # still ran the full path despite the error
+
+
+async def test_rebalance_latest_last_asof_and_last_eval_update_on_skip_and_full() -> (
+    None
+):
+    """``last_asof_ms``/``last_eval_ms`` update correctly on both paths."""
+    client = _counting_client([100.0], [50.0])
+    feed = _portfolio_feed_over(client)
+    strat = _strategy(_weights_signal({BTC: money("0.5"), ETH: money("-0.25")}))
+    router, tracker, bus, _broker = _engine()
+    runner = PortfolioRunner(strat, feed, router, tracker, event_bus=bus)
+
+    assert runner.last_asof_ms is None
+    assert runner.last_eval_ms is None
+
+    await runner.rebalance_latest()
+    asof_after_full = runner.last_asof_ms
+    eval_after_full = runner.last_eval_ms
+    assert asof_after_full == 0
+    assert eval_after_full is not None
+
+    await runner.rebalance_latest()  # the skip path (nothing new)
+    assert runner.last_asof_ms == asof_after_full  # unchanged on a skip
+    assert runner.last_eval_ms is not None
+    assert runner.last_eval_ms >= eval_after_full  # still updated on a skip
+
+
+async def test_rebalance_latest_offloads_the_full_read_off_the_event_loop() -> None:
+    """A slow, synchronous `latest()` does not block a concurrent coroutine.
+
+    Proves the `asyncio.to_thread` offload actually parallelises: while the
+    feed's blocking read sleeps, a concurrent loop gets many chances to run —
+    it would not if the read ran synchronously on the event loop.
+    """
+
+    class _SlowFeed:
+        def latest(self) -> Mapping[Symbol, pl.DataFrame]:
+            time.sleep(0.15)  # a slow synchronous "dccd read + alignment"
+            return _frames()
+
+    strat = _strategy(_weights_signal({BTC: money("0.5"), ETH: money("-0.25")}))
+    router, tracker, bus, _broker = _engine()
+    runner = PortfolioRunner(strat, _SlowFeed(), router, tracker, event_bus=bus)  # type: ignore[arg-type]
+
+    ticks = 0
+    stop = False
+
+    async def _concurrent_loop() -> None:
+        nonlocal ticks
+        while not stop:
+            ticks += 1
+            await asyncio.sleep(0.01)
+
+    ticker = asyncio.create_task(_concurrent_loop())
+    await runner.rebalance_latest()
+    stop = True
+    ticker.cancel()
+
+    # The concurrent loop must have gotten several chances to run while the
+    # slow synchronous read was in flight on its own thread.
+    assert ticks >= 5

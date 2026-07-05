@@ -75,6 +75,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `ui.port` / `ui.token` (like `dashboard` already does) instead of always
   defaulting to loopback `:8000` with no token; explicit flags/env still
   override.
+- **Daemon tick performance.** Idle daemon ticks no longer reload each unit's
+  full data history on every scheduler cadence (a daily-bar portfolio polled
+  every 60s was doing a multi-second, multi-GB reload ~1439 times a day for
+  nothing) — `StrategyRunner.step_latest` / `PortfolioRunner.rebalance_latest`
+  now gate on a cheap, bounded tail probe and skip the full reload when no new
+  bar/common date has appeared; when a full reload *is* needed, it runs off the
+  event loop (`asyncio.to_thread`) so the dashboard stays responsive during a
+  real rebalance.
 
 ### Deprecated
 

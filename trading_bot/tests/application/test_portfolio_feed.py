@@ -59,8 +59,9 @@ class _FakeDccdClient:
     """A fake dccd client keyed by ``symbol`` → a canned daily OHLC frame.
 
     ``read`` looks the canned frame up by the pair string the feed passes
-    (honouring ``end_ns`` so a cutoff read still works) and records each call's
-    args so a test can assert what the feed forwarded. No real dccd needed.
+    (honouring ``start_ns``/``end_ns`` so both a cutoff read and the
+    freshness-gate tail probe work) and records each call's args so a test can
+    assert what the feed forwarded. No real dccd needed.
     """
 
     def __init__(self, frames: dict[str, pl.DataFrame]) -> None:
@@ -87,6 +88,8 @@ class _FakeDccdClient:
             }
         )
         frame = self._frames[symbol]
+        if start_ns is not None:
+            frame = frame.filter(pl.col("TS") >= start_ns)
         if end_ns is not None:
             frame = frame.filter(pl.col("TS") <= end_ns)
         return frame
@@ -300,6 +303,112 @@ def test_asof_ms_is_latest_common_date_in_ms() -> None:
     # Latest common date is day 2 (ETH stops there). asof = its ns // 1e6.
     expected_ms = (2 * _DAY_NS) // 1_000_000
     assert feed.asof_ms() == expected_ms
+
+
+# --- tail_asof_ms: the freshness-gate probe --------------------------------- #
+
+
+def test_tail_asof_ms_finds_the_newest_common_date() -> None:
+    """`tail_asof_ms` reports the newest **common** date within the tail window."""
+    btc, eth = Symbol("BTC", "USDT"), Symbol("ETH", "USDT")
+    universe = [btc, eth]
+    frames = {
+        btc: _dccd_ohlc([1.0, 2, 3], start_ns=0),  # days 0,1,2
+        eth: _dccd_ohlc([10.0, 20, 30], start_ns=0),  # days 0,1,2
+    }
+    feed = PortfolioFeed(
+        universe, exchange="binance", client=_client_for(universe, frames)
+    )
+
+    # Anchored at day 0: the probe reaches forward to the newest common date.
+    assert feed.tail_asof_ms(since_ms=0) == (2 * _DAY_NS) // 1_000_000
+
+
+def test_tail_asof_ms_anchors_on_since_ms_not_wall_clock() -> None:
+    """A store far from wall-clock time still resolves correctly (anchored probe)."""
+    btc, eth = Symbol("BTC", "USDT"), Symbol("ETH", "USDT")
+    universe = [btc, eth]
+    far_past_start = 11_000 * _DAY_NS  # deliberately far from "real" wall-clock
+    frames = {
+        btc: _dccd_ohlc([1.0, 2], start_ns=far_past_start),
+        eth: _dccd_ohlc([10.0, 20], start_ns=far_past_start),
+    }
+    feed = PortfolioFeed(
+        universe, exchange="binance", client=_client_for(universe, frames)
+    )
+
+    since_ms = far_past_start // 1_000_000
+    assert (
+        feed.tail_asof_ms(since_ms=since_ms) == (far_past_start + _DAY_NS) // 1_000_000
+    )
+
+
+def test_tail_asof_ms_none_when_no_common_date_in_window() -> None:
+    """No common date at all in the tail window -> ``None`` (caller falls back)."""
+    btc, eth = Symbol("BTC", "USDT"), Symbol("ETH", "USDT")
+    universe = [btc, eth]
+    frames = {
+        btc: _dccd_ohlc([1.0], start_ns=0),
+        eth: _dccd_ohlc([10.0], start_ns=0),
+    }
+    feed = PortfolioFeed(
+        universe, exchange="binance", client=_client_for(universe, frames)
+    )
+
+    # Anchored well past the only common day -> the tail window starts after it.
+    since_ms = (1_000 * _DAY_NS) // 1_000_000
+    assert feed.tail_asof_ms(since_ms=since_ms) is None
+
+
+def test_tail_asof_ms_is_quiet_even_when_a_coin_lags_in_the_window(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The probe never logs a "lags the universe" warning (unlike a full read).
+
+    A narrow tail window naturally makes a coin whose own collection cycle
+    landed a beat later look "lagging" — expected and harmless there, unlike a
+    genuine lag over the full history. Those diagnostics stay on the full
+    read's path (:meth:`PortfolioFeed._common_dates`), not the probe.
+    """
+    btc, eth = Symbol("BTC", "USDT"), Symbol("ETH", "USDT")
+    universe = [btc, eth]
+    frames = {
+        btc: _dccd_ohlc([1.0, 2, 3], start_ns=0),  # days 0,1,2
+        eth: _dccd_ohlc([10.0, 20], start_ns=0),  # days 0,1 only (lags one)
+    }
+    feed = PortfolioFeed(
+        universe, exchange="binance", client=_client_for(universe, frames)
+    )
+
+    with caplog.at_level(
+        logging.WARNING, logger="trading_bot.application.portfolio_feed"
+    ):
+        result = feed.tail_asof_ms(since_ms=0)
+
+    assert result == _DAY_NS // 1_000_000  # the common date (day 1), not day 2
+    assert not any("lags the universe" in r.message for r in caplog.records)
+
+
+def test_tail_asof_ms_read_error_propagates() -> None:
+    """A read error from any coin's tail is not swallowed here.
+
+    The probe makes no correctness promise on its own — the *caller* (a
+    runner's freshness gate) is responsible for catching this and falling back
+    to a full evaluation.
+    """
+    btc = Symbol("BTC", "USDT")
+
+    class _RaisingClient:
+        def read(self, *args: object, **kwargs: object) -> pl.DataFrame:
+            raise RuntimeError("store unavailable")
+
+    feed = PortfolioFeed(
+        [btc],
+        exchange="binance",
+        client=_RaisingClient(),  # type: ignore[arg-type]
+    )
+    with pytest.raises(RuntimeError, match="store unavailable"):
+        feed.tail_asof_ms(since_ms=0)
 
 
 # --- forwarding to the dccd read ------------------------------------------- #
