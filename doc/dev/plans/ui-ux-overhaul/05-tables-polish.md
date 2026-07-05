@@ -6,7 +6,7 @@ complexity: medium
 depends: [04]
 parallel: false
 branch: feat/ui-tables-polish
-pr: ""
+pr: "#163"
 ---
 
 # Leaf 05 — Tables & event-feed polish
