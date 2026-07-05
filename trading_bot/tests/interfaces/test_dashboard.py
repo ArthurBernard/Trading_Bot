@@ -2465,6 +2465,41 @@ def test_start_serve_no_config_no_flags_defaults_to_loopback_no_auth(
     assert dashboard_kwargs["auth_token"] is None
 
 
+def test_start_defaults_to_the_dashboard_manifest_when_present(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A bare `start --serve` picks up ./configs/dashboard.yaml when it exists.
+
+    The daemon runs the same manifest the dashboard manages (the persistent
+    control plane), so no ``--config`` is needed once that file exists — proven
+    here by the manifest's ``ui:`` settings landing on the served dashboard.
+    The autouse temp-CWD fixture guarantees the file seen is the one written.
+    """
+    import pathlib as _pathlib
+
+    from trading_bot.application.config import AppConfig
+
+    monkeypatch.delenv("TRADING_BOT_UI_TOKEN", raising=False)
+    captured = _patch_serve_stack(monkeypatch)
+    manifest = _pathlib.Path("configs/dashboard.yaml")
+    manifest.parent.mkdir(parents=True, exist_ok=True)
+    AppConfig.model_validate(
+        {"mode": "paper", "ui": {"host": "0.0.0.0", "port": 9600, "token": "cfg-tok"}}
+    ).to_yaml(manifest)
+
+    result = runner.invoke(cli_app, ["start", "--serve", "--interval", "0.05"])
+
+    assert result.exit_code == 0, result.output
+    assert "using default manifest" in result.output
+    config_kwargs = captured["config_kwargs"]
+    assert isinstance(config_kwargs, dict)
+    assert config_kwargs["host"] == "0.0.0.0"  # came from the default manifest
+    assert config_kwargs["port"] == 9600
+    dashboard_kwargs = captured["dashboard_kwargs"]
+    assert isinstance(dashboard_kwargs, dict)
+    assert dashboard_kwargs["auth_token"] == "cfg-tok"
+
+
 def test_start_serve_non_loopback_without_token_refuses(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

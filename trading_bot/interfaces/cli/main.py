@@ -945,7 +945,11 @@ async def _run_daemon(
 @app.command()
 def start(
     config_path: pathlib.Path | None = typer.Option(
-        None, "--config", "-c", help="YAML AppConfig path. Defaults to a paper config."
+        None,
+        "--config",
+        "-c",
+        help="YAML AppConfig path. Defaults to the dashboard manifest "
+        "(configs/dashboard.yaml) when it exists, else a bare paper config.",
     ),
     interval: float = typer.Option(
         60.0,
@@ -1000,10 +1004,23 @@ def start(
     wins; otherwise the config's ``ui.host`` / ``ui.port`` / ``ui.token`` apply. So a
     manifest configured once for ``dashboard`` serves the control dashboard the same
     way via ``start --serve`` — no flags to remember. ``ui.read_only`` does not apply
-    here (the control daemon is never read-only). With no ``--config`` the bare
-    :class:`~trading_bot.application.config.AppConfig` default stays loopback + no
-    auth, unchanged.
+    here (the control daemon is never read-only).
+
+    With no ``--config``, the daemon looks for the **dashboard manifest**
+    (:data:`_DEFAULT_MANIFEST`, ``configs/dashboard.yaml`` relative to the CWD) —
+    the persistent control plane ``dashboard`` reads and rewrites — so a bare
+    ``trading-bot start --serve`` runs the same book the dashboard manages, with
+    no path to remember. Only when that manifest is absent does it fall back to a
+    bare :class:`~trading_bot.application.config.AppConfig` (empty paper,
+    loopback, no auth) — unchanged from before. ``run``/``serve`` deliberately do
+    **not** get this default: silently picking up a manifest that declares real
+    strategies would surprise a casual ``trading-bot run``.
     """
+    if config_path is None and _DEFAULT_MANIFEST.is_file():
+        # The daemon runs the same manifest the dashboard manages — say so, since
+        # nothing was passed explicitly and the file governs what trades.
+        config_path = _DEFAULT_MANIFEST
+        _console.print(f"[dim]using default manifest {_DEFAULT_MANIFEST}[/dim]")
     config = (
         AppConfig.from_yaml(config_path) if config_path is not None else AppConfig()
     )

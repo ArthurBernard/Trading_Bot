@@ -62,6 +62,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and already-buffered lines); the PnL stats table gains a Return column
   (realised PnL ÷ starting capital) and a starting-capital note (ui-ux-overhaul
   leaf 05).
+- **`start` defaults to the dashboard manifest.** With no `--config`,
+  `trading-bot start` now loads `configs/dashboard.yaml` when it exists (the
+  same persistent manifest `dashboard` reads and rewrites) instead of a bare
+  empty paper config — so a plain `trading-bot start --serve` runs and serves
+  the book the dashboard manages, no path to remember. Absent that file, the
+  bare-config fallback is unchanged; `run`/`serve` keep requiring an explicit
+  path (auto-picking up real strategies there would surprise).
 
 ### Fixed
 
