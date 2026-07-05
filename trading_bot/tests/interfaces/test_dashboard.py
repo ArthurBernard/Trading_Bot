@@ -248,6 +248,53 @@ def test_auth_login_flow_authenticates() -> None:
     assert client.get("/api/health").status_code == 200  # session cookie works
 
 
+def test_login_survives_a_background_login_rerender_stable_csrf() -> None:
+    """The CSRF cookie is stable across /login renders — the favicon race.
+
+    A browser fetches ``/favicon.ico`` in the background right after loading the
+    login page. Before the fix that fetch was auth-redirected to ``/login``,
+    whose render minted a FRESH token and rotated the ``tb_csrf`` cookie under
+    the form the user was already looking at — so every submit 403'd, forever.
+    The token embedded in the FIRST render's form must still authenticate after
+    a second (background) render.
+    """
+    import re as _re
+
+    client, token = _auth_client()
+    first = client.get("/login")
+    m = _re.search(r'name="csrf" value="([^"]+)"', first.text)
+    assert m, "login form must embed the CSRF field"
+    form_csrf = m.group(1)  # what the user's visible form will submit
+    # A background request re-renders /login (pre-fix: rotated the cookie).
+    client.get("/login?next=/favicon.ico")
+    assert client.cookies.get("tb_csrf", "") == form_csrf  # cookie is STABLE
+    ok = client.post(
+        "/login",
+        data={"token": token, "next": "/", "csrf": form_csrf},
+        follow_redirects=False,
+    )
+    assert ok.status_code == 303  # the form the user sees still works
+
+
+def test_favicon_is_open_and_never_bounces_to_login() -> None:
+    """``/favicon.ico`` needs no session and never triggers a /login re-render."""
+    client, _ = _auth_client()
+    r = client.get("/favicon.ico", follow_redirects=False)
+    assert r.status_code == 308
+    assert r.headers["location"] == "/static/favicon.svg"
+
+
+def test_login_render_rejects_a_malformed_csrf_cookie() -> None:
+    """A cookie not matching our minted shape is replaced, never echoed back."""
+    client, _ = _auth_client()
+    # Raw header (not the cookie jar) so the single malformed value is exactly
+    # what the server sees.
+    page = client.get("/login", headers={"cookie": "tb_csrf=<script>alert(1)</script>"})
+    assert "<script>alert(1)" not in page.text
+    set_cookie = page.headers.get("set-cookie", "")
+    assert "tb_csrf=" in set_cookie and "<script>" not in set_cookie  # fresh mint
+
+
 # --- aggregate read endpoints (Overview data) ------------------------------ #
 
 
