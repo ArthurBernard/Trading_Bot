@@ -963,18 +963,25 @@ def start(
         help="Also serve the control dashboard (start/stop strategies, switch mode) "
         "over HTTP — loopback by default, since it can change what trades.",
     ),
-    serve_host: str = typer.Option(
-        "127.0.0.1", "--serve-host", help="Control dashboard bind interface (loopback)."
+    serve_host: str | None = typer.Option(
+        None,
+        "--serve-host",
+        help="Control dashboard bind interface. Overrides the manifest's ui.host "
+        "(default 127.0.0.1 — loopback).",
     ),
-    serve_port: int = typer.Option(
-        8000, "--serve-port", help="Control dashboard TCP port."
+    serve_port: int | None = typer.Option(
+        None,
+        "--serve-port",
+        help="Control dashboard TCP port. Overrides the manifest's ui.port "
+        "(default 8000).",
     ),
     serve_token: str | None = typer.Option(
         None,
         "--serve-token",
         envvar="TRADING_BOT_UI_TOKEN",
         help="Require this token to log in to the control dashboard (enables auth). "
-        "Mandatory to bind a non-loopback --serve-host. Reads TRADING_BOT_UI_TOKEN.",
+        "Overrides the manifest's ui.token. Mandatory to bind a non-loopback "
+        "--serve-host. Reads TRADING_BOT_UI_TOKEN.",
     ),
 ) -> None:
     """Run the trading **daemon**: supervise the declared strategies, step on a schedule.
@@ -986,10 +993,27 @@ def start(
     testnet / live independently from the **control dashboard** (``--serve``). Going
     live still requires the explicit gates — the daemon never trades real money by
     merely starting, and the dashboard requires a typed confirmation to go live.
+
+    Web settings for ``--serve`` come from the manifest's ``ui:`` section (``host``
+    / ``port`` / ``token``) — the same resolution as ``dashboard``: an explicit
+    ``--serve-host`` / ``--serve-port`` / ``--serve-token`` (or ``TRADING_BOT_UI_TOKEN``)
+    wins; otherwise the config's ``ui.host`` / ``ui.port`` / ``ui.token`` apply. So a
+    manifest configured once for ``dashboard`` serves the control dashboard the same
+    way via ``start --serve`` — no flags to remember. ``ui.read_only`` does not apply
+    here (the control daemon is never read-only). With no ``--config`` the bare
+    :class:`~trading_bot.application.config.AppConfig` default stays loopback + no
+    auth, unchanged.
     """
     config = (
         AppConfig.from_yaml(config_path) if config_path is not None else AppConfig()
     )
+    # Resolve the web settings: an explicit CLI flag (or TRADING_BOT_UI_TOKEN for the
+    # token, already merged into serve_token by typer's envvar=) wins; otherwise fall
+    # back to the manifest's `ui:` section — mirrors `dashboard`'s resolution so the
+    # same manifest serves the same way via either command.
+    host = serve_host if serve_host is not None else config.ui.host
+    port = serve_port if serve_port is not None else config.ui.port
+    token = serve_token if serve_token is not None else config.ui.token
     try:
         asyncio.run(
             _run_daemon(
@@ -997,9 +1021,9 @@ def start(
                 interval=interval,
                 cron=cron,
                 serve=serve,
-                host=serve_host,
-                port=serve_port,
-                auth_token=serve_token,
+                host=host,
+                port=port,
+                auth_token=token,
             )
         )
     except Exception as exc:  # noqa: BLE001 - surface any build/config failure cleanly
