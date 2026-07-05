@@ -69,11 +69,12 @@ def _dccd_ohlc(closes: list[float], *, start_ns: int, span_ns: int) -> pl.DataFr
 
 
 class _FakeDccdClient:
-    """A fake dccd client: ``read`` returns a canned frame, honouring ``end_ns``.
+    """A fake dccd client: ``read`` returns a canned frame, honouring bounds.
 
     Records the arguments of each ``read`` call so a test can assert what the
-    feed forwarded, and slices the canned frame to ``end_ns`` (inclusive) so the
-    live-mode closed-bar logic can be exercised against a moving cutoff.
+    feed forwarded, and slices the canned frame to ``[start_ns, end_ns]``
+    (inclusive) so both the live-mode closed-bar logic and the freshness-gate
+    tail probe can be exercised against a moving window.
     """
 
     def __init__(self, frame: pl.DataFrame) -> None:
@@ -100,6 +101,8 @@ class _FakeDccdClient:
             }
         )
         frame = self._frame
+        if start_ns is not None:
+            frame = frame.filter(pl.col("TS") >= start_ns)
         if end_ns is not None:
             frame = frame.filter(pl.col("TS") <= end_ns)
         return frame
@@ -239,6 +242,106 @@ def test_dccd_latest_returns_full_normalised_frame() -> None:
     full = feed.latest()
     assert list(full.columns) == list(BARS_SCHEMA)
     assert full.height == 3
+
+
+# --- DccdFeed: tail / tail_asof_ms (freshness-gate probe) ------------------ #
+
+
+def test_dccd_tail_overrides_only_the_start_bound() -> None:
+    """`tail(start_ns=...)` forwards a bounded start, keeping span/symbol/end."""
+    span = 60
+    span_ns = span * 1_000_000_000
+    raw = _dccd_ohlc([1.0, 2, 3, 4, 5], start_ns=0, span_ns=span_ns)
+    client = _FakeDccdClient(raw)
+    feed = DccdFeed(client, "binance", "BTC/USDT", span)
+
+    tail = feed.tail(start_ns=3 * span_ns)
+
+    # Only bars from the 3rd span onward — not the full history.
+    assert tail["time"].to_list() == [3 * span_ns, 4 * span_ns]
+    call = client.calls[-1]
+    assert call["start_ns"] == 3 * span_ns
+    assert call["exchange"] == "binance"
+    assert call["symbol"] == "BTC/USDT"
+    assert call["span"] == span
+
+
+def test_dccd_tail_asof_ms_finds_the_newest_bar_in_the_window() -> None:
+    """`tail_asof_ms` reports the newest bar's time (ms) within the tail window."""
+    span = 86_400
+    span_ns = span * 1_000_000_000
+    raw = _dccd_ohlc([1.0, 2, 3], start_ns=0, span_ns=span_ns)  # days 0, 1, 2
+    feed = DccdFeed(_FakeDccdClient(raw), "binance", "BTC/USDT", span)
+
+    # Anchored at day 0 (since_ms=0): the tail window reaches forward to
+    # whatever the store currently has — day 2, the newest bar.
+    assert feed.tail_asof_ms(since_ms=0) == (2 * span_ns) // 1_000_000
+
+
+def test_dccd_tail_asof_ms_anchors_on_since_ms_not_wall_clock() -> None:
+    """The probe anchors on ``since_ms``, never on wall-clock time.
+
+    A store lagging real time by a lot (here the fixture's bars sit at epoch
+    day ~11,000 while the wall clock is "today") would make a wall-clock
+    anchored probe come back empty forever. Anchoring on the caller's own
+    ``since_ms`` avoids that: the probe still finds the newest bar regardless
+    of how far behind wall-clock the data actually is.
+    """
+    span = 86_400
+    span_ns = span * 1_000_000_000
+    far_past_start = 11_000 * span_ns  # deliberately far from "real" wall-clock
+    raw = _dccd_ohlc([1.0, 2], start_ns=far_past_start, span_ns=span_ns)
+    feed = DccdFeed(_FakeDccdClient(raw), "binance", "BTC/USDT", span)
+
+    since_ms = far_past_start // 1_000_000
+    assert (
+        feed.tail_asof_ms(since_ms=since_ms) == (far_past_start + span_ns) // 1_000_000
+    )
+
+
+def test_dccd_tail_asof_ms_none_when_tail_window_holds_no_bar() -> None:
+    """No bar at all in the tail window -> ``None`` (the caller falls back)."""
+    span = 60
+    span_ns = span * 1_000_000_000
+    raw = _dccd_ohlc([1.0], start_ns=0, span_ns=span_ns)
+    feed = DccdFeed(_FakeDccdClient(raw), "binance", "BTC/USDT", span)
+
+    # Anchored well past the only bar -> the tail window starts after it.
+    since_ms = (1_000 * span_ns) // 1_000_000
+    assert feed.tail_asof_ms(since_ms=since_ms) is None
+
+
+def test_dccd_tail_asof_ms_clamps_to_the_configured_start_ns() -> None:
+    """The tail window never reads earlier than the feed's own configured start."""
+    span = 60
+    span_ns = span * 1_000_000_000
+    raw = _dccd_ohlc([1.0, 2, 3], start_ns=0, span_ns=span_ns)
+    client = _FakeDccdClient(raw)
+    configured_start = 1 * span_ns
+    feed = DccdFeed(client, "binance", "BTC/USDT", span, start_ns=configured_start)
+
+    # since_ms=0 with spans=3 would naively probe from before bar 0 — clamped
+    # up to the feed's configured start instead.
+    feed.tail_asof_ms(since_ms=0)
+
+    assert client.calls[-1]["start_ns"] == configured_start
+
+
+def test_dccd_tail_asof_ms_read_error_propagates() -> None:
+    """A read error from the underlying client is not swallowed here.
+
+    The probe makes no correctness promise on its own — the *caller* (a
+    runner's freshness gate) is responsible for catching this and falling back
+    to a full evaluation.
+    """
+
+    class _RaisingClient:
+        def read(self, *args: object, **kwargs: object) -> pl.DataFrame:
+            raise RuntimeError("store unavailable")
+
+    feed = DccdFeed(_RaisingClient(), "binance", "BTC/USDT", 60)  # type: ignore[arg-type]
+    with pytest.raises(RuntimeError, match="store unavailable"):
+        feed.tail_asof_ms(since_ms=0)
 
 
 def test_dccd_rejects_non_positive_span() -> None:

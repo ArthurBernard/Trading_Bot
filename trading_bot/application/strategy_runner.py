@@ -73,6 +73,8 @@ performs no I/O of its own (the router/broker do).
 from __future__ import annotations
 
 import asyncio
+import logging
+import time
 from collections.abc import Callable
 from dataclasses import replace
 from typing import TYPE_CHECKING
@@ -92,6 +94,8 @@ if TYPE_CHECKING:
 
 __all__ = ["StrategyRunner", "OrderFactory"]
 
+logger = logging.getLogger(__name__)
+
 #: A caller-supplied order builder: ``(strategy, delta, bars) -> Order``. Given
 #: the signed target delta (``> 0`` buy, ``< 0`` sell) and the current bar
 #: window, it returns the :class:`Order` to submit (e.g. a LIMIT priced off the
@@ -101,6 +105,15 @@ __all__ = ["StrategyRunner", "OrderFactory"]
 OrderFactory = Callable[["Strategy", Money, "pl.DataFrame"], Order]
 
 _ZERO: Money = money("0")
+
+
+def _now_ms() -> int:
+    """Wall-clock time in milliseconds since the Unix epoch (UTC).
+
+    Used only for :attr:`StrategyRunner.last_eval_ms` bookkeeping — a
+    diagnostic, never consulted by the freshness gate itself.
+    """
+    return int(time.time() * 1000)
 
 
 class StrategyRunner:
@@ -176,6 +189,18 @@ class StrategyRunner:
         # repeated ``run`` calls keeps advancing (never reusing an id within one
         # instance's lifetime).
         self._step_index = 0
+        # The as-of (ms) of the last **completed** `step_latest` evaluation —
+        # ``None`` before the first tick ever runs. The idle-tick freshness gate
+        # compares a cheap tail probe against this to decide whether a new bar
+        # might exist before paying for the full `feed.latest()` load. Only
+        # `step_latest` updates it (a plain `step`/`run` backtest drive is
+        # unaffected).
+        self._last_asof_ms: int | None = None
+        # Wall-clock (ms since epoch) of the last time `step_latest` was
+        # *attempted* — set at the top of every call, whether it skips via the
+        # gate or runs the full evaluation. Not consulted by the gate itself;
+        # surfaced for a follow-up dashboard PR ("unit last checked at ...").
+        self._last_eval_ms: int | None = None
 
     @property
     def strategy(self) -> Strategy:
@@ -186,6 +211,16 @@ class StrategyRunner:
     def step_index(self) -> int:
         """The next step index (== number of windows processed so far)."""
         return self._step_index
+
+    @property
+    def last_asof_ms(self) -> int | None:
+        """The as-of (ms) of the last **completed** `step_latest`, or ``None`` before the first."""
+        return self._last_asof_ms
+
+    @property
+    def last_eval_ms(self) -> int | None:
+        """Wall-clock ms of the last `step_latest` attempt, or ``None`` before the first."""
+        return self._last_eval_ms
 
     async def run(
         self,
@@ -331,14 +366,103 @@ class StrategyRunner:
         repetition. The step index still advances (so a tick that *does* trade
         carries a fresh, unique ``client_order_id``).
 
+        Idle-tick freshness gate
+        ------------------------
+        Before paying for :meth:`~trading_bot.application.data_feed.DataFeed
+        .latest`'s full history read, a cheap tail probe
+        (:meth:`~trading_bot.application.data_feed.DccdFeed.tail_asof_ms`, when
+        the feed exposes one) checks whether a bar newer than
+        :attr:`last_asof_ms` might exist. When it is certain there is none, the
+        tick returns ``None`` **without** touching :meth:`latest` or the
+        ``signal_fn`` at all. Any doubt — no prior baseline yet, the feed offers
+        no tail probe (e.g. :class:`~trading_bot.application.data_feed
+        .InMemoryFeed`, a backtest fixture), an empty tail read, or the probe
+        raising — falls through to the full path: the gate is an optimisation
+        only, never a correctness dependency. The mechanics mirror the portfolio
+        analogue, :meth:`~trading_bot.application.portfolio_runner
+        .PortfolioRunner.rebalance_latest`, sharing the same
+        :class:`~trading_bot.application.data_feed.DccdFeed` tail primitive.
+
+        When the full path does run, the heavy sync read is offloaded via
+        :func:`asyncio.to_thread` so it never stalls concurrent event-loop
+        traffic (e.g. the dashboard's ``/api/health``). Safe for the same
+        reasons as the portfolio runner's offload (see that method's docstring):
+        each managed unit owns its own feed, and the only caller of
+        `step_latest` (the daemon's scheduled tick) never re-enters the same
+        unit concurrently.
+
         Returns
         -------
         Order or None
-            The submitted order, or ``None`` if the latest re-evaluation was on
-            target (``delta == 0``) or in warmup.
+            The submitted order; ``None`` if the freshness gate skipped this
+            tick, or if the latest re-evaluation was on target (``delta == 0``)
+            or in warmup.
 
         """
-        return await self.step(self._feed.latest())
+        self._last_eval_ms = _now_ms()
+        if await self._should_skip_tick():
+            return None
+        # Heavy sync work (a full dccd history read for a live feed) off the
+        # loop — see the docstring above for why this is safe.
+        bars = await asyncio.to_thread(self._feed.latest)
+        order = await self.step(bars)
+        if bars.height > 0:
+            self._last_asof_ms = self._derive_asof_ms(bars)
+        return order
+
+    async def _should_skip_tick(self) -> bool:
+        """The idle-tick freshness gate: True only when certain nothing is new.
+
+        Conservative by construction — any doubt falls through to ``False``
+        (evaluate the full path): no prior baseline yet, the feed exposes no
+        ``tail_asof_ms`` probe, the probe finds no bar in its tail window, or the
+        probe raises. Only a **determinate** tail read that is not newer than
+        :attr:`last_asof_ms` causes a skip. The probe itself runs via
+        :func:`asyncio.to_thread` (it is still a dccd read, just a bounded one).
+        """
+        if self._last_asof_ms is None:
+            return False  # nothing to compare against yet (the first-ever tick)
+        tail_asof_ms = getattr(self._feed, "tail_asof_ms", None)
+        if not callable(tail_asof_ms):
+            return False  # the feed offers no cheap probe (e.g. InMemoryFeed)
+        try:
+            # Anchor the probe on our own last-known as-of (never wall-clock —
+            # see DccdFeed.tail_asof_ms's docstring for why), so a stale store
+            # never permanently defeats the gate.
+            tail_asof = await asyncio.to_thread(
+                tail_asof_ms, since_ms=self._last_asof_ms
+            )
+        except Exception:
+            logger.debug(
+                "%s: freshness-gate tail probe raised; falling through to a "
+                "full evaluation (the gate is an optimisation, never a "
+                "correctness dependency)",
+                self._strategy.name,
+                exc_info=True,
+            )
+            return False
+        if tail_asof is None:
+            return False
+        if tail_asof <= self._last_asof_ms:
+            logger.debug(
+                "%s: freshness gate skipped this tick (tail asof %s <= last asof %s)",
+                self._strategy.name,
+                tail_asof,
+                self._last_asof_ms,
+            )
+            return True
+        return False
+
+    @staticmethod
+    def _derive_asof_ms(bars: pl.DataFrame) -> int:
+        """Derive the as-of ms from the window's latest bar time (ns → ms).
+
+        Mirrors :meth:`~trading_bot.application.portfolio_runner.PortfolioRunner
+        ._derive_asof_ms`: dccd timestamps bars in nanoseconds, so the value is
+        integer-divided to ms. Only called with a non-empty ``bars`` (guarded by
+        :meth:`step_latest`).
+        """
+        return int(bars["time"][-1]) // 1_000_000
 
     def _build_order(self, delta: Money, bars: pl.DataFrame, step: int) -> Order:
         """Build the step's order, stamping the deterministic per-step id.

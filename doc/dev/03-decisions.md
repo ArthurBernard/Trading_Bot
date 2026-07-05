@@ -54,6 +54,78 @@ rejected approaches as tombstones.
   the same operator-facing outcome (no ERROR-level traceback spam) without
   touching request/response plumbing every endpoint relies on.
 
+### 2026-07-05 Daemon tick performance: idle-tick freshness gate + off-loop reload  [accepted]
+- **Choice**: `StrategyRunner.step_latest` / `PortfolioRunner.rebalance_latest`
+  track `last_asof_ms` (the as-of of the last completed evaluation) and
+  `last_eval_ms` (wall-clock of the last tick attempt, for a follow-up dashboard
+  "last checked at" surfacing). Each tick first probes cheaply — a new
+  `DccdFeed.tail`/`tail_asof_ms` (single-instrument) and
+  `PortfolioFeed.tail_asof_ms` (portfolio, reusing the same `DccdFeed.tail`
+  primitive) read only a small bounded window (`spans` bar-widths, anchored on
+  the runner's own `last_asof_ms` — **never wall-clock**, so a store that lags
+  real time never permanently defeats the gate) instead of the feed's full
+  `latest()`/`_read_all()`. If the probe is certain no new bar/common date
+  exists (a determinate result `<= last_asof_ms`), the tick returns
+  immediately — no full reload, no `signal_fn` call. Any doubt (no prior
+  baseline, the feed exposes no probe, an empty tail, or the probe raising)
+  falls through to the full path unconditionally: the gate is an optimisation
+  only, never a correctness dependency, and the full path's inner-join /
+  no-forward-fill / no-lookahead semantics are untouched. When the full path
+  does run (a new bar exists, or the very first tick), the heavy synchronous
+  read + alignment — and the tail probe itself — are offloaded via
+  `asyncio.to_thread`, so a real rebalance never stalls the event loop (the
+  dashboard's `/api/health` and every other concurrent request). The offload is
+  safe because each managed unit owns its own engine (feed/tracker/router are
+  never shared across units — `StrategySupervisor`), and the daemon's
+  APScheduler job runs with its default `max_instances=1` while `step_all`
+  awaits each unit sequentially, so the same unit's tick is never re-entered
+  concurrently.
+- **Why**: a daily-bar portfolio polled every 60s (`trading-bot start --serve
+  --interval 60`) has at most **one** new common date per **1440** ticks, but
+  every tick was calling `PortfolioFeed.latest()` (a full per-coin history read
+  + cross-section re-alignment) synchronously inside the event loop — 1439 of
+  1440 ticks paid a multi-second, multi-GB reload to conclude "nothing new"
+  (production symptom: 343% CPU sustained, 2.3 GB RSS, intermittent multi-second
+  dashboard freezes). Reading the call graph also surfaced a second bug:
+  `PortfolioRunner._asof_ms` preferred `PortfolioFeed.asof_ms()` when present,
+  which performs its *own* full `_read_all()` — a tick that had just loaded
+  `latest()` was silently re-reading the whole history a **second** time only
+  to derive a timestamp already computable from the frames in hand. Fixed by
+  deriving the as-of purely from the already-loaded frames
+  (`_derive_asof_ms`) — a pure, zero-I/O computation.
+- **Real-data verification (caveat worth recording)**: a synthetic dccd store
+  (3 coins × 1-minute bars × 60 days, ~260k rows, real `dccd.Client` reading
+  real parquet, `ResamplingDccdClient` 1m→1d) driven through a real
+  `StrategySupervisor` showed 10 consecutive idle `step_all()` ticks going from
+  10 full evaluations (`signal_fn` called 10×, ~234ms wall / ~1.18s CPU total)
+  to 1 full evaluation + 9 gated skips (`signal_fn` called 1×, ~98ms wall /
+  ~0.41s CPU total — roughly 2.4–2.9×), and a concurrent `/api/health` request
+  fired mid-rebalance went from **fully blocked** (0 requests could make any
+  progress at all during a full tick; a single overlapping request took 99.9%
+  of the tick's own duration) to responsive (24.3% of tick duration for one
+  overlapping request; a burst of 8 requests during a second full tick averaged
+  0.70ms, max 1.33ms). The improvement is real but **not "near-zero"** for a
+  gated tick as originally hoped: dccd's `ParquetStore.load()` decodes every
+  matching parquet file into memory unconditionally before applying the
+  `start_ns`/`end_ns` filter (no row-group/file-level pruning), so a bounded
+  tail probe pays the same file-decode cost as a full read on a single-year
+  store — the gate's saving comes from skipping the downstream resample +
+  cross-coin alignment + signal evaluation, not the raw parquet decode. On a
+  real multi-year store the fixed decode cost would still be paid per probe,
+  but the (typically dominant) resample/align cost drops from O(full history)
+  to O(few days), so the *relative* win should hold or improve as history
+  grows. A genuinely "near-zero" gated tick would need dccd-side lazy/scan
+  predicate pushdown — out of scope here, left as a future dccd-side
+  improvement.
+- **Rejected alternatives**: gating on wall-clock-anchored tail windows (`now -
+  N spans`) — a store lagging real time (a paused collector, a daemon restarted
+  after downtime) would make the probe come back empty forever and permanently
+  defeat the gate; anchoring on the runner's own `last_asof_ms` instead keeps
+  the probe proportional to how stale the *runner* is, not to wall-clock;
+  threading the offload through `interfaces/cli/main.py` — deliberately avoided
+  (another PR was working there); the offload lives entirely inside the
+  runners instead.
+
 ### 2026-07-04 Display-only rounding, exact value on hover (PR #160)  [accepted]
 - **Choice**: a single dependency-free `static/format.js` (the `tbFmt` namespace)
   owns every display transform — grouped/rounded money by quote currency
