@@ -945,6 +945,81 @@ def test_orders_history_limit_caps_to_the_most_recent(tmp_path) -> None:  # noqa
     assert len(capped) == 2 and len(all_hist) > 2
 
 
+async def test_orders_history_and_open_orders_carry_ts(tmp_path) -> None:  # noqa: ANN001
+    """History rows carry the store's stamped `ts`; open-order rows look it up too.
+
+    History rows read `ts` straight off the store column (an exact int match
+    to what `SqliteStore.upsert_order` stamped — the domain `Order` itself
+    carries no `ts`). Open-order rows come from the live router, which also
+    carries no `ts` of its own, so the supervisor looks the same
+    `client_order_id` up in the unit's store: a freshly-persisted id resolves
+    to its stamp, an id the store never saw is `null`.
+    """
+    from trading_bot.domain.order import Order, OrderStatus, OrderType
+    from trading_bot.storage.sqlite_store import SqliteStore
+
+    db = str(tmp_path / "book.sqlite")
+    btc = Instrument(Symbol("BTC", "USD"))
+
+    # A terminal, persisted order — feeds the history-row assertion.
+    filled = Order(
+        "hist-1",
+        btc,
+        OrderSide.BUY,
+        money("1"),
+        OrderType.LIMIT,
+        limit_price=money("100"),
+    )
+    filled.status = OrderStatus.FILLED
+    filled.filled_qty = money("1")
+    store = SqliteStore(db)
+    store.upsert_order(filled)
+    stamped_ts = store.order_ts_map()["hist-1"]
+    store.close()
+
+    sup = StrategySupervisor(
+        _fills_config_with_store(db), dccd_client=_two_venue_client()
+    )
+    client = TestClient(create_dashboard_app(sup))
+
+    hist = client.get("/api/orders?history=true").json()
+    hist_row = next(r for r in hist if r["client_order_id"] == "hist-1")
+    assert hist_row["ts"] == stamped_ts
+
+    # A running unit's open (non-terminal) order: persisted at submit, then
+    # seeded straight into the live router (mirrors `router.restore()` on
+    # startup) — `open_orders()` must resolve its `ts` from the same store.
+    await sup.start("btc-kraken")
+    unit = sup._units["btc-kraken"]  # noqa: SLF001 — seed the live router directly
+    open_order = Order(
+        "open-1",
+        btc,
+        OrderSide.BUY,
+        money("1"),
+        OrderType.LIMIT,
+        limit_price=money("90"),
+    )
+    assert unit.engine is not None and unit.engine.store is not None
+    unit.engine.store.upsert_order(open_order)
+    unit.engine.router.restore([open_order])
+    # An order the router tracks but the store never saw — ts must be null.
+    ghost = Order(
+        "ghost-1",
+        btc,
+        OrderSide.SELL,
+        money("1"),
+        OrderType.LIMIT,
+        limit_price=money("90"),
+    )
+    unit.engine.router.restore([ghost])
+
+    live = client.get("/api/orders").json()
+    live_row = next(r for r in live if r["client_order_id"] == "open-1")
+    ghost_row = next(r for r in live if r["client_order_id"] == "ghost-1")
+    assert isinstance(live_row["ts"], int) and live_row["ts"] > 0
+    assert ghost_row["ts"] is None
+
+
 # --- Orders + Logs page markup --------------------------------------------- #
 
 
@@ -967,6 +1042,9 @@ def test_orders_page_has_tables_and_filters() -> None:
     # history read comes back at exactly the server's default ?limit= cap.
     assert 'id="orders-cap"' in html and "showing the most recent 200" in html
     assert 'id="fills-cap"' in html
+    # The Orders table's Time column (order date/time, this leaf) — mirrors the
+    # Fills table's own Time column.
+    assert html.count("<th>Time</th>") == 2  # one in Orders, one in Fills
 
 
 def test_logs_page_has_feed_and_subscribes_to_sse() -> None:
@@ -999,6 +1077,8 @@ def test_overview_page_has_kpi_strip_and_tables() -> None:
     assert 'data-group="strategy"' in html
     assert 'class="btn pos-group is-active" data-group="strategy"' in html
     assert 'id="orders-table"' in html
+    # The open-orders table's Time column (order date/time, this leaf).
+    assert "<th>Time</th>" in html
     # The summary strip (running/total strategies, open orders, total PnL, next
     # tick) sits above the KPI card.
     assert 'id="summary-strip"' in html
@@ -1181,6 +1261,32 @@ def test_strategies_endpoint_lists_units_with_exchange() -> None:
     assert s["quote"] == "USD"
 
 
+async def test_strategies_endpoint_last_eval_and_asof_ts() -> None:
+    """`GET /api/strategies` carries `last_eval_ts`/`last_asof_ts`, set after a tick.
+
+    Both are `None` before the unit has ever ticked via its `*_latest` path
+    (incl. a never-started unit — PR #168's diagnostic fields). Driving one
+    tick through the supervisor's `step_all` (the daemon's own path) stamps
+    both: `last_eval_ts` is the wall-clock of the attempt, `last_asof_ts` the
+    as-of of the data actually evaluated.
+    """
+    pytest.importorskip("fynance")  # ma_crossover evaluates fynance.sma
+    sup = StrategySupervisor(_config(), dccd_client=_FakeStartClient())
+    client = TestClient(create_dashboard_app(sup))
+
+    # Never started/ticked -> both null.
+    [before] = client.get("/api/strategies").json()
+    assert before["last_eval_ts"] is None
+    assert before["last_asof_ts"] is None
+
+    await sup.start("btc-ma")
+    assert await sup.step_all() == 1  # the one running unit stepped once
+
+    [after] = client.get("/api/strategies").json()
+    assert isinstance(after["last_eval_ts"], int) and after["last_eval_ts"] > 0
+    assert isinstance(after["last_asof_ts"], int) and after["last_asof_ts"] > 0
+
+
 def test_set_mode_testnet_then_paper() -> None:
     """Switching paper ↔ testnet needs no confirmation and updates the mode."""
     client = _client()
@@ -1267,6 +1373,9 @@ def test_strategies_page_has_table_and_live_modal() -> None:
     assert "<th>Cadence</th>" in html
     assert "<th>Next bar</th>" in html
     assert 'id="strategies-updated"' in html
+    # Last eval column (this leaf): when the strategy last ticked, relative-time
+    # in the cell with the absolute eval instant + as-of data date in `title`.
+    assert "<th>Last eval</th>" in html
 
 
 def test_strategies_page_read_only_note() -> None:

@@ -123,6 +123,22 @@ class StrategyStatus:
     open_orders : int
         The number of orders the unit's router currently tracks as non-terminal
         (``0`` when stopped).
+    last_eval_ts : int or None
+        Wall-clock (epoch ms) of the last time the unit's runner *attempted* a
+        tick (:attr:`~trading_bot.application.strategy_runner.StrategyRunner
+        .last_eval_ms` / :attr:`~trading_bot.application.portfolio_runner
+        .PortfolioRunner.last_eval_ms`) — set at the top of every
+        ``step_latest``/``rebalance_latest`` call, whether it skips via the
+        freshness gate or runs the full evaluation. ``None`` when the unit has
+        never been stepped via its ``*_latest`` path (incl. a stopped unit, or
+        one only driven through the plain ``run``/``step`` backtest API).
+    last_asof_ts : int or None
+        The as-of (epoch ms) of the last **completed** evaluation — the latest
+        bar time the runner actually evaluated
+        (:attr:`~trading_bot.application.strategy_runner.StrategyRunner
+        .last_asof_ms` / :attr:`~trading_bot.application.portfolio_runner
+        .PortfolioRunner.last_asof_ms`), i.e. "the data this strategy last
+        computed on". ``None`` before the first completed evaluation.
 
     """
 
@@ -135,6 +151,8 @@ class StrategyStatus:
     running: bool
     realised_pnl: Money | None
     open_orders: int
+    last_eval_ts: int | None = None
+    last_asof_ts: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -198,12 +216,19 @@ class OrderRow:
     order : Order
         The live order aggregate (money fields intact as
         :class:`~decimal.Decimal`); the API renders it with money as strings.
+    ts : int or None
+        The order's persisted-at time (epoch ms) — when it was **first**
+        written to the unit's store (:meth:`~trading_bot.storage.sqlite_store
+        .SqliteStore.upsert_order` stamps it once, on first insert; it never
+        moves on a later status update). ``None`` when the unit has no store,
+        or the order predates any store the unit ever had.
 
     """
 
     strategy: str
     exchange: str
     order: Order
+    ts: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -806,6 +831,8 @@ class StrategySupervisor:
     def _status_of(unit: _Unit) -> StrategyStatus:
         realised: Money | None = None
         open_orders = 0
+        last_eval_ts: int | None = None
+        last_asof_ts: int | None = None
         if unit.running and unit.engine is not None:
             realised = unit.engine.perf.realised_pnl()
             open_orders = sum(
@@ -813,6 +840,15 @@ class StrategySupervisor:
                 for order in unit.engine.router.tracked_orders().values()
                 if not order.is_terminal
             )
+        if unit.runner is not None:
+            # The runner survives independently of `unit.running` in practice
+            # (it is nulled by the same teardown that flips `running` off — see
+            # `_teardown`), but reading through it directly (rather than gating
+            # on `unit.running`) keeps this in lockstep with wherever the runner
+            # actually lives, matching `last_eval_ms`/`last_asof_ms`'s own
+            # "None before the first *_latest tick" contract.
+            last_eval_ts = unit.runner.last_eval_ms
+            last_asof_ts = unit.runner.last_asof_ms
         entry = _unit_entry(unit)
         return StrategyStatus(
             name=unit.name,
@@ -824,6 +860,8 @@ class StrategySupervisor:
             running=unit.running,
             realised_pnl=realised,
             open_orders=open_orders,
+            last_eval_ts=last_eval_ts,
+            last_asof_ts=last_asof_ts,
         )
 
     # --- aggregate read accessors (for the dashboard Overview) ------------- #
@@ -891,6 +929,7 @@ class StrategySupervisor:
         rows: list[OrderRow] = []
         for unit in self._running_units():
             assert unit.engine is not None
+            ts_map = self._order_ts_map_of(unit)
             for order in unit.engine.router.tracked_orders().values():
                 if not order.is_terminal:
                     rows.append(
@@ -898,6 +937,7 @@ class StrategySupervisor:
                             strategy=unit.name,
                             exchange=unit.exchange,
                             order=order,
+                            ts=ts_map.get(order.client_order_id),
                         )
                     )
         return rows
@@ -934,9 +974,15 @@ class StrategySupervisor:
                 # catching a just-submitted order not yet flushed to the store).
                 for order in unit.engine.router.tracked_orders().values():
                     by_cid[order.client_order_id] = order
+            ts_map = self._order_ts_map_of(unit)
             for order in by_cid.values():
                 rows.append(
-                    OrderRow(strategy=unit.name, exchange=unit.exchange, order=order)
+                    OrderRow(
+                        strategy=unit.name,
+                        exchange=unit.exchange,
+                        order=order,
+                        ts=ts_map.get(order.client_order_id),
+                    )
                 )
         return rows
 
@@ -984,6 +1030,27 @@ class StrategySupervisor:
         if db_path is None:
             return []
         return SqliteStore(db_path).orders()
+
+    @staticmethod
+    def _order_ts_map_of(unit: _Unit) -> dict[str, int]:
+        """The unit's ``client_order_id -> ts`` (epoch ms) persisted-order map.
+
+        Mirrors :meth:`_stored_fills_of`'s dual read path: a running unit reads
+        its live ``engine.store`` (flushed first, so a just-submitted order's
+        ``ts`` is not missed to the off-loop writer's lag); a stopped unit reads
+        a store opened at its configured ``db_path`` (empty when unset — nowhere
+        to read from). Used by :meth:`open_orders` / :meth:`order_history` to
+        tag each :class:`OrderRow` with "when was this order first persisted"
+        (``None`` when the lookup misses — no store, or the order predates any
+        store the unit ever had).
+        """
+        if unit.running and unit.engine is not None and unit.engine.store is not None:
+            unit.engine.store.flush()
+            return unit.engine.store.order_ts_map()
+        db_path = unit.config.storage.db_path
+        if db_path is None:
+            return {}
+        return SqliteStore(db_path).order_ts_map()
 
     def kpi(self, level: KpiLevel = "strategy") -> list[KpiRow]:
         """Realised PnL + fees (+ per-strategy ratios) at ``level``.

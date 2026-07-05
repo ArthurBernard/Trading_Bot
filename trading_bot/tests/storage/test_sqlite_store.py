@@ -256,6 +256,33 @@ def test_order_ts_is_stable_across_re_upserts(tmp_path) -> None:
     assert second_ts == first_ts
 
 
+def test_order_ts_map_matches_the_column_and_omits_unknown_ids(tmp_path) -> None:
+    """`order_ts_map()` returns `{client_order_id: ts}` matching the raw column.
+
+    The rebuilt domain `Order` carries no `ts` (see `orders()`'s docstring), so
+    the dashboard's order-history/open-orders rows read it from this bulk
+    companion instead — one query, keyed by `client_order_id`.
+    """
+    store = _store(tmp_path)
+    store.upsert_order(_order(cid="a"))
+    store.upsert_order(_order(cid="b"))
+
+    ts_map = store.order_ts_map()
+    assert set(ts_map) == {"a", "b"}
+    a_order = store.get_order("a")
+    assert a_order is not None
+    raw = sqlite3.connect(str(tmp_path / "engine.db"))
+    try:
+        (raw_ts,) = raw.execute(
+            "SELECT ts FROM orders WHERE client_order_id='a'"
+        ).fetchone()
+    finally:
+        raw.close()
+    assert ts_map["a"] == raw_ts
+    # An id never persisted is simply absent (not a KeyError/None entry).
+    assert "nope" not in ts_map
+
+
 def test_rejected_order_keeps_reject_reason_and_fill_tolerance(tmp_path) -> None:
     """A reloaded REJECTED order restores reject_reason and a custom fill_tolerance."""
     store = _store(tmp_path)

@@ -35,6 +35,7 @@
     <table id="orders-table">
       <thead>
         <tr>
+          <th>Time</th>
           <th>Strategy</th>
           <th>Exchange</th>
           <th>Instrument</th>
@@ -47,7 +48,7 @@
         </tr>
       </thead>
       <tbody id="orders-body">
-        <tr class="empty"><td colspan="9">Loading…</td></tr>
+        <tr class="empty"><td colspan="10">Loading…</td></tr>
       </tbody>
     </table>
   </div>
@@ -150,7 +151,7 @@
       rows = await api('GET', '/api/orders' + filterQuery('history=true'));
     } catch (e) {
       document.getElementById('orders-body').innerHTML =
-        '<tr class="empty"><td colspan="9">' + escapeHtml(e.message) + '</td></tr>';
+        '<tr class="empty"><td colspan="10">' + escapeHtml(e.message) + '</td></tr>';
       return [];
     }
     var body = document.getElementById('orders-body');
@@ -161,13 +162,19 @@
     toggleCapCaption('orders-cap', rows);
     if (guard === 'skip-stamp') return rows;
     if (!rows.length) {
-      body.innerHTML = '<tr class="empty"><td colspan="9">No orders.</td></tr>';
+      body.innerHTML = '<tr class="empty"><td colspan="10">No orders.</td></tr>';
       return rows;
     }
-    body.innerHTML = rows.map(function (o) {
+    // Most recent first (the API returns oldest-first, mirroring the Fills
+    // table below).
+    var ordered = rows.slice().reverse();
+    body.innerHTML = ordered.map(function (o) {
       var sideCls = o.side === 'buy' ? 'side-buy' : 'side-sell';
       var unit = tbFmt.splitInstrument(o.instrument);
+      // Absolute time with seconds, visible; relative ("3m ago") on hover —
+      // mirrors the Fills table's Time column exactly.
       return '<tr>' +
+        '<td class="num" title="' + escapeHtml(fmtRelative(o.ts)) + '">' + escapeHtml(fmtDate(o.ts, { seconds: true })) + '</td>' +
         '<td>' + escapeHtml(o.strategy) + '</td>' +
         '<td>' + escapeHtml(o.exchange) + '</td>' +
         '<td>' + escapeHtml(o.instrument) + '</td>' +

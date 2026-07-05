@@ -322,13 +322,19 @@ def _position_row_dict(row: PositionRow) -> dict[str, Any]:
 
 
 def _order_row_dict(row: OrderRow) -> dict[str, Any]:
-    """Render a supervisor :class:`OrderRow` — the order dict + strategy/venue tags."""
+    """Render a supervisor :class:`OrderRow` — the order dict + strategy/venue tags.
+
+    ``ts`` (epoch ms, or ``null``) is when the order was **first** persisted to
+    the unit's store — already an integer, unlike the money fields, so it needs
+    no stringification.
+    """
     return {
         "strategy": row.strategy,
         "exchange": row.exchange,
         # The instrument's base asset — the crypto filter key (orders carry no base
         # tag of their own; derive it from the instrument for the ?crypto= filter).
         "base": str(row.order.instrument).split("/", 1)[0],
+        "ts": row.ts,
         **_order_dict(row.order),
     }
 
@@ -1213,7 +1219,12 @@ def _discover_signals() -> dict[str, list[str]]:
 
 
 def _status_dict(status: StrategyStatus) -> dict[str, Any]:
-    """Render a :class:`StrategyStatus` for JSON (money as exact Decimal string)."""
+    """Render a :class:`StrategyStatus` for JSON (money as exact Decimal string).
+
+    ``last_eval_ts`` / ``last_asof_ts`` are already integer epoch ms (or
+    ``None``) on the domain side — no stringification needed, unlike the money
+    fields.
+    """
     return {
         "name": status.name,
         "kind": status.kind,
@@ -1226,6 +1237,8 @@ def _status_dict(status: StrategyStatus) -> dict[str, Any]:
             str(status.realised_pnl) if status.realised_pnl is not None else None
         ),
         "open_orders": status.open_orders,
+        "last_eval_ts": status.last_eval_ts,
+        "last_asof_ts": status.last_asof_ts,
     }
 
 
