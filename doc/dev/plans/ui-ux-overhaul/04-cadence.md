@@ -1,12 +1,12 @@
 ---
 plan: ui-ux-overhaul/04-cadence
 kind: leaf
-status: planned
+status: done
 complexity: medium
 depends: [03]
 parallel: false
 branch: feat/ui-cadence
-pr: ""
+pr: "#162"
 ---
 
 # Leaf 04 — Cadence made visible: next tick, next bar close, freshness

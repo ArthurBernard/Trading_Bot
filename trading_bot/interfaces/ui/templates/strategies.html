@@ -12,6 +12,7 @@
   <div class="row" style="justify-content:space-between;">
     <h2 style="margin:0;">Strategies</h2>
     <span class="row">
+      <span class="updated" id="strategies-updated"></span>
       <span class="chip"><b id="sum-total">—</b> total</span>
       <span class="chip"><b id="sum-running">—</b> running</span>
     </span>
@@ -27,13 +28,15 @@
           <th>Kind</th>
           <th>Mode</th>
           <th>Status</th>
+          <th>Cadence</th>
+          <th>Next bar</th>
           <th class="num">Realised PnL</th>
           <th class="num">Open orders</th>
           <th>Action</th>
         </tr>
       </thead>
       <tbody id="strategies-body">
-        <tr class="empty"><td colspan="7">Loading…</td></tr>
+        <tr class="empty"><td colspan="9">Loading…</td></tr>
       </tbody>
     </table>
   </div>
@@ -132,6 +135,26 @@
     return '<select data-name="' + escapeHtml(s.name) + '" class="mode-select" aria-label="mode"' + dis + '>' + opts + '</select>';
   }
 
+  // Cadence — the unit's bar span humanized ("1d bars" / "1h bars" / "15m
+  // bars"); muted "—" for a missing/zero span (older payload, or a unit with
+  // no bar cadence).
+  function cadenceCell(s) {
+    const label = tbTime.humanSpan(s.span);
+    return label == null ? '<span class="muted">—</span>' : escapeHtml(label) + ' bars';
+  }
+
+  // Next bar — a live countdown (hooked into base.html's shared
+  // tickCountdowns()) to the next epoch-aligned bar boundary, with the
+  // absolute local datetime in `title`. Muted "—" for a stopped unit or a
+  // missing/zero span — there is nothing to count down to.
+  function nextBarCell(s) {
+    if (!s.running) return '<span class="muted">—</span>';
+    const ts = tbTime.nextBarCloseMs(s.span);
+    if (ts == null) return '<span class="muted">—</span>';
+    return '<span data-countdown-ts="' + ts + '" title="' + escapeHtml(fmtDate(ts)) + '">' +
+      escapeHtml(tbTime.countdown(ts)) + '</span>';
+  }
+
   function rowHtml(s) {
     const status = s.running
       ? '<span class="run-pill is-running"><span class="dot"></span>running</span>'
@@ -153,6 +176,8 @@
       '<td>' + escapeHtml(s.kind) + '</td>' +
       '<td><span class="badge badge-' + escapeHtml(s.mode) + '">' + escapeHtml(s.mode) + '</span> ' + modeSelect(s) + '</td>' +
       '<td>' + status + '</td>' +
+      '<td>' + cadenceCell(s) + '</td>' +
+      '<td>' + nextBarCell(s) + '</td>' +
       '<td class="num ' + pnlClass(s.realised_pnl) + '">' + pnl + '</td>' +
       '<td class="num">' + escapeHtml(s.open_orders) + '</td>' +
       '<td>' + action + '</td>' +
@@ -160,7 +185,7 @@
   }
 
   function groupHeaderHtml(exchange, count) {
-    return '<tr class="group"><td colspan="7">' +
+    return '<tr class="group"><td colspan="9">' +
       '<span class="group-name">' + escapeHtml(exchange) + '</span>' +
       '<span class="group-count">' + count + '</span></td></tr>';
   }
@@ -170,13 +195,14 @@
     try {
       list = await api('GET', '/api/strategies');
     } catch (e) {
-      body.innerHTML = '<tr class="empty"><td colspan="7">' + escapeHtml(e.message) + '</td></tr>';
+      body.innerHTML = '<tr class="empty"><td colspan="9">' + escapeHtml(e.message) + '</td></tr>';
       return;
     }
+    stampUpdated('strategies-updated');
     sumTotal.textContent = list.length;
     sumRunning.textContent = list.filter(function (s) { return s.running; }).length;
     if (!list.length) {
-      body.innerHTML = '<tr class="empty"><td colspan="7">No strategies declared.</td></tr>';
+      body.innerHTML = '<tr class="empty"><td colspan="9">No strategies declared.</td></tr>';
       return;
     }
     // Group strategies by exchange (alphabetical), each under a header row.

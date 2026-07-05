@@ -27,7 +27,10 @@
 
 <!-- Orders — open + recent history (any status) across the units. -->
 <section class="card" id="orders-card">
-  <h2>Orders (open + recent)</h2>
+  <div class="row" style="justify-content:space-between;">
+    <h2 style="margin:0;">Orders (open + recent)</h2>
+    <span class="updated" id="orders-updated"></span>
+  </div>
   <div class="table-wrap">
     <table id="orders-table">
       <thead>
@@ -52,7 +55,10 @@
 
 <!-- Fills — the confirmed execution history (the PnL source of truth). -->
 <section class="card" id="fills-card">
-  <h2>Fills (history)</h2>
+  <div class="row" style="justify-content:space-between;">
+    <h2 style="margin:0;">Fills (history)</h2>
+    <span class="updated" id="fills-updated"></span>
+  </div>
   <div class="table-wrap">
     <table id="fills-table">
       <thead>
@@ -130,6 +136,7 @@
         '<tr class="empty"><td colspan="9">' + escapeHtml(e.message) + '</td></tr>';
       return [];
     }
+    stampUpdated('orders-updated');
     var body = document.getElementById('orders-body');
     if (!rows.length) {
       body.innerHTML = '<tr class="empty"><td colspan="9">No orders.</td></tr>';
@@ -163,6 +170,7 @@
         '<tr class="empty"><td colspan="8">' + escapeHtml(e.message) + '</td></tr>';
       return [];
     }
+    stampUpdated('fills-updated');
     var body = document.getElementById('fills-body');
     if (!rows.length) {
       body.innerHTML = '<tr class="empty"><td colspan="8">No fills.</td></tr>';

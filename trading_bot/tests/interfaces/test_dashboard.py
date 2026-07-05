@@ -109,6 +109,20 @@ def test_every_page_references_format_js(path: str) -> None:
     assert "/static/format.js" in html, path
 
 
+@pytest.mark.parametrize("path", _PAGES)
+def test_every_page_carries_the_cadence_helpers(path: str) -> None:
+    """Every page's shell (base.html) exposes the shared `tbTime` cadence helpers.
+
+    Leaf 04 (ui-ux-overhaul): the live next-tick/next-bar countdowns and the
+    "updated at" stamps are driven from base.html's single shared 1s tick, so
+    every page must carry it — not just the ones with a countdown cell today.
+    """
+    html = _client().get(path).text
+    assert "tbTime" in html, path
+    assert "data-countdown-ts" in html, path
+    assert "stampUpdated" in html, path
+
+
 def test_active_tab_is_highlighted() -> None:
     """The nav marks the current route active (Overview on ``/``, Orders on ``/orders``)."""
     overview = _client().get("/").text
@@ -843,6 +857,9 @@ def test_orders_page_has_tables_and_filters() -> None:
     # It fetches both history endpoints (orders history + fills).
     assert "/api/orders" in html and "history=true" in html
     assert "/api/fills" in html
+    # Freshness stamps on both tables (ui-ux leaf 04).
+    assert 'id="orders-updated"' in html
+    assert 'id="fills-updated"' in html
 
 
 def test_logs_page_has_feed_and_subscribes_to_sse() -> None:
@@ -876,6 +893,10 @@ def test_overview_page_has_kpi_strip_and_tables() -> None:
     assert 'id="sum-open-orders"' in html
     assert 'id="sum-pnl"' in html
     assert 'id="sum-next-tick"' in html
+    # Freshness stamps on the KPI/positions/open-orders cards (ui-ux leaf 04).
+    assert 'id="kpi-updated"' in html
+    assert 'id="positions-updated"' in html
+    assert 'id="overview-orders-updated"' in html
     # View preferences persist across reloads.
     assert "tb.overview.posGroup" in html
     assert "tb.overview.kpiLevel" in html
@@ -1072,6 +1093,11 @@ def test_strategies_page_has_table_and_live_modal() -> None:
     assert 'id="live-modal"' in html  # the deliberate go-live confirmation
     assert "I UNDERSTAND" in html  # the typed-confirmation phrase
     assert "/api/strategies" in html  # it wires the control endpoints
+    # Cadence made visible (ui-ux leaf 04): bar cadence + next-bar-close columns,
+    # and a freshness stamp on the table's header.
+    assert "<th>Cadence</th>" in html
+    assert "<th>Next bar</th>" in html
+    assert 'id="strategies-updated"' in html
 
 
 def test_strategies_page_read_only_note() -> None:
