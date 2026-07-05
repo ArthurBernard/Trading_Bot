@@ -2225,6 +2225,168 @@ def test_start_serve_folds_onto_create_dashboard_app(
     assert health["tick"] == "every 0.05s"
 
 
+def _patch_serve_stack(monkeypatch: pytest.MonkeyPatch) -> dict[str, object]:
+    """Patch the uvicorn Server/Config used by `start --serve` and spy the app factory.
+
+    Makes `_run_daemon`'s served branch return immediately (no socket ever opens)
+    and records the ``host``/``port`` handed to ``uvicorn.Config`` plus the kwargs
+    handed to ``create_dashboard_app`` (notably ``auth_token``) — the two places the
+    resolved web settings actually land.
+    """
+    import uvicorn
+
+    import trading_bot.interfaces.api as api_pkg
+
+    captured: dict[str, object] = {}
+    real_factory = api_pkg.create_dashboard_app
+
+    def _spy_factory(supervisor: object, **kwargs: object) -> object:
+        built_app = real_factory(supervisor, **kwargs)  # type: ignore[arg-type]
+        captured["app"] = built_app
+        captured["dashboard_kwargs"] = kwargs
+        return built_app
+
+    def _fake_config(app: object, **kwargs: object) -> object:
+        captured["config_kwargs"] = kwargs
+        return object()
+
+    class _FakeServer:
+        def __init__(self, config: object) -> None:
+            self.config = config
+
+        async def serve(self) -> None:
+            return None  # return immediately (no socket, no blocking)
+
+    monkeypatch.setattr(api_pkg, "create_dashboard_app", _spy_factory)
+    monkeypatch.setattr(uvicorn, "Config", _fake_config)
+    monkeypatch.setattr(uvicorn, "Server", _FakeServer)
+    return captured
+
+
+def test_start_serve_reads_ui_settings_from_the_manifest(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:  # noqa: ANN001
+    """`start --serve` with no `--serve-*` flags binds host/port/token from the manifest.
+
+    Mirrors ``dashboard``'s manifest resolution
+    (``test_dashboard_reads_ui_settings_from_the_manifest``): a manifest configured
+    once serves the control dashboard the same way whether launched via ``dashboard``
+    or ``start --serve``. Also proves a non-loopback manifest host is accepted when
+    the manifest itself carries the token.
+    """
+    monkeypatch.delenv("TRADING_BOT_UI_TOKEN", raising=False)
+    captured = _patch_serve_stack(monkeypatch)
+    manifest = _write_ui_manifest(
+        tmp_path, {"host": "0.0.0.0", "port": 9400, "token": "cfg-tok"}
+    )
+
+    result = runner.invoke(
+        cli_app, ["start", "--serve", "-c", manifest, "--interval", "0.05"]
+    )
+
+    assert result.exit_code == 0, result.output  # non-loopback allowed (config token)
+    config_kwargs = captured["config_kwargs"]
+    assert isinstance(config_kwargs, dict)
+    assert config_kwargs["host"] == "0.0.0.0"
+    assert config_kwargs["port"] == 9400
+    dashboard_kwargs = captured["dashboard_kwargs"]
+    assert isinstance(dashboard_kwargs, dict)
+    assert dashboard_kwargs["auth_token"] == "cfg-tok"
+
+
+def test_start_serve_cli_flags_override_the_ui_config(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:  # noqa: ANN001
+    """Explicit `--serve-host` / `--serve-port` / `--serve-token` win over the manifest."""
+    monkeypatch.delenv("TRADING_BOT_UI_TOKEN", raising=False)
+    captured = _patch_serve_stack(monkeypatch)
+    manifest = _write_ui_manifest(
+        tmp_path, {"host": "0.0.0.0", "port": 9400, "token": "cfg-tok"}
+    )
+
+    result = runner.invoke(
+        cli_app,
+        [
+            "start",
+            "--serve",
+            "-c",
+            manifest,
+            "--interval",
+            "0.05",
+            "--serve-host",
+            "127.0.0.1",
+            "--serve-port",
+            "9500",
+            "--serve-token",
+            "flag-tok",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    config_kwargs = captured["config_kwargs"]
+    assert isinstance(config_kwargs, dict)
+    assert config_kwargs["host"] == "127.0.0.1"  # flag overrode the manifest
+    assert config_kwargs["port"] == 9500
+    dashboard_kwargs = captured["dashboard_kwargs"]
+    assert isinstance(dashboard_kwargs, dict)
+    assert dashboard_kwargs["auth_token"] == "flag-tok"
+
+
+def test_start_serve_no_config_no_flags_defaults_to_loopback_no_auth(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """No `--config` and no `--serve-*` flags: `start --serve` stays loopback :8000, no auth.
+
+    A bare :class:`~trading_bot.application.config.AppConfig`'s ``ui`` defaults must
+    keep today's behaviour so an operator who never touches the manifest sees no
+    change.
+    """
+    monkeypatch.delenv("TRADING_BOT_UI_TOKEN", raising=False)
+    captured = _patch_serve_stack(monkeypatch)
+
+    result = runner.invoke(cli_app, ["start", "--serve", "--interval", "0.05"])
+
+    assert result.exit_code == 0, result.output
+    config_kwargs = captured["config_kwargs"]
+    assert isinstance(config_kwargs, dict)
+    assert config_kwargs["host"] == "127.0.0.1"
+    assert config_kwargs["port"] == 8000
+    dashboard_kwargs = captured["dashboard_kwargs"]
+    assert isinstance(dashboard_kwargs, dict)
+    assert dashboard_kwargs["auth_token"] is None
+
+
+def test_start_serve_non_loopback_without_token_refuses(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A non-loopback `--serve-host` with no token anywhere refuses (never serves).
+
+    Mirrors ``test_dashboard_non_loopback_without_token_refuses``: the same guard
+    (currently evaluated in ``_run_daemon``) still applies once the host/token have
+    been resolved from flags/env/manifest.
+    """
+    monkeypatch.delenv("TRADING_BOT_UI_TOKEN", raising=False)
+    called = {"server": False}
+
+    class _FakeServer:
+        def __init__(self, config: object) -> None:  # pragma: no cover
+            called["server"] = True
+
+        async def serve(self) -> None:  # pragma: no cover
+            return None
+
+    import uvicorn
+
+    monkeypatch.setattr(uvicorn, "Server", _FakeServer)
+    monkeypatch.setattr(uvicorn, "Config", lambda *a, **k: object())
+
+    result = runner.invoke(cli_app, ["start", "--serve", "--serve-host", "0.0.0.0"])
+
+    assert result.exit_code != 0
+    assert called["server"] is False  # never reached uvicorn
+    assert "token" in result.output.lower()
+
+
 async def test_start_serve_disables_uvicorn_signal_capture_and_owns_shutdown(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

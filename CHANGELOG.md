@@ -70,6 +70,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `serve()` returned, killing the process before the daemon's `finally` ran);
   the dashboard's `/api/events` SSE stream also no longer spams an ERROR-level
   cancellation traceback on every shutdown while a client holds it open.
+- **`start --serve` honours the manifest's `ui:` section.** `--serve-host` /
+  `--serve-port` / `--serve-token` now fall back to the manifest's `ui.host` /
+  `ui.port` / `ui.token` (like `dashboard` already does) instead of always
+  defaulting to loopback `:8000` with no token; explicit flags/env still
+  override.
 
 ### Deprecated
 
