@@ -1,12 +1,12 @@
 ---
 plan: ui-ux-overhaul/05-tables-polish
 kind: leaf
-status: planned
+status: done
 complexity: medium
 depends: [04]
 parallel: false
 branch: feat/ui-tables-polish
-pr: ""
+pr: "#163"
 ---
 
 # Leaf 05 — Tables & event-feed polish

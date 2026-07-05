@@ -123,6 +123,21 @@ def test_every_page_carries_the_cadence_helpers(path: str) -> None:
     assert "stampUpdated" in html, path
 
 
+@pytest.mark.parametrize("path", _PAGES)
+def test_every_page_carries_the_status_badge_language(path: str) -> None:
+    """Every page's shell (base.html) carries the order-status badge CSS + helper.
+
+    Leaf 05 (ui-ux-overhaul): order-status badges (Orders page + Overview
+    open-orders) share one `statusBadge()` JS helper and `.badge-status-*` CSS
+    defined once in base.html, so every page must carry them.
+    """
+    html = _client().get(path).text
+    assert "statusBadge" in html, path
+    assert ".badge-status-ok" in html, path
+    assert ".badge-status-warn" in html, path
+    assert ".badge-status-err" in html, path
+
+
 def test_active_tab_is_highlighted() -> None:
     """The nav marks the current route active (Overview on ``/``, Orders on ``/orders``)."""
     overview = _client().get("/").text
@@ -475,6 +490,10 @@ def test_pnl_page_has_chart_container_and_selector() -> None:
     assert "/static/uplot.min.css" in html  # its stylesheet
     assert "/api/pnl" in html  # it fetches the per-mode series
     assert "/api/strategies" in html  # it populates the selector
+    # The stats table's Return column (realised PnL / v0, ui-ux leaf 05) + the
+    # muted starting-capital note near it.
+    assert '<th class="num">Return</th>' in html
+    assert 'id="pnl-v0-note"' in html
 
 
 def test_format_js_is_served_with_the_tbfmt_namespace() -> None:
@@ -842,6 +861,43 @@ def test_orders_history_reads_stored_orders(tmp_path) -> None:  # noqa: ANN001
     assert only_kraken and all(o["exchange"] == "kraken" for o in only_kraken)
 
 
+def test_orders_history_limit_caps_to_the_most_recent(tmp_path) -> None:  # noqa: ANN001
+    """`GET /api/orders?history=true&limit=N` caps to the N most recent rows.
+
+    The Orders page's history-cap caption (ui-ux leaf 05) keys off the
+    response coming back at exactly the requested/default cap — this proves
+    that shape is real: several stored orders, a ``?limit=`` narrower than the
+    full history, and the response is exactly that many rows.
+    """
+    from trading_bot.domain.order import Order, OrderStatus, OrderType
+    from trading_bot.storage.sqlite_store import SqliteStore
+
+    db = str(tmp_path / "book.sqlite")
+    btc = Instrument(Symbol("BTC", "USD"))
+    store = SqliteStore(db)
+    for i in range(3):
+        order = Order(
+            f"oc{i}",
+            btc,
+            OrderSide.BUY,
+            money("1"),
+            OrderType.LIMIT,
+            limit_price=money("100"),
+        )
+        order.status = OrderStatus.FILLED
+        order.filled_qty = money("1")
+        store.upsert_order(order)
+
+    sup = StrategySupervisor(
+        _fills_config_with_store(db), dccd_client=_two_venue_client()
+    )
+    client = TestClient(create_dashboard_app(sup))
+
+    all_hist = client.get("/api/orders?history=true").json()
+    capped = client.get("/api/orders?history=true&limit=2").json()
+    assert len(capped) == 2 and len(all_hist) > 2
+
+
 # --- Orders + Logs page markup --------------------------------------------- #
 
 
@@ -860,6 +916,10 @@ def test_orders_page_has_tables_and_filters() -> None:
     # Freshness stamps on both tables (ui-ux leaf 04).
     assert 'id="orders-updated"' in html
     assert 'id="fills-updated"' in html
+    # History-cap caption nodes, one per table (ui-ux leaf 05): shown when a
+    # history read comes back at exactly the server's default ?limit= cap.
+    assert 'id="orders-cap"' in html and "showing the most recent 200" in html
+    assert 'id="fills-cap"' in html
 
 
 def test_logs_page_has_feed_and_subscribes_to_sse() -> None:
@@ -868,6 +928,12 @@ def test_logs_page_has_feed_and_subscribes_to_sse() -> None:
     assert 'id="logs-feed"' in html  # the feed container
     assert "/api/events" in html  # it subscribes to the merged SSE stream
     assert "connect(" in html  # via the shared connect() helper
+    # Event-type filter chips + a min-level select for log events (ui-ux leaf 05).
+    assert 'data-type="all"' in html
+    assert 'data-type="order"' in html
+    assert 'data-type="fill"' in html
+    assert 'data-type="log"' in html
+    assert 'id="log-min-level"' in html
 
 
 # --- Overview page markup + live SSE --------------------------------------- #

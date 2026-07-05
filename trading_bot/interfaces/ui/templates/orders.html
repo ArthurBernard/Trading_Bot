@@ -51,6 +51,10 @@
       </tbody>
     </table>
   </div>
+  <!-- Shown when the history read comes back at exactly the server's default
+       cap (?limit=200) — the list is silently truncated otherwise, which reads
+       as "these are ALL the orders" when they are not. -->
+  <p class="muted" id="orders-cap" style="display:none;">showing the most recent 200 — older rows are not displayed</p>
 </section>
 
 <!-- Fills — the confirmed execution history (the PnL source of truth). -->
@@ -78,6 +82,7 @@
       </tbody>
     </table>
   </div>
+  <p class="muted" id="fills-cap" style="display:none;">showing the most recent 200 — older rows are not displayed</p>
 </section>
 {% endblock %}
 
@@ -92,6 +97,18 @@
 
   // Current filter selections ('' = all). Mirrored on the three selects.
   var FILTERS = { crypto: '', exchange: '', strategy: '' };
+
+  // The server's default history cap (`_HISTORY_LIMIT_DEFAULT` in app.py) —
+  // kept in sync here so the "showing the most recent N" caption fires exactly
+  // when a table comes back at the cap (an unfiltered `?limit=` read never
+  // distinguishes "exactly N rows exist" from "truncated at N" on its own).
+  var HISTORY_CAP = 200;
+
+  // Toggle the muted history-cap caption for one table.
+  function toggleCapCaption(id, rows) {
+    var el = document.getElementById(id);
+    if (el) el.style.display = rows.length === HISTORY_CAP ? '' : 'none';
+  }
 
   // Build the ?crypto=&exchange=&strategy= query from the active filters.
   function filterQuery(extra) {
@@ -136,8 +153,13 @@
         '<tr class="empty"><td colspan="9">' + escapeHtml(e.message) + '</td></tr>';
       return [];
     }
-    stampUpdated('orders-updated');
     var body = document.getElementById('orders-body');
+    // No-flicker refresh — see tbRefreshGuard's doc in base.html.
+    var guard = tbRefreshGuard('orders', body, rows);
+    if (guard === 'skip-silent') return rows;
+    stampUpdated('orders-updated');
+    toggleCapCaption('orders-cap', rows);
+    if (guard === 'skip-stamp') return rows;
     if (!rows.length) {
       body.innerHTML = '<tr class="empty"><td colspan="9">No orders.</td></tr>';
       return rows;
@@ -154,7 +176,7 @@
         '<td class="num">' + tbFmt.qtyCell(o.qty, { base: unit.base }) + '</td>' +
         '<td class="num">' + tbFmt.qtyCell(o.filled_qty, { base: unit.base }) + '</td>' +
         '<td class="num">' + tbFmt.priceCell(o.avg_fill_price, { quote: unit.quote }) + '</td>' +
-        '<td>' + escapeHtml(o.status) + '</td>' +
+        '<td>' + statusBadge(o.status) + '</td>' +
         '</tr>';
     }).join('');
     return rows;
@@ -170,8 +192,13 @@
         '<tr class="empty"><td colspan="8">' + escapeHtml(e.message) + '</td></tr>';
       return [];
     }
-    stampUpdated('fills-updated');
     var body = document.getElementById('fills-body');
+    // No-flicker refresh — see tbRefreshGuard's doc in base.html.
+    var guard = tbRefreshGuard('fills', body, rows);
+    if (guard === 'skip-silent') return rows;
+    stampUpdated('fills-updated');
+    toggleCapCaption('fills-cap', rows);
+    if (guard === 'skip-stamp') return rows;
     if (!rows.length) {
       body.innerHTML = '<tr class="empty"><td colspan="8">No fills.</td></tr>';
       return rows;
@@ -181,8 +208,9 @@
     body.innerHTML = ordered.map(function (f) {
       var sideCls = f.side === 'buy' ? 'side-buy' : 'side-sell';
       var unit = tbFmt.splitInstrument(f.instrument);
+      // Absolute time with seconds, visible; relative ("3m ago") on hover.
       return '<tr>' +
-        '<td class="num">' + fmtDate(f.ts) + '</td>' +
+        '<td class="num" title="' + escapeHtml(fmtRelative(f.ts)) + '">' + escapeHtml(fmtDate(f.ts, { seconds: true })) + '</td>' +
         '<td>' + escapeHtml(f.strategy) + '</td>' +
         '<td>' + escapeHtml(f.exchange) + '</td>' +
         '<td>' + escapeHtml(f.instrument) + '</td>' +

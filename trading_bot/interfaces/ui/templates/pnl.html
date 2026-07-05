@@ -36,6 +36,7 @@
 <!-- Per-mode stats — final equity + realised PnL, colour-coded by mode. -->
 <section class="card" id="pnl-stats-card">
   <h2>By mode</h2>
+  <p class="muted" id="pnl-v0-note"></p>
   <div class="table-wrap">
     <table id="pnl-stats-table">
       <thead>
@@ -44,10 +45,11 @@
           <th class="num">Final equity</th>
           <th class="num">Realised PnL</th>
           <th class="num">Unrealised</th>
+          <th class="num">Return</th>
         </tr>
       </thead>
       <tbody id="pnl-stats-body">
-        <tr class="empty"><td colspan="4">Select a strategy.</td></tr>
+        <tr class="empty"><td colspan="5">Select a strategy.</td></tr>
       </tbody>
     </table>
   </div>
@@ -210,13 +212,30 @@
     });
   }
 
-  // Render the per-mode stats table (final equity + realised PnL + unrealised).
+  // Return = realised PnL / starting capital (v0) — display-only division
+  // (never fed back into a computation elsewhere); tbFmt.pct renders the
+  // resulting ratio as a percentage. "—" when there is no realised PnL yet, or
+  // `v0` doesn't parse to a non-zero finite number (a strategy with a zero/
+  // unset starting capital has an undefined return, not a divide-by-zero
+  // "0%" or "Infinity%").
+  function returnCell(pnl, v0) {
+    if (pnl == null) return '<span class="muted">—</span>';
+    var v0n = Number(v0);
+    var pnlN = Number(pnl);
+    if (!isFinite(v0n) || v0n === 0 || !isFinite(pnlN)) return '<span class="muted">—</span>';
+    return tbFmt.pct(pnlN / v0n);
+  }
+
+  // Render the per-mode stats table (final equity + realised PnL + unrealised
+  // + Return, the realised PnL as a fraction of the strategy's starting
+  // capital).
   function renderStats(payload, modes) {
     var body = document.getElementById('pnl-stats-body');
     if (!modes.length) {
-      body.innerHTML = '<tr class="empty"><td colspan="4">No fills yet.</td></tr>';
+      body.innerHTML = '<tr class="empty"><td colspan="5">No fills yet.</td></tr>';
       return;
     }
+    var v0 = payload.v0;
     body.innerHTML = modes.map(function (mode) {
       var series = payload.series[mode] || [];
       var lastPnl = series.length ? series[series.length - 1][1] : null;
@@ -230,8 +249,20 @@
         '<td class="num ' + pnlCls + '">' +
           tbFmt.moneyCell(lastPnl, { quote: CURRENT_QUOTE }) + '</td>' +
         '<td class="num">' + tbFmt.moneyCell(cur.unrealised, { quote: CURRENT_QUOTE }) + '</td>' +
+        '<td class="num ' + pnlCls + '">' + returnCell(lastPnl, v0) + '</td>' +
         '</tr>';
     }).join('');
+  }
+
+  // A muted note near the stats table naming the strategy's starting capital
+  // (v0) — the Return column's denominator, spelled out once instead of
+  // buried in a tooltip. `payload` is null/absent v0 -> the note is cleared.
+  function renderV0Note(payload) {
+    var el = document.getElementById('pnl-v0-note');
+    if (!el) return;
+    el.innerHTML = (payload && payload.v0 != null)
+      ? 'Starting capital (v0): ' + tbFmt.moneyCell(payload.v0, { quote: CURRENT_QUOTE })
+      : '';
   }
 
   // Set the chart heading to name the quote currency when known, e.g.
@@ -251,9 +282,10 @@
         encodeURIComponent(CURRENT_STRATEGY));
     } catch (e) {
       document.getElementById('pnl-stats-body').innerHTML =
-        '<tr class="empty"><td colspan="4">' + escapeHtml(e.message) + '</td></tr>';
+        '<tr class="empty"><td colspan="5">' + escapeHtml(e.message) + '</td></tr>';
       renderChart({ series: {} }, []);
       document.getElementById('pnl-legend').innerHTML = '';
+      renderV0Note(null);
       return;
     }
     // Modes present, in the stable MODES order (paper, testnet, live).
@@ -264,6 +296,7 @@
     renderChart(payload, modes);
     renderLegend(modes);
     renderStats(payload, modes);
+    renderV0Note(payload);
   }
 
   // Populate the strategy selector from /api/strategies. Also tracks the
@@ -285,6 +318,7 @@
       renderChartHeading();
       renderChart({ series: {} }, []);
       renderStats({ series: {} }, []);
+      renderV0Note(null);
       return;
     }
     STRATEGIES = list;

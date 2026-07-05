@@ -1,7 +1,7 @@
 ---
 plan: ui-ux-overhaul
 kind: global
-status: executing
+status: done
 roadmap: "**Dashboard UX overhaul** — readable numbers (display rounding, units, currency), visible evaluation cadence (next tick / next bar close), positions grouped by strategy, table/feed polish."
 release_on_done: false
 ---
@@ -57,7 +57,7 @@ ever parsed back into a computation.
 - [x] 02 formatters — feat/ui-formatters — medium
 - [x] 03 overview-groups — feat/ui-overview-groups — low
 - [x] 04 cadence — feat/ui-cadence — medium
-- [ ] 05 tables-polish — feat/ui-tables-polish — medium
+- [x] 05 tables-polish — feat/ui-tables-polish — medium
 
 ## Dependencies
 
