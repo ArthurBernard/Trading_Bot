@@ -6,6 +6,54 @@ rejected approaches as tombstones.
 
 ---
 
+### 2026-07-05 Clean Ctrl-C shutdown: the daemon owns its signals; SSE cancellation ends the stream  [accepted]
+- **Choice**: two independent fixes, both in the shutdown path uvicorn/starlette
+  own by default. (1) `_run_daemon`'s `--serve` branch overrides the built
+  `uvicorn.Server` instance's `capture_signals` with a no-op context manager
+  (there is no public `install_signal_handlers` config flag on uvicorn 0.49) and
+  installs its own `SIGINT`/`SIGTERM` handlers on the running loop around
+  `await server.serve()`: first signal sets `server.should_exit = True`
+  (graceful — uvicorn's own main loop polls this regardless of who sets it),
+  second sets `server.force_exit = True`; the handlers are removed once
+  `serve()` returns. (2) both `/api/events` SSE generators in
+  `interfaces/api/app.py` catch `asyncio.CancelledError` around their streaming
+  loop and end the generator cleanly instead of letting it propagate (the merged
+  generator also explicitly cancels any outstanding per-iteration getter task on
+  the way out); additionally, a `logging.Filter` on the `uvicorn.error` logger
+  drops uvicorn's "Exception in ASGI application" record specifically when the
+  underlying exception is a plain `asyncio.CancelledError` — necessary because
+  the noisy traceback is *not* raised by our own generator code: it originates
+  in Starlette's `StreamingResponse.__call__` (an `anyio` task group racing
+  "stream the body" against "listen for disconnect", the code path uvicorn 0.49
+  is stuck on since it declares ASGI `spec_version: "2.3"`, below the `2.4`
+  Starlette checks for its newer, single-await implementation), so no amount of
+  fixing our own generator's cancellation handling prevents uvicorn from logging
+  it.
+- **Why**: uvicorn 0.49's `Server.serve()` unconditionally wraps itself in
+  `capture_signals()`, which restores the pre-`serve()` signal disposition and
+  **re-raises** the captured signal with that (default) disposition right after
+  `serve()` returns — killing the process *before* `_run_daemon`'s own `finally`
+  (scheduler shutdown + `supervisor.shutdown()`) could run, so a paper store's
+  pending writes were never drained and units weren't stopped cleanly on Ctrl-C.
+  Separately, operators reading a multi-screen `CancelledError`/`anyio.WouldBlock`
+  traceback on every shutdown while a dashboard tab was open mistook a routine,
+  timeout-bounded force-cancel (`_SHUTDOWN_GRACE_SECONDS = 3`, kept as-is; its
+  own "Cancel N running task(s)..." log line stays — it *is* useful signal) for
+  a crash.
+- **Rejected alternatives**: passing `install_signal_handlers=False` to
+  `uvicorn.Config(...)` (the shape assumed going in) — that flag does not exist
+  in uvicorn 0.49's actual `Config`/`Server` API (confirmed against the
+  installed version; it raises `TypeError` at construction), so the
+  `capture_signals` override is the version-correct equivalent. Restructuring
+  `_install_hardening`'s two `@app.middleware("http")` handlers into raw ASGI
+  middleware (removing `BaseHTTPMiddleware`'s task/stream indirection entirely,
+  which independently reproduces the same traceback even with *no* custom
+  middleware registered, per direct testing against a bare FastAPI app) — would
+  also work and is more "correct" in spirit, but is a much larger, riskier
+  change for a shutdown-logging concern; the targeted logging filter achieves
+  the same operator-facing outcome (no ERROR-level traceback spam) without
+  touching request/response plumbing every endpoint relies on.
+
 ### 2026-07-04 Display-only rounding, exact value on hover (PR #160)  [accepted]
 - **Choice**: a single dependency-free `static/format.js` (the `tbFmt` namespace)
   owns every display transform — grouped/rounded money by quote currency

@@ -443,6 +443,82 @@ _SECURITY_HEADERS = {
 }
 
 
+class _SuppressGracefulShutdownCancellation(logging.Filter):
+    """Drop uvicorn's "Exception in ASGI application" record for an expected
+    graceful-shutdown cancellation — not a real application bug.
+
+    Why this lives at the logging layer, not in a route
+    -----------------------------------------------------
+    Every ``/api/events`` route below returns a plain
+    :class:`~starlette.responses.StreamingResponse`. uvicorn 0.49 declares ASGI
+    ``spec_version: "2.3"`` for HTTP (see
+    ``uvicorn/protocols/http/httptools_impl.py``), which is *below* the
+    ``(2, 4)`` threshold Starlette's own ``StreamingResponse.__call__`` checks
+    before picking its newer, single-await implementation — so under this
+    uvicorn version Starlette *always* falls back to its older code path: an
+    ``anyio`` task group racing "stream the body" against "listen for
+    disconnect" (``starlette/responses.py``). When
+    ``timeout_graceful_shutdown`` (:data:`_SHUTDOWN_GRACE_SECONDS`) elapses on a
+    still-open SSE connection, uvicorn force-cancels the per-connection task —
+    logging "Cancel N running task(s), timeout graceful shutdown exceeded" (a
+    legitimate, expected line, left alone). That cancellation lands *inside
+    Starlette's own task group*, which re-raises it unconverted all the way
+    back up to uvicorn's ``run_asgi``, which logs **any** exception escaping the
+    ASGI app — even a deliberate cancellation it just issued itself — as an
+    ERROR-level, multi-frame traceback ("Exception in ASGI application").
+    Operators read that as a crash on every shutdown while a client holds
+    ``/api/events`` open, even though the SSE generators in this module (see
+    their own ``except asyncio.CancelledError`` handling) already end cleanly
+    the moment cancellation reaches *their* frame — the noisy traceback
+    originates in Starlette's own plumbing, which this module does not control,
+    so suppressing it has to happen at the logging layer instead. This filter
+    drops *only* that exact, expected shape — an :class:`asyncio.CancelledError`
+    reaching uvicorn's "Exception in ASGI application" log call — so a genuine
+    application exception (any other exception type, or a ``CancelledError``
+    logged under a different message) is still logged normally.
+
+    Matching on exception *type* alone (not also uvicorn's own cancel message,
+    e.g. "Task cancelled, timeout graceful shutdown exceeded") is deliberate:
+    with **two** stacked ``@app.middleware("http")`` handlers here (see
+    :func:`_install_hardening`), each ``BaseHTTPMiddleware`` layer's own nested
+    ``anyio`` task group can re-signal the cancellation through its *own*
+    cancel scope on the way back out, which — per ``anyio``'s cancel-scope
+    bookkeeping — can substitute a **fresh, message-less**
+    ``CancelledError()`` for the one uvicorn originally raised. The message is
+    the only thing lost; every step in the chain is still a plain
+    cancellation. Restricting the match to uvicorn's own "Exception in ASGI
+    application" message keeps this from ever catching an unrelated
+    ``uvicorn.error`` record.
+    """
+
+    _EXPECTED_MESSAGE_PREFIX = "Exception in ASGI application"
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        """Return ``False`` (drop) only for the expected shutdown cancellation."""
+        if not record.exc_info:
+            return True
+        exc = record.exc_info[1]
+        is_expected = isinstance(
+            exc, asyncio.CancelledError
+        ) and record.getMessage().startswith(self._EXPECTED_MESSAGE_PREFIX)
+        return not is_expected
+
+
+def _suppress_graceful_shutdown_cancellation_logs() -> None:
+    """Install :class:`_SuppressGracefulShutdownCancellation` on ``uvicorn.error`` once.
+
+    Idempotent (checked by filter *type*), so calling this from every
+    :func:`create_app` / :func:`create_dashboard_app` build — including in
+    tests, which build many apps per process — never stacks up duplicate
+    filter instances.
+    """
+    target = logging.getLogger("uvicorn.error")
+    if not any(
+        isinstance(f, _SuppressGracefulShutdownCancellation) for f in target.filters
+    ):
+        target.addFilter(_SuppressGracefulShutdownCancellation())
+
+
 def _install_hardening(app: FastAPI) -> None:
     """Add the shared body-size cap + security-header middleware to ``app``.
 
@@ -456,11 +532,17 @@ def _install_hardening(app: FastAPI) -> None:
       :data:`_SECURITY_HEADERS` (nosniff / anti-clickjacking / no-referrer), and
       every authed JSON body (``/api/*``) additionally gets ``Cache-Control:
       no-store`` so the live book is never cached by a browser or intermediary.
+    * **Quiet shutdown.** Installs
+      :class:`_SuppressGracefulShutdownCancellation` on the ``uvicorn.error``
+      logger so a force-cancelled ``/api/events`` connection past
+      :data:`_SHUTDOWN_GRACE_SECONDS` doesn't spam an ERROR-level traceback for
+      what is an expected, controlled shutdown (see that class's docstring).
 
     Middleware runs outermost-first in registration order; the body cap is added
     last here so it runs **first** (it can reject before the header middleware even
     builds a response).
     """
+    _suppress_graceful_shutdown_cancellation_logs()
 
     @app.middleware("http")
     async def _security_headers(request: Request, call_next: Any) -> Any:
@@ -658,6 +740,17 @@ def create_app(engine: Engine) -> FastAPI:
                         yield f"data: {json.dumps(frame, default=_default)}\n\n"
                     except asyncio.TimeoutError:
                         yield ": heartbeat\n\n"
+            except asyncio.CancelledError:
+                # Server shutdown (the graceful-shutdown timeout force-cancels this
+                # task while it is suspended in the wait above) or the ASGI server
+                # tearing the connection down: either way the stream is over, which
+                # is the *correct* time for this generator to end — not an error.
+                # Left uncaught, this propagates as a bare CancelledError that
+                # uvicorn/starlette log as a scary ERROR-level traceback on every
+                # shutdown while a client holds this endpoint open; ending the
+                # generator cleanly here is the intended response to "server is
+                # going away", not a swallowed real failure.
+                pass
             finally:
                 bus.remove_queue(queue)
 
@@ -1925,6 +2018,10 @@ def create_dashboard_app(
 
         async def _generator() -> Any:
             seen: set[str] = set()
+            # Tracks the current iteration's per-queue getter tasks so a
+            # cancellation between iterations (see the CancelledError handler
+            # below) can still cancel whichever ones are outstanding.
+            getters: list[asyncio.Task[Any]] = []
             try:
                 yield ": connected\n\n"
                 if not queues:
@@ -1950,6 +2047,7 @@ def create_dashboard_app(
                     )
                     for task in pending:
                         task.cancel()
+                    getters = []
                     if not done:
                         yield ": heartbeat\n\n"
                         continue
@@ -1966,6 +2064,21 @@ def create_dashboard_app(
                             "ts": _epoch_ms(),
                         }
                         yield f"data: {json.dumps(frame, default=_default)}\n\n"
+            except asyncio.CancelledError:
+                # Server shutdown (the graceful-shutdown timeout force-cancels this
+                # task while a client holds the merged stream open) or the ASGI
+                # server tearing the connection down: the stream is over, which is
+                # the correct time for this generator to end, not an error. Any
+                # getter task still outstanding at the point of cancellation (e.g.
+                # cancelled mid-`asyncio.wait`, before the per-iteration cleanup
+                # above ran) is cancelled here too, so no bare queue.get() task is
+                # left dangling. Left uncaught, this propagates as a bare
+                # CancelledError that uvicorn/starlette log as a scary ERROR-level
+                # traceback on every shutdown while a client holds this endpoint
+                # open.
+                for task in getters:
+                    if not task.done():
+                        task.cancel()
             finally:
                 for bus, queue in zip(buses, queues, strict=True):
                     bus.remove_queue(queue)

@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from decimal import Decimal
 from typing import Any
 
@@ -351,6 +352,54 @@ async def test_events_stream_delivers_fill_event_and_removes_queue(
     assert len(bus._queues) == before
 
 
+async def test_events_stream_ends_cleanly_on_cancellation(engine: Engine) -> None:
+    """Cancelling the generator's task (server shutdown) ends the stream cleanly.
+
+    Mirrors what uvicorn's graceful-shutdown timeout does to a connected SSE
+    client: the task driving the generator is force-cancelled while it is
+    suspended waiting on the queue. The generator must convert that
+    ``CancelledError`` into a clean end-of-stream (``StopAsyncIteration``, the
+    normal "no more values" signal for an async generator) rather than letting
+    the ``CancelledError`` propagate — which is what used to make uvicorn log a
+    scary ERROR-level traceback on every shutdown while a client held this
+    endpoint open. The bus queue must still be unregistered (the ``finally``
+    is unaffected).
+    """
+    app = create_app(engine)
+    bus = engine.bus
+    before = len(bus._queues)
+
+    scope = {
+        "type": "http",
+        "method": "GET",
+        "path": "/api/events",
+        "headers": [],
+        "query_string": b"",
+        "app": app,
+    }
+    request = Request(scope, _never_disconnect)
+    response = await _events_route(app)(request)
+    frames = response.body_iterator
+
+    first = await frames.__anext__()
+    assert first.startswith(":")
+    assert len(bus._queues) == before + 1
+
+    # Cancel the task while it is suspended awaiting the next frame (the queue
+    # has nothing queued, so it is parked inside `asyncio.wait_for(queue.get(),
+    # ...)` — exactly where a real shutdown-time cancellation would land).
+    task = asyncio.ensure_future(frames.__anext__())
+    await asyncio.sleep(0)  # let the task actually start awaiting the queue
+    task.cancel()
+
+    with pytest.raises(StopAsyncIteration):
+        await task
+    assert not task.cancelled()  # the cancellation was converted, not propagated
+
+    # The `finally` still ran: the queue is unregistered like any other close.
+    assert len(bus._queues) == before
+
+
 # --- no-mutation: the API never places or cancels an order ----------------- #
 
 
@@ -421,6 +470,100 @@ def test_event_dict_serializes_each_event_type_with_string_money() -> None:
 
     log_payload = _event_dict(LogEvent(message="hi", level="warning"))
     assert log_payload == {"type": "log", "message": "hi", "level": "warning"}
+
+
+def _log_record(*, msg: str, exc: BaseException | None) -> logging.LogRecord:
+    """Build a bare ``LogRecord`` carrying ``exc`` as its ``exc_info`` (or none)."""
+    exc_info = (type(exc), exc, exc.__traceback__) if exc is not None else None
+    return logging.LogRecord(
+        name="uvicorn.error",
+        level=logging.ERROR,
+        pathname=__file__,
+        lineno=1,
+        msg=msg,
+        args=(),
+        exc_info=exc_info,
+    )
+
+
+def test_graceful_shutdown_cancellation_filter_drops_only_the_expected_shape() -> None:
+    """The uvicorn.error filter drops a shutdown CancelledError, keeps real errors.
+
+    Regression test for the Ctrl-C quiet-shutdown fix: uvicorn 0.49 logs *any*
+    exception escaping the ASGI app as an ERROR "Exception in ASGI application"
+    record — including the deliberate ``CancelledError`` it raises itself when
+    force-cancelling a still-open SSE connection past the graceful-shutdown
+    timeout. The filter must drop *that* shape (regardless of the exception's
+    message — see the class docstring on why nested ``BaseHTTPMiddleware``
+    task groups can strip it) while leaving a genuine application error, or a
+    ``CancelledError`` logged under an unrelated message, alone.
+    """
+    from trading_bot.interfaces.api.app import _SuppressGracefulShutdownCancellation
+
+    carveout = _SuppressGracefulShutdownCancellation()
+
+    # Dropped: a CancelledError (message-bearing or not) under uvicorn's own
+    # "Exception in ASGI application" message.
+    assert (
+        carveout.filter(
+            _log_record(
+                msg="Exception in ASGI application",
+                exc=asyncio.CancelledError(
+                    "Task cancelled, timeout graceful shutdown exceeded"
+                ),
+            )
+        )
+        is False
+    )
+    assert (
+        carveout.filter(
+            _log_record(
+                msg="Exception in ASGI application", exc=asyncio.CancelledError()
+            )
+        )
+        is False
+    )
+
+    # Kept: a real bug under the same message.
+    assert (
+        carveout.filter(
+            _log_record(msg="Exception in ASGI application", exc=ValueError("boom"))
+        )
+        is True
+    )
+    # Kept: a CancelledError logged under a different, unrelated message.
+    assert (
+        carveout.filter(
+            _log_record(msg="some other message", exc=asyncio.CancelledError())
+        )
+        is True
+    )
+    # Kept: no exc_info at all.
+    assert carveout.filter(_log_record(msg="plain info line", exc=None)) is True
+
+
+def test_graceful_shutdown_cancellation_filter_installs_once_per_process() -> None:
+    """Building an app repeatedly never stacks up duplicate filter instances.
+
+    ``create_app``/``create_dashboard_app`` install the filter on the shared,
+    process-wide ``uvicorn.error`` logger every time they build an app (tests
+    build many); the installer must stay idempotent.
+    """
+    from trading_bot.interfaces.api.app import (
+        _suppress_graceful_shutdown_cancellation_logs,
+        _SuppressGracefulShutdownCancellation,
+    )
+
+    target = logging.getLogger("uvicorn.error")
+    before = sum(
+        isinstance(f, _SuppressGracefulShutdownCancellation) for f in target.filters
+    )
+    _suppress_graceful_shutdown_cancellation_logs()
+    _suppress_graceful_shutdown_cancellation_logs()
+    after = sum(
+        isinstance(f, _SuppressGracefulShutdownCancellation) for f in target.filters
+    )
+    assert after == max(before, 1)
 
 
 def test_kpi_endpoint_stays_robust_over_a_profitable_curve() -> None:

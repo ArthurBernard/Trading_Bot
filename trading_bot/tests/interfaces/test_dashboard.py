@@ -1104,6 +1104,62 @@ async def test_events_stream_merges_and_yields_a_fill() -> None:
     assert [len(b._queues) for b in buses] == before  # noqa: SLF001
 
 
+async def test_events_stream_ends_cleanly_on_cancellation() -> None:
+    """Cancelling the merged generator's task (server shutdown) ends it cleanly.
+
+    Mirrors what uvicorn's graceful-shutdown timeout does to a connected SSE
+    client: the task driving the generator is force-cancelled while it is
+    suspended in ``asyncio.wait`` on the per-unit getter tasks. The generator
+    must convert that ``CancelledError`` into a clean end-of-stream
+    (``StopAsyncIteration``) rather than letting it propagate — which is what
+    used to make uvicorn log a scary ERROR-level traceback on every shutdown
+    while a dashboard client held this endpoint open — and every outstanding
+    per-iteration getter task plus every bus queue must still be cleaned up.
+    """
+    import asyncio
+
+    from fastapi import Request
+
+    sup = StrategySupervisor(_two_venue_config(), dccd_client=_two_venue_client())
+    await sup.start("btc-kraken")
+    await sup.start("eth-binance")
+    app = create_dashboard_app(sup)
+    buses = [sup._units[n].engine.bus for n in ("btc-kraken", "eth-binance")]  # noqa: SLF001
+    before = [len(b._queues) for b in buses]  # noqa: SLF001
+
+    scope = {
+        "type": "http",
+        "method": "GET",
+        "path": "/api/events",
+        "headers": [],
+        "query_string": b"",
+        "app": app,
+    }
+    request = Request(scope, _never_disconnect)
+    response = await _events_route(app)(request)  # type: ignore[operator]
+    frames = response.body_iterator
+
+    first = await frames.__anext__()
+    assert first.startswith(":")
+    assert [len(b._queues) for b in buses] == [n + 1 for n in before]  # noqa: SLF001
+
+    # Cancel the task while it is suspended in `asyncio.wait(getters, ...)` (no
+    # unit has emitted anything, so it is parked there — exactly where a real
+    # shutdown-time cancellation would land).
+    task = asyncio.ensure_future(frames.__anext__())
+    await asyncio.sleep(0)  # let the task actually start awaiting the getters
+    task.cancel()
+
+    with pytest.raises(StopAsyncIteration):
+        await task
+    assert not task.cancelled()  # the cancellation was converted, not propagated
+
+    # The `finally` still ran: every bus queue is unregistered like any other
+    # close, and no getter task is left dangling (no "was destroyed but it is
+    # pending" warning — pytest-asyncio would otherwise surface it).
+    assert [len(b._queues) for b in buses] == before  # noqa: SLF001
+
+
 # --- strategy control (list + start/stop/mode, the live gate) -------------- #
 
 
@@ -2167,6 +2223,81 @@ def test_start_serve_folds_onto_create_dashboard_app(
     health = client.get("/api/health").json()
     assert isinstance(health["next_tick_ts"], int)
     assert health["tick"] == "every 0.05s"
+
+
+async def test_start_serve_disables_uvicorn_signal_capture_and_owns_shutdown(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`start --serve` disables uvicorn's own signal capture and owns Ctrl-C itself.
+
+    Regression test for the "Ctrl-C loses the teardown" bug: uvicorn 0.49's
+    ``Server.serve()`` unconditionally wraps itself in ``capture_signals()``,
+    which restores the pre-``serve()`` signal disposition and **re-raises** the
+    captured SIGINT/SIGTERM right after ``serve()`` returns — killing the
+    process before ``_run_daemon``'s own ``finally`` (scheduler + supervisor
+    teardown) can run. ``_run_daemon`` works around this (there is no public
+    ``install_signal_handlers`` config flag on this uvicorn version) by
+    overriding the server instance's ``capture_signals`` with a no-op context
+    manager and installing its own loop-level SIGINT/SIGTERM handlers around
+    ``await server.serve()``. This proves both halves: the override is applied,
+    and the daemon's own handlers are the ones registered *while* serving —
+    then removed once ``serve()`` returns. The end-to-end "the process actually
+    survives a real Ctrl-C and completes its teardown" claim is verified
+    separately by the pty-driver check (a unit test cannot deliver a real OS
+    signal to itself safely).
+    """
+    import asyncio
+    import contextlib
+    import signal
+
+    import trading_bot.interfaces.api as api_pkg
+
+    monkeypatch.setattr(api_pkg, "create_dashboard_app", lambda sup, **kw: object())
+
+    built: dict[str, object] = {}
+    ready = asyncio.Event()
+    release = asyncio.Event()
+    installed_during_serve: set[int] = set()
+
+    class _FakeServer:
+        def __init__(self, config: object) -> None:
+            self.config = config
+            self.should_exit = False
+            self.force_exit = False
+            built["server"] = self
+
+        async def serve(self) -> None:
+            loop = asyncio.get_running_loop()
+            installed_during_serve.update(loop._signal_handlers)  # noqa: SLF001
+            ready.set()
+            await release.wait()
+
+    import uvicorn
+
+    monkeypatch.setattr(uvicorn, "Server", _FakeServer)
+    monkeypatch.setattr(uvicorn, "Config", lambda *a, **k: object())
+
+    from trading_bot.interfaces.cli.main import _run_daemon
+
+    task = asyncio.ensure_future(
+        _run_daemon(AppConfig(), interval=0.05, cron=None, serve=True)
+    )
+    await ready.wait()
+
+    # The daemon's own handlers are installed WHILE serving — the exact window
+    # uvicorn 0.49 would otherwise own via its own (now-disabled) capture.
+    assert {signal.SIGINT, signal.SIGTERM} <= installed_during_serve
+    # uvicorn's own capture/re-raise is disabled on this server instance.
+    assert built["server"].capture_signals is contextlib.nullcontext  # type: ignore[attr-defined]
+
+    release.set()
+    await task
+
+    # Removed again once `serve()` returned — nothing left registered, so a
+    # later real signal has exactly one handler to reach: the OS default.
+    loop = asyncio.get_running_loop()
+    assert signal.SIGINT not in loop._signal_handlers  # noqa: SLF001
+    assert signal.SIGTERM not in loop._signal_handlers  # noqa: SLF001
 
 
 # --- web hardening (audit wave 3: I-4, I-6, I-7, I-9, I-10, I-11, I-13) ----- #

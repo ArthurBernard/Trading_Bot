@@ -64,6 +64,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (shape-checked so an arbitrary value is never echoed into the form), and
   `/favicon.ico` is an open route (308 → `/static/favicon.svg`) so the probe
   never bounces through the auth redirect at all.
+- **Clean Ctrl-C shutdown.** `start --serve`'s Ctrl-C/SIGTERM handling now
+  completes the supervisor teardown instead of the process dying mid-shutdown
+  (uvicorn 0.49's own signal capture re-raised the captured signal after
+  `serve()` returned, killing the process before the daemon's `finally` ran);
+  the dashboard's `/api/events` SSE stream also no longer spams an ERROR-level
+  cancellation traceback on every shutdown while a client holds it open.
 
 ### Deprecated
 
