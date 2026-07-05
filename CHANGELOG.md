@@ -8,6 +8,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Dashboard shows WHEN things happened.** `/api/strategies` rows carry
+  `last_eval_ts` (wall-clock of the last tick attempt) and `last_asof_ts` (as-of
+  of the last completed evaluation); the Strategies table gains a **Last eval**
+  column (relative time, with the absolute eval instant + as-of data date on
+  hover). Every order row served by `/api/orders` now carries `ts` (epoch ms,
+  first-persisted time; `null` when the order predates any store) — the Orders
+  page's Orders table and the Overview's open-orders table both gain a **Time**
+  column (mirroring the Fills table's formatting), and order history now renders
+  most-recent-first.
 - **Dashboard read-API enrichment.** `/api/strategies` rows and `/api/kpi` rows now
   carry `span` (bar cadence, seconds) and `quote` (currency; `null` when an
   aggregate row folds mixed quote currencies); `/api/health` gains `next_tick_ts`

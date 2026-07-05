@@ -498,6 +498,34 @@ class SqliteStore:
             rows = conn.execute("SELECT * FROM orders ORDER BY rowid").fetchall()
         return [_row_to_order(r) for r in rows]
 
+    def order_ts_map(self) -> dict[str, int]:
+        """Return ``{client_order_id: ts}`` for every persisted order (ts, ms).
+
+        The rebuilt domain :class:`~trading_bot.domain.order.Order` (see
+        :func:`_row_to_order`) carries no ``ts`` — "when was this order first
+        persisted" is a storage concern, not a domain one — so a caller that
+        wants it (the dashboard's Orders page) reads this bulk companion map
+        instead of widening the domain aggregate. One query for every order,
+        keyed by ``client_order_id`` so a caller can tag a list of orders
+        (however sourced — this store's own :meth:`orders`, or a running
+        unit's live router) in a single lookup per row.
+
+        Returns
+        -------
+        dict of str to int
+            ``client_order_id -> ts`` (epoch ms) for every row whose ``ts`` is
+            not null (a freshly-created row is always stamped by
+            :meth:`upsert_order`, so this only omits a theoretical corrupt row).
+
+        """
+        with self._conn() as conn:
+            rows = conn.execute("SELECT client_order_id, ts FROM orders").fetchall()
+        return {
+            str(row["client_order_id"]): int(row["ts"])
+            for row in rows
+            if row["ts"] is not None
+        }
+
     def fills(self, since_ms: int | None = None) -> list[Fill]:
         """Return stored fills, optionally only those at/after ``since_ms``.
 

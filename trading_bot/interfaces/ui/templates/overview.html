@@ -96,6 +96,7 @@
     <table id="orders-table">
       <thead>
         <tr>
+          <th>Time</th>
           <th>Strategy</th>
           <th>Exchange</th>
           <th>Instrument</th>
@@ -107,7 +108,7 @@
         </tr>
       </thead>
       <tbody id="orders-body">
-        <tr class="empty"><td colspan="8">Loading…</td></tr>
+        <tr class="empty"><td colspan="9">Loading…</td></tr>
       </tbody>
     </table>
   </div>
@@ -343,7 +344,7 @@
       rows = await api('GET', '/api/orders');
     } catch (e) {
       document.getElementById('orders-body').innerHTML =
-        '<tr class="empty"><td colspan="8">' + escapeHtml(e.message) + '</td></tr>';
+        '<tr class="empty"><td colspan="9">' + escapeHtml(e.message) + '</td></tr>';
       document.getElementById('sum-open-orders').textContent = '—';
       return;
     }
@@ -356,13 +357,16 @@
     stampUpdated('overview-orders-updated');
     if (guard === 'skip-stamp') return;
     if (!rows.length) {
-      body.innerHTML = '<tr class="empty"><td colspan="8">No open orders.</td></tr>';
+      body.innerHTML = '<tr class="empty"><td colspan="9">No open orders.</td></tr>';
       return;
     }
     body.innerHTML = rows.map(function (o) {
       const sideCls = o.side === 'buy' ? 'side-buy' : 'side-sell';
       const unit = tbFmt.splitInstrument(o.instrument);
+      // Absolute time with seconds, visible; relative ("3m ago") on hover —
+      // mirrors the Orders page / Fills table's Time column.
       return '<tr>' +
+        '<td class="num" title="' + escapeHtml(fmtRelative(o.ts)) + '">' + escapeHtml(fmtDate(o.ts, { seconds: true })) + '</td>' +
         '<td>' + escapeHtml(o.strategy) + '</td>' +
         '<td>' + escapeHtml(o.exchange) + '</td>' +
         '<td>' + escapeHtml(o.instrument) + '</td>' +

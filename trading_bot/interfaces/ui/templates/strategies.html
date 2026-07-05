@@ -30,13 +30,14 @@
           <th>Status</th>
           <th>Cadence</th>
           <th>Next bar</th>
+          <th>Last eval</th>
           <th class="num">Realised PnL</th>
           <th class="num">Open orders</th>
           <th>Action</th>
         </tr>
       </thead>
       <tbody id="strategies-body">
-        <tr class="empty"><td colspan="9">Loading…</td></tr>
+        <tr class="empty"><td colspan="10">Loading…</td></tr>
       </tbody>
     </table>
   </div>
@@ -155,6 +156,34 @@
       escapeHtml(tbTime.countdown(ts)) + '</span>';
   }
 
+  // A bare "YYYY-MM-DD" local date (no time) — for the as-of DATA date in the
+  // Last-eval tooltip ("data through 2026-07-04"), distinct from fmtDate's
+  // evaluation-INSTANT timestamp (which does carry a time-of-day).
+  function fmtDateOnly(ms) {
+    if (ms == null) return '—';
+    return new Date(ms).toLocaleDateString('en-CA'); // en-CA -> YYYY-MM-DD
+  }
+
+  // Last eval — a compact relative time since the runner's last tick attempt
+  // (`last_eval_ts`, e.g. "3m ago"), with BOTH the absolute evaluation instant
+  // and the as-of DATA date (`last_asof_ts` — the latest bar the runner
+  // actually computed on, which can lag the eval instant) in `title`, so a
+  // hover answers "when did this run, and on data through when?". Muted "—"
+  // when the unit has never ticked via its `*_latest` path (stopped, or never
+  // started).
+  function lastEvalCell(s) {
+    if (s.last_eval_ts == null) return '<span class="muted">—</span>';
+    let title = 'evaluated ' + fmtDate(s.last_eval_ts, { seconds: true });
+    if (s.last_asof_ts != null) {
+      const cadence = tbTime.humanSpan(s.span);
+      title += ' — data through ' + fmtDateOnly(s.last_asof_ts) +
+        (cadence ? ' (' + cadence + ' bar close)' : '');
+    } else {
+      title += ' — no data evaluated yet';
+    }
+    return '<span title="' + escapeHtml(title) + '">' + escapeHtml(fmtRelative(s.last_eval_ts)) + '</span>';
+  }
+
   function rowHtml(s) {
     const status = s.running
       ? '<span class="run-pill is-running"><span class="dot"></span>running</span>'
@@ -178,6 +207,7 @@
       '<td>' + status + '</td>' +
       '<td>' + cadenceCell(s) + '</td>' +
       '<td>' + nextBarCell(s) + '</td>' +
+      '<td>' + lastEvalCell(s) + '</td>' +
       '<td class="num ' + pnlClass(s.realised_pnl) + '">' + pnl + '</td>' +
       '<td class="num">' + escapeHtml(s.open_orders) + '</td>' +
       '<td>' + action + '</td>' +
@@ -185,7 +215,7 @@
   }
 
   function groupHeaderHtml(exchange, count) {
-    return '<tr class="group"><td colspan="9">' +
+    return '<tr class="group"><td colspan="10">' +
       '<span class="group-name">' + escapeHtml(exchange) + '</span>' +
       '<span class="group-count">' + count + '</span></td></tr>';
   }
@@ -195,7 +225,7 @@
     try {
       list = await api('GET', '/api/strategies');
     } catch (e) {
-      body.innerHTML = '<tr class="empty"><td colspan="9">' + escapeHtml(e.message) + '</td></tr>';
+      body.innerHTML = '<tr class="empty"><td colspan="10">' + escapeHtml(e.message) + '</td></tr>';
       return;
     }
     // No-flicker refresh: this page polls every 3s, the tightest cadence of any
@@ -211,7 +241,7 @@
     sumTotal.textContent = list.length;
     sumRunning.textContent = list.filter(function (s) { return s.running; }).length;
     if (!list.length) {
-      body.innerHTML = '<tr class="empty"><td colspan="9">No strategies declared.</td></tr>';
+      body.innerHTML = '<tr class="empty"><td colspan="10">No strategies declared.</td></tr>';
       return;
     }
     // Group strategies by exchange (alphabetical), each under a header row.
