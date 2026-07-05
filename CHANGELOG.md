@@ -56,6 +56,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Login: stable CSRF cookie + open favicon route.** `GET /login` no longer
+  rotates the `tb_csrf` double-submit cookie on every render — a background
+  request auth-redirected to `/login` (typically the browser's `/favicon.ico`
+  probe) used to rotate the cookie under the form the user was looking at, so
+  every submit 403'd. The render now reuses a well-formed existing cookie
+  (shape-checked so an arbitrary value is never echoed into the form), and
+  `/favicon.ico` is an open route (308 → `/static/favicon.svg`) so the probe
+  never bounces through the auth redirect at all.
+
 ### Deprecated
 
 ### Removed

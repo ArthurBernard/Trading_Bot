@@ -687,7 +687,16 @@ _SESSION_TTL_SECONDS = 12 * 3600
 #: Login attempts per minute per client (brute-force throttle).
 _LOGIN_RATE_PER_MIN = 10
 #: Path prefixes reachable without a session (the login flow + assets).
-_OPEN_PREFIXES = ("/login", "/logout", "/static")
+#: ``/favicon.ico`` is open on purpose: a browser fetches it in the background on
+#: every page — including the login page — and an auth redirect to ``/login``
+#: would re-render the form and (before the stable-cookie fix in ``_login_page``)
+#: rotate the CSRF cookie under the form the user is looking at.
+_OPEN_PREFIXES = ("/login", "/logout", "/static", "/favicon.ico")
+
+#: Shape of a CSRF token we minted (``secrets.token_urlsafe(32)`` → 43 urlsafe
+#: chars). An existing cookie is only reused when it matches, so an arbitrary
+#: value can never be echoed back into the login form.
+_CSRF_SHAPE = re.compile(r"^[A-Za-z0-9_-]{43}$")
 
 #: Hard cap on live sessions (I-7): once reached, the oldest session is evicted on a
 #: new login so the in-memory map cannot grow without bound over a long-lived daemon.
@@ -1411,10 +1420,16 @@ def _install_control_auth(
 
     def _login_page(request: Request, *, error: str = "", status: int = 200) -> Any:
         nxt = _safe_next(request.query_params.get("next"))
-        # I-13: mint (or reuse) a per-render CSRF token, embed it in the form AND
-        # set it as a SameSite=strict cookie — the POST must echo both (double
-        # submit). A fresh token each GET is fine (the browser keeps the latest).
-        csrf = secrets.token_urlsafe(32)
+        # I-13: double-submit CSRF — the POST must echo the form field AND the
+        # cookie, and they must match. REUSE the browser's existing cookie when it
+        # has the shape we mint: any background request landing on /login (e.g. an
+        # unauthenticated asset fetch redirected here) re-renders this page, and
+        # minting a fresh token per render would rotate the cookie *under* the form
+        # the user is already looking at — every submit would then 403. A stable
+        # per-browser token is the standard double-submit pattern.
+        csrf = request.cookies.get(_CSRF_COOKIE, "")
+        if not _CSRF_SHAPE.match(csrf):
+            csrf = secrets.token_urlsafe(32)
         if templates is not None:
             resp: Any = templates.TemplateResponse(
                 request,
@@ -1446,6 +1461,11 @@ def _install_control_auth(
             max_age=_SESSION_TTL_SECONDS,
         )
         return resp
+
+    @app.get("/favicon.ico", include_in_schema=False)
+    async def favicon() -> Any:
+        """Serve the browser's default icon probe (open route, see _OPEN_PREFIXES)."""
+        return RedirectResponse("/static/favicon.svg", status_code=308)
 
     @app.get("/login", response_class=HTMLResponse)
     async def login_form(request: Request) -> Any:
