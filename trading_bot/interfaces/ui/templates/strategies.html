@@ -198,7 +198,16 @@
       body.innerHTML = '<tr class="empty"><td colspan="9">' + escapeHtml(e.message) + '</td></tr>';
       return;
     }
+    // No-flicker refresh: this page polls every 3s, the tightest cadence of any
+    // page, so an unconditional rebuild would visibly wipe an open mode
+    // <select> mid-interaction. 'skip-silent' defers everything (including the
+    // stamp — the shown rows aren't verified current); 'skip-stamp' means the
+    // payload is unchanged, so the rows already match the server and only the
+    // freshness stamp needs to move.
+    const guard = tbRefreshGuard('strategies', body, list);
+    if (guard === 'skip-silent') return;
     stampUpdated('strategies-updated');
+    if (guard === 'skip-stamp') return;
     sumTotal.textContent = list.length;
     sumRunning.textContent = list.filter(function (s) { return s.running; }).length;
     if (!list.length) {

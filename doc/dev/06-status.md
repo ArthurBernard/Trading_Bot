@@ -1,6 +1,6 @@
 # 06 — Status
 
-_Last updated: 2026-07-02_
+_Last updated: 2026-07-05_
 
 ## Where things stand
 
@@ -58,6 +58,24 @@ restored from the persisted store before the first order); and a portfolio's **d
 store-key convention is pinned** by config (`store_key_format`). Hygiene in the same pass:
 removed the dead `BrokerRegistry`, and the limit-at-close price is exact `Decimal` (no
 float). Remaining venue-side idempotency token is the real-key-sandbox prerequisite.
+
+**Post-0.2.0 — multi-strategy dashboard UX overhaul shipped:** the unified
+Overview / Strategies / Orders / PnL / Logs dashboard is now legible for an
+operator, not just correct. Every figure is display-rounded, thousands-grouped
+and unit/currency-labelled (`static/format.js`'s `tbFmt` namespace) while the
+exact Decimal string the API sent always survives in a `title` tooltip —
+rounding never leaks into a computation. Evaluation cadence is visible: the
+health chip and Overview summary strip count down live to the daemon's next
+scheduler tick, and the Strategies table shows each unit's bar cadence and a
+countdown to its next bar close. Overview's positions grid groups by strategy
+by default, with a summary strip (running/total strategies, open orders, total
+realised PnL, next tick) above the KPI card. Table polish closes the epic:
+polling refreshes on Strategies/Overview/Orders no longer visibly rebuild an
+unchanged table nor wipe an open control mid-interaction, order statuses render
+as colour-coded badges, a history read at the server's cap says so, and the
+merged Logs event feed is stamped with server time, tagged by emitting
+strategy, and filterable (event type + minimum log level). Plan tree:
+`doc/dev/plans/ui-ux-overhaul/` (all five leaves shipped).
 
 **Remaining:** **real-key live enablement** (validate Kraken private endpoints +
 venue-level idempotency against a real-key sandbox, then flip `live_enabled`) — the one

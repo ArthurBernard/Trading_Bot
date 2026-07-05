@@ -232,8 +232,14 @@
         '<tr class="empty"><td colspan="7">' + escapeHtml(e.message) + '</td></tr>';
       return;
     }
-    stampUpdated('kpi-updated');
     const body = document.getElementById('kpi-body');
+    // No-flicker refresh — keyed by level, since switching levels always
+    // renders (a different shape) while an unchanged poll at the same level
+    // skips the rebuild. See tbRefreshGuard's doc in base.html.
+    const guard = tbRefreshGuard('kpi:' + KPI_LEVEL, body, rows);
+    if (guard === 'skip-silent') return;
+    stampUpdated('kpi-updated');
+    if (guard === 'skip-stamp') return;
     if (!rows.length) {
       body.innerHTML = '<tr class="empty"><td colspan="7">No running strategy.</td></tr>';
       return;
@@ -301,8 +307,14 @@
         '<tr class="empty"><td colspan="' + colspan + '">' + escapeHtml(e.message) + '</td></tr>';
       return;
     }
-    stampUpdated('positions-updated');
     const body = document.getElementById('positions-body');
+    // No-flicker refresh — keyed by grouping, since switching POS_GROUP always
+    // renders (a different shape) while an unchanged poll at the same grouping
+    // skips the rebuild. See tbRefreshGuard's doc in base.html.
+    const guard = tbRefreshGuard('positions:' + (POS_GROUP || 'flat'), body, data);
+    if (guard === 'skip-silent') return;
+    stampUpdated('positions-updated');
+    if (guard === 'skip-stamp') return;
     let html = '';
     if (POS_GROUP) {
       // Grouped: [{group, rows}] — a header row per bucket.
@@ -335,10 +347,14 @@
       document.getElementById('sum-open-orders').textContent = '—';
       return;
     }
+    const body = document.getElementById('orders-body');
+    // No-flicker refresh — see tbRefreshGuard's doc in base.html.
+    const guard = tbRefreshGuard('open-orders', body, rows);
+    if (guard === 'skip-silent') return;
     // Feeds the summary strip's open-orders count — no separate fetch for it.
     document.getElementById('sum-open-orders').textContent = rows.length;
     stampUpdated('overview-orders-updated');
-    const body = document.getElementById('orders-body');
+    if (guard === 'skip-stamp') return;
     if (!rows.length) {
       body.innerHTML = '<tr class="empty"><td colspan="8">No open orders.</td></tr>';
       return;
@@ -354,7 +370,7 @@
         '<td>' + escapeHtml(o.type) + '</td>' +
         '<td class="num">' + tbFmt.qtyCell(o.qty, { base: unit.base }) + '</td>' +
         '<td class="num">' + tbFmt.qtyCell(o.filled_qty, { base: unit.base }) + '</td>' +
-        '<td>' + escapeHtml(o.status) + '</td>' +
+        '<td>' + statusBadge(o.status) + '</td>' +
         '</tr>';
     }).join('');
   }
@@ -412,9 +428,4 @@
     setInterval(refreshAll, 10000);
   });
 </script>
-<style>
-  /* Toggle button active state — reuses the nav's accent language. */
-  .btn.is-active { color:var(--accent); border-color:rgba(94,162,255,.45);
-          background:var(--accent-soft); font-weight:600; }
-</style>
 {% endblock %}

@@ -41,6 +41,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   reloads (`localStorage`), and a summary strip above the KPI card shows
   running/total strategies, open orders, total realised PnL (server-exact, no
   client-side math) and the next scheduled tick (ui-ux-overhaul leaf 03).
+- **Dashboard: tables & event-feed polish (closes the ui-ux-overhaul epic).**
+  The Strategies/Overview/Orders tables no longer visibly rebuild on an
+  unchanged poll nor wipe an open mode `<select>` mid-interaction; order
+  statuses render as colour-coded badges (Orders page + Overview open-orders);
+  a history read at the server's default cap shows a "showing the most recent
+  200" caption; the Fills table gains a seconds-precision timestamp with a
+  relative ("3m ago") tooltip; the Logs feed stamps lines with the event's own
+  server time, tags them with the emitting strategy, and gains All/Orders/
+  Fills/Logs filter chips plus a min-level select (applied to both incoming
+  and already-buffered lines); the PnL stats table gains a Return column
+  (realised PnL ÷ starting capital) and a starting-capital note (ui-ux-overhaul
+  leaf 05).
 
 ### Fixed
 

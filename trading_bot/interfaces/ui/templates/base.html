@@ -137,6 +137,19 @@
             background:var(--warn-soft); }
     .badge-live    { color:var(--err); border-color:rgba(248,81,73,.5);
             background:var(--err-soft); }
+    /* Order-status badges (Orders page + Overview open-orders) — statusBadge()
+       below maps a lowercase order status to one of these; an unrecognized
+       status falls back to plain escaped text instead of guessing a colour. */
+    .badge-status-muted { color:var(--muted); border-color:var(--border);
+            background:var(--panel-hi); }
+    .badge-status-dim   { color:var(--muted); border-color:var(--border);
+            background:transparent; opacity:.6; }
+    .badge-status-warn  { color:var(--warn); border-color:rgba(214,161,50,.45);
+            background:var(--warn-soft); }
+    .badge-status-ok    { color:var(--ok); border-color:rgba(63,185,80,.4);
+            background:var(--ok-soft); }
+    .badge-status-err   { color:var(--err); border-color:rgba(248,81,73,.5);
+            background:var(--err-soft); }
     /* Running / stopped pill with a status dot. */
     .run-pill { display:inline-flex; align-items:center; gap:.4rem;
             font-size:.8rem; }
@@ -159,6 +172,11 @@
     button.btn-primary { color:#08110a; background:var(--ok);
             border-color:var(--ok); font-weight:700; }
     button.btn-primary:hover { filter:brightness(1.08); background:var(--ok); }
+    /* Toggle button active state — reuses the nav's accent language. Shared by
+       every page-level toggle group (Overview's KPI-level/group-by chips,
+       Logs' event-type filter chips). */
+    .btn.is-active { color:var(--accent); border-color:rgba(94,162,255,.45);
+            background:var(--accent-soft); font-weight:600; }
     select.mode-select { font:inherit; font-size:.8rem; color:var(--fg);
             background:var(--bg); border:1px solid var(--border);
             border-radius:7px; padding:.28rem 1.6rem .28rem .55rem; cursor:pointer;
@@ -292,18 +310,87 @@
     function fmtMoney(v) {
       return tbFmt.money(v);
     }
-    // Format a ms epoch as "YYYY-MM-DD HH:mm" in the browser's local zone.
-    function fmtDate(ms) {
+    // Format a ms epoch as "YYYY-MM-DD HH:mm" (or "HH:mm:ss" with
+    // {seconds:true}, e.g. the Fills table / Logs feed) in the browser's local
+    // zone.
+    function fmtDate(ms, opts) {
       if (ms == null) return '—';
-      const opts = { year:'numeric', month:'2-digit', day:'2-digit',
+      opts = opts || {};
+      const o = { year:'numeric', month:'2-digit', day:'2-digit',
                      hour:'2-digit', minute:'2-digit', hour12:false };
-      return new Date(ms).toLocaleString('en-CA', opts).replace(',', '');
+      if (opts.seconds) o.second = '2-digit';
+      return new Date(ms).toLocaleString('en-CA', o).replace(',', '');
+    }
+
+    // A compact "Ns ago" / "Nm ago" / "Nh ago" / "Nd ago" string for a past ms
+    // epoch — paired with fmtDate() as a `title` tooltip (e.g. the Fills
+    // table's absolute timestamp, a Logs feed line) so the exact and relative
+    // reading are both one hover away. "—" for a missing timestamp.
+    function fmtRelative(ms) {
+      if (ms == null) return '—';
+      const deltaS = Math.max(0, Math.floor((Date.now() - ms) / 1000));
+      if (deltaS < 1) return 'just now';
+      if (deltaS < 60) return deltaS + 's ago';
+      if (deltaS < 3600) return Math.floor(deltaS / 60) + 'm ago';
+      if (deltaS < 86400) return Math.floor(deltaS / 3600) + 'h ago';
+      return Math.floor(deltaS / 86400) + 'd ago';
     }
 
     function escapeHtml(s) {
       return String(s).replace(/[&<>"']/g, function (c) {
         return { '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c];
       });
+    }
+
+    // Order-status -> badge CSS suffix (the .badge-status-* rules above) — one
+    // lowercase-status map shared by the Orders page and Overview's open-orders
+    // table so both surfaces colour-code statuses identically. Covers every
+    // `OrderStatus` value the domain actually emits (new/submitted/open —
+    // still working; partially_filled; filled; cancelled; rejected), plus a
+    // few defensive synonyms (US "canceled" spelling, "working"/"expired") in
+    // case a future venue-side status differs. An unrecognized status falls
+    // back to plain escaped text rather than guessing a colour.
+    const ORDER_STATUS_BADGE_CLASS = {
+      new: 'muted',
+      submitted: 'muted',
+      open: 'muted',
+      working: 'muted',
+      partially_filled: 'warn',
+      filled: 'ok',
+      cancelled: 'dim',
+      canceled: 'dim',
+      rejected: 'err',
+      expired: 'err',
+    };
+    function statusBadge(status) {
+      const key = String(status == null ? '' : status).toLowerCase();
+      const cls = ORDER_STATUS_BADGE_CLASS[key];
+      if (!cls) return escapeHtml(status == null ? '—' : status);
+      return '<span class="badge badge-status-' + cls + '">' + escapeHtml(key) + '</span>';
+    }
+
+    // tbRefreshGuard(key, tableEl, payload) -> 'render' | 'skip-stamp' | 'skip-silent'
+    // Shared by the Strategies/Overview/Orders polling refreshes so a table
+    // never visibly rebuilds when nothing changed, and never rebuilds out from
+    // under an open control (e.g. an in-row mode <select>):
+    //   - 'skip-silent': `document.activeElement` sits inside `tableEl` — a
+    //     control is mid-interaction. The caller must defer EVERYTHING
+    //     (including the "updated" stamp: the visible rows are not verified
+    //     current, so stamping now would be dishonest) to the next refresh.
+    //   - 'skip-stamp': the payload is byte-identical (JSON.stringify) to the
+    //     last call for this `key` — nothing to redraw, but the fetch did
+    //     succeed and the visible rows ARE what the server just sent, so the
+    //     caller should still stamp "updated".
+    //   - 'render': the payload changed (or this is the first call) — rebuild.
+    // One cache entry per `key`, so unrelated tables (or the same table under a
+    // different grouping — pass a compound key) don't collide.
+    const _tbLastPayload = Object.create(null);
+    function tbRefreshGuard(key, tableEl, payload) {
+      if (tableEl && tableEl.contains(document.activeElement)) return 'skip-silent';
+      const json = JSON.stringify(payload);
+      const unchanged = _tbLastPayload[key] === json;
+      _tbLastPayload[key] = json;
+      return unchanged ? 'skip-stamp' : 'render';
     }
 
     // tbTime — shared cadence helpers reused by base.html's health chip and by
