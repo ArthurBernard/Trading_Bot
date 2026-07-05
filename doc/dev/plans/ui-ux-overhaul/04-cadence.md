@@ -6,7 +6,7 @@ complexity: medium
 depends: [03]
 parallel: false
 branch: feat/ui-cadence
-pr: ""
+pr: "#162"
 ---
 
 # Leaf 04 — Cadence made visible: next tick, next bar close, freshness
