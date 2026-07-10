@@ -158,6 +158,15 @@ class StrategyRunner:
         Whatever it returns, the runner overrides the ``client_order_id`` with
         its deterministic per-step id (so idempotency is the runner's, not the
         factory's, concern).
+    capital_provider : Callable[[], Money] or None, optional
+        A **lazy** sizing-base provider read on **every** :meth:`step`. When
+        given, the step derives ``reference_qty = provider() / last_close`` (the
+        capital base translated into base units at the bar's close) and sizes the
+        fractional-exposure signal against it — so a deposit / withdrawal / policy
+        flip is hot (it takes effect on the next step with **no** runner rebuild).
+        The provider is called **once per step**, giving that step a single,
+        consistent base. ``None`` (default) keeps the legacy static sizing (the
+        strategy's own ``reference_qty``), byte-for-byte unchanged.
 
     Examples
     --------
@@ -176,6 +185,7 @@ class StrategyRunner:
         *,
         event_bus: EventBus | None = None,
         order_factory: OrderFactory | None = None,
+        capital_provider: Callable[[], Money] | None = None,
     ) -> None:
         self._strategy = strategy
         self._feed = feed
@@ -183,6 +193,7 @@ class StrategyRunner:
         self._tracker = tracker
         self._bus = event_bus
         self._order_factory = order_factory
+        self._capital_provider = capital_provider
         # Monotonic step index — also the per-step client-order-id seed. It is an
         # instance counter so a fresh runner over the same feed reproduces the
         # same ids (deterministic re-run), while a *single* runner re-driven via
@@ -287,8 +298,11 @@ class StrategyRunner:
 
         Evaluates ``strategy.evaluate(bars)`` (flat during warmup), reads the
         current position from the tracker, computes
-        ``delta = signal.delta_to(position, reference_qty=strategy.reference_qty)``
-        and, **only if ``delta != 0``**, builds an order (MARKET by default, or
+        ``delta = signal.delta_to(position, reference_qty=...)`` — the reference
+        size being either the strategy's static ``reference_qty`` or, when a
+        ``capital_provider`` is wired, ``provider() / last_close`` (the live
+        sizing base per :meth:`_reference_qty`) — and, **only if ``delta != 0``**,
+        builds an order (MARKET by default, or
         via the ``order_factory``) with the deterministic per-step
         ``client_order_id`` and submits it through the router. The step index is
         always advanced (so ids stay aligned to the bar sequence even on a
@@ -331,7 +345,7 @@ class StrategyRunner:
                 fees_paid=_ZERO,
             )
         )
-        delta = signal.delta_to(position, reference_qty=self._strategy.reference_qty)
+        delta = signal.delta_to(position, reference_qty=self._reference_qty(bars))
 
         if delta == 0:
             # Already on target (incl. flat-during-warmup → flat position): no
@@ -463,6 +477,34 @@ class StrategyRunner:
         :meth:`step_latest`).
         """
         return int(bars["time"][-1]) // 1_000_000
+
+    def _reference_qty(self, bars: pl.DataFrame) -> Money | None:
+        """The reference size a fractional signal resolves against for this step.
+
+        Two paths, chosen by whether a ``capital_provider`` was wired:
+
+        * **no provider (legacy)** — the strategy's own static
+          :attr:`~trading_bot.application.strategy.Strategy.reference_qty`,
+          untouched (byte-identical to before the capital ledger existed).
+        * **provider (capital-driven)** — the provider is called **once** for a
+          single consistent sizing base ``B`` (quote units), then translated into
+          base units at the bar's close: ``reference_qty = B / last_close``.
+          ``last_close`` is the close of the bar being stepped (``"c"``, the last
+          row — already in hand, read exactly via ``str -> Decimal``, never
+          through ``float``, matching the limit-at-close order factory). So a
+          deposit / withdrawal / policy flip moves the very next step's target
+          quantities with no runner rebuild.
+
+        The quotient is kept exact :class:`~decimal.Decimal` (``money(str(...))``,
+        the same idiom as the portfolio path's ``weight * capital / price``).
+        """
+        if self._capital_provider is None:
+            return self._strategy.reference_qty
+        base = self._capital_provider()
+        # Price exactly via str -> Decimal (never float), matching the
+        # limit-at-close factory; robust if the close column is Decimal.
+        last_close = money(str(bars["c"][-1]))
+        return money(str(base / last_close))
 
     def _build_order(self, delta: Money, bars: pl.DataFrame, step: int) -> Order:
         """Build the step's order, stamping the deterministic per-step id.

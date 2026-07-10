@@ -45,6 +45,8 @@ from trading_bot.application import (
 from trading_bot.application.config import RiskConfig
 from trading_bot.brokers import PaperBroker
 from trading_bot.domain import (
+    CapitalEvent,
+    CapitalEventType,
     Instrument,
     OrderSide,
     Symbol,
@@ -829,3 +831,119 @@ async def test_rebalance_latest_offloads_the_full_read_off_the_event_loop() -> N
     # The concurrent loop must have gotten several chances to run while the
     # slow synchronous read was in flight on its own thread.
     assert ticks >= 5
+
+
+# --- capital_provider: lazy sizing base per rebalance ----------------------- #
+
+
+def _cap_provider(tmp_path, policy: str, realised: dict, *, genesis: str = "100000"):  # type: ignore[no-untyped-def]  # noqa: ANN001
+    """A real store-backed CapitalService closure the runner sizes against.
+
+    Returns ``(store, provider)`` — ``provider`` folds the ledger live and
+    applies ``policy`` against the mutable ``realised["v"]`` on every call, so a
+    ledger write (a deposit) or a realised-PnL move is reflected on the next tick
+    with no runner rebuild.
+    """
+    from trading_bot.application.capital_service import CapitalService
+    from trading_bot.storage.sqlite_store import SqliteStore
+
+    store = SqliteStore(str(tmp_path / "ledger.sqlite"))
+    cap = CapitalService(store, "book", "paper")
+    cap.ensure_genesis(money(genesis))
+    return store, (lambda: cap.sizing_base(policy, realised["v"]))
+
+
+async def test_capital_provider_overrides_static_capital() -> None:
+    """A provider base supersedes the strategy's static ``capital`` for sizing.
+
+    BTC weight ``0.5`` at price 50000 with a provider base of 200000 sizes to
+    ``0.5 * 200000 / 50000 = 2`` (vs 1 against the static 100000).
+    """
+    router, tracker, bus, _broker = _engine()
+    runner = PortfolioRunner(
+        _strategy(_weights_signal({BTC: money("0.5")})),
+        _ListFeed([], asof=1_700),
+        router,
+        tracker,
+        event_bus=bus,
+        capital_provider=lambda: money("200000"),
+    )
+    await runner.rebalance(_frames())
+    assert tracker.position(Instrument(BTC)).net_qty == Decimal("2")  # type: ignore[union-attr]
+
+
+async def test_fixed_policy_sizes_on_contributed_after_profit(tmp_path) -> None:  # noqa: ANN001
+    """`fixed` sizes on C even after realised profit — the base never grows."""
+    realised = {"v": money("0")}
+    _store, provider = _cap_provider(tmp_path, "fixed", realised)
+    router, tracker, bus, _broker = _engine()
+    runner = PortfolioRunner(
+        _strategy(_weights_signal({BTC: money("1")})),
+        _ListFeed([], asof=1_700),
+        router,
+        tracker,
+        event_bus=bus,
+        capital_provider=provider,
+    )
+    await runner.rebalance(_frames())  # base 100000 → BTC qty 2
+    assert tracker.position(Instrument(BTC)).net_qty == Decimal("2")  # type: ignore[union-attr]
+
+    # A big realised profit does NOT move a fixed base → still target 2 → no leg.
+    realised["v"] = money("50000")
+    result = await runner.rebalance(_frames())
+    assert result.submitted == 0
+    assert tracker.position(Instrument(BTC)).net_qty == Decimal("2")  # type: ignore[union-attr]
+
+
+async def test_compound_policy_reinvests_and_shrinks(tmp_path) -> None:  # noqa: ANN001
+    """`compound` sizes on C + R: a profit grows the base, a loss shrinks it."""
+    realised = {"v": money("0")}
+    _store, provider = _cap_provider(tmp_path, "compound", realised)
+    router, tracker, bus, _broker = _engine()
+    runner = PortfolioRunner(
+        _strategy(_weights_signal({BTC: money("1")})),
+        _ListFeed([], asof=1_700),
+        router,
+        tracker,
+        event_bus=bus,
+        capital_provider=provider,
+    )
+    await runner.rebalance(_frames())  # base 100000 → BTC qty 2
+    assert tracker.position(Instrument(BTC)).net_qty == Decimal("2")  # type: ignore[union-attr]
+
+    # A +50000 realised profit → compound base 150000 → target 3 → top up +1.
+    realised["v"] = money("50000")
+    result = await runner.rebalance(_frames())
+    assert result.submitted == 1
+    assert tracker.position(Instrument(BTC)).net_qty == Decimal("3")  # type: ignore[union-attr]
+
+    # A loss shrinks the base: -80000 → base 70000 → target 1.4 → sell down.
+    realised["v"] = money("-30000")  # 100000 - 30000 = 70000
+    await runner.rebalance(_frames())
+    assert tracker.position(Instrument(BTC)).net_qty == Decimal("1.4")  # type: ignore[union-attr]
+
+
+async def test_deposit_grows_next_rebalance_no_rebuild(tmp_path) -> None:  # noqa: ANN001
+    """A recorded DEPOSIT grows the *next* rebalance's targets — same runner instance."""
+    realised = {"v": money("0")}
+    store, provider = _cap_provider(tmp_path, "fixed", realised)
+    router, tracker, bus, _broker = _engine()
+    runner = PortfolioRunner(
+        _strategy(_weights_signal({BTC: money("1")})),
+        _ListFeed([], asof=1_700),
+        router,
+        tracker,
+        event_bus=bus,
+        capital_provider=provider,
+    )
+    await runner.rebalance(_frames())  # base 100000 → BTC qty 2
+    assert tracker.position(Instrument(BTC)).net_qty == Decimal("2")  # type: ignore[union-attr]
+
+    # Record a +100000 deposit into the ledger — contributed jumps to 200000.
+    store.record_capital_event(
+        CapitalEvent("D1", "book", CapitalEventType.DEPOSIT, money("100000"), ts=10)
+    )
+    # The SAME runner instance sizes the next tick on 200000 → target 4 → +2.
+    result = await runner.rebalance(_frames())
+    assert result.submitted == 1
+    assert tracker.position(Instrument(BTC)).net_qty == Decimal("4")  # type: ignore[union-attr]

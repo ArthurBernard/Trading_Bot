@@ -24,6 +24,7 @@ from trading_bot.application.config import (
 from trading_bot.application.events import FillEvent
 from trading_bot.application.strategy_runner import StrategyRunner
 from trading_bot.application.supervisor import StrategySupervisor
+from trading_bot.domain.capital import CapitalEvent, CapitalEventType
 from trading_bot.domain.errors import ConfigError, LiveTradingNotEnabled
 from trading_bot.domain.fill import Fill
 from trading_bot.domain.instrument import Instrument, Symbol
@@ -1374,3 +1375,137 @@ async def test_remove_unit_fully_tears_down_no_residual_handles() -> None:
     # ... and it is gone from the registry + manifest.
     assert sup.names() == []
     assert sup.manifest().strategies == []
+
+
+# --- capital: status fields, v0 repoint, KPI isolation ---------------------- #
+
+
+def _config_alloc(
+    db_path: str, *, allocation: str = "100", policy: str = "fixed"
+) -> AppConfig:
+    """A paper BTC/USD strategy declaring an ``allocation`` + ``capital_policy``."""
+    return AppConfig.model_validate(
+        {
+            "mode": "paper",
+            "storage": {"db_path": db_path},
+            "brokers": [{"name": "kraken", "exchange": "kraken"}],
+            "strategies": [
+                {
+                    "name": "btc-ma",
+                    "symbol": "BTC/USD",
+                    "data": {"exchange": "kraken", "span": 60},
+                    "signal": {"ref": "ma_crossover", "params": {"fast": 3, "slow": 6}},
+                    "reference_qty": "2",
+                    "lookback": 6,
+                    "allocation": allocation,
+                    "capital_policy": policy,
+                }
+            ],
+        }
+    )
+
+
+async def test_status_exposes_capital_fields(tmp_path) -> None:  # noqa: ANN001
+    """A started unit with an ``allocation`` surfaces the capital view on its status."""
+    pytest.importorskip("fynance")
+    db = str(tmp_path / "book.sqlite")
+    sup = StrategySupervisor(
+        _config_alloc(db, allocation="100", policy="compound"),
+        dccd_client=_FakeDccdClient({"BTC/USD": _dccd_ohlc(_trend())}),
+    )
+    await sup.start("btc-ma")  # seeds the genesis via build_runners
+
+    status = sup.status("btc-ma")[0]
+    assert status.allocation == money("100")
+    assert status.contributed == money("100")  # only the genesis so far
+    assert status.capital_policy == "compound"
+    # No fills / flat book yet → total_value = contributed + 0 + 0.
+    assert status.total_value == money("100")
+    # The genesis landed once in the ledger.
+    events = sup._units["btc-ma"].engine.store.capital_events(strategy="btc-ma")  # type: ignore[union-attr]  # noqa: SLF001
+    assert len(events) == 1 and events[0].event_id == "btc-ma:funding"
+
+
+def test_status_capital_fields_none_for_legacy_unit() -> None:
+    """A strategy with no ``allocation`` reports None capital fields (unchanged)."""
+    sup = _supervisor()  # the default config declares no allocation / no store
+    [status] = sup.status()
+    assert status.allocation is None
+    assert status.contributed is None
+    assert status.unrealised is None
+    assert status.total_value is None
+    assert status.capital_policy == "fixed"  # the field default
+
+
+def test_v0_anchors_at_allocation(tmp_path) -> None:  # noqa: ANN001
+    """`pnl_series`' v0 (the KPI anchor) repoints to the genesis allocation."""
+    db = str(tmp_path / "book.sqlite")
+    sup = StrategySupervisor(
+        _config_alloc(db, allocation="250"),
+        dccd_client=_FakeDccdClient({"BTC/USD": _dccd_ohlc(_trend())}),
+    )
+    assert sup.pnl_series("btc-ma")["v0"] == money("250")
+
+
+def test_v0_legacy_unit_stays_starting_capital() -> None:
+    """A legacy unit (no allocation) keeps ``starting_capital`` as its anchor."""
+    sup = _supervisor()
+    result = sup.pnl_series("btc-ma")
+    assert result["v0"] == sup._units["btc-ma"].config.starting_capital  # noqa: SLF001
+
+
+def test_deposit_never_distorts_the_fill_only_kpi_curve(tmp_path) -> None:  # noqa: ANN001
+    """The guardrail: a DEPOSIT moves total_value but never the fill-only equity curve.
+
+    A deposit is a capital movement, not a return — so the per-mode ``series``
+    (the KPI equity curve) and the ``v0`` anchor must be byte-identical before and
+    after it, while ``total_value`` (contributed + realised) moves by the deposit.
+    """
+    from trading_bot.storage.sqlite_store import SqliteStore
+
+    db = str(tmp_path / "book.sqlite")
+    inst = Instrument(Symbol("BTC", "USD"))
+    store = SqliteStore(db)
+    store.set_context(mode="paper", venue="kraken")
+    # Genesis funding of 100 + a paper round trip realising +8.
+    store.record_capital_event(
+        CapitalEvent(
+            "btc-ma:funding", "btc-ma", CapitalEventType.FUNDING, money("100"), 0
+        )
+    )
+    store.record_fill(
+        Fill("PF1", "pc1", inst, OrderSide.BUY, money("1"), money("100"), money("1"), 1)
+    )
+    store.record_fill(
+        Fill(
+            "PF2", "pc2", inst, OrderSide.SELL, money("1"), money("110"), money("1"), 2
+        )
+    )
+
+    # A stopped unit reads back from the configured db_path store.
+    sup = StrategySupervisor(
+        _config_alloc(db, allocation="100"),
+        dccd_client=_FakeDccdClient({"BTC/USD": _dccd_ohlc(_trend())}),
+    )
+
+    before = sup.pnl_series("btc-ma")
+    assert before["v0"] == money("100")  # anchored at the genesis
+    series_before = before["series"]["paper"]
+    # total_value = contributed(100) + realised(8) + unrealised(None→0).
+    assert before["current"]["paper"]["total_value"] == money("108")
+
+    # Record a mid-run DEPOSIT of 50 → contributed jumps to 150.
+    store.record_capital_event(
+        CapitalEvent("D1", "btc-ma", CapitalEventType.DEPOSIT, money("50"), ts=100)
+    )
+
+    after = sup.pnl_series("btc-ma")
+    # The fill-only KPI curve + anchor are UNCHANGED — a deposit is not a return.
+    assert after["v0"] == money("100")
+    assert after["series"]["paper"] == series_before
+    # But total_value moved by the deposit: 150 + 8 = 158.
+    assert after["current"]["paper"]["total_value"] == money("158")
+    # And the status view agrees (contributed grew, realised curve did not).
+    status = sup.status("btc-ma")[0]
+    assert status.contributed == money("150")
+    assert status.total_value == money("158")

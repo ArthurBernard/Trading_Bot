@@ -355,10 +355,12 @@ def _pnl_series_dict(
 
     The per-mode realised-PnL / equity curve: ``v0`` and every money field in the
     series points (``[ts_ms, pnl, equity]``) and the ``current`` end points
-    (``equity`` / ``unrealised``) are exact :class:`~decimal.Decimal` strings;
-    ``ts_ms`` stays the integer ms it already is. With ``only_mode`` set, only
-    that mode's series + current are kept (the ``?mode=`` filter) — an absent mode
-    yields empty ``series`` / ``current`` (200, not an error).
+    (``equity`` / ``unrealised`` / ``allocation`` / ``contributed`` /
+    ``total_value``) are exact :class:`~decimal.Decimal` strings, with
+    ``capital_policy`` passed through as a plain string; ``ts_ms`` stays the
+    integer ms it already is. With ``only_mode`` set, only that mode's series +
+    current are kept (the ``?mode=`` filter) — an absent mode yields empty
+    ``series`` / ``current`` (200, not an error).
     """
     series_in: dict[str, Any] = result["series"]
     current_in: dict[str, Any] = result["current"]
@@ -375,6 +377,10 @@ def _pnl_series_dict(
         mode: {
             "equity": _money_str(current_in[mode]["equity"]),
             "unrealised": _money_str(current_in[mode]["unrealised"]),
+            "allocation": _money_str(current_in[mode]["allocation"]),
+            "contributed": _money_str(current_in[mode]["contributed"]),
+            "total_value": _money_str(current_in[mode]["total_value"]),
+            "capital_policy": current_in[mode]["capital_policy"],
         }
         for mode in modes
         if mode in current_in
@@ -1036,6 +1042,11 @@ def _status_dict(status: StrategyStatus) -> dict[str, Any]:
         "open_orders": status.open_orders,
         "last_eval_ts": status.last_eval_ts,
         "last_asof_ts": status.last_asof_ts,
+        "allocation": _money_str(status.allocation),
+        "contributed": _money_str(status.contributed),
+        "unrealised": _money_str(status.unrealised),
+        "total_value": _money_str(status.total_value),
+        "capital_policy": status.capital_policy,
     }
 
 
