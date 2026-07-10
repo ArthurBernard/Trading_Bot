@@ -74,7 +74,7 @@ file-disjoint until they join at 08.
 - [x] 03 storage-capital-events — feat/storage-capital-events — medium
 - [x] 04 config-allocation-policy — feat/config-allocation-policy — low
 - [x] 05 strategy-detail-page — feat/strategy-detail-page — high
-- [ ] 06 capital-service-sizing — feat/capital-service-sizing — high
+- [x] 06 capital-service-sizing — feat/capital-service-sizing — high
 - [ ] 07 capital-control-plane — feat/capital-control-plane — high
 - [ ] 08 ui-capital-block — feat/ui-capital-block — medium
 
