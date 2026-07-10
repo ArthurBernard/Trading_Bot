@@ -74,6 +74,7 @@ from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, cast
 
+from trading_bot.application.capital_service import CapitalService
 from trading_bot.application.data_provider import (
     ResamplingDccdClient,
     _make_client,
@@ -108,6 +109,7 @@ if TYPE_CHECKING:
 
     from trading_bot.application.config import (
         AppConfig,
+        PortfolioStrategyConfig,
         StrategyConfig,
     )
     from trading_bot.application.data_feed import DataFeed
@@ -438,6 +440,56 @@ def _claimed_symbols(config: AppConfig) -> Iterator[tuple[Symbol, str]]:
             )
 
 
+def _strategy_capital_provider(
+    strategy_cfg: StrategyConfig, engine: Engine
+) -> Callable[[], Money] | None:
+    """Wire a lazy sizing-base provider for a single-instrument strategy.
+
+    Feature-inert unless the strategy **declares money** (a set ``allocation``)
+    *and* the engine has a store to hold the ledger. When both hold, this seeds
+    the genesis ``FUNDING`` once (:meth:`~trading_bot.application.capital_service
+    .CapitalService.ensure_genesis`, idempotent) and returns a closure the runner
+    calls **every step**: ``sizing_base(policy, realised_pnl)`` folds the ledger
+    live, so a deposit / withdrawal / policy flip takes effect on the next step
+    with no engine rebuild. ``None`` (no ``allocation``, or no store) leaves the
+    runner on its legacy static ``reference_qty``.
+    """
+    if strategy_cfg.allocation is None or engine.store is None:
+        return None
+    capital = CapitalService(engine.store, strategy_cfg.name, engine.config.mode)
+    capital.ensure_genesis(strategy_cfg.allocation)
+    perf = engine.perf
+    policy = strategy_cfg.capital_policy
+    return lambda: capital.sizing_base(policy, perf.realised_pnl())
+
+
+def _portfolio_capital_provider(
+    portfolio_cfg: PortfolioStrategyConfig, engine: Engine
+) -> Callable[[], Money] | None:
+    """Wire a lazy capital-base provider for a portfolio.
+
+    A portfolio **always declares money** (``capital`` is required), so its
+    genesis is seeded whenever the engine has a store — with ``allocation`` when
+    set, else the required ``capital`` (the two never both anchor: ``allocation``
+    supersedes). The returned closure the runner calls **once per rebalance**
+    folds the ledger live (``sizing_base(policy, realised_pnl)``), so a deposit /
+    withdrawal / policy flip is hot with no rebuild. ``None`` (no store) leaves
+    the runner on its legacy static ``strategy.capital``.
+    """
+    if engine.store is None:
+        return None
+    genesis = (
+        portfolio_cfg.allocation
+        if portfolio_cfg.allocation is not None
+        else portfolio_cfg.capital
+    )
+    capital = CapitalService(engine.store, portfolio_cfg.name, engine.config.mode)
+    capital.ensure_genesis(genesis)
+    perf = engine.perf
+    policy = portfolio_cfg.capital_policy
+    return lambda: capital.sizing_base(policy, perf.realised_pnl())
+
+
 def build_runners(
     config: AppConfig,
     engine: Engine,
@@ -532,6 +584,7 @@ def build_runners(
             engine.tracker,
             event_bus=engine.bus,
             order_factory=_limit_at_close_factory(),
+            capital_provider=_strategy_capital_provider(strategy_cfg, engine),
         )
         runners.append(runner)
     return runners
@@ -644,6 +697,7 @@ def build_portfolio_runners(
             engine.router,
             engine.tracker,
             event_bus=engine.bus,
+            capital_provider=_portfolio_capital_provider(portfolio_cfg, engine),
         )
         runners.append(runner)
     return runners

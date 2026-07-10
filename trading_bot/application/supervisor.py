@@ -43,7 +43,8 @@ from typing import TYPE_CHECKING, Literal, cast
 from trading_bot.application.pnl_series import by_mode, equity_series
 from trading_bot.application.reconcile import reconcile
 from trading_bot.application.run_app import build_portfolio_runners, build_runners
-from trading_bot.application.service_factory import Engine, build_engine
+from trading_bot.application.service_factory import Engine, build_engine, genesis_v0
+from trading_bot.domain.capital import contributed_capital
 from trading_bot.domain.errors import ConfigError, LiveTradingNotEnabled
 from trading_bot.domain.money import money
 from trading_bot.domain.performance import (
@@ -64,6 +65,7 @@ if TYPE_CHECKING:
     from trading_bot.application.data_provider import DccdClient
     from trading_bot.application.portfolio_runner import PortfolioRunner
     from trading_bot.application.strategy_runner import StrategyRunner
+    from trading_bot.domain.capital import CapitalEvent
     from trading_bot.domain.fill import Fill
     from trading_bot.domain.money import Money
     from trading_bot.domain.order import Order
@@ -139,6 +141,29 @@ class StrategyStatus:
         .last_asof_ms` / :attr:`~trading_bot.application.portfolio_runner
         .PortfolioRunner.last_asof_ms`), i.e. "the data this strategy last
         computed on". ``None`` before the first completed evaluation.
+    allocation : Money or None
+        The unit's **genesis** capital — its declared ``allocation`` (or a
+        portfolio's ``allocation``/``capital``). ``None`` for a single-instrument
+        strategy that declares no money base (a legacy entry). The one-off seed of
+        the capital ledger; after seeding the ledger is the source of truth.
+    contributed : Money or None
+        The **ledger fold** ``C = Σ deposits − Σ withdrawals`` for the unit
+        (:func:`~trading_bot.domain.capital.contributed_capital` over its capital
+        events). Equals ``allocation`` with only the genesis; grows / shrinks with
+        deposits / withdrawals. ``None`` when the unit declares no money base.
+    unrealised : Money or None
+        Best-effort mark-to-market of the running unit's open book in its current
+        mode (:meth:`_unrealised_of`). ``None`` when stopped, flat, unpriced, or
+        no money base is declared.
+    total_value : Money or None
+        The unit's total value ``V = contributed + realised + unrealised``
+        (null-safe: a missing ``unrealised`` folds as ``0`` ⇒ ``contributed +
+        realised``). ``None`` when the unit declares no money base. **A deposit
+        moves this, never the KPI equity curve** — capital in is not a return.
+    capital_policy : {"fixed", "compound"}
+        The unit's capital-evolution policy (its config ``capital_policy``):
+        ``fixed`` sizes against ``contributed``; ``compound`` reinvests realised
+        PnL into the sizing base.
 
     """
 
@@ -153,6 +178,11 @@ class StrategyStatus:
     open_orders: int
     last_eval_ts: int | None = None
     last_asof_ts: int | None = None
+    allocation: Money | None = None
+    contributed: Money | None = None
+    unrealised: Money | None = None
+    total_value: Money | None = None
+    capital_policy: str = "fixed"
 
 
 @dataclass(frozen=True, slots=True)
@@ -827,8 +857,7 @@ class StrategySupervisor:
         names = [name] if name is not None else list(self._units)
         return [self._status_of(self._unit(n)) for n in names]
 
-    @staticmethod
-    def _status_of(unit: _Unit) -> StrategyStatus:
+    def _status_of(self, unit: _Unit) -> StrategyStatus:
         realised: Money | None = None
         open_orders = 0
         last_eval_ts: int | None = None
@@ -850,6 +879,18 @@ class StrategySupervisor:
             last_eval_ts = unit.runner.last_eval_ms
             last_asof_ts = unit.runner.last_asof_ms
         entry = _unit_entry(unit)
+        # Capital view: the declared genesis (allocation), the ledger fold
+        # (contributed), the open-book mark (unrealised) and their sum
+        # (total_value). All None when the unit declares no money base — a legacy
+        # single-instrument strategy with no `allocation` is fully unchanged.
+        allocation = _declared_genesis(entry)
+        contributed = self._contributed_of(unit)
+        stored = self._stored_fills_of(unit)
+        mode_fills = by_mode(stored).get(unit.mode, [])
+        unrealised = self._unrealised_of(unit, unit.mode, mode_fills)
+        total_value = self._total_value_of(
+            contributed, realised, mode_fills, unrealised
+        )
         return StrategyStatus(
             name=unit.name,
             kind=unit.kind,
@@ -862,6 +903,35 @@ class StrategySupervisor:
             open_orders=open_orders,
             last_eval_ts=last_eval_ts,
             last_asof_ts=last_asof_ts,
+            allocation=allocation,
+            contributed=contributed,
+            unrealised=unrealised,
+            total_value=total_value,
+            capital_policy=entry.capital_policy,
+        )
+
+    @staticmethod
+    def _total_value_of(
+        contributed: Money | None,
+        realised: Money | None,
+        mode_fills: list[Fill],
+        unrealised: Money | None,
+    ) -> Money | None:
+        """The unit's total value ``V = contributed + realised + unrealised``.
+
+        ``None`` when the unit declares no money base (``contributed is None``).
+        Otherwise ``realised`` is the unit engine's realised PnL when running (so
+        ``V`` reconciles with the displayed ``realised_pnl``), else the fill-only
+        fold of the mode's fills (a stopped unit has no live engine). A missing
+        ``unrealised`` (stopped / flat / unpriced) folds as ``0``.
+        """
+        if contributed is None:
+            return None
+        if realised is None:
+            points = equity_series(mode_fills)
+            realised = points[-1].realised_pnl if points else _ZERO
+        return (
+            contributed + realised + (unrealised if unrealised is not None else _ZERO)
         )
 
     # --- aggregate read accessors (for the dashboard Overview) ------------- #
@@ -1295,9 +1365,11 @@ class StrategySupervisor:
         -------
         dict
             ``{"strategy", "v0", "series": {mode: [[ts_ms, pnl, equity], ...]},
-            "current": {mode: {"equity", "unrealised"}}}`` — money as exact
+            "current": {mode: {"equity", "unrealised", "allocation",
+            "contributed", "total_value", "capital_policy"}}}`` — money as exact
             :class:`~decimal.Decimal` (the API stringifies it), timestamps integer
-            ms.
+            ms. The ``series`` (fill-only equity) is unchanged by a deposit — only
+            ``current[mode].total_value`` moves with contributed capital.
 
         Raises
         ------
@@ -1309,16 +1381,39 @@ class StrategySupervisor:
         v0 = self._v0_of(unit)
         stored = self._stored_fills_of(unit)
         buckets = by_mode(stored)
+        # Capital view, shared across every mode's end point: the declared genesis
+        # (allocation) and the ledger fold (contributed). ``total_value`` is folded
+        # per mode below (each mode's realised + unrealised). All None when the
+        # unit declares no money base.
+        entry = _unit_entry(unit)
+        allocation = _declared_genesis(entry)
+        contributed = self._contributed_of(unit)
 
         series: dict[str, list[list[object]]] = {}
-        current: dict[str, dict[str, Money | None]] = {}
+        current: dict[str, dict[str, object]] = {}
         for mode, fills in buckets.items():
             points = equity_series(fills, v0=v0)
             series[mode] = [[p.ts_ms, p.realised_pnl, p.equity] for p in points]
             end_equity = points[-1].equity if points else v0
+            realised = points[-1].realised_pnl if points else _ZERO
+            unrealised = self._unrealised_of(unit, mode, fills)
+            if contributed is None:
+                total_value: Money | None = None
+            else:
+                total_value = (
+                    contributed
+                    + realised
+                    + (unrealised if unrealised is not None else _ZERO)
+                )
             current[mode] = {
+                # KPI equity (fill-only, anchored at v0=genesis) — unchanged by a
+                # deposit; only ``total_value`` moves with contributed capital.
                 "equity": end_equity,
-                "unrealised": self._unrealised_of(unit, mode, fills),
+                "unrealised": unrealised,
+                "allocation": allocation,
+                "contributed": contributed,
+                "total_value": total_value,
+                "capital_policy": entry.capital_policy,
             }
         return {
             "strategy": unit.name,
@@ -1379,14 +1474,19 @@ class StrategySupervisor:
 
     @staticmethod
     def _v0_of(unit: _Unit) -> Money:
-        """The unit's equity-curve anchor — its config ``starting_capital``.
+        """The unit's equity-curve anchor — its **genesis** capital.
 
         The same ``v0`` :func:`~trading_bot.application.service_factory.build_engine`
-        seeds the unit's performance service with, so a derived
-        :meth:`pnl_series` curve reconciles to the running engine's
-        ``perf.realised_pnl()`` exactly (``final equity == v0 + realised PnL``).
+        seeds the unit's performance service with (via
+        :func:`~trading_bot.application.service_factory.genesis_v0`): the unit's
+        declared ``allocation`` (or a portfolio's ``capital``), falling back to
+        ``starting_capital`` when it declares no money. Keeping the two identical
+        is what makes a derived :meth:`pnl_series` curve reconcile to the running
+        engine's ``perf.realised_pnl()`` exactly (``final equity == v0 + realised
+        PnL``). KPI ratios anchor here, on the **fill-only** curve — a deposit is
+        a capital movement, never a return.
         """
-        return unit.config.starting_capital
+        return genesis_v0(unit.config)
 
     def _stored_fills_of(self, unit: _Unit) -> list[StoredFill]:
         """The unit's tagged fills — from the running engine's store, else its db.
@@ -1404,6 +1504,37 @@ class StrategySupervisor:
         if db_path is None:
             return []
         return SqliteStore(db_path).stored_fills()
+
+    def _contributed_of(self, unit: _Unit) -> Money | None:
+        """The unit's net contributed capital ``C`` (the ledger fold), or ``None``.
+
+        ``None`` when the unit declares no money base (a legacy single-instrument
+        strategy with no ``allocation``) — there is no ledger to fold. Otherwise
+        the unit's capital events are folded via
+        :func:`~trading_bot.domain.capital.contributed_capital`. When no event has
+        been recorded yet (a unit never started, or one with no store), the
+        declared genesis is the best-effort base (the ledger, once seeded, would
+        hold exactly it).
+        """
+        genesis = _declared_genesis(_unit_entry(unit))
+        if genesis is None:
+            return None
+        events = self._capital_events_of(unit)
+        return contributed_capital(events) if events else genesis
+
+    def _capital_events_of(self, unit: _Unit) -> list[CapitalEvent]:
+        """The unit's capital events — from the running engine's store, else its db.
+
+        Mirrors :meth:`_stored_fills_of`'s dual read path: a running unit reads its
+        live ``engine.store``; a stopped unit reads a store opened at its
+        configured ``db_path`` (empty when unset — nowhere to read from).
+        """
+        if unit.running and unit.engine is not None and unit.engine.store is not None:
+            return unit.engine.store.capital_events(strategy=unit.name)
+        db_path = unit.config.storage.db_path
+        if db_path is None:
+            return []
+        return SqliteStore(db_path).capital_events(strategy=unit.name)
 
     @staticmethod
     def _unrealised_of(unit: _Unit, mode: str, fills: list[Fill]) -> Money | None:
@@ -1447,6 +1578,30 @@ def _unit_entry(unit: _Unit) -> StrategyConfig | PortfolioStrategyConfig:
     if unit.kind == "strategy":
         return unit.config.strategies[0]
     return unit.config.portfolios[0]
+
+
+def _declared_genesis(
+    entry: StrategyConfig | PortfolioStrategyConfig,
+) -> Money | None:
+    """The genesis capital a config entry declares, or ``None`` for a legacy one.
+
+    A :class:`~trading_bot.application.config.PortfolioStrategyConfig` **always**
+    declares money — its ``allocation`` when set, else its required ``capital``
+    (``allocation`` supersedes ``capital`` as the base). A single-instrument
+    :class:`~trading_bot.application.config.StrategyConfig` declares money only via
+    an optional ``allocation`` — ``None`` there means "no money base" (today's
+    legacy behaviour, unchanged). This is the amount
+    :func:`~trading_bot.application.service_factory.genesis_v0` anchors ``v0`` at
+    and the amount :meth:`StrategySupervisor.start` seeds the ledger genesis with.
+    """
+    # Local import (not at module top): PortfolioStrategyConfig is a
+    # TYPE_CHECKING-only import above; the concrete class is needed at runtime
+    # only for this isinstance dispatch (mirrors `_entry_quote`'s pattern).
+    from trading_bot.application.config import PortfolioStrategyConfig
+
+    if isinstance(entry, PortfolioStrategyConfig):
+        return entry.allocation if entry.allocation is not None else entry.capital
+    return entry.allocation
 
 
 def _entry_quote(entry: StrategyConfig | PortfolioStrategyConfig) -> str | None:

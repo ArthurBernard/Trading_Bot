@@ -64,9 +64,10 @@ from trading_bot.brokers.binance import TESTNET_API_BASE, BinanceBroker
 from trading_bot.brokers.kraken import KrakenBroker
 from trading_bot.brokers.paper import PaperBroker
 from trading_bot.domain.errors import BrokerError, LiveTradingNotEnabled
+from trading_bot.domain.money import Money
 from trading_bot.storage.sqlite_store import SqliteStore
 
-__all__ = ["Engine", "build_engine"]
+__all__ = ["Engine", "build_engine", "genesis_v0"]
 
 #: Venue keys recognised as live (non-simulated) adapters.
 _LIVE_VENUES = ("kraken", "binance")
@@ -192,10 +193,14 @@ def build_engine(
     broker = _build_broker(config, bus)
 
     tracker = PositionTracker(event_bus=bus)
-    # Seed the equity curve with the configured starting capital so the KPI
-    # ratios are computed over a strictly-positive account value (the curve does
-    # not sign-cross), making Sharpe/Sortino/Calmar over a real run meaningful.
-    perf = PerformanceService(v0=config.starting_capital, event_bus=bus)
+    # Anchor the equity curve at the unit's genesis capital (its ``allocation``,
+    # or a portfolio's ``capital``) when the config is a single-unit slice —
+    # falling back to ``starting_capital`` for a multi-unit / legacy config that
+    # declares no per-unit money (see ``genesis_v0``). A strictly-positive anchor
+    # keeps the curve from sign-crossing, so the KPI ratios (Sharpe/Sortino/
+    # Calmar) over a real run stay meaningful. KPI ratios stay on this fill-only
+    # curve — a deposit is a capital movement, never a return.
+    perf = PerformanceService(v0=genesis_v0(config), event_bus=bus)
     # Wire the daily-loss circuit breaker to the live PnL: the risk manager reads
     # the *current UTC day's* signed realised PnL (a loss is negative) off the
     # performance service via ``realised_pnl_since(day_start_ms)``. "Daily" is a
@@ -227,6 +232,55 @@ def build_engine(
         risk=risk,
         store=store,
     )
+
+
+def genesis_v0(config: AppConfig) -> Money:
+    """The equity-curve anchor for ``config`` — the unit's genesis capital.
+
+    The KPI anchor ``v0`` :func:`build_engine` seeds the performance service
+    with. When ``config`` is a **single-unit slice** (exactly one strategy and no
+    portfolio, or exactly one portfolio and no strategy — the shape the
+    :class:`~trading_bot.application.supervisor.StrategySupervisor` builds every
+    unit's engine from), the anchor is that unit's **genesis capital**: a
+    strategy's declared ``allocation`` (or a portfolio's ``allocation``, else its
+    required ``capital``). A unit that declares no money base — a single-instrument
+    strategy with no ``allocation`` — falls back to ``config.starting_capital``, as
+    does any multi-unit / empty config (the whole-system
+    :func:`~trading_bot.application.run_app.run_app` path, and every legacy
+    manifest), so their anchoring is unchanged.
+
+    Keeping this identical to the supervisor's own per-unit ``_v0_of`` is what
+    makes a derived
+    :meth:`~trading_bot.application.supervisor.StrategySupervisor.pnl_series` curve
+    reconcile to the running engine's ``perf.realised_pnl()`` to the cent (same
+    ``v0``, same fill fold).
+
+    Parameters
+    ----------
+    config : AppConfig
+        The engine configuration (typically a single-unit slice under the
+        supervisor; the whole system under ``run_app``).
+
+    Returns
+    -------
+    Money
+        The genesis capital of the single declared unit, else
+        ``config.starting_capital``.
+
+    """
+    strategies = config.strategies
+    portfolios = config.portfolios
+    if len(strategies) == 1 and not portfolios:
+        allocation = strategies[0].allocation
+        return allocation if allocation is not None else config.starting_capital
+    if len(portfolios) == 1 and not strategies:
+        portfolio = portfolios[0]
+        return (
+            portfolio.allocation
+            if portfolio.allocation is not None
+            else portfolio.capital
+        )
+    return config.starting_capital
 
 
 def _build_broker(config: AppConfig, bus: EventBus) -> Broker:

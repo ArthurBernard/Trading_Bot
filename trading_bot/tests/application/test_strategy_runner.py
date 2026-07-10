@@ -863,3 +863,117 @@ async def test_step_latest_offloads_the_full_read_off_the_event_loop() -> None:
     # The concurrent loop must have gotten several chances to run while the
     # slow synchronous read was in flight on its own thread.
     assert ticks >= 5
+
+
+# --- capital_provider: reference_qty = sizing_base / close ------------------ #
+
+
+def _always_long(bars: pl.DataFrame) -> Signal:
+    """A constant +1 (fully long) exposure signal for BTC/USD."""
+    return Signal.exposure(BTC_USD, money("1"), ts=0)
+
+
+def _wire_provider(
+    strategy: Strategy,
+    frame: pl.DataFrame,
+    provider: object,
+    *,
+    mark: str = "100",
+) -> tuple[StrategyRunner, PaperBroker, PositionTracker]:
+    """A wired runner whose sizing is driven by ``provider`` (a lazy base fn)."""
+    bus = EventBus()
+    tracker = PositionTracker(event_bus=bus)
+    broker = PaperBroker(
+        prices={BTC_USD: money(mark)},
+        fee_bps=money("0"),
+        fill_model="immediate",
+        starting_balances={"USD": money("10000000"), "BTC": money("0")},
+        event_bus=bus,
+    )
+    router = OrderRouter(broker, bus)
+    runner = StrategyRunner(
+        strategy,
+        InMemoryFeed(frame),
+        router,
+        tracker,
+        event_bus=bus,
+        capital_provider=provider,  # type: ignore[arg-type]
+    )
+    return runner, broker, tracker
+
+
+async def test_capital_provider_sizes_reference_qty_from_base() -> None:
+    """A step sizes ``reference_qty = base / close`` — target = exposure * that.
+
+    With base 100 at close 100, ``reference_qty = 1`` so a +1 exposure targets
+    long 1 from flat → an order for exactly 1 (money exact ``Decimal``).
+    """
+    strat = Strategy(name="cap", instrument=BTC_USD, signal_fn=_always_long)
+    frame = _bars([100.0])
+    runner, _broker, tracker = _wire_provider(strat, frame, lambda: money("100"))
+
+    order = await runner.step(frame)
+    assert order is not None
+    assert order.qty == Decimal("1")
+    pos = tracker.position(BTC_USD)
+    assert pos is not None and pos.net_qty == Decimal("1")
+
+
+async def test_capital_provider_reference_qty_tracks_close() -> None:
+    """The base translates to base units at the bar's close: qty = base / close.
+
+    Base 150 at close 30000 → ``reference_qty = 0.005`` → long 0.005, exact.
+    """
+    strat = Strategy(name="cap", instrument=BTC_USD, signal_fn=_always_long)
+    frame = _bars([30000.0])
+    runner, _broker, _tracker = _wire_provider(
+        strat, frame, lambda: money("150"), mark="30000"
+    )
+    order = await runner.step(frame)
+    assert order is not None
+    assert order.qty == Decimal("0.005")  # 150 / 30000, exact
+
+
+async def test_capital_provider_deposit_grows_next_step_no_rebuild() -> None:
+    """A base bump (a deposit) grows the *next* step's target on the same runner.
+
+    Step 1 (base 100) targets long 1; step 2 (base unchanged) is on target (no
+    order); after lifting the base to 200, step 3 tops up to long 2 — all on the
+    **same runner instance** (the lazy provider is re-read every step, no rebuild).
+    """
+    base = {"v": money("100")}
+    strat = Strategy(name="cap", instrument=BTC_USD, signal_fn=_always_long)
+    frame = _bars([100.0])
+    runner, _broker, tracker = _wire_provider(strat, frame, lambda: base["v"])
+
+    order1 = await runner.step(frame)
+    assert order1 is not None and order1.qty == Decimal("1")
+    assert tracker.position(BTC_USD).net_qty == Decimal("1")  # type: ignore[union-attr]
+
+    # Same base → already on target → no order.
+    assert await runner.step(frame) is None
+
+    # A "deposit": lift the base — the very next step tops the position up.
+    base["v"] = money("200")
+    order3 = await runner.step(frame)
+    assert order3 is not None and order3.qty == Decimal("1")  # 2 target - 1 held
+    assert tracker.position(BTC_USD).net_qty == Decimal("2")  # type: ignore[union-attr]
+
+
+async def test_no_provider_uses_static_reference_qty_unchanged() -> None:
+    """With no provider the runner sizes on the strategy's static reference_qty.
+
+    Byte-identical to the pre-ledger behaviour: a +1 exposure with a static
+    ``reference_qty = 3`` targets long 3 regardless of the close.
+    """
+    strat = Strategy(
+        name="static",
+        instrument=BTC_USD,
+        signal_fn=_always_long,
+        reference_qty=money("3"),
+    )
+    frame = _bars([100.0])
+    runner, _broker, tracker, _bus = _wire(strat, frame, mark="100")
+    order = await runner.step(frame)
+    assert order is not None and order.qty == Decimal("3")
+    assert tracker.position(BTC_USD).net_qty == Decimal("3")  # type: ignore[union-attr]

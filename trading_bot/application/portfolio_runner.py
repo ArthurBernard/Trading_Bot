@@ -237,6 +237,16 @@ class PortfolioRunner:
         self-contained). Whatever it returns, the runner overrides the
         ``client_order_id`` with its deterministic, symbol-namespaced per-step id
         (so idempotency is the runner's, not the factory's, concern).
+    capital_provider : Callable[[], Money] or None, optional
+        A **lazy** capital-base provider read on **every** :meth:`rebalance`. When
+        given, the tick sizes the weight vector against ``provider()`` instead of
+        the strategy's static ``capital`` — so a deposit / withdrawal / policy
+        flip is hot (it takes effect on the next rebalance with **no** runner
+        rebuild). The provider is called **exactly once per rebalance**, giving
+        the whole book one consistent base for the tick; **this single call — not
+        a lock — is the concurrency guarantee** that every leg of a tick sizes
+        against the same base even if a deposit lands mid-tick. ``None`` (default)
+        keeps the legacy static ``strategy.capital``, byte-for-byte unchanged.
 
     Examples
     --------
@@ -255,12 +265,14 @@ class PortfolioRunner:
         *,
         event_bus: EventBus | None = None,
         order_factory: PortfolioOrderFactory | None = None,
+        capital_provider: Callable[[], Money] | None = None,
     ) -> None:
         self._strategy = strategy
         self._feed = feed
         self._router = router
         self._tracker = tracker
         self._bus = event_bus
+        self._capital_provider = capital_provider
         self._order_factory = (
             order_factory
             if order_factory is not None
@@ -406,10 +418,20 @@ class PortfolioRunner:
             symbol: weights.get(symbol, _ZERO) for symbol in self._strategy.universe
         }
 
+        # Call the lazy capital provider exactly once per rebalance so the whole
+        # book sizes against one consistent base for this tick (a deposit landing
+        # mid-tick affects the *next* rebalance, never a half of this one) — this
+        # single call, not a lock, is the per-tick concurrency guarantee. With no
+        # provider the legacy static ``strategy.capital`` is used unchanged.
+        capital = (
+            self._capital_provider()
+            if self._capital_provider is not None
+            else self._strategy.capital
+        )
         signals = weights_to_signals(
             full_weights,
             prices=prices,
-            capital=self._strategy.capital,
+            capital=capital,
             asof_ms=asof,
         )
         signal_by_symbol = {sig.instrument.symbol: sig for sig in signals}

@@ -6,6 +6,40 @@ rejected approaches as tombstones.
 
 ---
 
+### 2026-07-10 Per-strategy capital: an append-only ledger, derived figures, policy-driven sizing (PR #177)  [accepted]
+- **Choice**: one new source of truth per strategy — the append-only
+  `capital_events` ledger (`FUNDING`/`DEPOSIT`/`WITHDRAWAL`, composite-PK
+  idempotency mirroring fills). The config `allocation` only **seeds** a
+  deterministic genesis event (`<strategy>:funding`), then goes inert. Every
+  money figure is derived, never stored: `C = Σdeposits − Σwithdrawals`
+  (contributed), `R` = realised PnL (fills, unchanged), `U` = best-effort MTM,
+  `total_value = C + R + U`. Sizing reads a **lazy `capital_provider` once per
+  tick**: `fixed → B = C`, `compound → B = max(0, C + R)` (realised only, never
+  unrealised). The KPI anchor `v0` = the genesis amount; KPI ratios stay on the
+  **fill-only** equity curve — the ledger-aware `value_series` is display-only.
+- **Why**: three unreconciled money notions coexisted (portfolio `capital` as a
+  static sizing constant, a global `starting_capital` KPI anchor shared by every
+  unit, unused PaperBroker balances), and none supported the requested
+  fund/refund/cashout, capital/PnL/value split, or reinvest-vs-cashout policy.
+  A mutable "capital" column was rejected up front: it destroys the audit
+  trail, makes `v0` ambiguous after a top-up, and cannot separate "money I put
+  in" from "money I made" — the ledger is the minimal *correct* core, a copy of
+  the proven fills discipline. The lazy provider (read once per tick) makes
+  money mutations hot with no engine rebuild and no crash window: the ledger
+  write is the only durable write; a crash after it simply takes effect on the
+  next tick. Compounding uses realised PnL only — compounding unrealised MTM
+  would resize the book on every price wiggle. KPI isolation is the hard
+  invariant: folding deposits into the ratio curve would let a top-up
+  masquerade as an instantaneous +100% return and poison Sharpe/Sortino/Calmar.
+- **Rejected alternatives**: mutable capital column (above); policy as a ledger
+  event (a magnitude-less event strains the `amount>0` invariant; the runner
+  only needs the *current* policy — a config field flipped like `set_mode`
+  suffices); compounding on `C+R+U` (noise-driven resizing); holding the unit
+  lock across a rebalance to serialize deposits (contradicts the A-3 design —
+  the single provider read per tick is the actual consistency guarantee);
+  auto profit-sweep events (dropped — `fixed` + manual withdraw covers the
+  cashout semantic with no scheduler machinery).
+
 ### 2026-07-10 Dashboard IA: the strategy detail page is the per-strategy home (PR #176)  [accepted]
 - **Choice**: a parameterized, deep-linkable `GET /strategies/{name}` shell page
   concentrates everything about one strategy (controls incl. go-live modal, the

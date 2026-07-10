@@ -8,6 +8,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The capital ledger drives the engine.** New
+  `application/capital_service.py`: the declared `allocation` (or a portfolio's
+  `capital`) seeds a deterministic genesis `FUNDING` event once
+  (`<strategy>:funding`, idempotent — re-deploys never double-fund; the config
+  value is inert thereafter), and both runners now read their sizing base
+  through a **lazy `capital_provider` called once per tick** — `fixed` sizes on
+  contributed capital `C`, `compound` on `C + realised PnL` (floored at 0,
+  never unrealised) — so a deposit/withdrawal/policy flip is hot with no engine
+  rebuild. The KPI anchor `v0` repoints to the genesis amount while the ratios
+  stay on the **fill-only** equity curve (a deposit never reads as a return —
+  guardrail-tested). `/api/strategies` rows and `/api/pnl`'s `current` gain
+  `allocation` / `contributed` / `unrealised` / `total_value` /
+  `capital_policy` (strategy-capital leaf 06). (#177)
 - **Per-strategy detail page.** Every strategy now has a deep-linkable home,
   `GET /strategies/{name}` (404 for an unknown unit): header with mode badge /
   run pill / Start-Stop-Mode-Remove controls (incl. the typed go-live modal),
