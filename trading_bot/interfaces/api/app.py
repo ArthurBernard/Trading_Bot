@@ -393,6 +393,38 @@ def _pnl_series_dict(
     }
 
 
+def _capital_breakdown_dict(breakdown: dict[str, Any]) -> dict[str, Any]:
+    """Render a supervisor :meth:`capital_breakdown` result for JSON (money as strings).
+
+    Every money field (``allocation`` / ``contributed`` / ``realised`` /
+    ``unrealised`` / ``total_value`` / ``withdrawable`` and each ledger event's
+    ``amount``) is an exact :class:`~decimal.Decimal` string (``None`` passes
+    through); ``policy`` is a plain string and each event ``ts`` the integer ms it
+    already is. ``events`` is the ledger audit trail (deposits / withdrawals /
+    the genesis funding) the UI renders.
+    """
+    return {
+        "strategy": breakdown["strategy"],
+        "allocation": _money_str(breakdown["allocation"]),
+        "contributed": _money_str(breakdown["contributed"]),
+        "realised": _money_str(breakdown["realised"]),
+        "unrealised": _money_str(breakdown["unrealised"]),
+        "total_value": _money_str(breakdown["total_value"]),
+        "withdrawable": _money_str(breakdown["withdrawable"]),
+        "policy": breakdown["policy"],
+        "events": [
+            {
+                "event_id": event["event_id"],
+                "type": event["type"],
+                "amount": _money_str(event["amount"]),
+                "ts": event["ts"],
+                "note": event["note"],
+            }
+            for event in breakdown["events"]
+        ],
+    }
+
+
 def _finite_or_none(value: float | None) -> float | None:
     """Pass a finite float through; map ``None`` / non-finite to JSON ``null``.
 
@@ -659,6 +691,38 @@ class _ModeBody(BaseModel):
     mode: str
     confirm: bool = False
     ack: str | None = None
+
+
+class _CapitalOpBody(BaseModel):
+    """Request body for ``POST /api/strategies/{name}/capital`` — deposit / withdraw.
+
+    ``amount`` is a **string** (never a JSON float): money crosses the wire as an
+    exact decimal string, so a client that sends ``12.5`` as a float is rejected
+    (422) rather than silently binary-rounded — the money-exactness invariant.
+    ``op_id`` is the caller-assigned idempotency key (the client-order-id
+    analogue): re-POSTing the same ``op_id`` is a no-op that returns the unchanged
+    breakdown. Kept **module-level** for the same reason as :class:`_ModeBody`
+    (FastAPI resolves body models against module globals under ``from __future__
+    import annotations``).
+    """
+
+    action: Literal["deposit", "withdraw"]
+    # I-6: bound the free-form strings so a giant field cannot amplify (the
+    # body-size middleware is the coarse gate; these are the per-field defence).
+    amount: str = Field(min_length=1, max_length=64)
+    op_id: str = Field(min_length=1, max_length=128)
+    note: str = Field(default="", max_length=256)
+
+
+class _PolicyBody(BaseModel):
+    """Request body for ``POST /api/strategies/{name}/policy`` — set the sizing policy.
+
+    Module-level (see :class:`_CapitalOpBody`). ``policy`` is the capital-evolution
+    policy the unit sizes under: ``fixed`` sizes against contributed capital,
+    ``compound`` reinvests realised PnL into the base.
+    """
+
+    policy: Literal["fixed", "compound"]
 
 
 class _CreateStrategyBody(BaseModel):
@@ -2039,6 +2103,89 @@ def create_dashboard_app(
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         _persist(request)
         return {"ok": True, "removed": name}
+
+    # -- Capital control plane: deposit / withdraw / policy (paper) ---------- #
+
+    @app.get("/api/strategies/{name}/capital")
+    async def capital(name: str, request: Request) -> dict[str, Any]:
+        """A unit's capital breakdown + ledger audit trail (a read; safe read-only).
+
+        ``{allocation, contributed, realised, unrealised, total_value,
+        withdrawable, policy, events}`` — money as exact Decimal strings; an
+        unknown unit is a 404.
+        """
+        from trading_bot.domain.errors import ConfigError
+
+        try:
+            breakdown = _sup(request).capital_breakdown(name)
+        except ConfigError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return _capital_breakdown_dict(breakdown)
+
+    @app.post("/api/strategies/{name}/capital")
+    async def capital_op(
+        name: str, body: _CapitalOpBody, request: Request
+    ) -> dict[str, Any]:
+        """Deposit into / withdraw from a unit's capital ledger — idempotent by ``op_id``.
+
+        This **never** places / amends / cancels an order — capital ops move
+        bookkeeping, not orders (the hard invariant). Re-POSTing the same ``op_id``
+        is a no-op that returns the unchanged breakdown. ``422`` on a bad amount /
+        an over-limit withdrawal (carrying the exact withdrawable figure); ``404``
+        an unknown unit; ``409`` a **live** unit (real-money ops are deferred to
+        real-key enablement — paper / testnet are unconstrained); ``403`` when the
+        dashboard is read-only.
+        """
+        from trading_bot.domain.errors import (
+            ConfigError,
+            LiveCapitalOpsDeferred,
+            MoneyError,
+            WithdrawalTooLarge,
+        )
+
+        if request.app.state.read_only:
+            raise HTTPException(
+                status_code=403,
+                detail="dashboard is read-only; capital control is disabled",
+            )
+        sup = _sup(request)
+        op = sup.deposit if body.action == "deposit" else sup.withdraw
+        try:
+            breakdown = await op(name, body.amount, op_id=body.op_id, note=body.note)
+        except LiveCapitalOpsDeferred as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except WithdrawalTooLarge as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except ConfigError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except (ValueError, MoneyError) as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        return _capital_breakdown_dict(breakdown)
+
+    @app.post("/api/strategies/{name}/policy")
+    async def set_policy(
+        name: str, body: _PolicyBody, request: Request
+    ) -> dict[str, Any]:
+        """Set a unit's capital-evolution policy (``fixed`` / ``compound``) — hot + persisted.
+
+        Flips the sizing policy live (the running unit reflects it next tick, no
+        restart) and **persists the manifest** so it survives a restart. ``404``
+        an unknown unit; ``403`` when the dashboard is read-only.
+        """
+        from trading_bot.domain.errors import ConfigError
+
+        if request.app.state.read_only:
+            raise HTTPException(
+                status_code=403,
+                detail="dashboard is read-only; capital control is disabled",
+            )
+        sup = _sup(request)
+        try:
+            breakdown = await sup.set_policy(name, body.policy)
+        except ConfigError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        _persist(request)
+        return _capital_breakdown_dict(breakdown)
 
     # The strategy control surface (list + start/stop/mode) — shared with the
     # control app. Under `read_only`, the write routes return 403 (the reads stay).

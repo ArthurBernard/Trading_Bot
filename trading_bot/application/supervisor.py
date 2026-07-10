@@ -36,16 +36,27 @@ through the engines it builds (reconcile on start; the runners' router/broker).
 from __future__ import annotations
 
 import asyncio
+import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Literal, cast
 
+from trading_bot.application.capital_service import CapitalService
 from trading_bot.application.pnl_series import by_mode, equity_series
 from trading_bot.application.reconcile import reconcile
 from trading_bot.application.run_app import build_portfolio_runners, build_runners
 from trading_bot.application.service_factory import Engine, build_engine, genesis_v0
-from trading_bot.domain.capital import contributed_capital
-from trading_bot.domain.errors import ConfigError, LiveTradingNotEnabled
+from trading_bot.domain.capital import (
+    CapitalEvent,
+    CapitalEventType,
+    contributed_capital,
+)
+from trading_bot.domain.errors import (
+    ConfigError,
+    LiveCapitalOpsDeferred,
+    LiveTradingNotEnabled,
+    WithdrawalTooLarge,
+)
 from trading_bot.domain.money import money
 from trading_bot.domain.performance import (
     PerformanceDependencyError,
@@ -57,6 +68,7 @@ from trading_bot.domain.performance import (
 from trading_bot.storage.sqlite_store import SqliteStore
 
 if TYPE_CHECKING:
+    from trading_bot.application.capital_service import CapitalPolicy
     from trading_bot.application.config import (
         AppConfig,
         PortfolioStrategyConfig,
@@ -65,8 +77,8 @@ if TYPE_CHECKING:
     from trading_bot.application.data_provider import DccdClient
     from trading_bot.application.portfolio_runner import PortfolioRunner
     from trading_bot.application.strategy_runner import StrategyRunner
-    from trading_bot.domain.capital import CapitalEvent
     from trading_bot.domain.fill import Fill
+    from trading_bot.domain.instrument import Instrument
     from trading_bot.domain.money import Money
     from trading_bot.domain.order import Order
     from trading_bot.storage.sqlite_store import StoredFill
@@ -793,6 +805,384 @@ class StrategySupervisor:
             unit.config = new_config
             if was_running:
                 await self._start_locked(unit)
+
+    # --- control plane: capital ops (deposit / withdraw / policy) ----------- #
+
+    async def deposit(
+        self, name: str, amount: Money | str, *, op_id: str, note: str = ""
+    ) -> dict[str, object]:
+        """Record a ``DEPOSIT`` into a unit's capital ledger — idempotent by ``op_id``.
+
+        Symmetric to :meth:`set_mode` (taken under the unit's lock): appends a
+        :class:`~trading_bot.domain.capital.CapitalEvent` (``DEPOSIT``) of
+        ``amount`` under the caller-assigned ``op_id`` — the client-order-id
+        analogue — to the unit's store. The store's ``INSERT OR IGNORE`` makes a
+        **retried** op (same ``op_id``) a no-op, so a deposit is safe to re-send;
+        either way the current breakdown is returned. Paper / testnet are
+        unconstrained; a **live** unit is refused — live capital ops land with
+        real-key enablement.
+
+        Parameters
+        ----------
+        name : str
+            The managed unit to fund.
+        amount : Money or str
+            The deposit magnitude (quote units). Routed through
+            :func:`~trading_bot.domain.money.money` (never a ``float``); must be
+            strictly positive.
+        op_id : str
+            The caller-assigned idempotency key (unique per intended op). A
+            re-sent ``op_id`` is a no-op.
+        note : str, optional
+            Free-form annotation stored on the ledger event.
+
+        Returns
+        -------
+        dict
+            The unit's capital breakdown after the op (see
+            :meth:`capital_breakdown`).
+
+        Raises
+        ------
+        ConfigError
+            If ``name`` is not a managed unit (or has no store to record into).
+        LiveCapitalOpsDeferred
+            If the unit is in ``live`` mode (deferred to real-key enablement).
+        ValueError or MoneyError
+            If ``amount`` is not a strictly-positive money value.
+
+        """
+        unit = self._unit(name)
+        async with unit.lock:
+            self._reject_live_capital_op(unit, "deposit")
+            amt = _validated_amount(amount)
+            if not self._ledger_has_op(unit, op_id):
+                self._apply_capital_op(
+                    unit, CapitalEventType.DEPOSIT, amt, op_id=op_id, note=note
+                )
+            return self._capital_breakdown_of(unit)
+
+    async def withdraw(
+        self, name: str, amount: Money | str, *, op_id: str, note: str = ""
+    ) -> dict[str, object]:
+        """Record a ``WITHDRAWAL`` from a unit's ledger — guarded + idempotent.
+
+        Symmetric to :meth:`deposit`, plus a solvency guard: the requested
+        ``amount`` may not exceed the unit's **withdrawable** capital
+        (:meth:`_withdrawable_of` — total value net of what open positions have
+        committed and working orders have reserved). Over the limit raises
+        :class:`~trading_bot.domain.errors.WithdrawalTooLarge` carrying the exact
+        figure (the API maps it to 422); nothing is moved. Idempotent by
+        ``op_id`` — a re-sent op is a no-op and its guard is skipped, so a replay
+        never trips the now-lower withdrawable. Live units are refused.
+
+        Parameters
+        ----------
+        name : str
+            The managed unit to withdraw from.
+        amount : Money or str
+            The withdrawal magnitude (quote units), strictly positive.
+        op_id : str
+            The caller-assigned idempotency key.
+        note : str, optional
+            Free-form annotation stored on the ledger event.
+
+        Returns
+        -------
+        dict
+            The unit's capital breakdown after the op.
+
+        Raises
+        ------
+        ConfigError
+            If ``name`` is not a managed unit (or has no store to record into).
+        LiveCapitalOpsDeferred
+            If the unit is in ``live`` mode.
+        WithdrawalTooLarge
+            If ``amount`` exceeds the unit's withdrawable capital.
+        ValueError or MoneyError
+            If ``amount`` is not a strictly-positive money value.
+
+        """
+        unit = self._unit(name)
+        async with unit.lock:
+            self._reject_live_capital_op(unit, "withdraw")
+            amt = _validated_amount(amount)
+            if not self._ledger_has_op(unit, op_id):
+                withdrawable = self._withdrawable_of(unit)
+                if amt > withdrawable:
+                    raise WithdrawalTooLarge(unit.name, amt, withdrawable)
+                self._apply_capital_op(
+                    unit, CapitalEventType.WITHDRAWAL, amt, op_id=op_id, note=note
+                )
+            return self._capital_breakdown_of(unit)
+
+    async def set_policy(self, name: str, policy: str) -> dict[str, object]:
+        """Switch a unit's capital-evolution policy (``fixed`` / ``compound``) — hot.
+
+        Updates the unit's ``capital_policy`` config field **in place**. Because a
+        running unit's ``capital_provider`` reads the policy off this same entry
+        live (see :func:`~trading_bot.application.run_app.
+        _strategy_capital_provider`), the flip takes effect on the next tick with
+        no engine / runner rebuild. The mutation is on the shared config entry, so
+        :meth:`manifest` reflects it too — the API persists the manifest to disk
+        after the call (the ``set_mode`` persistence path).
+
+        Parameters
+        ----------
+        name : str
+            The managed unit to repolicy.
+        policy : {"fixed", "compound"}
+            The new capital-evolution policy.
+
+        Returns
+        -------
+        dict
+            The unit's capital breakdown after the flip (its ``policy`` reflects
+            the new value).
+
+        Raises
+        ------
+        ConfigError
+            If ``name`` is not a managed unit, or ``policy`` is not recognised.
+
+        """
+        if policy not in ("fixed", "compound"):
+            raise ConfigError(
+                f"unknown capital policy {policy!r}; expected 'fixed' or 'compound'"
+            )
+        unit = self._unit(name)
+        async with unit.lock:
+            # Mutate the config entry in place: it is the SAME object the running
+            # runner's capital_provider reads live AND the one `self._base` (hence
+            # `manifest()`) exposes, so this one assignment is hot for the runner
+            # and durable through the manifest in a single stroke.
+            entry = _unit_entry(unit)
+            entry.capital_policy = cast("CapitalPolicy", policy)
+            return self._capital_breakdown_of(unit)
+
+    def capital_breakdown(self, name: str) -> dict[str, object]:
+        """A unit's capital breakdown + ledger audit trail (a pure read).
+
+        Parameters
+        ----------
+        name : str
+            The managed unit to read.
+
+        Returns
+        -------
+        dict
+            ``{strategy, allocation, contributed, realised, unrealised,
+            total_value, withdrawable, policy, events}`` — money as exact
+            :class:`~decimal.Decimal` (the API stringifies it). ``events`` is the
+            ordered ledger (each ``{event_id, type, amount, ts, note}``) for the
+            UI's audit trail. ``allocation`` / ``contributed`` / ``total_value``
+            are ``None`` for a unit that declares no money base.
+
+        Raises
+        ------
+        ConfigError
+            If ``name`` is not a managed unit.
+
+        """
+        return self._capital_breakdown_of(self._unit(name))
+
+    # --- control plane: capital-op internals -------------------------------- #
+
+    @staticmethod
+    def _reject_live_capital_op(unit: _Unit, op: str) -> None:
+        """Refuse a deposit / withdrawal on a live unit (real money is deferred)."""
+        if unit.mode == "live":
+            raise LiveCapitalOpsDeferred(unit.name, op)
+
+    def _ledger_has_op(self, unit: _Unit, op_id: str) -> bool:
+        """Whether ``op_id`` is already recorded in the unit's ledger (a replay)."""
+        return any(event.event_id == op_id for event in self._capital_events_of(unit))
+
+    def _apply_capital_op(
+        self,
+        unit: _Unit,
+        event_type: CapitalEventType,
+        amount: Money | str,
+        *,
+        op_id: str,
+        note: str,
+    ) -> None:
+        """Seed the genesis (idempotent) then record one ledger event, on the unit's store.
+
+        Writes to the running unit's live ``engine.store`` when available, else a
+        store opened at its configured ``db_path`` (the dual path
+        :meth:`_capital_events_of` reads from). The genesis ``FUNDING`` is
+        (re-)seeded first via :class:`~trading_bot.application.capital_service.
+        CapitalService` so a deposit / withdrawal on a unit whose genesis was
+        never persisted (never started) still folds against its declared base —
+        both writes are idempotent by their event id. ``amount`` is validated
+        strictly positive.
+        """
+        amt = _validated_amount(amount)
+        genesis = _declared_genesis(_unit_entry(unit))
+        store, close = self._capital_store_of(unit)
+        try:
+            if genesis is not None:
+                CapitalService(store, unit.name, unit.mode).ensure_genesis(genesis)
+            store.record_capital_event(
+                CapitalEvent(
+                    event_id=op_id,
+                    strategy=unit.name,
+                    event_type=event_type,
+                    amount=amt,
+                    ts=_now_ms(),
+                    note=note,
+                )
+            )
+        finally:
+            if close:
+                store.close()
+
+    @staticmethod
+    def _capital_store_of(unit: _Unit) -> tuple[SqliteStore, bool]:
+        """The store a unit's capital events are written to, + whether to close it.
+
+        A running unit writes to its live ``engine.store`` (already
+        mode/venue-tagged, kept open — ``False``); a stopped unit opens a fresh
+        store at its configured ``db_path``, tagged with the unit's mode / venue,
+        for the caller to close (``True``). A unit with no store to record into
+        (stopped, no ``db_path``) raises.
+        """
+        if unit.running and unit.engine is not None and unit.engine.store is not None:
+            return unit.engine.store, False
+        db_path = unit.config.storage.db_path
+        if db_path is None:
+            raise ConfigError(
+                f"strategy {unit.name!r} has no store to record a capital event "
+                "into; start it or configure a db_path"
+            )
+        return SqliteStore(db_path, mode=unit.mode, venue=unit.exchange), True
+
+    def _capital_breakdown_of(self, unit: _Unit) -> dict[str, object]:
+        """Assemble a unit's capital breakdown + ledger audit trail (money exact).
+
+        The body of :meth:`capital_breakdown`, factored out so the mutating ops
+        (:meth:`deposit` / :meth:`withdraw` / :meth:`set_policy`) can return the
+        post-op breakdown while still holding the unit's lock.
+        """
+        entry = _unit_entry(unit)
+        allocation = _declared_genesis(entry)
+        contributed = self._contributed_of(unit)
+        stored = self._stored_fills_of(unit)
+        mode_fills = by_mode(stored).get(unit.mode, [])
+        # Match `_status_of`: a running unit's realised is its engine's; a stopped
+        # unit folds the mode's fills (via `_total_value_of` when `realised` is
+        # None). Resolve a concrete `realised` for the display field the same way.
+        realised_engine: Money | None = None
+        if unit.running and unit.engine is not None:
+            realised_engine = unit.engine.perf.realised_pnl()
+        unrealised = self._unrealised_of(unit, unit.mode, mode_fills)
+        total_value = self._total_value_of(
+            contributed, realised_engine, mode_fills, unrealised
+        )
+        if realised_engine is not None:
+            realised: Money = realised_engine
+        else:
+            points = equity_series(mode_fills)
+            realised = points[-1].realised_pnl if points else _ZERO
+        return {
+            "strategy": unit.name,
+            "allocation": allocation,
+            "contributed": contributed,
+            "realised": realised,
+            "unrealised": unrealised,
+            "total_value": total_value,
+            "withdrawable": self._withdrawable_of(unit),
+            "policy": entry.capital_policy,
+            "events": [
+                _capital_event_dict(event) for event in self._capital_events_of(unit)
+            ],
+        }
+
+    def _withdrawable_of(self, unit: _Unit) -> Money:
+        """The unit's withdrawable capital: ``max(0, total_value − committed − reserved)``.
+
+        ``committed`` is ``Σ |net_qty| × mark`` over the unit's open positions
+        (marks are the last-known fill price per instrument in the unit's mode —
+        the same marks :meth:`_unrealised_of` uses; ``|·|`` is deliberately
+        conservative for a **short** book, freeing no more than the exposure it
+        represents). ``reserved`` is ``Σ remaining_qty × price`` over the router's
+        non-terminal orders (their limit price, else the last-known mark). Both
+        default to ``0`` on a stopped / flat unit, so withdrawable is then just
+        the total value; it is floored at ``0`` and never goes negative. ``0`` for
+        a unit that declares no money base.
+        """
+        contributed = self._contributed_of(unit)
+        if contributed is None:
+            return _ZERO
+        stored = self._stored_fills_of(unit)
+        mode_fills = by_mode(stored).get(unit.mode, [])
+        marks = self._mark_map(mode_fills)
+        realised_engine: Money | None = None
+        if unit.running and unit.engine is not None:
+            realised_engine = unit.engine.perf.realised_pnl()
+        unrealised = self._unrealised_of(unit, unit.mode, mode_fills)
+        total_value = self._total_value_of(
+            contributed, realised_engine, mode_fills, unrealised
+        )
+        assert total_value is not None  # contributed is not None ⇒ total_value set
+        remaining = (
+            total_value
+            - self._committed_value(unit, marks)
+            - self._reserved_value(unit, marks)
+        )
+        return remaining if remaining > _ZERO else _ZERO
+
+    @staticmethod
+    def _mark_map(fills: list[Fill]) -> dict[Instrument, Money]:
+        """The last-known fill price per instrument over ``fills`` (their mark)."""
+        marks: dict[Instrument, Money] = {}
+        for fill in fills:
+            marks[fill.instrument] = fill.price
+        return marks
+
+    @staticmethod
+    def _committed_value(unit: _Unit, marks: dict[Instrument, Money]) -> Money:
+        """Capital committed to the running unit's open positions (``Σ |net_qty| × mark``).
+
+        Unpriced instruments (no mark in ``marks``) contribute nothing. ``0`` when
+        the unit is stopped or flat.
+        """
+        if not unit.running or unit.engine is None:
+            return _ZERO
+        committed: Money = _ZERO
+        for position in unit.engine.tracker.all_positions().values():
+            if position.is_flat:
+                continue
+            mark = marks.get(position.instrument)
+            if mark is None:
+                continue
+            committed += abs(position.net_qty) * mark
+        return committed
+
+    @staticmethod
+    def _reserved_value(unit: _Unit, marks: dict[Instrument, Money]) -> Money:
+        """Capital reserved by the running unit's working orders (``Σ remaining_qty × price``).
+
+        Prices a working (non-terminal) order at its ``limit_price``, else its
+        partial ``avg_fill_price``, else the instrument's last-known mark; an order
+        with none of these (a fresh market order on an unpriced instrument)
+        contributes nothing. ``0`` when the unit is stopped.
+        """
+        if not unit.running or unit.engine is None:
+            return _ZERO
+        reserved: Money = _ZERO
+        for order in unit.engine.router.tracked_orders().values():
+            if order.is_terminal:
+                continue
+            price = (
+                order.limit_price or order.avg_fill_price or marks.get(order.instrument)
+            )
+            if price is None:
+                continue
+            reserved += order.remaining_qty * price
+        return reserved
 
     async def step(self, name: str) -> Order | object | None:
         """Run **one** re-evaluation of the unit over the latest data.
@@ -1550,9 +1940,7 @@ class StrategySupervisor:
         """
         if not unit.running or unit.engine is None or mode != unit.mode or not fills:
             return None
-        last_price: dict[object, Money] = {}
-        for fill in fills:
-            last_price[fill.instrument] = fill.price
+        last_price = StrategySupervisor._mark_map(fills)
         unrealised: Money = _ZERO
         marked = False
         for position in unit.engine.tracker.all_positions().values():
@@ -1564,6 +1952,39 @@ class StrategySupervisor:
             unrealised += (mark - position.avg_entry_price) * position.net_qty
             marked = True
         return unrealised if marked else None
+
+
+def _now_ms() -> int:
+    """Wall-clock now as epoch milliseconds (UTC) — a ledger event's ``ts``."""
+    return int(time.time() * 1000)
+
+
+def _validated_amount(amount: Money | str) -> Money:
+    """Route ``amount`` through :func:`money` and require it strictly positive.
+
+    Rejects a raw ``float`` / non-finite (via :func:`~trading_bot.domain.money.
+    money`) and a non-positive magnitude — a capital op's direction lives in the
+    event *type*, never in the sign of the amount.
+    """
+    amt = money(amount)
+    if amt <= _ZERO:
+        raise ValueError(f"capital op amount must be strictly positive, got {amt}")
+    return amt
+
+
+def _capital_event_dict(event: CapitalEvent) -> dict[str, object]:
+    """Render a :class:`~trading_bot.domain.capital.CapitalEvent` for the audit trail.
+
+    Money (``amount``) stays exact :class:`~decimal.Decimal` (the API stringifies
+    it); ``ts`` is the integer epoch-ms it already is.
+    """
+    return {
+        "event_id": event.event_id,
+        "type": event.event_type.value,
+        "amount": event.amount,
+        "ts": event.ts,
+        "note": event.note,
+    }
 
 
 def _unit_entry(unit: _Unit) -> StrategyConfig | PortfolioStrategyConfig:

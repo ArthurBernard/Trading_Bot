@@ -459,8 +459,11 @@ def _strategy_capital_provider(
     capital = CapitalService(engine.store, strategy_cfg.name, engine.config.mode)
     capital.ensure_genesis(strategy_cfg.allocation)
     perf = engine.perf
-    policy = strategy_cfg.capital_policy
-    return lambda: capital.sizing_base(policy, perf.realised_pnl())
+    # Read ``capital_policy`` off the config entry **live** on every call (not a
+    # value captured at build time) so the control plane's ``set_policy`` — which
+    # mutates this same entry in place — takes effect on the next tick with no
+    # engine / runner rebuild (a hot policy flip, like a hot deposit).
+    return lambda: capital.sizing_base(strategy_cfg.capital_policy, perf.realised_pnl())
 
 
 def _portfolio_capital_provider(
@@ -486,8 +489,12 @@ def _portfolio_capital_provider(
     capital = CapitalService(engine.store, portfolio_cfg.name, engine.config.mode)
     capital.ensure_genesis(genesis)
     perf = engine.perf
-    policy = portfolio_cfg.capital_policy
-    return lambda: capital.sizing_base(policy, perf.realised_pnl())
+    # Read ``capital_policy`` off the config entry **live** on every call (not a
+    # value captured at build time) so a hot ``set_policy`` flip takes effect on
+    # the next rebalance with no rebuild (see ``_strategy_capital_provider``).
+    return lambda: capital.sizing_base(
+        portfolio_cfg.capital_policy, perf.realised_pnl()
+    )
 
 
 def build_runners(

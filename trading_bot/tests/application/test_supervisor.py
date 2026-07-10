@@ -25,11 +25,17 @@ from trading_bot.application.events import FillEvent
 from trading_bot.application.strategy_runner import StrategyRunner
 from trading_bot.application.supervisor import StrategySupervisor
 from trading_bot.domain.capital import CapitalEvent, CapitalEventType
-from trading_bot.domain.errors import ConfigError, LiveTradingNotEnabled
+from trading_bot.domain.errors import (
+    ConfigError,
+    LiveCapitalOpsDeferred,
+    LiveTradingNotEnabled,
+    WithdrawalTooLarge,
+)
 from trading_bot.domain.fill import Fill
 from trading_bot.domain.instrument import Instrument, Symbol
 from trading_bot.domain.money import money
 from trading_bot.domain.order import OrderSide
+from trading_bot.storage.sqlite_store import SqliteStore
 
 
 def _dccd_ohlc(closes: list[float], *, span_s: int = 60) -> pl.DataFrame:
@@ -1509,3 +1515,259 @@ def test_deposit_never_distorts_the_fill_only_kpi_curve(tmp_path) -> None:  # no
     status = sup.status("btc-ma")[0]
     assert status.contributed == money("150")
     assert status.total_value == money("158")
+
+
+# --- control plane: deposit / withdraw / set_policy ------------------------- #
+
+
+def _seed_book(db: str, *, allocation: str, fills: tuple[Fill, ...] = ()) -> None:
+    """Seed a paper store with the genesis funding + any ``fills`` (before start)."""
+    store = SqliteStore(db)
+    store.set_context(mode="paper", venue="kraken")
+    store.record_capital_event(
+        CapitalEvent(
+            "btc-ma:funding",
+            "btc-ma",
+            CapitalEventType.FUNDING,
+            money(allocation),
+            0,
+        )
+    )
+    for fill in fills:
+        store.record_fill(fill)
+    store.close()
+
+
+async def _started_alloc_unit(
+    db: str,
+    *,
+    allocation: str = "100",
+    policy: str = "fixed",
+    fills: tuple[Fill, ...] = (),
+) -> StrategySupervisor:
+    """A started paper BTC/USD unit with an ``allocation`` (+ optional seeded book).
+
+    Any ``fills`` are written to the store *before* start so the unit's engine
+    replays them into its tracker / perf (a paper book that survives a restart).
+    """
+    if fills:
+        _seed_book(db, allocation=allocation, fills=fills)
+    sup = StrategySupervisor(
+        _config_alloc(db, allocation=allocation, policy=policy),
+        dccd_client=_FakeDccdClient({"BTC/USD": _dccd_ohlc(_trend())}),
+    )
+    await sup.start("btc-ma")
+    return sup
+
+
+async def test_deposit_idempotent_by_op_id(tmp_path) -> None:  # noqa: ANN001
+    """A re-sent ``op_id`` is a no-op (one ledger event); distinct op_ids accumulate."""
+    pytest.importorskip("fynance")
+    db = str(tmp_path / "book.sqlite")
+    sup = await _started_alloc_unit(db)
+
+    b1 = await sup.deposit("btc-ma", "50", op_id="op-1")
+    assert b1["contributed"] == money("150")
+    # Same op_id again → no new event, identical breakdown (idempotent replay).
+    b2 = await sup.deposit("btc-ma", "50", op_id="op-1")
+    assert b2["contributed"] == money("150")
+    assert [e["event_id"] for e in b2["events"]].count("op-1") == 1
+    # A distinct op_id accumulates.
+    b3 = await sup.deposit("btc-ma", "50", op_id="op-2")
+    assert b3["contributed"] == money("200")
+
+
+async def test_deposit_money_precision_is_exact(tmp_path) -> None:  # noqa: ANN001
+    """Depositing ``0.1`` three times moves contributed by exactly ``0.3`` (no float)."""
+    pytest.importorskip("fynance")
+    db = str(tmp_path / "book.sqlite")
+    sup = await _started_alloc_unit(db)
+
+    breakdown: dict[str, object] = {}
+    for i in range(3):
+        breakdown = await sup.deposit("btc-ma", "0.1", op_id=f"d{i}")
+    assert breakdown["contributed"] == money("100.3")
+
+
+async def test_deposit_rejects_a_non_positive_amount(tmp_path) -> None:  # noqa: ANN001
+    """A zero / negative deposit amount is refused (the direction lives in the type)."""
+    pytest.importorskip("fynance")
+    db = str(tmp_path / "book.sqlite")
+    sup = await _started_alloc_unit(db)
+    with pytest.raises(ValueError, match="strictly positive"):
+        await sup.deposit("btc-ma", "0", op_id="bad")
+
+
+async def test_deposit_on_a_stopped_unit_persists_and_seeds_genesis(
+    tmp_path,  # noqa: ANN001
+) -> None:
+    """A deposit on a never-started unit writes to its db store + seeds the genesis."""
+    db = str(tmp_path / "book.sqlite")
+    sup = StrategySupervisor(
+        _config_alloc(db, allocation="100"),
+        dccd_client=_FakeDccdClient({"BTC/USD": _dccd_ohlc(_trend())}),
+    )  # never started — the stopped-unit (db_path) write path
+    b = await sup.deposit("btc-ma", "50", op_id="op-1")
+    assert b["contributed"] == money("150")
+    ids = {e["event_id"] for e in b["events"]}
+    assert "btc-ma:funding" in ids and "op-1" in ids
+
+
+async def test_withdraw_over_withdrawable_raises_with_the_figure(
+    tmp_path,  # noqa: ANN001
+) -> None:
+    """Withdrawing more than withdrawable raises, carrying the exact figure; nothing moves."""
+    pytest.importorskip("fynance")
+    db = str(tmp_path / "book.sqlite")
+    sup = await _started_alloc_unit(db)  # flat book → withdrawable == contributed(100)
+
+    with pytest.raises(WithdrawalTooLarge) as exc:
+        await sup.withdraw("btc-ma", "150", op_id="w1")
+    assert exc.value.withdrawable == money("100")
+    assert exc.value.requested == money("150")
+    # Nothing moved — the refused op left the ledger untouched.
+    assert sup.capital_breakdown("btc-ma")["contributed"] == money("100")
+
+
+async def test_withdraw_reduces_contributed(tmp_path) -> None:  # noqa: ANN001
+    """A valid withdrawal drops contributed (and the withdrawable) by the amount."""
+    pytest.importorskip("fynance")
+    db = str(tmp_path / "book.sqlite")
+    sup = await _started_alloc_unit(db)
+
+    b = await sup.withdraw("btc-ma", "30", op_id="w1")
+    assert b["contributed"] == money("70")
+    assert b["withdrawable"] == money("70")
+
+
+async def test_withdraw_idempotent_replay_skips_the_guard(tmp_path) -> None:  # noqa: ANN001
+    """Re-sending a withdrawal's ``op_id`` is a no-op — the replay never re-trips the guard."""
+    pytest.importorskip("fynance")
+    db = str(tmp_path / "book.sqlite")
+    sup = await _started_alloc_unit(db)
+
+    b1 = await sup.withdraw("btc-ma", "60", op_id="w1")
+    assert b1["contributed"] == money("40")  # withdrawable was 100
+    # Replay: 60 now exceeds the reduced withdrawable (40), but a replay is a
+    # no-op — it must NOT raise, and must return the unchanged breakdown.
+    b2 = await sup.withdraw("btc-ma", "60", op_id="w1")
+    assert b2["contributed"] == money("40")
+    assert [e["event_id"] for e in b2["events"]].count("w1") == 1
+
+
+async def test_withdrawable_fully_invested_is_zero(tmp_path) -> None:  # noqa: ANN001
+    """A unit whose open position consumes all its cash has ~zero withdrawable."""
+    pytest.importorskip("fynance")
+    db = str(tmp_path / "book.sqlite")
+    inst = Instrument(Symbol("BTC", "USD"))
+    # BUY 2 @ 50 → the whole 100 genesis is committed to the open position.
+    buy = Fill("F1", "c1", inst, OrderSide.BUY, money("2"), money("50"), money("0"), 1)
+    sup = await _started_alloc_unit(db, fills=(buy,))
+
+    b = sup.capital_breakdown("btc-ma")
+    assert b["total_value"] == money("100")  # 100 + realised(0) + unrealised(0)
+    assert b["withdrawable"] == money("0")  # committed |2|*50 = 100 → nothing free
+    with pytest.raises(WithdrawalTooLarge):
+        await sup.withdraw("btc-ma", "1", op_id="w1")
+
+
+async def test_withdrawable_never_negative(tmp_path) -> None:  # noqa: ANN001
+    """Committed capital beyond total value floors withdrawable at zero (never negative)."""
+    pytest.importorskip("fynance")
+    db = str(tmp_path / "book.sqlite")
+    inst = Instrument(Symbol("BTC", "USD"))
+    # BUY 3 @ 50 → committed 150 > total_value 100 ⇒ withdrawable floored at 0.
+    buy = Fill("F1", "c1", inst, OrderSide.BUY, money("3"), money("50"), money("0"), 1)
+    sup = await _started_alloc_unit(db, fills=(buy,))
+    assert sup.capital_breakdown("btc-ma")["withdrawable"] == money("0")
+
+
+async def test_partly_invested_withdrawable_is_the_free_cash(
+    tmp_path,  # noqa: ANN001
+) -> None:
+    """Withdrawable is total value net of the capital committed to the open book."""
+    pytest.importorskip("fynance")
+    db = str(tmp_path / "book.sqlite")
+    inst = Instrument(Symbol("BTC", "USD"))
+    # BUY 1 @ 50 → 50 committed, 50 free of the 100 genesis.
+    buy = Fill("F1", "c1", inst, OrderSide.BUY, money("1"), money("50"), money("0"), 1)
+    sup = await _started_alloc_unit(db, fills=(buy,))
+
+    assert sup.capital_breakdown("btc-ma")["withdrawable"] == money("50")
+    b = await sup.withdraw("btc-ma", "50", op_id="w1")
+    assert b["contributed"] == money("50")
+
+
+async def test_set_policy_is_hot_on_the_running_unit(tmp_path) -> None:  # noqa: ANN001
+    """A policy flip is hot: the SAME running provider reflects it, no restart."""
+    pytest.importorskip("fynance")
+    db = str(tmp_path / "book.sqlite")
+    inst = Instrument(Symbol("BTC", "USD"))
+    # A round trip realising +10, so fixed vs compound sizing bases differ.
+    buy = Fill("F1", "c1", inst, OrderSide.BUY, money("1"), money("100"), money("0"), 1)
+    sell = Fill(
+        "F2", "c2", inst, OrderSide.SELL, money("1"), money("110"), money("0"), 2
+    )
+    sup = await _started_alloc_unit(db, policy="fixed", fills=(buy, sell))
+
+    unit = sup._units["btc-ma"]  # noqa: SLF001
+    provider = unit.runner._capital_provider  # type: ignore[union-attr]  # noqa: SLF001
+    assert provider is not None
+    # fixed: sizing base is contributed (100), realised PnL not reinvested.
+    assert provider() == money("100")
+
+    b = await sup.set_policy("btc-ma", "compound")
+    assert b["policy"] == "compound"
+    # Hot: the SAME provider now reinvests realised (+10) → 110, no rebuild.
+    assert provider() == money("110")
+    # The shared config entry (hence the persisted manifest) reflects it too.
+    assert sup.manifest().strategies[0].capital_policy == "compound"
+
+
+async def test_set_policy_rejects_an_unknown_policy(tmp_path) -> None:  # noqa: ANN001
+    """An unrecognised policy is refused (nothing changes)."""
+    pytest.importorskip("fynance")
+    db = str(tmp_path / "book.sqlite")
+    sup = await _started_alloc_unit(db)
+    with pytest.raises(ConfigError, match="unknown capital policy"):
+        await sup.set_policy("btc-ma", "bogus")
+    assert sup.manifest().strategies[0].capital_policy == "fixed"
+
+
+async def test_live_mode_capital_ops_are_refused(tmp_path) -> None:  # noqa: ANN001
+    """Deposit / withdraw on a live unit is refused (deferred to real-key enablement)."""
+    db = str(tmp_path / "book.sqlite")
+    sup = StrategySupervisor(
+        _config_alloc(db, allocation="100"),
+        dccd_client=_FakeDccdClient({"BTC/USD": _dccd_ohlc(_trend())}),
+    )
+    await sup.set_mode("btc-ma", "live", confirm_live=True)  # stopped → just flips mode
+    with pytest.raises(LiveCapitalOpsDeferred):
+        await sup.deposit("btc-ma", "50", op_id="op-1")
+    with pytest.raises(LiveCapitalOpsDeferred):
+        await sup.withdraw("btc-ma", "10", op_id="op-2")
+
+
+async def test_capital_breakdown_lists_the_ledger(tmp_path) -> None:  # noqa: ANN001
+    """The breakdown carries the genesis + deposit events as the UI's audit trail."""
+    pytest.importorskip("fynance")
+    db = str(tmp_path / "book.sqlite")
+    sup = await _started_alloc_unit(db)
+    await sup.deposit("btc-ma", "25", op_id="dep-1", note="top up")
+
+    b = sup.capital_breakdown("btc-ma")
+    kinds = {(e["type"], e["event_id"]) for e in b["events"]}
+    assert ("funding", "btc-ma:funding") in kinds
+    assert ("deposit", "dep-1") in kinds
+    dep = next(e for e in b["events"] if e["event_id"] == "dep-1")
+    assert dep["amount"] == money("25") and dep["note"] == "top up"
+    assert b["allocation"] == money("100")
+    assert b["contributed"] == money("125")
+    assert b["policy"] == "fixed"
+
+
+def test_capital_breakdown_unknown_unit_raises() -> None:
+    """A breakdown for an unknown unit raises (the API maps it to 404)."""
+    sup = _supervisor()
+    with pytest.raises(ConfigError):
+        sup.capital_breakdown("nope")
