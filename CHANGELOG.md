@@ -8,6 +8,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+### Changed
+
+### Fixed
+
+### Deprecated
+
+### Removed
+
+## [0.11.0] - 2026-07-10
+
+### Added
+
 - **The capital block — the money story reconciles on screen (closes the
   strategy-capital epic).** The strategy detail page opens with a CAPITAL card:
   starting capital + PnL (realised / unrealised) = total value, joined by
