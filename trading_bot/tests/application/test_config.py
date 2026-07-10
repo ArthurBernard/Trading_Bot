@@ -311,6 +311,8 @@ def test_minimal_legacy_strategy_still_validates() -> None:
     assert strat.signal is None
     assert strat.reference_qty is None
     assert strat.lookback == 0
+    assert strat.allocation is None
+    assert strat.capital_policy == "fixed"
     # storage defaults to an all-unset StorageConfig
     assert isinstance(cfg.storage, StorageConfig)
     assert cfg.storage.db_path is None
@@ -379,6 +381,87 @@ def test_non_positive_reference_qty_raises() -> None:
         AppConfig.model_validate(
             {"strategies": [{"name": "s", "symbol": "BTC/USD", "reference_qty": "0"}]}
         )
+
+
+def test_allocation_and_capital_policy_default_to_none_and_fixed() -> None:
+    """``allocation`` defaults to ``None``, ``capital_policy`` to ``"fixed"``."""
+    cfg = AppConfig.model_validate({"strategies": [{"name": "s", "symbol": "BTC/USD"}]})
+    strat = cfg.strategies[0]
+    assert strat.allocation is None
+    assert strat.capital_policy == "fixed"
+
+
+def test_allocation_parses_exact_decimal_without_float_error() -> None:
+    """A numeric ``allocation`` keeps its exact decimal meaning."""
+    cfg = AppConfig.model_validate(
+        {"strategies": [{"name": "s", "symbol": "BTC/USD", "allocation": 0.1}]}
+    )
+    assert cfg.strategies[0].allocation == Decimal("0.1")
+    assert isinstance(cfg.strategies[0].allocation, Decimal)
+
+
+def test_non_positive_allocation_raises() -> None:
+    """A non-positive ``allocation`` is rejected (zero too)."""
+    with pytest.raises(ValidationError):
+        AppConfig.model_validate(
+            {"strategies": [{"name": "s", "symbol": "BTC/USD", "allocation": "0"}]}
+        )
+    with pytest.raises(ValidationError):
+        AppConfig.model_validate(
+            {"strategies": [{"name": "s", "symbol": "BTC/USD", "allocation": "-1"}]}
+        )
+
+
+def test_unknown_capital_policy_raises() -> None:
+    """A ``capital_policy`` outside {fixed, compound} is rejected."""
+    with pytest.raises(ValidationError):
+        AppConfig.model_validate(
+            {
+                "strategies": [
+                    {"name": "s", "symbol": "BTC/USD", "capital_policy": "banana"}
+                ]
+            }
+        )
+
+
+def test_compound_capital_policy_accepted() -> None:
+    """``capital_policy: "compound"`` validates."""
+    cfg = AppConfig.model_validate(
+        {
+            "strategies": [
+                {
+                    "name": "s",
+                    "symbol": "BTC/USD",
+                    "allocation": "100",
+                    "capital_policy": "compound",
+                }
+            ]
+        }
+    )
+    assert cfg.strategies[0].capital_policy == "compound"
+
+
+def test_allocation_round_trips_through_yaml(tmp_path) -> None:  # noqa: ANN001
+    """A strategy's ``allocation`` survives a ``to_yaml``/``from_yaml`` round-trip
+    as an exact ``Decimal``, alongside ``capital_policy``."""
+    cfg = AppConfig.model_validate(
+        {
+            "strategies": [
+                {
+                    "name": "s",
+                    "symbol": "BTC/USD",
+                    "allocation": "1234.56",
+                    "capital_policy": "compound",
+                }
+            ]
+        }
+    )
+    path = tmp_path / "cfg.yaml"
+    cfg.to_yaml(path)
+    reloaded = AppConfig.from_yaml(path)
+    assert reloaded.strategies[0].allocation == Decimal("1234.56")
+    assert isinstance(reloaded.strategies[0].allocation, Decimal)
+    assert reloaded.strategies[0].capital_policy == "compound"
 
 
 def test_signal_params_default_empty() -> None:
@@ -488,6 +571,52 @@ def test_add_portfolio_appends_and_validates() -> None:
     )
     new = cfg.add_portfolio(entry)
     assert [p.name for p in new.portfolios] == ["pf1"]
+
+
+def test_add_strategy_with_allocation_and_capital_policy_validates() -> None:
+    """`add_strategy` accepts + validates an entry carrying the new fields."""
+    cfg = AppConfig()
+    entry = StrategyConfig(
+        name="s1",
+        symbol="BTC/USD",
+        allocation=Decimal("500"),
+        capital_policy="compound",
+    )
+    new = cfg.add_strategy(entry)
+    assert new.strategies[0].allocation == Decimal("500")
+    assert new.strategies[0].capital_policy == "compound"
+
+
+def test_add_portfolio_with_allocation_and_capital_policy_validates() -> None:
+    """`add_portfolio` accepts + validates an entry carrying the new fields."""
+    cfg = AppConfig()
+    entry = PortfolioStrategyConfig(
+        name="pf1",
+        venue="binance",
+        universe=["BTC/USDT", "ETH/USDT"],
+        signal=SignalRefConfig(ref="pkg.mod:sig"),
+        capital=Decimal("100000"),
+        data=DataSourceConfig(exchange="binance", span=86400),
+        allocation=Decimal("100"),
+        capital_policy="compound",
+    )
+    new = cfg.add_portfolio(entry)
+    assert new.portfolios[0].allocation == Decimal("100")
+    assert new.portfolios[0].capital_policy == "compound"
+
+
+def test_remove_entry_still_validates_with_new_fields_present() -> None:
+    """`remove_entry` still validates a config whose entries carry the new fields."""
+    cfg = AppConfig().add_strategy(
+        StrategyConfig(
+            name="s1",
+            symbol="BTC/USD",
+            allocation=Decimal("500"),
+            capital_policy="compound",
+        )
+    )
+    without = cfg.remove_entry("s1")
+    assert without.strategies == []
 
 
 def test_add_strategy_rejects_a_duplicate_name() -> None:
