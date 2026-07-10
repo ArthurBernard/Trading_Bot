@@ -45,14 +45,27 @@ hygiene (`D-6`/`D-11`/`D-12`/`D-13`/`A-12`), tooling/CI/packaging parity
 removal (`T-4`/`T-12`/`I-12`/`A-11`/`G-14`) (see `CHANGELOG.md`). **The audit is
 fully remediated** — only pure Info observations remain in `doc/dev/audit/`.
 
-## Open epics
-
-- [ ] **Per-strategy capital & dashboard IA reorg** (`strategy-capital`): append-only
-  capital ledger per strategy (fund/refund/cashout, fixed|compound policy,
-  capital/PnL/value split) + IA reorg (retire the legacy dashboard, per-strategy
-  detail page). Plan: `doc/dev/plans/strategy-capital/`.
-
 ## Known issues / follow-ups
+
+- [ ] **Live funds gate (strategy-capital deferral — lands WITH real-key
+  enablement).** Live-mode capital ops currently return 409. The gate is two
+  layers: supervisor-level admission on deposit (Σ live allocations on a venue ≤
+  real venue balance) + an **async** available-funds pre-check in
+  `OrderRouter._do_submit` before `RiskManager.check` (a sync `funds_provider`
+  inside the risk manager cannot await `broker.balances()`). Paper/testnet stay
+  unconstrained by design.
+- [ ] **Dashboard follow-ups (strategy-capital deferrals).** Overview portfolio
+  money band (capital deployed / total value / withdrawable) + allocation
+  breakdown; `close-and-refund` teardown (flatten + drain the ledger — with its
+  **own** cancel path, never overloading the kill-switch semantics) + a
+  `remove_unit` flat-and-zero guard; state polish (error/stale pills, live red
+  banner on the detail page, one unified SSE+poll refresh model).
+- [ ] **API quick wins.** Order-cancel endpoint (`OrderRouter.cancel()` exists,
+  no route — the Orders page can only observe); kill-switch trip/reset + status
+  (`tripped`/reason + risk-limit visibility incl. daily-loss usage);
+  `last_error` on `/api/strategies` (a stopped unit is indistinguishable from a
+  crashed one); pagination beyond the 200-row tail + server timestamps on
+  snapshot endpoints.
 
 - [ ] **Binance futures/margin testnet adapter (for a faithful long/short testnet
   live-test).** The `BinanceBroker` is **spot** (`/api/v3`), and the Binance testnet

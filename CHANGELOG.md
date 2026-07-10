@@ -8,6 +8,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The capital block — the money story reconciles on screen (closes the
+  strategy-capital epic).** The strategy detail page opens with a CAPITAL card:
+  starting capital + PnL (realised / unrealised) = total value, joined by
+  explicit `+`/`=` glyphs with a Δ%-since-funding readout; a withdrawable line;
+  a Reinvest/Cashout segmented toggle (live mode asks for confirmation); one
+  shared Adjust-capital modal (deposit/withdraw, display-only preview, an
+  `op_id` minted once per open so a double-click never double-counts; a 422
+  renders the server's exact withdrawable inline); and a ledger expander — the
+  audit trail of every funding/deposit/withdrawal. The Strategies roster gains
+  a Total value column so the same figure reads at every altitude
+  (strategy-capital leaf 08). (#179)
 - **Capital control plane: fund, cash out, flip the policy — live from the
   dashboard API.** `GET/POST /api/strategies/{name}/capital` (deposit/withdraw,
   amounts as Decimal strings — a JSON float is refused) and
