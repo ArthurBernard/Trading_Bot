@@ -50,7 +50,8 @@ The dashboard UI — a pure HTTP client mounted on the same app (carried into th
 ``/static`` over :data:`~trading_bot.interfaces.ui.STATIC_DIR`, a
 :class:`~fastapi.templating.Jinja2Templates` over
 :data:`~trading_bot.interfaces.ui.TEMPLATES_DIR`, and one page per tab (Overview /
-Strategies / Orders / PnL / Logs) rendered as **shells** carrying only the version
+Strategies / Orders / Logs), the per-strategy detail page (``/strategies/{name}``)
+and the deploy form (``/strategies/new``), rendered as **shells** carrying only the version
 and ``read_only``/auth flags (no supervisor data server-side). Each page's script
 fetches ``/api/*`` and live-updates from ``/api/events``, so the UI is a **pure
 HTTP client** of this API. The directories are resolved from the installed package
@@ -72,7 +73,12 @@ from decimal import Decimal
 from typing import TYPE_CHECKING, Any, Literal
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
+from fastapi.responses import (
+    HTMLResponse,
+    JSONResponse,
+    RedirectResponse,
+    StreamingResponse,
+)
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, Field
@@ -1429,8 +1435,8 @@ def _install_control_auth(
 _DASHBOARD_PAGES: tuple[tuple[str, str], ...] = (
     ("/", "overview.html"),
     ("/strategies", "strategies.html"),
+    ("/strategies/new", "strategies_new.html"),
     ("/orders", "orders.html"),
-    ("/pnl", "pnl.html"),
     ("/logs", "logs.html"),
 )
 
@@ -1515,8 +1521,9 @@ def create_dashboard_app(
     """Build the **unified dashboard** FastAPI over a :class:`StrategySupervisor`.
 
     The foundation that hosts both monitoring *and* control in one app and one
-    shell (``base.html``): a top nav across Overview / Strategies / Orders / PnL /
-    Logs, a brand + version + health chip + connection dot. This factory ships the
+    shell (``base.html``): a top nav across Overview / Strategies / Orders / Logs
+    (with the per-strategy detail page ``/strategies/{name}`` under Strategies), a
+    brand + version + health chip + connection dot. This factory ships the
     **shell + stub pages + health** — the per-page data (positions, orders, PnL,
     logs) lands in later leaves, fetched client-side over ``/api/*``.
 
@@ -1619,6 +1626,43 @@ def create_dashboard_app(
 
         for _route, _template in _DASHBOARD_PAGES:
             _page(_route, _template)
+
+        # The per-strategy detail page — a parameterized route the tuple above
+        # cannot express (it carries a `{name}` path param). Registered AFTER the
+        # `/strategies/new` shell (in the tuple, so it binds first) so the exact
+        # "new" is never mistaken for a strategy name. Still a pure shell: only the
+        # `name` is injected server-side (404 for an unknown unit — checked against
+        # the supervisor's names); every engine datum is client-fetched from /api/*.
+        @app.get(
+            "/strategies/{name}",
+            response_class=HTMLResponse,
+            name="page:strategy-detail",
+        )
+        async def strategy_detail(name: str, request: Request) -> Any:
+            if name not in _sup(request).names():
+                raise HTTPException(
+                    status_code=404, detail=f"unknown strategy {name!r}"
+                )
+            return templates.TemplateResponse(
+                request,
+                "strategy_detail.html",
+                {
+                    # Highlight the Strategies tab (the detail page lives under it).
+                    "active": "/strategies",
+                    "strategy_name": name,
+                    "version": trading_bot.__version__,
+                    "read_only": request.app.state.read_only,
+                    "auth": request.app.state.auth_enabled,
+                },
+            )
+
+    # `/pnl` retired INTO the per-strategy detail page (its equity chart + per-mode
+    # stats now live on `/strategies/{name}`). Redirect so an old bookmark still
+    # lands somewhere sensible — the Overview. Registered unconditionally (a
+    # redirect needs no templates) so the bookmark never 404s.
+    @app.get("/pnl", include_in_schema=False)
+    async def pnl_redirect() -> RedirectResponse:
+        return RedirectResponse("/", status_code=303)
 
     @app.get("/api/health")
     async def health(request: Request) -> dict[str, Any]:

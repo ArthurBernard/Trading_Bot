@@ -6,6 +6,25 @@ rejected approaches as tombstones.
 
 ---
 
+### 2026-07-10 Dashboard IA: the strategy detail page is the per-strategy home (PR #176)  [accepted]
+- **Choice**: a parameterized, deep-linkable `GET /strategies/{name}` shell page
+  concentrates everything about one strategy (controls incl. go-live modal, the
+  equity chart + per-mode stats formerly on `/pnl`, its positions/orders/fills);
+  the `/pnl` tab is retired (303 → `/`), the Strategies page becomes a linked
+  roster, deployment moves to `/strategies/new`, and every strategy name across
+  the dashboard is a link. Nav: 5 tabs → 4.
+- **Why**: the strategy is the operator's mental unit, but its facts were
+  scattered across three tabs (PnL behind a dropdown re-pick, controls on the
+  roster, orders behind a manual filter) with names never clickable — the root
+  cause of the "hard to find your way around" feedback. The detail page is also
+  the *place* the upcoming capital block (allocation / PnL / total value +
+  fund/withdraw/policy controls) needs; without it the money story has no home.
+- **Rejected alternatives**: keeping 5 tabs and adding cross-links only (does
+  not give the capital block a surface; the 10-column roster cannot also hold a
+  chart + orders + controls); an expanding drawer on the roster row instead of a
+  page (no shareable URL, cramped, fights the `tbRefreshGuard` no-flicker
+  logic — kept as a possible narrow-viewport degradation later).
+
 ### 2026-07-10 One dashboard code path: retire the legacy single-engine UI (PR #172)  [accepted]
 - **Choice**: delete `create_app` (the read-only single-engine FastAPI) together
   with `dashboard.html`/`app.js`/`style.css`, drop `run --serve` (+

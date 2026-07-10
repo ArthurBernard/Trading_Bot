@@ -157,6 +157,14 @@
     return '';
   }
 
+  // A strategy name rendered as a link to its detail page (/strategies/{name}) —
+  // used everywhere a strategy is named (the KPI table, the positions + open-orders
+  // rows) so each is deep-linkable. The href is URL-encoded; the text is escaped.
+  function stratLink(name) {
+    return '<a class="strat-link" href="/strategies/' + encodeURIComponent(name) + '">' +
+      escapeHtml(name) + '</a>';
+  }
+
   // --- Summary strip ------------------------------------------------------ //
   // Running/total strategies, open orders (reusing loadOrders()'s already-
   // fetched payload — see below), total realised PnL, and the next tick.
@@ -246,9 +254,13 @@
       return;
     }
     body.innerHTML = rows.map(function (r) {
-      const label = r.strategy || r.exchange || 'Total';
+      // At the strategy level the key links to the detail page; the folded
+      // exchange / total levels are plain labels (not a single strategy).
+      const labelCell = r.strategy
+        ? stratLink(r.strategy)
+        : escapeHtml(r.exchange || 'Total');
       return '<tr>' +
-        '<td>' + escapeHtml(label) + '</td>' +
+        '<td>' + labelCell + '</td>' +
         '<td class="num ' + pnlClass(r.realised_pnl) + '">' +
           tbFmt.moneyCell(r.realised_pnl, { quote: r.quote }) + '</td>' +
         '<td class="num">' + tbFmt.moneyCell(r.fees_paid, { quote: r.quote }) + '</td>' +
@@ -278,7 +290,7 @@
   function positionRowHtml(r, includeStrategy) {
     const unit = tbFmt.splitInstrument(r.instrument);  // {base, quote}
     return '<tr>' +
-      (includeStrategy ? '<td>' + escapeHtml(r.strategy) + '</td>' : '') +
+      (includeStrategy ? '<td>' + stratLink(r.strategy) + '</td>' : '') +
       '<td>' + escapeHtml(r.exchange) + '</td>' +
       '<td>' + escapeHtml(r.instrument) + '</td>' +
       '<td class="num">' + tbFmt.qtyCell(r.net_qty, { base: unit.base }) + '</td>' +
@@ -367,7 +379,7 @@
       // mirrors the Orders page / Fills table's Time column.
       return '<tr>' +
         '<td class="num" title="' + escapeHtml(fmtRelative(o.ts)) + '">' + escapeHtml(fmtDate(o.ts, { seconds: true })) + '</td>' +
-        '<td>' + escapeHtml(o.strategy) + '</td>' +
+        '<td>' + stratLink(o.strategy) + '</td>' +
         '<td>' + escapeHtml(o.exchange) + '</td>' +
         '<td>' + escapeHtml(o.instrument) + '</td>' +
         '<td class="' + sideCls + '">' + escapeHtml(o.side) + '</td>' +

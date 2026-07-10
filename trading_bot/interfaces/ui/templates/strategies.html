@@ -3,11 +3,12 @@
 {% block content %}
 <h1>Strategies</h1>
 
-<!-- The control surface: every managed strategy grouped by exchange, with a mode
-     <select> (paper / testnet / live) and a start/stop button per row. Switching a
-     strategy to LIVE (real money) opens a typed-confirmation modal whose phrase is
-     sent as {ack:"I UNDERSTAND"} and enforced server-side (the modal is UX only).
-     Read-only dashboards disable the controls (the write endpoints return 403). -->
+<!-- The roster: every managed strategy grouped by exchange, one linked row each.
+     The name links to the per-strategy detail page (/strategies/{name}) — the deep
+     link that holds the equity chart, positions, orders/fills and the control
+     surface (mode <select>, go-live). This table keeps only a quick Start/Stop;
+     mode switching and removal live on the detail page now. Read-only dashboards
+     hide Start/Stop (the write endpoints return 403). -->
 <section class="card" id="strategies-card">
   <div class="row" style="justify-content:space-between;">
     <h2 style="margin:0;">Strategies</h2>
@@ -15,6 +16,9 @@
       <span class="updated" id="strategies-updated"></span>
       <span class="chip"><b id="sum-total">—</b> total</span>
       <span class="chip"><b id="sum-running">—</b> running</span>
+      {% if not read_only %}
+      <a href="/strategies/new" class="btn btn-primary" style="text-decoration:none;">Deploy a strategy</a>
+      {% endif %}
     </span>
   </div>
   {% if read_only %}
@@ -32,92 +36,29 @@
           <th>Next bar</th>
           <th>Last eval</th>
           <th class="num">Realised PnL</th>
-          <th class="num">Open orders</th>
           <th>Action</th>
         </tr>
       </thead>
       <tbody id="strategies-body">
-        <tr class="empty"><td colspan="10">Loading…</td></tr>
+        <tr class="empty"><td colspan="9">Loading…</td></tr>
       </tbody>
     </table>
   </div>
 </section>
-
-{% if not read_only %}
-<!-- Deploy an EXISTING signal (a builtin name or a module:function ref discovered
-     from strategies/*/signal.py) as a new stopped unit. The UI composes the
-     DEPLOYMENT (venue / mode / capital / universe|symbol) — it never authors the
-     signal's Python. POSTing persists the manifest server-side. -->
-<section class="card" id="deploy-card">
-  <h2 style="margin-top:0;">Deploy a strategy</h2>
-  <p class="muted">Compose a deployment from a signal that already exists in code. The unit is added <b>stopped</b> (paper-safe).</p>
-  <form id="deploy-form" class="row" style="flex-wrap:wrap; gap:.5rem; align-items:flex-end;">
-    <label>Name<br><input id="dep-name" required autocomplete="off"></label>
-    <label>Kind<br>
-      <select id="dep-kind">
-        <option value="strategy">strategy</option>
-        <option value="portfolio">portfolio</option>
-      </select>
-    </label>
-    <label>Signal<br>
-      <select id="dep-signal"><option value="">loading…</option></select>
-    </label>
-    <label>Venue<br><input id="dep-venue" value="binance" autocomplete="off"></label>
-    <label>Mode<br>
-      <select id="dep-mode">
-        <option value="paper" selected>paper</option>
-        <option value="testnet">testnet</option>
-      </select>
-    </label>
-    <label class="dep-strategy-only">Symbol<br><input id="dep-symbol" placeholder="BTC/USD" autocomplete="off"></label>
-    <label class="dep-portfolio-only" hidden>Universe (comma-sep)<br><input id="dep-universe" placeholder="BTC/USDT, ETH/USDT" autocomplete="off"></label>
-    <label class="dep-portfolio-only" hidden>Capital<br><input id="dep-capital" value="100000" autocomplete="off"></label>
-    <button class="btn-primary" type="submit">Deploy</button>
-  </form>
-</section>
-{% endif %}
-
-<!-- Live confirmation modal: the deliberate "go real money" acknowledgement. The
-     Go-live button only enables once the exact phrase is typed. -->
-<div id="live-modal" class="modal" role="dialog" aria-modal="true" aria-labelledby="live-modal-title">
-  <div class="modal-card">
-    <h3 id="live-modal-title"><span class="warn-mark">⚠</span> Switch to LIVE — real money</h3>
-    <p>
-      You are about to switch <b id="live-modal-name">—</b> to <b>live</b>. This
-      trades <b>real money</b> on the venue. Type <code>I UNDERSTAND</code> to confirm.
-    </p>
-    <input id="live-modal-input" type="text" placeholder="I UNDERSTAND" autocomplete="off" spellcheck="false">
-    <div class="modal-actions">
-      <button id="live-modal-cancel" type="button">Cancel</button>
-      <button id="live-modal-confirm" class="btn-primary" type="button" disabled>Go live</button>
-    </div>
-  </div>
-</div>
 {% endblock %}
 
 {% block scripts %}
 <script>
-  // Strategies page — the control plane ported into the unified shell. Lists the
-  // managed strategies grouped by exchange, and (unless the dashboard is read-only)
-  // lets you start/stop them and switch mode. Switching to LIVE opens a typed
-  // confirmation that maps to {confirm:true}. Dependency-free vanilla JS; reuses
+  // Strategies roster — a slim, linked index of the managed strategies grouped by
+  // exchange. Each name links to its detail page (/strategies/{name}), where the
+  // deep controls (mode switch, go-live, remove) and per-strategy charts live.
+  // This page keeps only a quick Start/Stop. Dependency-free vanilla JS; reuses
   // base.html's api()/escapeHtml()/toast()/connect() and the TB_READ_ONLY flag,
   // plus format.js's tbFmt.moneyCell() for the row's quote-labelled PnL.
-
-  const MODES = ['paper', 'testnet', 'live'];
-  const PHRASE = 'I UNDERSTAND';
 
   const body = document.getElementById('strategies-body');
   const sumTotal = document.getElementById('sum-total');
   const sumRunning = document.getElementById('sum-running');
-
-  const modal = document.getElementById('live-modal');
-  const modalName = document.getElementById('live-modal-name');
-  const modalInput = document.getElementById('live-modal-input');
-  const modalConfirm = document.getElementById('live-modal-confirm');
-  const modalCancel = document.getElementById('live-modal-cancel');
-
-  let pendingLive = null;  // {name} awaiting confirmation
 
   // A signed-money cell class: green for a gain, red for a loss.
   function pnlClass(v) {
@@ -128,12 +69,11 @@
     return '';
   }
 
-  function modeSelect(s) {
-    const dis = TB_READ_ONLY ? ' disabled' : '';
-    const opts = MODES.map(function (m) {
-      return '<option value="' + m + '"' + (m === s.mode ? ' selected' : '') + '>' + m + '</option>';
-    }).join('');
-    return '<select data-name="' + escapeHtml(s.name) + '" class="mode-select" aria-label="mode"' + dis + '>' + opts + '</select>';
+  // The strategy name as a link to its detail page (the deep-linkable home). The
+  // href is URL-encoded; the visible text is HTML-escaped.
+  function nameCell(s) {
+    return '<a class="strat-link" href="/strategies/' + encodeURIComponent(s.name) + '">' +
+      escapeHtml(s.name) + '</a>';
   }
 
   // Cadence — the unit's bar span humanized ("1d bars" / "1h bars" / "15m
@@ -192,30 +132,26 @@
     if (TB_READ_ONLY) {
       action = '<span class="muted">—</span>';
     } else {
-      const toggle = s.running
+      action = s.running
         ? '<button data-name="' + escapeHtml(s.name) + '" data-act="stop" class="btn-stop">Stop</button>'
         : '<button data-name="' + escapeHtml(s.name) + '" data-act="start" class="btn-start">Start</button>';
-      // Remove drops the deployment and rewrites the manifest server-side.
-      const remove = '<button data-name="' + escapeHtml(s.name) + '" data-act="remove" class="btn-stop" title="Remove deployment">Remove</button>';
-      action = toggle + ' ' + remove;
     }
     const pnl = tbFmt.moneyCell(s.realised_pnl, { quote: s.quote });
     return '<tr>' +
-      '<td>' + escapeHtml(s.name) + '</td>' +
+      '<td>' + nameCell(s) + '</td>' +
       '<td>' + escapeHtml(s.kind) + '</td>' +
-      '<td><span class="badge badge-' + escapeHtml(s.mode) + '">' + escapeHtml(s.mode) + '</span> ' + modeSelect(s) + '</td>' +
+      '<td><span class="badge badge-' + escapeHtml(s.mode) + '">' + escapeHtml(s.mode) + '</span></td>' +
       '<td>' + status + '</td>' +
       '<td>' + cadenceCell(s) + '</td>' +
       '<td>' + nextBarCell(s) + '</td>' +
       '<td>' + lastEvalCell(s) + '</td>' +
       '<td class="num ' + pnlClass(s.realised_pnl) + '">' + pnl + '</td>' +
-      '<td class="num">' + escapeHtml(s.open_orders) + '</td>' +
       '<td>' + action + '</td>' +
       '</tr>';
   }
 
   function groupHeaderHtml(exchange, count) {
-    return '<tr class="group"><td colspan="10">' +
+    return '<tr class="group"><td colspan="9">' +
       '<span class="group-name">' + escapeHtml(exchange) + '</span>' +
       '<span class="group-count">' + count + '</span></td></tr>';
   }
@@ -225,15 +161,13 @@
     try {
       list = await api('GET', '/api/strategies');
     } catch (e) {
-      body.innerHTML = '<tr class="empty"><td colspan="10">' + escapeHtml(e.message) + '</td></tr>';
+      body.innerHTML = '<tr class="empty"><td colspan="9">' + escapeHtml(e.message) + '</td></tr>';
       return;
     }
-    // No-flicker refresh: this page polls every 3s, the tightest cadence of any
-    // page, so an unconditional rebuild would visibly wipe an open mode
-    // <select> mid-interaction. 'skip-silent' defers everything (including the
-    // stamp — the shown rows aren't verified current); 'skip-stamp' means the
-    // payload is unchanged, so the rows already match the server and only the
-    // freshness stamp needs to move.
+    // No-flicker refresh: 'skip-silent' defers everything (including the stamp —
+    // the shown rows aren't verified current); 'skip-stamp' means the payload is
+    // unchanged, so the rows already match the server and only the freshness
+    // stamp needs to move. See tbRefreshGuard's doc in base.html.
     const guard = tbRefreshGuard('strategies', body, list);
     if (guard === 'skip-silent') return;
     stampUpdated('strategies-updated');
@@ -241,7 +175,7 @@
     sumTotal.textContent = list.length;
     sumRunning.textContent = list.filter(function (s) { return s.running; }).length;
     if (!list.length) {
-      body.innerHTML = '<tr class="empty"><td colspan="10">No strategies declared.</td></tr>';
+      body.innerHTML = '<tr class="empty"><td colspan="9">No strategies declared.</td></tr>';
       return;
     }
     // Group strategies by exchange (alphabetical), each under a header row.
@@ -255,20 +189,6 @@
     body.innerHTML = html;
   }
 
-  async function setMode(name, mode, confirm, ack) {
-    try {
-      // `ack` is the typed live-confirmation phrase; the server enforces it for a
-      // live switch (the modal is UX, the gate is server-side).
-      await api('POST', '/api/strategies/' + encodeURIComponent(name) + '/mode',
-        { mode: mode, confirm: !!confirm, ack: ack || null });
-      toast(name + ': mode → ' + mode, 'ok');
-    } catch (e) {
-      toast(name + ': ' + e.message, 'err');
-    } finally {
-      await refresh();
-    }
-  }
-
   async function onClick(ev) {
     const btn = ev.target.closest('button[data-act]');
     if (!btn) return;
@@ -276,17 +196,8 @@
     const act = btn.dataset.act;
     btn.disabled = true;
     try {
-      if (act === 'remove') {
-        if (!window.confirm('Remove deployment "' + name + '"? Its manifest entry is rewritten.')) {
-          btn.disabled = false;
-          return;
-        }
-        await api('DELETE', '/api/strategies/' + encodeURIComponent(name));
-        toast(name + ': removed', 'ok');
-      } else {
-        await api('POST', '/api/strategies/' + encodeURIComponent(name) + '/' + act);
-        toast(name + ': ' + act + 'ed', 'ok');
-      }
+      await api('POST', '/api/strategies/' + encodeURIComponent(name) + '/' + act);
+      toast(name + ': ' + act + 'ed', 'ok');
     } catch (e) {
       toast(name + ': ' + e.message, 'err');
     } finally {
@@ -294,122 +205,14 @@
     }
   }
 
-  // --- deploy form: compose a deployment of an existing signal ------------- //
-
-  async function loadSignals() {
-    const sel = document.getElementById('dep-signal');
-    if (!sel) return;
-    try {
-      const s = await api('GET', '/api/signals');
-      const opts = [];
-      (s.builtins || []).forEach(function (b) { opts.push('<option value="' + escapeHtml(b) + '">' + escapeHtml(b) + ' (builtin)</option>'); });
-      (s.discovered || []).forEach(function (d) { opts.push('<option value="' + escapeHtml(d) + '">' + escapeHtml(d) + '</option>'); });
-      sel.innerHTML = opts.length ? opts.join('') : '<option value="">no signals found</option>';
-    } catch (e) {
-      sel.innerHTML = '<option value="">' + escapeHtml(e.message) + '</option>';
-    }
-  }
-
-  function syncDeployKind() {
-    const kind = document.getElementById('dep-kind').value;
-    document.querySelectorAll('.dep-strategy-only').forEach(function (el) { el.hidden = kind !== 'strategy'; });
-    document.querySelectorAll('.dep-portfolio-only').forEach(function (el) { el.hidden = kind !== 'portfolio'; });
-  }
-
-  async function onDeploy(ev) {
-    ev.preventDefault();
-    const kind = document.getElementById('dep-kind').value;
-    const body = {
-      name: document.getElementById('dep-name').value.trim(),
-      kind: kind,
-      venue: document.getElementById('dep-venue').value.trim(),
-      mode: document.getElementById('dep-mode').value,
-      signal: document.getElementById('dep-signal').value,
-    };
-    if (kind === 'strategy') {
-      body.symbol = document.getElementById('dep-symbol').value.trim();
-    } else {
-      body.universe = document.getElementById('dep-universe').value
-        .split(',').map(function (p) { return p.trim(); }).filter(Boolean);
-      body.capital = document.getElementById('dep-capital').value.trim();
-    }
-    try {
-      await api('POST', '/api/strategies', body);
-      toast(body.name + ': deployed (stopped)', 'ok');
-      document.getElementById('deploy-form').reset();
-      syncDeployKind();
-    } catch (e) {
-      toast('deploy failed: ' + e.message, 'err');
-    } finally {
-      await refresh();
-    }
-  }
-
-  function onModeChange(ev) {
-    const sel = ev.target.closest('select.mode-select');
-    if (!sel) return;
-    const name = sel.dataset.name;
-    const mode = sel.value;
-    if (mode === 'live') {
-      openLiveModal(name);  // deliberate, typed acknowledgement
-      return;
-    }
-    setMode(name, mode, false);  // paper / testnet — no confirmation
-  }
-
-  // --- live confirmation modal -------------------------------------------- //
-
-  function openLiveModal(name) {
-    pendingLive = { name: name };
-    modalName.textContent = name;
-    modalInput.value = '';
-    modalConfirm.disabled = true;
-    modal.classList.add('open');
-    modalInput.focus();
-  }
-
-  function closeLiveModal() {
-    modal.classList.remove('open');
-    pendingLive = null;
-    refresh();  // re-render so a cancelled select reverts to the server's mode
-  }
-
-  modalInput.addEventListener('input', function () {
-    modalConfirm.disabled = modalInput.value.trim() !== PHRASE;
-  });
-  modalInput.addEventListener('keydown', function (e) {
-    if (e.key === 'Enter' && !modalConfirm.disabled) modalConfirm.click();
-    if (e.key === 'Escape') closeLiveModal();
-  });
-  modalConfirm.addEventListener('click', async function () {
-    const name = pendingLive && pendingLive.name;
-    const ack = modalInput.value.trim();  // the typed phrase — sent for server-side check
-    modal.classList.remove('open');
-    if (name) await setMode(name, 'live', true, ack);
-    pendingLive = null;
-  });
-  modalCancel.addEventListener('click', function () {
-    toast((pendingLive ? pendingLive.name : '') + ': live switch cancelled', 'err');
-    closeLiveModal();
-  });
-  modal.addEventListener('click', function (e) { if (e.target === modal) closeLiveModal(); });
-
   document.addEventListener('DOMContentLoaded', function () {
     if (!TB_READ_ONLY) {
       body.addEventListener('click', onClick);
-      body.addEventListener('change', onModeChange);
-      const form = document.getElementById('deploy-form');
-      if (form) {
-        loadSignals();
-        syncDeployKind();
-        document.getElementById('dep-kind').addEventListener('change', syncDeployKind);
-        form.addEventListener('submit', onDeploy);
-      }
     }
     refresh();
 
-    // Live: an event (order/fill/log) may have moved a strategy's PnL / open
-    // orders — refetch the list. connect() mirrors liveness on the connection dot.
+    // Live: an event (order/fill/log) may have moved a strategy's PnL / running
+    // state — refetch the list. connect() mirrors liveness on the connection dot.
     connect('/api/events', function () { refresh(); });
 
     // Polling fallback — refresh even if the SSE stream is down.

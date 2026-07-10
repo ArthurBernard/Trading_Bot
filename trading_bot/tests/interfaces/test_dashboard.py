@@ -51,11 +51,22 @@ def _FakeStartClient() -> _FakeDccdClient:  # noqa: N802 — factory named like 
     return _FakeDccdClient({"BTC/USD": _dccd_ohlc(_trend())})
 
 
-#: The five page routes the shared nav links to (Overview at ``/``).
-_PAGES = ("/", "/strategies", "/orders", "/pnl", "/logs")
+#: Page routes rendered as shells over ``base.html`` — the four nav tabs (Overview
+#: at ``/``) plus the two sub-pages under Strategies (the deploy form and a
+#: per-strategy detail page for the declared ``btc-ma`` unit). Every one extends the
+#: shared shell, so the parametrized shell tests below sweep them all.
+_PAGES = (
+    "/",
+    "/strategies",
+    "/strategies/new",
+    "/strategies/btc-ma",
+    "/orders",
+    "/logs",
+)
 
-#: Nav labels every page carries (proves the shared shell, not a bespoke page).
-_NAV_LABELS = ("Overview", "Strategies", "Orders", "PnL", "Logs")
+#: Nav labels every page carries (proves the shared shell, not a bespoke page). The
+#: PnL tab retired into the per-strategy detail page — the nav is four tabs now.
+_NAV_LABELS = ("Overview", "Strategies", "Orders", "Logs")
 
 
 def _config() -> AppConfig:
@@ -140,6 +151,19 @@ def test_every_page_carries_the_status_badge_language(path: str) -> None:
     assert ".badge-status-ok" in html, path
     assert ".badge-status-warn" in html, path
     assert ".badge-status-err" in html, path
+
+
+@pytest.mark.parametrize("path", _PAGES)
+def test_nav_lists_four_tabs_and_no_pnl(path: str) -> None:
+    """Every page's nav lists the four surviving tabs; the retired PnL tab is gone.
+
+    The `/pnl` tab retired into the per-strategy detail page (its equity chart
+    lives on `/strategies/{name}` now), so no page shell links `/pnl` any more.
+    """
+    html = _client().get(path).text
+    for href in ('href="/"', 'href="/strategies"', 'href="/orders"', 'href="/logs"'):
+        assert href in html, (href, path)
+    assert 'href="/pnl"' not in html, path
 
 
 def test_active_tab_is_highlighted() -> None:
@@ -529,22 +553,57 @@ def test_pnl_endpoint_unknown_mode_is_422() -> None:
     assert _client().get("/api/pnl?strategy=btc-ma&mode=bogus").status_code == 422
 
 
-# --- PnL page markup + vendored uPlot assets ------------------------------- #
+# --- Per-strategy detail page (the retired /pnl chart lives here now) ------- #
 
 
-def test_pnl_page_has_chart_container_and_selector() -> None:
-    """`GET /pnl` carries the chart container, strategy selector + uPlot reference."""
-    html = _client().get("/pnl").text
+def test_pnl_redirects_to_overview() -> None:
+    """`GET /pnl` (the retired tab) 303-redirects to Overview so bookmarks survive."""
+    r = _client().get("/pnl", follow_redirects=False)
+    assert r.status_code == 303
+    assert r.headers["location"] == "/"
+
+
+def test_strategy_detail_serves_the_shell_with_name_and_sections() -> None:
+    """`GET /strategies/{name}` is a 200 shell naming the strategy + its sections.
+
+    The per-strategy home merges the retired /pnl chart (uPlot equity + per-mode
+    stats, pre-bound to this strategy — no selector) with the moved control surface
+    (mode <select> + go-live modal) and this strategy's positions, orders and fills.
+    """
+    html = _client().get("/strategies/btc-ma").text
+    assert "btc-ma" in html  # the name injected server-side
+    assert 'id="detail-header"' in html  # the header + control block
+    # The equity chart (moved from /pnl), pre-bound to this strategy (no selector).
     assert 'id="pnl-chart"' in html  # the uPlot mount
-    assert 'id="pnl-strategy"' in html  # the strategy selector
+    assert 'id="pnl-strategy"' not in html  # no strategy dropdown — it's pre-bound
     assert "/static/uplot.min.js" in html  # the vendored chart library
     assert "/static/uplot.min.css" in html  # its stylesheet
     assert "/api/pnl" in html  # it fetches the per-mode series
-    assert "/api/strategies" in html  # it populates the selector
-    # The stats table's Return column (realised PnL / v0, ui-ux leaf 05) + the
-    # muted starting-capital note near it.
+    # The stats table's Return column + the muted starting-capital note.
     assert '<th class="num">Return</th>' in html
     assert 'id="pnl-v0-note"' in html
+    # This strategy's positions / orders / fills tables.
+    assert 'id="positions-table"' in html
+    assert 'id="orders-table"' in html
+    assert 'id="fills-table"' in html
+    # The control surface + go-live modal moved here from the roster row.
+    assert "mode-select" in html
+    assert 'id="live-modal"' in html
+    assert "I UNDERSTAND" in html
+
+
+def test_strategy_detail_unknown_name_is_404() -> None:
+    """`GET /strategies/{name}` for an unmanaged name is a 404 (not a blank shell)."""
+    assert _client().get("/strategies/does-not-exist").status_code == 404
+
+
+def test_strategy_detail_read_only_guards_the_controls() -> None:
+    """A read-only detail page surfaces the flag its client-rendered controls gate on."""
+    html = _client(read_only=True).get("/strategies/btc-ma").text
+    assert "const TB_READ_ONLY = true" in html  # the shell flag
+    # The control render is gated behind that flag (no mode switch / start-stop /
+    # remove when read-only) — the guard the client obeys.
+    assert "if (TB_READ_ONLY)" in html
 
 
 def test_format_js_is_served_with_the_tbfmt_namespace() -> None:
@@ -1364,41 +1423,71 @@ def test_read_only_write_routes_are_403() -> None:
 # --- Strategies page markup ------------------------------------------------ #
 
 
-def test_strategies_page_has_table_and_live_modal() -> None:
-    """`GET /strategies` carries the grouped table + mode select + the live modal."""
+def test_strategies_page_is_a_linked_roster() -> None:
+    """`GET /strategies` is a slim roster: linked rows, columns; no mode-select/modal.
+
+    The roster slimmed to a linked index — each name links to its detail page
+    (/strategies/{name}) where the deep controls (mode switch, go-live, remove) and
+    charts live. The mode <select> and the go-live modal moved off this page.
+    """
     html = _client().get("/strategies").text
     assert 'id="strategies-body"' in html  # the table the page fills
-    assert "mode-select" in html  # the paper/testnet/live select
-    assert 'id="live-modal"' in html  # the deliberate go-live confirmation
-    assert "I UNDERSTAND" in html  # the typed-confirmation phrase
     assert "/api/strategies" in html  # it wires the control endpoints
-    # Cadence made visible (ui-ux leaf 04): bar cadence + next-bar-close columns,
-    # and a freshness stamp on the table's header.
+    # Rows link to the per-strategy detail page (client-rendered in the roster JS).
+    assert 'href="/strategies/' in html
+    assert "strat-link" in html
+    # The kept roster columns (cadence / next-bar / last-eval), plus the stamp.
     assert "<th>Cadence</th>" in html
     assert "<th>Next bar</th>" in html
-    assert 'id="strategies-updated"' in html
-    # Last eval column (this leaf): when the strategy last ticked, relative-time
-    # in the cell with the absolute eval instant + as-of data date in `title`.
     assert "<th>Last eval</th>" in html
+    assert 'id="strategies-updated"' in html
+    # The go-live modal + its typed phrase MOVED to the detail page — the roster
+    # no longer carries the confirmation surface (the `.mode-select` CSS class
+    # lives in base.html for every page, so the modal id is the clean marker).
+    assert 'id="live-modal"' not in html
+    assert "I UNDERSTAND" not in html
 
 
-def test_strategies_page_read_only_note() -> None:
-    """A read-only dashboard's Strategies page advertises disabled controls."""
+def test_strategies_page_read_only_note_and_no_deploy_link() -> None:
+    """A read-only roster advertises disabled controls and hides the Deploy link."""
     html = _client(read_only=True).get("/strategies").text
     assert "read-only" in html.lower()
+    assert "const TB_READ_ONLY = true" in html  # Start/Stop rendering guards on it
+    # The Deploy link is server-guarded ({% if not read_only %}) — gone here.
+    assert 'href="/strategies/new"' not in html
 
 
-def test_strategies_page_has_deploy_form_when_writable() -> None:
-    """A writable Strategies page carries the deploy form wired to /api/signals."""
+def test_strategies_roster_links_to_the_deploy_page_when_writable() -> None:
+    """A writable roster carries the Deploy link to the relocated form."""
     html = _client().get("/strategies").text
+    assert 'href="/strategies/new"' in html
+
+
+def test_strategies_new_page_has_deploy_form_when_writable() -> None:
+    """`GET /strategies/new` carries the relocated deploy form wired to /api/signals."""
+    html = _client().get("/strategies/new").text
     assert 'id="deploy-form"' in html
     assert "/api/signals" in html  # the form fetches discoverable signal refs
+    assert 'href="/strategies"' in html  # a link back to the roster
+    # The form is no longer on the roster page (it moved here).
+    assert 'id="deploy-form"' not in _client().get("/strategies").text
 
 
-def test_strategies_page_hides_deploy_form_when_read_only() -> None:
-    """A read-only Strategies page omits the deploy form (no create affordance)."""
-    html = _client(read_only=True).get("/strategies").text
+def test_strategies_new_page_hides_deploy_form_when_read_only() -> None:
+    """A read-only `/strategies/new` omits the deploy form (no create affordance)."""
+    html = _client(read_only=True).get("/strategies/new").text
     assert 'id="deploy-form"' not in html
+
+
+def test_strategies_new_is_not_matched_as_a_strategy_name() -> None:
+    """`/strategies/new` binds the deploy form, never the detail route for a unit "new".
+
+    Route ordering: the `/strategies/new` shell is registered before the
+    parameterized `/strategies/{name}` route, so the exact "new" always wins.
+    """
+    r = _client().get("/strategies/new")
+    assert r.status_code == 200
+    assert 'id="deploy-form"' in r.text  # the form, not a per-strategy detail shell
 
 
 # --- restored paper book surfaces through the dashboard -------------------- #
