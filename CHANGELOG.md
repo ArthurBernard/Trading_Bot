@@ -8,6 +8,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Per-strategy detail page.** Every strategy now has a deep-linkable home,
+  `GET /strategies/{name}` (404 for an unknown unit): header with mode badge /
+  run pill / Start-Stop-Mode-Remove controls (incl. the typed go-live modal),
+  the uPlot equity chart + per-mode stats (moved from the PnL tab, strategy
+  pre-bound — no dropdown), and that strategy's positions, recent orders and
+  fills. The deploy form moves to its own `/strategies/new` page
+  (strategy-capital leaf 05). (#176)
 - **Per-strategy `allocation` + `capital_policy` config fields.** Both
   `StrategyConfig` and `PortfolioStrategyConfig` gain an optional, strictly
   positive `allocation` (the declared capital base — single-instrument
@@ -60,6 +67,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Dashboard IA: 5 tabs → 4; the PnL tab retired into the detail page.**
+  The nav is now Overview · Strategies · Orders · Logs; `GET /pnl` 303-redirects
+  to `/` so old bookmarks keep working. The Strategies page slims to a linked
+  roster (name links to the detail page; the mode `<select>`, Remove and the
+  go-live modal move there; quick Start/Stop stays), and strategy names across
+  Overview and Orders are links to `/strategies/{name}`
+  (strategy-capital leaf 05). (#176)
 - **Dashboard display formatting.** A new dependency-free `static/format.js`
   (`tbFmt` namespace) rounds, thousands-groups and unit-labels every figure on
   every page (money by quote currency, quantities by base asset, max-drawdown as
