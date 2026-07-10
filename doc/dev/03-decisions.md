@@ -6,6 +6,30 @@ rejected approaches as tombstones.
 
 ---
 
+### 2026-07-10 Capital operations: ledger events under the unit lock; withdrawable subtracts committed + reserved (PR #178)  [accepted]
+- **Choice**: `deposit`/`withdraw`/`set_policy` are supervisor methods (the
+  `set_mode` idiom: `async with unit.lock`, manifest persisted on config
+  change), exposed as auth+read-only-guarded routes. A mutation is **one**
+  durable ledger write, idempotent by caller-assigned `op_id`; the runner picks
+  it up on its next tick through the lazy provider — no engine rebuild, no
+  second write to keep in sync. `withdrawable = max(0, total_value −
+  Σ|net_qty|×mark − Σ open-order reservations)` (|·| is conservative for a
+  short book — documented); a too-large withdrawal 422s with the exact figure
+  and moves nothing. Live-mode capital ops return **409** until real-key
+  enablement lands the funds gate. `set_policy` flips the shared config entry
+  in place — the provider closures read the policy off the config **at call
+  time**, which is what makes the flip hot and durable in one assignment.
+- **Why**: cash-only withdrawals can never force a liquidation or drive the
+  sizing base negative; refusing (422) with the exact withdrawable beats
+  silently clamping. Deferring live ops behind 409 is honest: a live funds
+  check cannot be validated before the real-key sandbox milestone, and
+  silently allowing unchecked live capital ops would fake safety.
+- **Rejected alternatives**: allowing live ops with a best-effort balance
+  check (unverifiable today); clamping an oversized withdrawal to the
+  available figure (surprising money movement); a `set-amount` absolute
+  endpoint (delta-on-read races two concurrent setters — deposit/withdraw
+  primitives are race-free under op-id idempotency).
+
 ### 2026-07-10 Per-strategy capital: an append-only ledger, derived figures, policy-driven sizing (PR #177)  [accepted]
 - **Choice**: one new source of truth per strategy — the append-only
   `capital_events` ledger (`FUNDING`/`DEPOSIT`/`WITHDRAWAL`, composite-PK

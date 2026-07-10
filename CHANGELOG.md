@@ -8,6 +8,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Capital control plane: fund, cash out, flip the policy — live from the
+  dashboard API.** `GET/POST /api/strategies/{name}/capital` (deposit/withdraw,
+  amounts as Decimal strings — a JSON float is refused) and
+  `POST /api/strategies/{name}/policy` (`fixed`/`compound`, persisted to the
+  manifest and hot next tick). Every mutation is idempotent by a caller-assigned
+  `op_id` (the client-order-id analogue — a retried POST never double-counts);
+  withdrawals are capped at `withdrawable = max(0, total_value − committed to
+  positions − reserved by open orders)` and a too-large request 422s with the
+  exact figure. Paper/testnet unconstrained; a live-mode capital op returns 409
+  (deferred to real-key enablement). New `WithdrawalTooLarge` /
+  `LiveCapitalOpsDeferred` domain errors (strategy-capital leaf 07). (#178)
 - **The capital ledger drives the engine.** New
   `application/capital_service.py`: the declared `allocation` (or a portfolio's
   `capital`) seeds a deterministic genesis `FUNDING` event once
