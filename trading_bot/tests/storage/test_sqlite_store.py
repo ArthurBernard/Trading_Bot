@@ -40,6 +40,8 @@ from trading_bot.application import (
 )
 from trading_bot.brokers import PaperBroker
 from trading_bot.domain import (
+    CapitalEvent,
+    CapitalEventType,
     Fill,
     Instrument,
     Order,
@@ -58,6 +60,25 @@ ETH_USD = Instrument(Symbol("ETH", "USD"))
 
 def _store(tmp_path) -> SqliteStore:
     return SqliteStore(tmp_path / "engine.db")
+
+
+def _capital_event(
+    *,
+    event_id: str,
+    strategy: str = "alloc1",
+    event_type: CapitalEventType = CapitalEventType.FUNDING,
+    amount: str = "1000",
+    ts: int = 1_700_000_000_000,
+    note: str = "",
+) -> CapitalEvent:
+    return CapitalEvent(
+        event_id=event_id,
+        strategy=strategy,
+        event_type=event_type,
+        amount=money(amount),
+        ts=ts,
+        note=note,
+    )
 
 
 def _order(
@@ -405,6 +426,186 @@ def test_plain_fills_unaffected_by_tags(tmp_path) -> None:
     store.record_fill(_fill(fill_id="T1"))
     [fill] = store.fills()
     _assert_fills_equal(fill, _fill(fill_id="T1"))
+
+
+# --- capital_events: append-only ledger ------------------------------------ #
+
+
+def test_record_capital_event_round_trip(tmp_path) -> None:
+    """A capital event round-trips to an equal CapitalEvent (Decimal exact)."""
+    store = _store(tmp_path)
+    event = _capital_event(event_id="E1", amount="1234.5678", note="genesis")
+    assert store.record_capital_event(event) is True
+    [got] = store.capital_events()
+    assert got == event
+
+
+def test_record_capital_event_is_append_only(tmp_path) -> None:
+    """Re-recording the same (event_id, strategy, mode) is a no-op (idempotent)."""
+    store = _store(tmp_path)
+    event = _capital_event(event_id="E1")
+    assert store.record_capital_event(event) is True
+    assert store.record_capital_event(event) is False  # replay
+    # A different-content event under the same composite key is also ignored.
+    tampered = _capital_event(event_id="E1", amount="99", note="tampered")
+    assert store.record_capital_event(tampered) is False
+    [got] = store.capital_events()
+    assert got == event  # original wins, untouched
+
+
+def test_record_capital_event_same_id_different_mode_both_persist(tmp_path) -> None:
+    """The same event_id under a different `mode` is kept as a distinct row."""
+    store = SqliteStore(tmp_path / "engine.db", mode="paper", venue="")
+    store.record_capital_event(_capital_event(event_id="E1", amount="1000"))
+    store.set_context(mode="live", venue="kraken")
+    store.record_capital_event(_capital_event(event_id="E1", amount="2000"))
+
+    got = store.capital_events()
+    assert len(got) == 2
+    assert {event.amount for event in got} == {money("1000"), money("2000")}
+
+
+def test_capital_events_ordered_by_ts_then_event_id(tmp_path) -> None:
+    """Reads come back ts-ordered, with event_id as a deterministic tie-break."""
+    store = _store(tmp_path)
+    store.record_capital_event(_capital_event(event_id="E3", ts=300))
+    store.record_capital_event(_capital_event(event_id="E1", ts=100))
+    store.record_capital_event(_capital_event(event_id="EB", ts=200))
+    store.record_capital_event(_capital_event(event_id="EA", ts=200))
+
+    assert [e.event_id for e in store.capital_events()] == ["E1", "EA", "EB", "E3"]
+
+
+def test_capital_events_filter_by_strategy(tmp_path) -> None:
+    """`capital_events(strategy=...)` restricts to the given strategy only."""
+    store = _store(tmp_path)
+    store.record_capital_event(_capital_event(event_id="E1", strategy="alloc1"))
+    store.record_capital_event(_capital_event(event_id="E2", strategy="alloc2"))
+
+    assert [e.event_id for e in store.capital_events(strategy="alloc1")] == ["E1"]
+    assert [e.event_id for e in store.capital_events(strategy="alloc2")] == ["E2"]
+    assert {e.event_id for e in store.capital_events()} == {"E1", "E2"}
+
+
+def test_capital_events_filter_since_ms(tmp_path) -> None:
+    """`capital_events(since_ms=...)` filters by ts, inclusive, like fills()."""
+    store = _store(tmp_path)
+    store.record_capital_event(_capital_event(event_id="E1", ts=100))
+    store.record_capital_event(_capital_event(event_id="E2", ts=200))
+    store.record_capital_event(_capital_event(event_id="E3", ts=300))
+
+    assert [e.event_id for e in store.capital_events(since_ms=200)] == ["E2", "E3"]
+    assert [e.event_id for e in store.capital_events(since_ms=301)] == []
+
+
+def test_capital_event_withdrawal_round_trips(tmp_path) -> None:
+    """A WITHDRAWAL event (and a free-form note) round-trips exactly."""
+    store = _store(tmp_path)
+    event = _capital_event(
+        event_id="W1",
+        event_type=CapitalEventType.WITHDRAWAL,
+        amount="50.25",
+        note="operator withdrawal",
+    )
+    store.record_capital_event(event)
+    [got] = store.capital_events()
+    assert got == event
+    assert got.event_type is CapitalEventType.WITHDRAWAL
+
+
+def test_capital_event_amount_is_text_and_decimal_exact(tmp_path) -> None:
+    """`amount` round-trips exactly (no float) and the raw column is TEXT."""
+    store = _store(tmp_path)
+    store.record_capital_event(_capital_event(event_id="E1", amount="0.1"))
+    [got] = store.capital_events()
+    assert got.amount == money("0.1")
+
+    raw = sqlite3.connect(str(store._path))
+    try:
+        (amount,) = raw.execute(
+            "SELECT amount FROM capital_events WHERE event_id='E1'"
+        ).fetchone()
+    finally:
+        raw.close()
+    assert isinstance(amount, str)
+    assert amount == "0.1"
+
+
+def test_capital_event_set_context_tags_rows_like_fills(tmp_path) -> None:
+    """`set_context` stamps mode/venue on capital_events exactly like fills."""
+    store = _store(tmp_path)
+    store.record_capital_event(_capital_event(event_id="P1"))  # default paper / ''
+    store.set_context(mode="testnet", venue="binance")
+    store.record_capital_event(_capital_event(event_id="T1"))
+    store.set_context(mode="live", venue="kraken")
+    store.record_capital_event(_capital_event(event_id="L1"))
+
+    raw = sqlite3.connect(str(store._path))
+    try:
+        rows = {
+            row[0]: (row[1], row[2])
+            for row in raw.execute(
+                "SELECT event_id, mode, venue FROM capital_events"
+            ).fetchall()
+        }
+    finally:
+        raw.close()
+    assert rows["P1"] == ("paper", "")
+    assert rows["T1"] == ("testnet", "binance")
+    assert rows["L1"] == ("live", "kraken")
+
+
+def test_capital_events_table_added_to_pre_existing_db(tmp_path) -> None:
+    """Opening a DB whose `capital_events` table was dropped re-adds it.
+
+    Simulates a database written before this leaf shipped (or one where the
+    table was otherwise lost): dropping the table and reopening through
+    SqliteStore must recreate it (idempotent migration), without touching the
+    unrelated `fills` table.
+    """
+    db = tmp_path / "engine.db"
+    store = SqliteStore(db)
+    fill = _fill(fill_id="T1")
+    store.record_fill(fill)
+    fills_before = store.fills()
+
+    raw = sqlite3.connect(str(db))
+    try:
+        raw.execute("DROP TABLE capital_events")
+        raw.commit()
+    finally:
+        raw.close()
+
+    reopened = SqliteStore(db)  # migration recreates the table
+    fills_after = reopened.fills()
+    assert len(fills_after) == len(fills_before) == 1
+    _assert_fills_equal(fills_after[0], fill)
+    assert reopened.capital_events() == []
+    event = _capital_event(event_id="GENESIS")
+    assert reopened.record_capital_event(event) is True
+    assert reopened.capital_events() == [event]
+
+
+def test_capital_events_migration_is_idempotent(tmp_path) -> None:
+    """Re-opening a DB that already has `capital_events` is a harmless no-op."""
+    db = tmp_path / "engine.db"
+    store = SqliteStore(db)
+    store.record_capital_event(_capital_event(event_id="E1"))
+    # Second and third opens: the table already exists, migration is a no-op.
+    SqliteStore(db)
+    reopened = SqliteStore(db)
+    assert [e.event_id for e in reopened.capital_events()] == ["E1"]
+    reopened.record_capital_event(_capital_event(event_id="E2"))
+    assert {e.event_id for e in reopened.capital_events()} == {"E1", "E2"}
+
+
+def test_capital_events_migration_noop_on_fresh_db(tmp_path) -> None:
+    """A fresh DB already has the table; the migration is a harmless no-op."""
+    db = tmp_path / "engine.db"
+    store = SqliteStore(db)  # CREATE TABLE gives the full schema
+    store.record_capital_event(_capital_event(event_id="E1"))
+    reopened = SqliteStore(db)  # migration finds the table present
+    assert [e.event_id for e in reopened.capital_events()] == ["E1"]
 
 
 # --- fills: schema migration (add mode/venue to a pre-existing table) ------- #

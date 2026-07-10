@@ -63,6 +63,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Generator
 
+from trading_bot.domain.capital import CapitalEvent, CapitalEventType
 from trading_bot.domain.fill import Fill
 from trading_bot.domain.instrument import Instrument, Symbol
 from trading_bot.domain.money import money
@@ -136,6 +137,24 @@ CREATE TABLE IF NOT EXISTS fills (
 
 CREATE INDEX IF NOT EXISTS idx_fills_ts ON fills(ts);
 CREATE INDEX IF NOT EXISTS idx_fills_cid ON fills(client_order_id);
+
+CREATE TABLE IF NOT EXISTS capital_events (
+    event_id   TEXT NOT NULL,
+    strategy   TEXT NOT NULL,
+    event_type TEXT NOT NULL,
+    amount     TEXT NOT NULL,
+    ts         INTEGER NOT NULL,
+    note       TEXT NOT NULL DEFAULT '',
+    mode       TEXT NOT NULL DEFAULT 'paper',
+    venue      TEXT NOT NULL DEFAULT '',
+    -- Composite identity, same rationale as the fills PK above: an event_id is
+    -- minted per-mode (an operator note struck in paper vs. live), so keying on
+    -- event_id + strategy alone would let a paper genesis event and a live
+    -- genesis event sharing an id collide under INSERT OR IGNORE.
+    PRIMARY KEY (event_id, strategy, mode)
+);
+
+CREATE INDEX IF NOT EXISTS idx_capital_events_ts ON capital_events(ts);
 
 CREATE TABLE IF NOT EXISTS state (
     key   TEXT PRIMARY KEY,
@@ -224,9 +243,10 @@ class SqliteStore:
 
     Construct it on a database path (created if absent, with its parent
     directories); the schema is applied on init. Then persist with
-    :meth:`upsert_order`, :meth:`record_fill` and :meth:`set_state`, and read
-    back exact-:class:`~decimal.Decimal` domain objects with :meth:`get_order`,
-    :meth:`orders`, :meth:`fills` and :meth:`get_state`. Optionally wire it to an
+    :meth:`upsert_order`, :meth:`record_fill`, :meth:`record_capital_event` and
+    :meth:`set_state`, and read back exact-:class:`~decimal.Decimal` domain
+    objects with :meth:`get_order`, :meth:`orders`, :meth:`fills`,
+    :meth:`capital_events` and :meth:`get_state`. Optionally wire it to an
     :class:`~trading_bot.application.events.EventBus` with :meth:`attach`.
 
     Parameters
@@ -278,6 +298,7 @@ class SqliteStore:
             _migrate_fills_tags(conn)
             _migrate_fills_pk(conn)
             _migrate_orders_columns(conn)
+            _migrate_capital_events(conn)
 
     def set_context(self, *, mode: str, venue: str) -> None:
         """Set the ``mode`` / ``venue`` stamped on subsequently-recorded fills.
@@ -443,6 +464,54 @@ class SqliteStore:
                 ),
             )
 
+    def record_capital_event(self, event: CapitalEvent) -> bool:
+        """Append ``event`` to the capital_events table — append-only, no overwrite.
+
+        ``INSERT OR IGNORE`` on the composite ``(event_id, strategy, mode)``
+        primary key — the same discipline :meth:`record_fill` uses on its own
+        composite key (see the ``capital_events`` PK rationale in
+        :data:`_SCHEMA`): re-recording the *same* event (a replayed operator
+        action, a reconciliation re-fetch) is a silent no-op, while an event
+        id minted under a different mode (e.g. a paper genesis vs. a live
+        genesis sharing an id) is kept as a distinct row. A capital event is a
+        control-plane write, not bus-driven, so — unlike fills/orders — there
+        is no off-loop ``_WriteJob`` path; this always writes inline. The row
+        is tagged with the store's current ``mode`` / ``venue`` (see
+        :meth:`set_context`), exactly like a fill. ``amount`` is stored as
+        ``str(Decimal)`` TEXT.
+
+        Parameters
+        ----------
+        event : CapitalEvent
+            The capital movement to persist.
+
+        Returns
+        -------
+        bool
+            ``True`` if a new row was inserted, ``False`` if the composite key
+            already existed (an idempotent replay).
+
+        """
+        with self._conn() as conn:
+            cursor = conn.execute(
+                """
+                INSERT OR IGNORE INTO capital_events (
+                    event_id, strategy, event_type, amount, ts, note, mode, venue
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    event.event_id,
+                    event.strategy,
+                    event.event_type.value,
+                    str(event.amount),
+                    event.ts,
+                    event.note,
+                    self._mode,
+                    self._venue,
+                ),
+            )
+        return cursor.rowcount > 0
+
     def set_state(self, key: str, value: str) -> None:
         """Set the engine-state ``value`` for ``key`` (UPSERT by ``key``).
 
@@ -584,6 +653,47 @@ class SqliteStore:
                     (since_ms,),
                 ).fetchall()
         return [_row_to_stored_fill(r) for r in rows]
+
+    def capital_events(
+        self, strategy: str | None = None, since_ms: int | None = None
+    ) -> list[CapitalEvent]:
+        """Return stored capital events, optionally filtered, ``ts``-ordered.
+
+        Parameters
+        ----------
+        strategy : str, optional
+            Restrict to events recorded for this strategy. ``None`` (default)
+            returns events for every strategy.
+        since_ms : int, optional
+            Lower time bound as **milliseconds since the Unix epoch (UTC)**,
+            inclusive. ``None`` (default) returns every stored event.
+
+        Returns
+        -------
+        list of CapitalEvent
+            The matching events, ordered by ``ts`` then ``event_id`` (a
+            deterministic tie-break for events sharing a timestamp — unlike
+            :meth:`fills`, which orders by ``rowid``, since capital events are
+            written at human/control-plane rates where the folds in
+            :mod:`trading_bot.domain.capital` care about ``ts`` order, not
+            insertion order). Money exact.
+
+        """
+        clauses: list[str] = []
+        params: list[object] = []
+        if strategy is not None:
+            clauses.append("strategy = ?")
+            params.append(strategy)
+        if since_ms is not None:
+            clauses.append("ts >= ?")
+            params.append(since_ms)
+        query = "SELECT * FROM capital_events"
+        if clauses:
+            query += " WHERE " + " AND ".join(clauses)
+        query += " ORDER BY ts, event_id"
+        with self._conn() as conn:
+            rows = conn.execute(query, params).fetchall()
+        return [_row_to_capital_event(r) for r in rows]
 
     def get_state(self, key: str) -> str | None:
         """Return the stored value for ``key``, or ``None`` if the key is unknown."""
@@ -818,6 +928,18 @@ def _row_to_stored_fill(row: sqlite3.Row) -> StoredFill:
     )
 
 
+def _row_to_capital_event(row: sqlite3.Row) -> CapitalEvent:
+    """Rebuild a :class:`CapitalEvent` from a stored ``capital_events`` row (exact Decimal)."""
+    return CapitalEvent(
+        event_id=str(row["event_id"]),
+        strategy=str(row["strategy"]),
+        event_type=CapitalEventType(row["event_type"]),
+        amount=money(str(row["amount"])),
+        ts=int(row["ts"]),
+        note=str(row["note"]),
+    )
+
+
 def _migrate_fills_tags(conn: sqlite3.Connection) -> None:
     """Add the ``mode`` / ``venue`` columns to a pre-existing ``fills`` table.
 
@@ -935,3 +1057,43 @@ def _migrate_orders_columns(conn: sqlite3.Connection) -> None:
     for name, coltype in _ORDERS_ADDED_COLUMNS:
         if name not in columns:
             conn.execute(f"ALTER TABLE orders ADD COLUMN {name} {coltype}")
+
+
+def _migrate_capital_events(conn: sqlite3.Connection) -> None:
+    """Add the ``capital_events`` table to a pre-existing database missing it.
+
+    A presence-probing migration in the same idiom as :func:`_migrate_orders_
+    columns`, but at table granularity rather than column granularity: this
+    leaf's table ships **dormant** (nothing writes to it yet — see the module
+    docstring), so :data:`_SCHEMA`'s own ``CREATE TABLE IF NOT EXISTS`` already
+    covers both a fresh database and a database opened after this leaf shipped.
+    This function makes that guarantee explicit and self-contained for a
+    database opened *before* the table existed (or one where it was dropped),
+    following the same "inspect what's live, add only what's missing" template
+    the fills/orders migrations use, so a later column added to
+    ``capital_events`` has a ready home to extend. Idempotent: a no-op once the
+    table is present. Runs unconditionally in :meth:`SqliteStore.__init__`,
+    after the fills/orders migrations.
+    """
+    tables = {
+        row["name"]
+        for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
+    }
+    if "capital_events" in tables:
+        return
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS capital_events (
+            event_id   TEXT NOT NULL,
+            strategy   TEXT NOT NULL,
+            event_type TEXT NOT NULL,
+            amount     TEXT NOT NULL,
+            ts         INTEGER NOT NULL,
+            note       TEXT NOT NULL DEFAULT '',
+            mode       TEXT NOT NULL DEFAULT 'paper',
+            venue      TEXT NOT NULL DEFAULT '',
+            PRIMARY KEY (event_id, strategy, mode)
+        );
+        CREATE INDEX IF NOT EXISTS idx_capital_events_ts ON capital_events(ts);
+        """
+    )
