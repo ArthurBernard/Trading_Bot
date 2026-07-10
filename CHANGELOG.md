@@ -104,6 +104,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 
+- **Legacy single-engine dashboard retired.** `create_app` (the read-only
+  one-engine FastAPI) with its `dashboard.html`/`app.js`/`style.css` assets and
+  the `run --serve` flag are gone — the unified dashboard (`start --serve` /
+  `dashboard` / `serve`) is the single web code path, and `run` is console-only;
+  the login page carries its own inline styles (strategy-capital leaf 01). (#172)
+
 ## [0.10.0] - 2026-07-02
 
 ### Added

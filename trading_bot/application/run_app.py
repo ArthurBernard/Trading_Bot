@@ -725,8 +725,7 @@ class PreparedSystem:
     :class:`~trading_bot.application.orchestrator.Orchestrator` already loaded with
     every runner (and, for a live Kraken run, the fill streamer), and the runner
     lists used to build the final report. :func:`run_app` runs the orchestrator and
-    reports; the ``run --serve`` path instead serves a dashboard over the **same**
-    ``engine`` while the orchestrator runs, so the dashboard observes the live run.
+    reports.
 
     Attributes
     ----------
@@ -760,10 +759,9 @@ async def prepare_system(
     any), **reconciles** to the broker before the first order, rejects commingled
     instruments, builds the runners, and loads them — plus the live fill streamer
     for a real-money live Kraken run — into a fresh
-    :class:`~trading_bot.application.orchestrator.Orchestrator`. Shared by
-    :func:`run_app` (run + report) and the ``run --serve`` path (serve the
-    dashboard over the same engine while the orchestrator runs). See
-    :func:`run_app` for the parameter meanings.
+    :class:`~trading_bot.application.orchestrator.Orchestrator`. Used by
+    :func:`run_app` (run + report). See :func:`run_app` for the parameter
+    meanings.
     """
     engine = build_engine(config, db_path=config.storage.db_path)
     # Recover idempotency state across a restart: seed the router's dedup map from

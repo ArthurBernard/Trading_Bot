@@ -6,6 +6,25 @@ rejected approaches as tombstones.
 
 ---
 
+### 2026-07-10 One dashboard code path: retire the legacy single-engine UI (PR #172)  [accepted]
+- **Choice**: delete `create_app` (the read-only single-engine FastAPI) together
+  with `dashboard.html`/`app.js`/`style.css`, drop `run --serve` (+
+  `_run_and_serve`) so `run` is console-only — monitoring lives on
+  `start --serve` / `dashboard` / `serve` — and inline the small style subset
+  the standalone login page needs into `login.html`.
+- **Why**: two parallel dashboards (a nav-less legacy page vs the unified 5-tab
+  shell) shipped with drifted palettes and the same API routes returning
+  divergent payload shapes; that split was the top structural cause of the
+  "hard to find your way around" feedback the `strategy-capital` epic answers
+  (leaf 01). The unified app supersedes every legacy capability except watching
+  a one-shot `run`, a niche the daemon path covers better.
+- **Rejected alternatives**: rewiring `run --serve` onto `create_dashboard_app`
+  (it needs a `StrategySupervisor`; a one-shot run's bare `Engine` is not one,
+  and building a throwaway supervisor to watch a finite run would add a second
+  wiring path for no operator value); keeping `style.css` for the login page
+  alone (254 lines of dead theme for one card — the inlined subset is
+  self-contained and cannot drift silently).
+
 ### 2026-07-05 Clean Ctrl-C shutdown: the daemon owns its signals; SSE cancellation ends the stream  [accepted]
 - **Choice**: two independent fixes, both in the shutdown path uvicorn/starlette
   own by default. (1) `_run_daemon`'s `--serve` branch overrides the built

@@ -783,7 +783,7 @@ def test_fill_streamer_built_for_live_kraken(monkeypatch: pytest.MonkeyPatch) ->
     assert isinstance(streamer, LiveFillStreamer)
 
 
-# --- prepare_system + live-dashboard monitoring (run --serve) -------------- #
+# --- prepare_system ---------------------------------------------------------- #
 
 
 async def test_prepare_system_builds_engine_and_loaded_orchestrator() -> None:
@@ -797,38 +797,3 @@ async def test_prepare_system_builds_engine_and_loaded_orchestrator() -> None:
     assert isinstance(system, PreparedSystem)
     assert len(system.runners) == 2
     assert len(system.orchestrator.runners) == 2  # the two strategy runners
-
-
-def test_dashboard_reflects_a_live_run_engine() -> None:
-    """The read-only dashboard, built on the run's engine, shows its positions.
-
-    This is exactly what ``run --serve`` does: `prepare_system`, run the
-    orchestrator, and serve the dashboard over the **same** engine. After a finite
-    offline run the dashboard's ``/api/positions`` reflects the engine's live
-    tracker — proving the dashboard monitors the running engine, not a fresh one.
-    """
-    import asyncio
-
-    from fastapi.testclient import TestClient
-
-    from trading_bot.application.run_app import prepare_system
-    from trading_bot.interfaces.api import create_app
-
-    pytest.importorskip("fynance")
-    config = _two_strategy_config()
-    client = _fake_client_for(config)
-
-    async def _build_and_run():  # noqa: ANN202
-        system = await prepare_system(config, dccd_client=client)
-        await system.orchestrator.run()
-        return system
-
-    system = asyncio.run(_build_and_run())
-
-    http = TestClient(create_app(system.engine))
-    resp = http.get("/api/positions")
-    assert resp.status_code == 200
-
-    instruments = {p["instrument"] for p in resp.json()}
-    # The run traded both instruments; the dashboard on the SAME engine sees them.
-    assert {"BTC/USD", "ETH/USD"} & instruments

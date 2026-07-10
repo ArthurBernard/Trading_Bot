@@ -99,8 +99,7 @@ _RUNBOOK = "doc/dev/09-go-live.md"
 
 #: The host values treated as loopback (local-only). Binding any *other* host makes
 #: the dashboard reachable off the box, so the serve paths that expose the control
-#: surface require a token there (and `run --serve`, which has no token, refuses a
-#: non-loopback host outright). Kept in sync with the config-layer guard
+#: surface require a token there. Kept in sync with the config-layer guard
 #: (:data:`trading_bot.application.config._LOOPBACK_HOSTS`).
 _LOOPBACK_HOSTS = ("127.0.0.1", "localhost", "::1")
 
@@ -290,17 +289,6 @@ def run(
         "--yes-i-understand",
         help="Explicit acknowledgement required to go --live.",
     ),
-    serve: bool = typer.Option(
-        False,
-        "--serve",
-        help="Also serve the read-only live dashboard over HTTP while the run "
-        "executes, so you can monitor positions / orders / PnL in real time "
-        "(Ctrl-C stops both). Read-only — the dashboard never places an order.",
-    ),
-    serve_host: str = typer.Option(
-        "127.0.0.1", "--serve-host", help="Dashboard bind interface (loopback)."
-    ),
-    serve_port: int = typer.Option(8000, "--serve-port", help="Dashboard TCP port."),
 ) -> None:
     """Run the declared system (or a quick demo) and print a short summary.
 
@@ -333,26 +321,6 @@ def run(
 
     mode = _resolve_mode(config, live=live, yes_i_understand=yes_i_understand)
     config = config.model_copy(update={"mode": mode})
-
-    # --serve: run the declared system AND serve the read-only dashboard over the
-    # SAME engine, so the run can be monitored live. Handles 0+ strategies.
-    if serve:
-        # I-5: `run --serve` binds the read-only engine view (GET-only — it cannot
-        # trade), but a non-loopback bind still leaks the live book (positions /
-        # orders / PnL / mode) to the whole network segment. Unlike `dashboard` /
-        # `start --serve`, this view has no token login, so refuse a non-loopback
-        # `--serve-host` outright (loopback-only by contract) — the same
-        # muscle-memory "serve is guarded" the other serve paths uphold.
-        if serve_host not in _LOOPBACK_HOSTS:
-            _console.print(
-                "[red]refusing to bind the read-only run dashboard to a non-loopback "
-                f"host[/red] {serve_host!r} — `run --serve` has no auth and would leak "
-                "the live book to the network; bind 127.0.0.1 and tunnel, or use "
-                "`trading-bot dashboard` (token login) for remote access."
-            )
-            raise typer.Exit(code=1)
-        _run_and_serve(config, host=serve_host, port=serve_port)
-        return
 
     # A config that declares strategies (with their own data + signal) runs the
     # whole declared system via the triptych entrypoint. A bare config (no
@@ -437,61 +405,6 @@ def _run_declared_system(config: AppConfig) -> None:
         s.instrument: s.position for s in report.strategies if s.position is not None
     }
     _console.print(_render.positions_table(positions))
-
-
-def _run_and_serve(config: AppConfig, *, host: str, port: int) -> None:
-    """Run the declared system **and** serve the live dashboard over one engine.
-
-    Builds the system once (:func:`~trading_bot.application.run_app.prepare_system`),
-    serves the read-only FastAPI dashboard
-    (:func:`~trading_bot.interfaces.api.create_app`) over the **same** engine under
-    uvicorn, and runs the orchestrator concurrently — so the dashboard reflects the
-    live run in real time (positions / orders / PnL via the engine bus + SSE).
-    uvicorn owns ``SIGINT``: Ctrl-C ends ``serve``, and the ``finally`` then drains
-    the orchestrator. The dashboard is **read-only** — it can never place an order.
-    A finite (paper) run completes while the dashboard keeps serving the final state
-    until Ctrl-C; a live run streams until stopped. Build/config failures surface as
-    a clean non-zero exit with no order placed.
-    """
-    import uvicorn
-
-    from trading_bot.application.run_app import prepare_system
-    from trading_bot.interfaces.api import create_app
-
-    async def _serve() -> None:
-        system = await prepare_system(config)
-        api = create_app(system.engine)
-        server = uvicorn.Server(
-            uvicorn.Config(
-                api,
-                host=host,
-                port=port,
-                log_level="warning",
-                timeout_graceful_shutdown=_SHUTDOWN_GRACE_SECONDS,
-            )
-        )
-        orch_task = asyncio.create_task(system.orchestrator.run())
-        _console.print(
-            f"[green]live dashboard[/green] (mode={config.mode}) on "
-            f"http://{host}:{port}  —  Ctrl-C to stop"
-        )
-        try:
-            await server.serve()  # blocks until SIGINT (uvicorn owns the signal)
-        finally:
-            system.orchestrator.stop_event.set()
-            if not orch_task.done():
-                with contextlib.suppress(Exception):
-                    await asyncio.wait_for(orch_task, timeout=5.0)
-            if not orch_task.done():
-                orch_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError, Exception):
-                await orch_task
-
-    try:
-        asyncio.run(_serve())
-    except Exception as exc:  # noqa: BLE001 - surface any build/config failure
-        _console.print(f"[red]refusing to run:[/red] {exc}")
-        raise typer.Exit(code=1) from exc
 
 
 def _resolve_mode(config: AppConfig, *, live: bool, yes_i_understand: bool) -> str:
