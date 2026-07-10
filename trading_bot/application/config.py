@@ -238,6 +238,25 @@ class StrategyConfig(BaseModel):
     lookback : int, optional
         Warmup: minimum number of bars before the signal is meaningful. Must be
         ``>= 0``. Default ``0`` (no warmup).
+    allocation : Decimal or None, optional
+        The capital (quote units) declared for this strategy. Single-instrument
+        strategies have no other money field (only ``reference_qty``, base
+        units), so ``None`` (default) simply means "no money base declared" —
+        today's behaviour, unchanged. Parsed exactly from a YAML scalar
+        (``str``/``int``) without touching ``float``. Must be **strictly
+        positive** when set.
+
+        Ledger semantics (a later leaf wires this): a set ``allocation`` seeds
+        the genesis ``FUNDING`` capital-event **once**; after that the config
+        value is inert and the ledger is the source of truth for capital going
+        forward.
+    capital_policy : {"fixed", "compound"}, optional
+        How this strategy's capital base evolves after the genesis funding:
+        ``"fixed"`` (default) keeps sizing against the declared ``allocation``;
+        ``"compound"`` reinvests realised PnL into the sizing base. Meaningless
+        while ``allocation`` is unset (nothing to reinvest against). A later
+        leaf wires the reinvestment behaviour; this leaf only declares + validates
+        the field.
     db_path : str or None, optional
         Per-strategy SQLite store path; overrides the global ``storage.db_path``
         for this strategy so its book/PnL are isolated. ``None`` → use the global
@@ -252,6 +271,8 @@ class StrategyConfig(BaseModel):
     signal: SignalRefConfig | None = None
     reference_qty: Decimal | None = None
     lookback: int = 0
+    allocation: Decimal | None = None
+    capital_policy: Literal["fixed", "compound"] = "fixed"
     db_path: str | None = None
 
     @field_validator("name", "symbol")
@@ -268,6 +289,14 @@ class StrategyConfig(BaseModel):
         """Reject a non-positive ``reference_qty`` (``None`` is allowed)."""
         if v is not None and v <= 0:
             raise ValueError(f"reference_qty must be positive, got {v}")
+        return v
+
+    @field_validator("allocation")
+    @classmethod
+    def _positive_allocation(cls, v: Decimal | None) -> Decimal | None:
+        """Reject a non-positive ``allocation`` (``None`` is allowed)."""
+        if v is not None and v <= 0:
+            raise ValueError(f"allocation must be positive, got {v}")
         return v
 
     @field_validator("lookback")
@@ -323,6 +352,28 @@ class PortfolioStrategyConfig(BaseModel):
         :class:`~trading_bot.application.portfolio.PortfolioStrategy` for a
         signal/runner to honour. The engine does **not** enforce or re-normalise
         against it. Must be positive when set. ``None`` (default) means uncapped.
+    allocation : Decimal or None, optional
+        The declared capital (quote units) for this portfolio. Parsed exactly
+        from a YAML scalar (``str``/``int``) without touching ``float``. Must be
+        **strictly positive** when set.
+
+        Precedence with ``capital``: ``capital`` **stays required** and keeps
+        its legacy meaning as the sizing base a signal's weight vector is a
+        fraction of. When ``allocation`` is set, it **supersedes** ``capital``
+        as the genesis/capital base; when ``allocation`` is unset (``None``,
+        the default), the genesis amount is ``capital`` — so every existing
+        manifest keeps working unchanged.
+
+        Ledger semantics (a later leaf wires this): a set ``allocation`` seeds
+        the genesis ``FUNDING`` capital-event **once**; after that the config
+        value is inert and the ledger is the source of truth for capital going
+        forward.
+    capital_policy : {"fixed", "compound"}, optional
+        How this portfolio's capital base evolves after the genesis funding:
+        ``"fixed"`` (default) keeps sizing against the genesis amount;
+        ``"compound"`` reinvests realised PnL into the sizing base. A later
+        leaf wires the reinvestment behaviour; this leaf only declares +
+        validates the field.
     venue : str, optional
         The venue key the universe's bars are stored under / rendered for (e.g.
         ``"binance"``). Defaults to ``"binance"``. Must be non-empty.
@@ -357,6 +408,8 @@ class PortfolioStrategyConfig(BaseModel):
     capital: Decimal
     data: DataSourceConfig
     gross_cap: Decimal | None = None
+    allocation: Decimal | None = None
+    capital_policy: Literal["fixed", "compound"] = "fixed"
     venue: str = "binance"
     store_key_format: Literal["venue", "hyphen", "slash"] = "venue"
     db_path: str | None = None
@@ -415,6 +468,14 @@ class PortfolioStrategyConfig(BaseModel):
         """Reject a non-positive ``gross_cap`` (``None`` is allowed)."""
         if v is not None and v <= 0:
             raise ValueError(f"gross_cap must be positive, got {v}")
+        return v
+
+    @field_validator("allocation")
+    @classmethod
+    def _positive_allocation(cls, v: Decimal | None) -> Decimal | None:
+        """Reject a non-positive ``allocation`` (``None`` is allowed)."""
+        if v is not None and v <= 0:
+            raise ValueError(f"allocation must be positive, got {v}")
         return v
 
 

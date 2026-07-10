@@ -216,6 +216,127 @@ def test_non_positive_capital_rejected() -> None:
         _one_portfolio_config(capital="-5")
 
 
+def test_allocation_and_capital_policy_default_to_none_and_fixed() -> None:
+    """``allocation`` defaults to ``None``; ``capital_policy`` defaults to ``"fixed"``.
+
+    ``capital`` stays required and keeps its legacy meaning as the genesis
+    sizing base when ``allocation`` is unset — every existing manifest keeps
+    working unchanged.
+    """
+    cfg = _one_portfolio_config(capital="100000")
+    pf = cfg.portfolios[0]
+    assert pf.allocation is None
+    assert pf.capital_policy == "fixed"
+    assert pf.capital == Decimal("100000")
+
+
+def test_allocation_parses_exact_decimal_and_supersedes_capital_as_declared() -> None:
+    """A set ``allocation`` parses to an exact Decimal alongside a required ``capital``."""
+    cfg = AppConfig.model_validate(
+        {
+            "portfolios": [
+                {
+                    "name": "p",
+                    "universe": ["BTC/USDT"],
+                    "signal": {"ref": _FAKE_SIGNAL},
+                    "capital": "100000",
+                    "data": {"exchange": "binance", "span": 86400},
+                    "allocation": "100",
+                    "capital_policy": "compound",
+                }
+            ]
+        }
+    )
+    pf = cfg.portfolios[0]
+    assert pf.allocation == Decimal("100")
+    assert isinstance(pf.allocation, Decimal)
+    assert pf.capital == Decimal("100000")  # legacy field is untouched
+    assert pf.capital_policy == "compound"
+
+
+def test_non_positive_allocation_rejected() -> None:
+    """A zero / negative ``allocation`` is rejected (``capital`` unaffected)."""
+    with pytest.raises(ValidationError, match="allocation must be positive"):
+        AppConfig.model_validate(
+            {
+                "portfolios": [
+                    {
+                        "name": "p",
+                        "universe": ["BTC/USDT"],
+                        "signal": {"ref": _FAKE_SIGNAL},
+                        "capital": "1000",
+                        "data": {"exchange": "binance", "span": 86400},
+                        "allocation": "0",
+                    }
+                ]
+            }
+        )
+    with pytest.raises(ValidationError, match="allocation must be positive"):
+        AppConfig.model_validate(
+            {
+                "portfolios": [
+                    {
+                        "name": "p",
+                        "universe": ["BTC/USDT"],
+                        "signal": {"ref": _FAKE_SIGNAL},
+                        "capital": "1000",
+                        "data": {"exchange": "binance", "span": 86400},
+                        "allocation": "-5",
+                    }
+                ]
+            }
+        )
+
+
+def test_unknown_capital_policy_rejected() -> None:
+    """A ``capital_policy`` outside {fixed, compound} is a validation error."""
+    with pytest.raises(ValidationError):
+        AppConfig.model_validate(
+            {
+                "portfolios": [
+                    {
+                        "name": "p",
+                        "universe": ["BTC/USDT"],
+                        "signal": {"ref": _FAKE_SIGNAL},
+                        "capital": "1000",
+                        "data": {"exchange": "binance", "span": 86400},
+                        "capital_policy": "banana",
+                    }
+                ]
+            }
+        )
+
+
+def test_allocation_and_capital_policy_round_trip_through_yaml(
+    tmp_path,
+) -> None:  # noqa: ANN001
+    """A portfolio's ``allocation``/``capital_policy`` survive a YAML round-trip
+    as an exact ``Decimal`` / literal string, alongside the legacy ``capital``."""
+    cfg = AppConfig.model_validate(
+        {
+            "portfolios": [
+                {
+                    "name": "p",
+                    "universe": ["BTC/USDT"],
+                    "signal": {"ref": _FAKE_SIGNAL},
+                    "capital": "100000",
+                    "data": {"exchange": "binance", "span": 86400},
+                    "allocation": "1234.56",
+                    "capital_policy": "compound",
+                }
+            ]
+        }
+    )
+    path = tmp_path / "cfg.yaml"
+    cfg.to_yaml(path)
+    reloaded = AppConfig.from_yaml(path)
+    pf = reloaded.portfolios[0]
+    assert pf.allocation == Decimal("1234.56")
+    assert isinstance(pf.allocation, Decimal)
+    assert pf.capital_policy == "compound"
+    assert pf.capital == Decimal("100000")
+
+
 def test_non_positive_gross_cap_rejected() -> None:
     """A non-positive gross_cap is rejected (None is allowed)."""
     with pytest.raises(ValidationError, match="gross_cap must be positive"):
