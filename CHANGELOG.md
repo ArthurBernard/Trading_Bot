@@ -12,6 +12,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+### Deprecated
+
+### Removed
+
+## [0.11.1] - 2026-07-10
+
+### Fixed
+
 - **The genesis funding event carries the real funding time.** `ensure_genesis`
   stamped the ledger's genesis at the `ts=0` sentinel ("sorts before every
   fill"), which the capital block's ledger trail rendered as **1970-01-01**.
@@ -29,10 +37,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   window never matched a single paper fill. `build_engine` now injects
   `time.time()`-based epoch-ms into the engine's PaperBroker; the deterministic
   default stays for direct/test construction. (#182)
-
-### Deprecated
-
-### Removed
 
 ## [0.11.0] - 2026-07-10
 
