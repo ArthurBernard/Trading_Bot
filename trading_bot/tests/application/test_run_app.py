@@ -900,6 +900,9 @@ def test_genesis_v0_anchors_at_allocation_else_starting_capital(tmp_path) -> Non
 
 def test_build_portfolio_runners_seeds_portfolio_genesis(tmp_path) -> None:  # noqa: ANN001
     """A portfolio always seeds its genesis (``allocation`` else required ``capital``)."""
+    # Building a portfolio runner wires its dccd bars feed — skip without dccd
+    # (the E5+ data-feed convention; unit CI has no dccd install).
+    pytest.importorskip("dccd")
     from trading_bot.application.config import (
         DataSourceConfig,
         PortfolioStrategyConfig,
