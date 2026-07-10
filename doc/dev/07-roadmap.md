@@ -45,48 +45,77 @@ hygiene (`D-6`/`D-11`/`D-12`/`D-13`/`A-12`), tooling/CI/packaging parity
 removal (`T-4`/`T-12`/`I-12`/`A-11`/`G-14`) (see `CHANGELOG.md`). **The audit is
 fully remediated** — only pure Info observations remain in `doc/dev/audit/`.
 
-## Known issues / follow-ups
+## Road to v1.0.0
 
-- [ ] **Live funds gate (strategy-capital deferral — lands WITH real-key
-  enablement).** Live-mode capital ops currently return 409. The gate is two
-  layers: supervisor-level admission on deposit (Σ live allocations on a venue ≤
-  real venue balance) + an **async** available-funds pre-check in
-  `OrderRouter._do_submit` before `RiskManager.check` (a sync `funds_provider`
-  inside the risk manager cannot await `broker.balances()`). Paper/testnet stay
-  unconstrained by design.
+**v1.0.0 means: the engine trades real money safely, and the public contract
+(YAML config schema, CLI, HTTP API) freezes.** The engine is feature-complete
+(`06-status.md`); what separates 0.11.x from 1.0 is the live bridge, its safety
+companions, operational readiness, and one strategy decision. In dependency
+order — none started yet, each is a `/pick-task` candidate:
+
+0. **Decision first — the first live strategy** (maintainer choice, gates the
+   scope of everything below):
+   - **long-only / spot** → shortest path: the existing Kraken/Binance spot
+     adapters suffice; the futures adapter moves post-1.0;
+   - **LS1 (long/short)** → requires the **Binance USDT-M futures adapter**
+     (testnet `testnet.binancefuture.com` for a faithful live-test *and*
+     mainnet for the real book — a full epic; the spot testnet cannot short, a
+     spot "live test" of LS1 would silently drop every short leg).
+   Kraken has no testnet either way: real-key validation happens with **small
+   real sums + tight risk limits**.
+
+1. [ ] **Real-key live enablement — THE gate.** Validate with a real key what
+   the offline suite cannot prove (`09-go-live.md`, "Proven vs pending"):
+   **venue-level order idempotency** (the venue honouring the client-order-id,
+   closing the crash-gap double-submit — the one open money risk), a **real
+   cancel** (the kill-switch path against the live API), and real network-edge
+   behaviour of **ambiguous submits** (timeout → unknown outcome). Private
+   reads are already validated read-only on mainnet, both venues. Then flip
+   `live_enabled`.
+
+2. [ ] **Live funds gate** (strategy-capital deferral — lands WITH #1; live
+   capital ops currently return 409). Two layers: supervisor-level admission on
+   deposit (Σ live allocations on a venue ≤ real venue balance) + an **async**
+   available-funds pre-check in `OrderRouter._do_submit` before
+   `RiskManager.check` (a sync `funds_provider` inside the risk manager cannot
+   await `broker.balances()`). Paper/testnet stay unconstrained by design.
+
+3. [ ] **Operational safety surface** (must exist before a live order, UI-side):
+   order-cancel endpoint (`OrderRouter.cancel()` exists, no route — the Orders
+   page can only observe); kill-switch trip/reset + status (`tripped`/reason +
+   risk-limit visibility incl. daily-loss usage); `last_error` on
+   `/api/strategies` (a stopped unit is indistinguishable from a crashed one).
+
+4. [ ] **Ops readiness** (not engine code): daemon under **systemd** (restart
+   policy + an alert when the process dies — today it is a `nohup` from a
+   terminal session); a **multi-week paper soak** on the real-data books
+   (running since 2026-07-10, capital 100/strategy — KPIs and equity curves as
+   evidence); **backup of the trading stores** (`var/dashboard/*.sqlite` — the
+   dccd data has its hourly rclone sync, the books have nothing).
+
+5. [ ] **API contract freeze** (last, before tagging): pagination beyond the
+   200-row tail + server timestamps on snapshot endpoints, then the public
+   contract is declared stable — 0.x-style breaking removals end at 1.0.
+
+## Not gating 1.0 (post-1.0 candidates)
+
+- [ ] **Binance USDT-M futures adapter** — *unless* chosen as the first live
+  path in the decision above (then it joins the road to 1.0). Testnet
+  (`testnet.binancefuture.com`, supports shorts) + mainnet; prerequisite for a
+  faithful testnet live-test of any long/short book. Until then, long/short
+  strategies stay **paper**; spot/long-only strategies can use the spot testnet
+  today.
 - [ ] **Dashboard follow-ups (strategy-capital deferrals).** Overview portfolio
   money band (capital deployed / total value / withdrawable) + allocation
   breakdown; `close-and-refund` teardown (flatten + drain the ledger — with its
   **own** cancel path, never overloading the kill-switch semantics) + a
   `remove_unit` flat-and-zero guard; state polish (error/stale pills, live red
   banner on the detail page, one unified SSE+poll refresh model).
-- [ ] **API quick wins.** Order-cancel endpoint (`OrderRouter.cancel()` exists,
-  no route — the Orders page can only observe); kill-switch trip/reset + status
-  (`tripped`/reason + risk-limit visibility incl. daily-loss usage);
-  `last_error` on `/api/strategies` (a stopped unit is indistinguishable from a
-  crashed one); pagination beyond the 200-row tail + server timestamps on
-  snapshot endpoints.
-
-- [ ] **Binance futures/margin testnet adapter (for a faithful long/short testnet
-  live-test).** The `BinanceBroker` is **spot** (`/api/v3`), and the Binance testnet
-  it reaches (`testnet.binance.vision`) is spot-only — it **cannot short**.
-  Long/short portfolio strategies (typically net-short) therefore can
-  only be *paper*-tested faithfully; a testnet "live test" would silently drop every
-  short leg. A USDT-M **futures** testnet adapter (`testnet.binancefuture.com`, which
-  supports shorts) is the prerequisite for a faithful testnet live-test of a
-  long/short book. Until then, long/short strategies stay **paper**; spot-only or
-  long-only strategies can use the spot testnet today.
 
 > **Live fill streaming — done.** The private `KrakenPrivateWS` is wired into the run
 > loop via `LiveFillStreamer` (real-money live Kraken only), reconcile fires on every
 > WS (re)connect, and fills are de-duplicated by id. Validated **read-only** against
 > real Kraken (no order sent). See `03-decisions.md`.
-
-## Open / deferred (maintainer decisions)
-
-- [ ] **Real-key live enablement.** Validate Kraken private endpoints + venue-level
-  order idempotency against a **real-key sandbox**, then flip `live_enabled` — the one
-  remaining prerequisite before real-money trading. See `doc/dev/09-go-live.md`.
 
 > **Project name — decided:** kept as `trading_bot` (with `dccd` / `fynance`). The
 > deferred "final name" decision is **closed**; no rename. See `03-decisions.md`.
