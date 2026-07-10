@@ -8,6 +8,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Capital ledger storage.** `SqliteStore` gains the append-only
+  `capital_events` table (composite PK `(event_id, strategy, mode)` +
+  `INSERT OR IGNORE` — the fills idempotency discipline; money as
+  `str(Decimal)`; `mode`/`venue` context tags) with `record_capital_event()` /
+  `capital_events()` and a presence-probing `_migrate_capital_events`, so an
+  existing store upgrades in place. Dormant until the capital service lands
+  (strategy-capital leaf 03). (#174)
 - **Domain capital primitives.** New pure `domain/capital.py`: `CapitalEvent`
   (immutable money movement — `FUNDING`/`DEPOSIT`/`WITHDRAWAL`, strictly-positive
   Decimal amount with the sign in the type, mirroring `Fill`'s discipline) plus

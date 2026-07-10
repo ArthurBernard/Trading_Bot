@@ -71,7 +71,7 @@ file-disjoint until they join at 08.
 
 - [x] 01 retire-legacy-dashboard — chore/retire-legacy-dashboard — medium
 - [x] 02 domain-capital-event — feat/domain-capital-event — medium
-- [ ] 03 storage-capital-events — feat/storage-capital-events — medium
+- [x] 03 storage-capital-events — feat/storage-capital-events — medium
 - [ ] 04 config-allocation-policy — feat/config-allocation-policy — low
 - [ ] 05 strategy-detail-page — feat/strategy-detail-page — high
 - [ ] 06 capital-service-sizing — feat/capital-service-sizing — high
