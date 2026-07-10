@@ -8,6 +8,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Per-strategy `allocation` + `capital_policy` config fields.** Both
+  `StrategyConfig` and `PortfolioStrategyConfig` gain an optional, strictly
+  positive `allocation` (the declared capital base — single-instrument
+  strategies had no money field at all) and a
+  `capital_policy: "fixed" | "compound"` (default `fixed`). `allocation`
+  supersedes a portfolio's `capital` when set; unset = exactly today's
+  behaviour, every existing manifest validates unchanged. Inert until the
+  capital service wires them (strategy-capital leaf 04). (#175)
 - **Capital ledger storage.** `SqliteStore` gains the append-only
   `capital_events` table (composite PK `(event_id, strategy, mode)` +
   `INSERT OR IGNORE` — the fills idempotency discipline; money as
