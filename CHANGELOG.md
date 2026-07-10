@@ -8,6 +8,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Domain capital primitives.** New pure `domain/capital.py`: `CapitalEvent`
+  (immutable money movement — `FUNDING`/`DEPOSIT`/`WITHDRAWAL`, strictly-positive
+  Decimal amount with the sign in the type, mirroring `Fill`'s discipline) plus
+  the folds `contributed_capital(events)` and `value_series(fills, events)`
+  (both streams interleaved by `ts`, event-before-fill on ties;
+  `value = contributed + realised`). Reconciles point-for-point with
+  `pnl_series.equity_series` when the only event is a genesis funding — verified
+  exact over 477 real paper fills (strategy-capital leaf 02). (#173)
 - **Dashboard shows WHEN things happened.** `/api/strategies` rows carry
   `last_eval_ts` (wall-clock of the last tick attempt) and `last_asof_ts` (as-of
   of the last completed evaluation); the Strategies table gains a **Last eval**
