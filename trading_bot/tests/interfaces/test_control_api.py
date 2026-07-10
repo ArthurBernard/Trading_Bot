@@ -140,10 +140,21 @@ def test_control_wrapper_serves_the_unified_dashboard() -> None:
     assert "Overview" in html and "Strategies" in html and "Orders" in html
 
 
-def test_control_wrapper_strategies_page_has_the_control_surface() -> None:
-    """The Strategies page carries the control table + the deliberate go-live modal."""
+def test_control_wrapper_strategies_page_is_the_linked_roster() -> None:
+    """The Strategies page is the linked roster; its rows deep-link to detail pages."""
     html = _client().get("/strategies").text
     assert 'id="strategies-body"' in html  # the table the page fills
+    assert 'href="/strategies/' in html  # rows link to the per-strategy detail page
+
+
+def test_control_wrapper_detail_page_has_the_control_surface() -> None:
+    """The per-strategy detail page carries the control surface + go-live modal.
+
+    The mode <select> + typed go-live confirmation moved off the roster onto the
+    per-strategy detail page (`/strategies/{name}`); the wrapper serves it too.
+    """
+    html = _client().get("/strategies/btc-ma").text
+    assert 'id="detail-header"' in html  # the header + control block
     assert 'id="live-modal"' in html  # the deliberate go-live confirmation
     assert "I UNDERSTAND" in html  # the typed-confirmation phrase
 

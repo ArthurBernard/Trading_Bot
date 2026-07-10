@@ -2,8 +2,9 @@
 
 This package ships the **static assets** of the dashboard: the Jinja2
 ``templates/`` (``base.html`` — the shared shell — plus one template per tab:
-``overview.html``, ``strategies.html``, ``orders.html``, ``pnl.html``,
-``logs.html``, and the standalone ``login.html``) and ``static/`` (the
+``overview.html``, ``strategies.html``, ``orders.html``, ``logs.html``, the
+per-strategy ``strategy_detail.html`` and the ``strategies_new.html`` deploy
+form, and the standalone ``login.html``) and ``static/`` (the
 dependency-free ``format.js``, fonts, logo/favicon, and the vendored uPlot
 chart assets). It holds **no Python logic** — the
 :func:`~trading_bot.interfaces.api.app.create_dashboard_app` factory mounts

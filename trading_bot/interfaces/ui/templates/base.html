@@ -118,6 +118,10 @@
     .num { text-align:right; font-family:var(--font-mono); }
     .empty td { color:var(--muted); text-align:center; padding:1rem; }
     .side-buy { color:var(--ok); } .side-sell { color:var(--err); }
+    /* Strategy-name -> detail-page link, shared across the roster, Overview and
+       Orders name cells so every place a strategy is named is deep-linkable. */
+    a.strat-link { color:var(--accent); text-decoration:none; }
+    a.strat-link:hover { text-decoration:underline; }
     /* Exchange group-header row in the strategies table. */
     tr.group td { background:var(--accent-soft);
             border-bottom:1px solid var(--border); padding:.4rem .6rem; }
@@ -254,7 +258,6 @@
       ('/', 'Overview'),
       ('/strategies', 'Strategies'),
       ('/orders', 'Orders'),
-      ('/pnl', 'PnL'),
       ('/logs', 'Logs'),
     ] %}
     {% for href, text in tabs %}
