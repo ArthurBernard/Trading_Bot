@@ -75,7 +75,7 @@ file-disjoint until they join at 08.
 - [x] 04 config-allocation-policy — feat/config-allocation-policy — low
 - [x] 05 strategy-detail-page — feat/strategy-detail-page — high
 - [x] 06 capital-service-sizing — feat/capital-service-sizing — high
-- [ ] 07 capital-control-plane — feat/capital-control-plane — high
+- [x] 07 capital-control-plane — feat/capital-control-plane — high
 - [ ] 08 ui-capital-block — feat/ui-capital-block — medium
 
 ## Dependencies

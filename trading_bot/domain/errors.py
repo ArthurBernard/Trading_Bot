@@ -34,6 +34,8 @@ __all__ = [
     "SignalError",
     "ConfigError",
     "LiveTradingNotEnabled",
+    "WithdrawalTooLarge",
+    "LiveCapitalOpsDeferred",
 ]
 
 
@@ -388,6 +390,68 @@ class LiveTradingNotEnabled(TradingBotError):
 
     def __init__(self, msg: str | None = None) -> None:
         super().__init__(msg if msg is not None else self._DEFAULT)
+
+
+class WithdrawalTooLarge(TradingBotError):
+    """A withdrawal exceeds the strategy's currently withdrawable capital.
+
+    Raised by the control plane when an operator asks to withdraw more than a
+    unit can free right now: ``withdrawable = max(0, total_value − committed −
+    reserved)``, where ``committed`` is the capital marked into open positions
+    and ``reserved`` is the capital tied up in working (non-terminal) orders.
+    The exact ``withdrawable`` figure is carried so the caller (the API) can
+    return it to the operator (mapped to HTTP 422). No capital is moved.
+
+    Parameters
+    ----------
+    strategy : str
+        The unit the withdrawal targeted.
+    requested : Decimal
+        The amount that was asked to be withdrawn (quote units).
+    withdrawable : Decimal
+        The amount that is actually withdrawable right now (quote units).
+
+    """
+
+    def __init__(
+        self, strategy: str, requested: Decimal, withdrawable: Decimal
+    ) -> None:
+        self.strategy = strategy
+        self.requested = requested
+        self.withdrawable = withdrawable
+        super().__init__(
+            f"cannot withdraw {requested} from {strategy!r}: only {withdrawable} "
+            "is withdrawable (total value minus capital committed to open "
+            "positions and reserved by working orders). No capital moved."
+        )
+
+
+class LiveCapitalOpsDeferred(TradingBotError):
+    """A deposit / withdrawal was attempted on a live (real-money) unit.
+
+    Paper and testnet capital ops are unconstrained by design; live capital
+    movements are **deferred to real-key enablement** — they must reconcile
+    against the venue's real balances, out of scope until real keys are wired.
+    Refused distinctly so the control API can map it to HTTP 409 (rather than
+    silently allowing an unchecked real-money movement). No capital is moved.
+
+    Parameters
+    ----------
+    strategy : str
+        The live unit the op targeted.
+    op : str
+        The operation that was refused (``"deposit"`` / ``"withdraw"``).
+
+    """
+
+    def __init__(self, strategy: str, op: str) -> None:
+        self.strategy = strategy
+        self.op = op
+        super().__init__(
+            f"cannot {op} {strategy!r} in live mode: live capital ops land with "
+            "real-key enablement (paper / testnet are unconstrained). No capital "
+            "moved."
+        )
 
 
 class NoCapability(TradingBotError):
