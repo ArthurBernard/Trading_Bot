@@ -45,6 +45,13 @@ hygiene (`D-6`/`D-11`/`D-12`/`D-13`/`A-12`), tooling/CI/packaging parity
 removal (`T-4`/`T-12`/`I-12`/`A-11`/`G-14`) (see `CHANGELOG.md`). **The audit is
 fully remediated** — only pure Info observations remain in `doc/dev/audit/`.
 
+## Open epics
+
+- [ ] **Per-strategy capital & dashboard IA reorg** (`strategy-capital`): append-only
+  capital ledger per strategy (fund/refund/cashout, fixed|compound policy,
+  capital/PnL/value split) + IA reorg (retire the legacy dashboard, per-strategy
+  detail page). Plan: `doc/dev/plans/strategy-capital/`.
+
 ## Known issues / follow-ups
 
 - [ ] **Binance futures/margin testnet adapter (for a faithful long/short testnet
