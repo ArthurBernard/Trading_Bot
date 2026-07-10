@@ -57,6 +57,7 @@ exactly as dccd reported them.
 from __future__ import annotations
 
 import logging
+import time
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from typing import TYPE_CHECKING
 
@@ -93,6 +94,15 @@ class PortfolioFeed:
 
     The dccd coupling is **injectable**: pass a ``client`` (a fake in offline
     tests, the real ``dccd.Client`` live) and nothing here imports dccd.
+
+    :meth:`latest` re-reads every coin's **full** history on every call — the
+    right cost for a one-shot snapshot, wasteful for a scheduler-driven daemon
+    calling it every tick when a daily strategy has at most one new common date
+    per day. :meth:`tail_asof_ms` is the cheap escape hatch: it probes only the
+    last few bar-widths per coin (not to be confused with the inner-join
+    freshness gate above, which is about *which dates* qualify — this one is
+    about *whether it is worth reading at all*) and is what a runner's own
+    idle-tick gate consults before paying for :meth:`latest`.
 
     Parameters
     ----------
@@ -167,6 +177,8 @@ class PortfolioFeed:
         self._exchange = exchange
         self._span = span
         self._data_type = data_type
+        self._start_ns = start_ns
+        self._end_ns = end_ns
 
         if client is None:
             client = _make_client(data_path)
@@ -211,6 +223,22 @@ class PortfolioFeed:
         """
         return {sym: feed.latest() for sym, feed in self._feeds.items()}
 
+    @staticmethod
+    def _intersection(frames: Mapping[Symbol, pl.DataFrame]) -> list[int]:
+        """The sorted intersection of every coin's bar timestamps — no logging.
+
+        The pure inner-join computation behind :meth:`_common_dates` (which adds
+        the lagging-coin diagnostics on top). Factored out so the freshness-gate
+        tail probe (:meth:`tail_asof_ms`) can reuse the same intersection logic
+        on a small tail slice **without** emitting a "lags the universe" warning
+        on every idle tick — those diagnostics are only meaningful against a
+        *full* read (:meth:`_common_dates`'s callers), not a narrow probe window
+        where a coin trailing by one collection cycle is expected and harmless.
+        """
+        date_sets = {sym: set(f["time"].to_list()) for sym, f in frames.items()}
+        common: set[int] = set.intersection(*date_sets.values()) if date_sets else set()
+        return sorted(common)
+
     def _common_dates(self, frames: Mapping[Symbol, pl.DataFrame]) -> list[int]:
         """The sorted intersection of every coin's bar timestamps (the gate).
 
@@ -220,11 +248,11 @@ class PortfolioFeed:
         from the result, so the cross-section is never computed on a partial or
         stale universe.
         """
-        date_sets = {sym: set(f["time"].to_list()) for sym, f in frames.items()}
-        common: set[int] = set.intersection(*date_sets.values()) if date_sets else set()
+        common = self._intersection(frames)
 
         # Freshness diagnostics: a coin whose newest bar is behind the universe
         # maximum is lagging — log it (the day it lacks is simply not emitted).
+        date_sets = {sym: set(f["time"].to_list()) for sym, f in frames.items()}
         maxima = {
             sym: (max(dates) if dates else None) for sym, dates in date_sets.items()
         }
@@ -248,7 +276,7 @@ class PortfolioFeed:
                         universe_max,
                     )
 
-        return sorted(common)
+        return common
 
     def _aligned(
         self, frames: Mapping[Symbol, pl.DataFrame]
@@ -302,6 +330,64 @@ class PortfolioFeed:
         universe), so a caller can skip rather than rebalance on nothing.
         """
         dates = self._common_dates(self._read_all())
+        if not dates:
+            return None
+        return dates[-1] // 1_000_000
+
+    def tail_asof_ms(
+        self, *, since_ms: int | None = None, spans: int = 3
+    ) -> int | None:
+        """Cheaply probe the latest **common** date via a short per-coin tail read.
+
+        The portfolio analogue of :meth:`~trading_bot.application.data_feed
+        .DccdFeed.tail_asof_ms`: reads only a short window (``spans``
+        bar-widths *before* the anchor) per coin (through each coin's own
+        :class:`~trading_bot.application.data_feed.DccdFeed`,
+        :meth:`~trading_bot.application.data_feed.DccdFeed.tail`) instead of
+        :meth:`latest`'s full ``_read_all`` + alignment, then applies the same
+        inner-join intersection (:meth:`_intersection`, **quietly** — no
+        lagging-coin warnings on a narrow probe window) to that tail slice. Used
+        by :class:`~trading_bot.application.portfolio_runner.PortfolioRunner`'s
+        idle-tick freshness gate to check "is there a new common date?" without
+        paying for the full per-coin history read.
+
+        The anchor is deliberately the **caller's own last-known as-of**
+        (``since_ms``), never wall-clock time — see
+        :meth:`~trading_bot.application.data_feed.DccdFeed.tail_asof_ms`'s
+        docstring for why: anchoring on wall-clock would make the probe come
+        back empty (and permanently defeat the gate) whenever the store lags
+        real time by more than a few bar-widths.
+
+        This method makes **no correctness promise on its own** — it is purely
+        an optimisation probe. A read error from any coin's tail propagates; the
+        caller is responsible for catching it and falling back to :meth:`latest`.
+
+        Parameters
+        ----------
+        since_ms : int or None, optional
+            Anchor the tail window just before this timestamp (**milliseconds**
+            since the epoch) — typically the caller's last completed as-of.
+            ``None`` (default) anchors at the wall clock instead — a "what's
+            fresh right now" standalone probe with no prior baseline.
+        spans : int, optional
+            How many ``span``-widths *before* the anchor to start reading per
+            coin. Defaults to ``3``.
+
+        Returns
+        -------
+        int or None
+            The latest common date across the universe within the tail window,
+            in milliseconds, or ``None`` when the tail slice has no common date.
+
+        """
+        anchor_ns = time.time_ns() if since_ms is None else since_ms * 1_000_000
+        tail_start_ns = anchor_ns - spans * self._span * 1_000_000_000
+        if self._start_ns is not None:
+            tail_start_ns = max(tail_start_ns, self._start_ns)
+        tail_frames = {
+            sym: feed.tail(start_ns=tail_start_ns) for sym, feed in self._feeds.items()
+        }
+        dates = self._intersection(tail_frames)
         if not dates:
             return None
         return dates[-1] // 1_000_000

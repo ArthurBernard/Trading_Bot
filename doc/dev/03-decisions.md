@@ -6,6 +6,273 @@ rejected approaches as tombstones.
 
 ---
 
+### 2026-07-10 Capital operations: ledger events under the unit lock; withdrawable subtracts committed + reserved (PR #178)  [accepted]
+- **Choice**: `deposit`/`withdraw`/`set_policy` are supervisor methods (the
+  `set_mode` idiom: `async with unit.lock`, manifest persisted on config
+  change), exposed as auth+read-only-guarded routes. A mutation is **one**
+  durable ledger write, idempotent by caller-assigned `op_id`; the runner picks
+  it up on its next tick through the lazy provider — no engine rebuild, no
+  second write to keep in sync. `withdrawable = max(0, total_value −
+  Σ|net_qty|×mark − Σ open-order reservations)` (|·| is conservative for a
+  short book — documented); a too-large withdrawal 422s with the exact figure
+  and moves nothing. Live-mode capital ops return **409** until real-key
+  enablement lands the funds gate. `set_policy` flips the shared config entry
+  in place — the provider closures read the policy off the config **at call
+  time**, which is what makes the flip hot and durable in one assignment.
+- **Why**: cash-only withdrawals can never force a liquidation or drive the
+  sizing base negative; refusing (422) with the exact withdrawable beats
+  silently clamping. Deferring live ops behind 409 is honest: a live funds
+  check cannot be validated before the real-key sandbox milestone, and
+  silently allowing unchecked live capital ops would fake safety.
+- **Rejected alternatives**: allowing live ops with a best-effort balance
+  check (unverifiable today); clamping an oversized withdrawal to the
+  available figure (surprising money movement); a `set-amount` absolute
+  endpoint (delta-on-read races two concurrent setters — deposit/withdraw
+  primitives are race-free under op-id idempotency).
+
+### 2026-07-10 Per-strategy capital: an append-only ledger, derived figures, policy-driven sizing (PR #177)  [accepted]
+- **Choice**: one new source of truth per strategy — the append-only
+  `capital_events` ledger (`FUNDING`/`DEPOSIT`/`WITHDRAWAL`, composite-PK
+  idempotency mirroring fills). The config `allocation` only **seeds** a
+  deterministic genesis event (`<strategy>:funding`), then goes inert. Every
+  money figure is derived, never stored: `C = Σdeposits − Σwithdrawals`
+  (contributed), `R` = realised PnL (fills, unchanged), `U` = best-effort MTM,
+  `total_value = C + R + U`. Sizing reads a **lazy `capital_provider` once per
+  tick**: `fixed → B = C`, `compound → B = max(0, C + R)` (realised only, never
+  unrealised). The KPI anchor `v0` = the genesis amount; KPI ratios stay on the
+  **fill-only** equity curve — the ledger-aware `value_series` is display-only.
+- **Why**: three unreconciled money notions coexisted (portfolio `capital` as a
+  static sizing constant, a global `starting_capital` KPI anchor shared by every
+  unit, unused PaperBroker balances), and none supported the requested
+  fund/refund/cashout, capital/PnL/value split, or reinvest-vs-cashout policy.
+  A mutable "capital" column was rejected up front: it destroys the audit
+  trail, makes `v0` ambiguous after a top-up, and cannot separate "money I put
+  in" from "money I made" — the ledger is the minimal *correct* core, a copy of
+  the proven fills discipline. The lazy provider (read once per tick) makes
+  money mutations hot with no engine rebuild and no crash window: the ledger
+  write is the only durable write; a crash after it simply takes effect on the
+  next tick. Compounding uses realised PnL only — compounding unrealised MTM
+  would resize the book on every price wiggle. KPI isolation is the hard
+  invariant: folding deposits into the ratio curve would let a top-up
+  masquerade as an instantaneous +100% return and poison Sharpe/Sortino/Calmar.
+- **Rejected alternatives**: mutable capital column (above); policy as a ledger
+  event (a magnitude-less event strains the `amount>0` invariant; the runner
+  only needs the *current* policy — a config field flipped like `set_mode`
+  suffices); compounding on `C+R+U` (noise-driven resizing); holding the unit
+  lock across a rebalance to serialize deposits (contradicts the A-3 design —
+  the single provider read per tick is the actual consistency guarantee);
+  auto profit-sweep events (dropped — `fixed` + manual withdraw covers the
+  cashout semantic with no scheduler machinery).
+
+### 2026-07-10 Dashboard IA: the strategy detail page is the per-strategy home (PR #176)  [accepted]
+- **Choice**: a parameterized, deep-linkable `GET /strategies/{name}` shell page
+  concentrates everything about one strategy (controls incl. go-live modal, the
+  equity chart + per-mode stats formerly on `/pnl`, its positions/orders/fills);
+  the `/pnl` tab is retired (303 → `/`), the Strategies page becomes a linked
+  roster, deployment moves to `/strategies/new`, and every strategy name across
+  the dashboard is a link. Nav: 5 tabs → 4.
+- **Why**: the strategy is the operator's mental unit, but its facts were
+  scattered across three tabs (PnL behind a dropdown re-pick, controls on the
+  roster, orders behind a manual filter) with names never clickable — the root
+  cause of the "hard to find your way around" feedback. The detail page is also
+  the *place* the upcoming capital block (allocation / PnL / total value +
+  fund/withdraw/policy controls) needs; without it the money story has no home.
+- **Rejected alternatives**: keeping 5 tabs and adding cross-links only (does
+  not give the capital block a surface; the 10-column roster cannot also hold a
+  chart + orders + controls); an expanding drawer on the roster row instead of a
+  page (no shareable URL, cramped, fights the `tbRefreshGuard` no-flicker
+  logic — kept as a possible narrow-viewport degradation later).
+
+### 2026-07-10 One dashboard code path: retire the legacy single-engine UI (PR #172)  [accepted]
+- **Choice**: delete `create_app` (the read-only single-engine FastAPI) together
+  with `dashboard.html`/`app.js`/`style.css`, drop `run --serve` (+
+  `_run_and_serve`) so `run` is console-only — monitoring lives on
+  `start --serve` / `dashboard` / `serve` — and inline the small style subset
+  the standalone login page needs into `login.html`.
+- **Why**: two parallel dashboards (a nav-less legacy page vs the unified 5-tab
+  shell) shipped with drifted palettes and the same API routes returning
+  divergent payload shapes; that split was the top structural cause of the
+  "hard to find your way around" feedback the `strategy-capital` epic answers
+  (leaf 01). The unified app supersedes every legacy capability except watching
+  a one-shot `run`, a niche the daemon path covers better.
+- **Rejected alternatives**: rewiring `run --serve` onto `create_dashboard_app`
+  (it needs a `StrategySupervisor`; a one-shot run's bare `Engine` is not one,
+  and building a throwaway supervisor to watch a finite run would add a second
+  wiring path for no operator value); keeping `style.css` for the login page
+  alone (254 lines of dead theme for one card — the inlined subset is
+  self-contained and cannot drift silently).
+
+### 2026-07-05 Clean Ctrl-C shutdown: the daemon owns its signals; SSE cancellation ends the stream  [accepted]
+- **Choice**: two independent fixes, both in the shutdown path uvicorn/starlette
+  own by default. (1) `_run_daemon`'s `--serve` branch overrides the built
+  `uvicorn.Server` instance's `capture_signals` with a no-op context manager
+  (there is no public `install_signal_handlers` config flag on uvicorn 0.49) and
+  installs its own `SIGINT`/`SIGTERM` handlers on the running loop around
+  `await server.serve()`: first signal sets `server.should_exit = True`
+  (graceful — uvicorn's own main loop polls this regardless of who sets it),
+  second sets `server.force_exit = True`; the handlers are removed once
+  `serve()` returns. (2) both `/api/events` SSE generators in
+  `interfaces/api/app.py` catch `asyncio.CancelledError` around their streaming
+  loop and end the generator cleanly instead of letting it propagate (the merged
+  generator also explicitly cancels any outstanding per-iteration getter task on
+  the way out); additionally, a `logging.Filter` on the `uvicorn.error` logger
+  drops uvicorn's "Exception in ASGI application" record specifically when the
+  underlying exception is a plain `asyncio.CancelledError` — necessary because
+  the noisy traceback is *not* raised by our own generator code: it originates
+  in Starlette's `StreamingResponse.__call__` (an `anyio` task group racing
+  "stream the body" against "listen for disconnect", the code path uvicorn 0.49
+  is stuck on since it declares ASGI `spec_version: "2.3"`, below the `2.4`
+  Starlette checks for its newer, single-await implementation), so no amount of
+  fixing our own generator's cancellation handling prevents uvicorn from logging
+  it.
+- **Why**: uvicorn 0.49's `Server.serve()` unconditionally wraps itself in
+  `capture_signals()`, which restores the pre-`serve()` signal disposition and
+  **re-raises** the captured signal with that (default) disposition right after
+  `serve()` returns — killing the process *before* `_run_daemon`'s own `finally`
+  (scheduler shutdown + `supervisor.shutdown()`) could run, so a paper store's
+  pending writes were never drained and units weren't stopped cleanly on Ctrl-C.
+  Separately, operators reading a multi-screen `CancelledError`/`anyio.WouldBlock`
+  traceback on every shutdown while a dashboard tab was open mistook a routine,
+  timeout-bounded force-cancel (`_SHUTDOWN_GRACE_SECONDS = 3`, kept as-is; its
+  own "Cancel N running task(s)..." log line stays — it *is* useful signal) for
+  a crash.
+- **Rejected alternatives**: passing `install_signal_handlers=False` to
+  `uvicorn.Config(...)` (the shape assumed going in) — that flag does not exist
+  in uvicorn 0.49's actual `Config`/`Server` API (confirmed against the
+  installed version; it raises `TypeError` at construction), so the
+  `capture_signals` override is the version-correct equivalent. Restructuring
+  `_install_hardening`'s two `@app.middleware("http")` handlers into raw ASGI
+  middleware (removing `BaseHTTPMiddleware`'s task/stream indirection entirely,
+  which independently reproduces the same traceback even with *no* custom
+  middleware registered, per direct testing against a bare FastAPI app) — would
+  also work and is more "correct" in spirit, but is a much larger, riskier
+  change for a shutdown-logging concern; the targeted logging filter achieves
+  the same operator-facing outcome (no ERROR-level traceback spam) without
+  touching request/response plumbing every endpoint relies on.
+
+### 2026-07-05 Daemon tick performance: idle-tick freshness gate + off-loop reload  [accepted]
+- **Choice**: `StrategyRunner.step_latest` / `PortfolioRunner.rebalance_latest`
+  track `last_asof_ms` (the as-of of the last completed evaluation) and
+  `last_eval_ms` (wall-clock of the last tick attempt, for a follow-up dashboard
+  "last checked at" surfacing). Each tick first probes cheaply — a new
+  `DccdFeed.tail`/`tail_asof_ms` (single-instrument) and
+  `PortfolioFeed.tail_asof_ms` (portfolio, reusing the same `DccdFeed.tail`
+  primitive) read only a small bounded window (`spans` bar-widths, anchored on
+  the runner's own `last_asof_ms` — **never wall-clock**, so a store that lags
+  real time never permanently defeats the gate) instead of the feed's full
+  `latest()`/`_read_all()`. If the probe is certain no new bar/common date
+  exists (a determinate result `<= last_asof_ms`), the tick returns
+  immediately — no full reload, no `signal_fn` call. Any doubt (no prior
+  baseline, the feed exposes no probe, an empty tail, or the probe raising)
+  falls through to the full path unconditionally: the gate is an optimisation
+  only, never a correctness dependency, and the full path's inner-join /
+  no-forward-fill / no-lookahead semantics are untouched. When the full path
+  does run (a new bar exists, or the very first tick), the heavy synchronous
+  read + alignment — and the tail probe itself — are offloaded via
+  `asyncio.to_thread`, so a real rebalance never stalls the event loop (the
+  dashboard's `/api/health` and every other concurrent request). The offload is
+  safe because each managed unit owns its own engine (feed/tracker/router are
+  never shared across units — `StrategySupervisor`), and the daemon's
+  APScheduler job runs with its default `max_instances=1` while `step_all`
+  awaits each unit sequentially, so the same unit's tick is never re-entered
+  concurrently.
+- **Why**: a daily-bar portfolio polled every 60s (`trading-bot start --serve
+  --interval 60`) has at most **one** new common date per **1440** ticks, but
+  every tick was calling `PortfolioFeed.latest()` (a full per-coin history read
+  + cross-section re-alignment) synchronously inside the event loop — 1439 of
+  1440 ticks paid a multi-second, multi-GB reload to conclude "nothing new"
+  (production symptom: 343% CPU sustained, 2.3 GB RSS, intermittent multi-second
+  dashboard freezes). Reading the call graph also surfaced a second bug:
+  `PortfolioRunner._asof_ms` preferred `PortfolioFeed.asof_ms()` when present,
+  which performs its *own* full `_read_all()` — a tick that had just loaded
+  `latest()` was silently re-reading the whole history a **second** time only
+  to derive a timestamp already computable from the frames in hand. Fixed by
+  deriving the as-of purely from the already-loaded frames
+  (`_derive_asof_ms`) — a pure, zero-I/O computation.
+- **Real-data verification (caveat worth recording)**: a synthetic dccd store
+  (3 coins × 1-minute bars × 60 days, ~260k rows, real `dccd.Client` reading
+  real parquet, `ResamplingDccdClient` 1m→1d) driven through a real
+  `StrategySupervisor` showed 10 consecutive idle `step_all()` ticks going from
+  10 full evaluations (`signal_fn` called 10×, ~234ms wall / ~1.18s CPU total)
+  to 1 full evaluation + 9 gated skips (`signal_fn` called 1×, ~98ms wall /
+  ~0.41s CPU total — roughly 2.4–2.9×), and a concurrent `/api/health` request
+  fired mid-rebalance went from **fully blocked** (0 requests could make any
+  progress at all during a full tick; a single overlapping request took 99.9%
+  of the tick's own duration) to responsive (24.3% of tick duration for one
+  overlapping request; a burst of 8 requests during a second full tick averaged
+  0.70ms, max 1.33ms). The improvement is real but **not "near-zero"** for a
+  gated tick as originally hoped: dccd's `ParquetStore.load()` decodes every
+  matching parquet file into memory unconditionally before applying the
+  `start_ns`/`end_ns` filter (no row-group/file-level pruning), so a bounded
+  tail probe pays the same file-decode cost as a full read on a single-year
+  store — the gate's saving comes from skipping the downstream resample +
+  cross-coin alignment + signal evaluation, not the raw parquet decode. On a
+  real multi-year store the fixed decode cost would still be paid per probe,
+  but the (typically dominant) resample/align cost drops from O(full history)
+  to O(few days), so the *relative* win should hold or improve as history
+  grows. A genuinely "near-zero" gated tick would need dccd-side lazy/scan
+  predicate pushdown — out of scope here, left as a future dccd-side
+  improvement.
+- **Rejected alternatives**: gating on wall-clock-anchored tail windows (`now -
+  N spans`) — a store lagging real time (a paused collector, a daemon restarted
+  after downtime) would make the probe come back empty forever and permanently
+  defeat the gate; anchoring on the runner's own `last_asof_ms` instead keeps
+  the probe proportional to how stale the *runner* is, not to wall-clock;
+  threading the offload through `interfaces/cli/main.py` — deliberately avoided
+  (another PR was working there); the offload lives entirely inside the
+  runners instead.
+
+### 2026-07-04 Display-only rounding, exact value on hover (PR #160)  [accepted]
+- **Choice**: a single dependency-free `static/format.js` (the `tbFmt` namespace)
+  owns every display transform — grouped/rounded money by quote currency
+  (`moneyCell`), trimmed quantities by base asset (`qtyCell`), adaptive-precision
+  prices (`priceCell`), max-drawdown as `%` (`pctCell`) and fixed-precision ratios
+  (`ratioCell`). Every `*Cell()` helper returns a `<span title="<exact raw> <unit>">`
+  fragment: the rounded text is what an operator reads, the exact string the API
+  sent is one hover away, and a mixed-quote aggregate row (`quote: null`) renders
+  with no suffix and `title="mixed quote currencies"` instead of a wrong single
+  label. `base.html`'s existing `fmtMoney`/`fmtNum` become thin wrappers over
+  `tbFmt` (back-compat only); every page's own rendering migrated to the `*Cell()`
+  helpers directly, deriving unit context client-side by splitting an
+  `instrument` string (`"BASE/QUOTE"`) or reading leaf 01's `quote`/`span`.
+- **Why**: the dashboard's raw, unrounded Decimal strings were unreadable
+  (`fmtMoney` passed them through verbatim, no thousands grouping, no currency),
+  but the non-negotiable invariant is that rounding must never touch
+  money-exactness — the API keeps serving exact Decimal strings, and no
+  formatted value is ever parsed back into a computation. A tooltip is the
+  cheapest way to keep the exact value one interaction away without cluttering
+  every cell, and a single namespace applied identically across all five unified
+  pages *and* the legacy single-engine dashboard avoids five slightly-different
+  ad hoc formatters drifting apart.
+- **Rejected alternatives**: embedding the currency directly in the number text
+  (e.g. `"$1,234.56"`) — crypto quote currencies (`USDT`, `USD`, …) are not valid
+  `Intl.NumberFormat` currency codes and a hardcoded `$` would lie for non-USD
+  pairs; a server-side rounding pass — would need a second "exact" field
+  round-tripped anyway to satisfy the tooltip invariant, for no real benefit over
+  formatting once, client-side, from the value already on the page.
+
+### 2026-07-04 Dashboard read-API: scheduler-agnostic health hook + server-tagged SSE (PR #157)  [accepted]
+- **Choice**: `create_dashboard_app` accepts an optional `schedule_info: Callable[[],
+  dict] | None` hook, stored on `app.state` and read by `/api/health` under a
+  try/except (a raising or absent hook degrades to `next_tick_ts`/`tick` = `null`,
+  never a 500). Only `_run_daemon` (the `--serve`/daemon path, which owns an
+  `apscheduler` job) injects it; the plain `dashboard` command passes nothing. The
+  merged `/api/events` SSE handler now tags every frame with the emitting unit's
+  `strategy` name and a server-computed `ts` (epoch ms) — both derived inside the
+  handler, not trusted from the client.
+- **Why**: the dashboard app (`create_dashboard_app`) is used by both `dashboard`
+  (no scheduler) and the daemon's `--serve` (an `apscheduler.AsyncIOScheduler`);
+  threading a scheduler dependency into the factory itself would make the plain
+  command carry dead scheduler wiring. A hook keeps the app scheduler-agnostic and
+  the daemon the single owner of "what the next tick is". Tagging SSE frames
+  server-side (not asking the client to guess `strategy` from context, and not
+  trusting a client-supplied timestamp) is what lets the Logs page (a later leaf)
+  attribute and order events correctly across a merged, multi-unit stream.
+- **Rejected alternatives**: passing the `AsyncIOScheduler`/job object itself into
+  `create_dashboard_app` — leaks an implementation detail (apscheduler) into the API
+  layer and couples it to a scheduler library the plain `dashboard` command has no
+  use for.
+
 ### 2026-07-02 Tooling/CI parity + format-the-tree (PR #152)  [accepted]
 - **Choice**: CI runs `ruff check` + `ruff format --check` + `mypy` + `interrogate`
   + pytest (actions SHA-pinned); pre-commit mirrors it; ruff pinned to a fixed

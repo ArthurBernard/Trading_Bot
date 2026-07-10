@@ -54,7 +54,7 @@ import signal
 import sys
 from collections.abc import Callable
 from decimal import Decimal
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import polars as pl
 import typer
@@ -99,8 +99,7 @@ _RUNBOOK = "doc/dev/09-go-live.md"
 
 #: The host values treated as loopback (local-only). Binding any *other* host makes
 #: the dashboard reachable off the box, so the serve paths that expose the control
-#: surface require a token there (and `run --serve`, which has no token, refuses a
-#: non-loopback host outright). Kept in sync with the config-layer guard
+#: surface require a token there. Kept in sync with the config-layer guard
 #: (:data:`trading_bot.application.config._LOOPBACK_HOSTS`).
 _LOOPBACK_HOSTS = ("127.0.0.1", "localhost", "::1")
 
@@ -290,17 +289,6 @@ def run(
         "--yes-i-understand",
         help="Explicit acknowledgement required to go --live.",
     ),
-    serve: bool = typer.Option(
-        False,
-        "--serve",
-        help="Also serve the read-only live dashboard over HTTP while the run "
-        "executes, so you can monitor positions / orders / PnL in real time "
-        "(Ctrl-C stops both). Read-only — the dashboard never places an order.",
-    ),
-    serve_host: str = typer.Option(
-        "127.0.0.1", "--serve-host", help="Dashboard bind interface (loopback)."
-    ),
-    serve_port: int = typer.Option(8000, "--serve-port", help="Dashboard TCP port."),
 ) -> None:
     """Run the declared system (or a quick demo) and print a short summary.
 
@@ -333,26 +321,6 @@ def run(
 
     mode = _resolve_mode(config, live=live, yes_i_understand=yes_i_understand)
     config = config.model_copy(update={"mode": mode})
-
-    # --serve: run the declared system AND serve the read-only dashboard over the
-    # SAME engine, so the run can be monitored live. Handles 0+ strategies.
-    if serve:
-        # I-5: `run --serve` binds the read-only engine view (GET-only — it cannot
-        # trade), but a non-loopback bind still leaks the live book (positions /
-        # orders / PnL / mode) to the whole network segment. Unlike `dashboard` /
-        # `start --serve`, this view has no token login, so refuse a non-loopback
-        # `--serve-host` outright (loopback-only by contract) — the same
-        # muscle-memory "serve is guarded" the other serve paths uphold.
-        if serve_host not in _LOOPBACK_HOSTS:
-            _console.print(
-                "[red]refusing to bind the read-only run dashboard to a non-loopback "
-                f"host[/red] {serve_host!r} — `run --serve` has no auth and would leak "
-                "the live book to the network; bind 127.0.0.1 and tunnel, or use "
-                "`trading-bot dashboard` (token login) for remote access."
-            )
-            raise typer.Exit(code=1)
-        _run_and_serve(config, host=serve_host, port=serve_port)
-        return
 
     # A config that declares strategies (with their own data + signal) runs the
     # whole declared system via the triptych entrypoint. A bare config (no
@@ -437,61 +405,6 @@ def _run_declared_system(config: AppConfig) -> None:
         s.instrument: s.position for s in report.strategies if s.position is not None
     }
     _console.print(_render.positions_table(positions))
-
-
-def _run_and_serve(config: AppConfig, *, host: str, port: int) -> None:
-    """Run the declared system **and** serve the live dashboard over one engine.
-
-    Builds the system once (:func:`~trading_bot.application.run_app.prepare_system`),
-    serves the read-only FastAPI dashboard
-    (:func:`~trading_bot.interfaces.api.create_app`) over the **same** engine under
-    uvicorn, and runs the orchestrator concurrently — so the dashboard reflects the
-    live run in real time (positions / orders / PnL via the engine bus + SSE).
-    uvicorn owns ``SIGINT``: Ctrl-C ends ``serve``, and the ``finally`` then drains
-    the orchestrator. The dashboard is **read-only** — it can never place an order.
-    A finite (paper) run completes while the dashboard keeps serving the final state
-    until Ctrl-C; a live run streams until stopped. Build/config failures surface as
-    a clean non-zero exit with no order placed.
-    """
-    import uvicorn
-
-    from trading_bot.application.run_app import prepare_system
-    from trading_bot.interfaces.api import create_app
-
-    async def _serve() -> None:
-        system = await prepare_system(config)
-        api = create_app(system.engine)
-        server = uvicorn.Server(
-            uvicorn.Config(
-                api,
-                host=host,
-                port=port,
-                log_level="warning",
-                timeout_graceful_shutdown=_SHUTDOWN_GRACE_SECONDS,
-            )
-        )
-        orch_task = asyncio.create_task(system.orchestrator.run())
-        _console.print(
-            f"[green]live dashboard[/green] (mode={config.mode}) on "
-            f"http://{host}:{port}  —  Ctrl-C to stop"
-        )
-        try:
-            await server.serve()  # blocks until SIGINT (uvicorn owns the signal)
-        finally:
-            system.orchestrator.stop_event.set()
-            if not orch_task.done():
-                with contextlib.suppress(Exception):
-                    await asyncio.wait_for(orch_task, timeout=5.0)
-            if not orch_task.done():
-                orch_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError, Exception):
-                await orch_task
-
-    try:
-        asyncio.run(_serve())
-    except Exception as exc:  # noqa: BLE001 - surface any build/config failure
-        _console.print(f"[red]refusing to run:[/red] {exc}")
-        raise typer.Exit(code=1) from exc
 
 
 def _resolve_mode(config: AppConfig, *, live: bool, yes_i_understand: bool) -> str:
@@ -770,11 +683,36 @@ async def _run_daemon(
     running units on an **interval** (or **cron**) via an ``apscheduler``
     ``AsyncIOScheduler``. When ``serve`` is set, the control dashboard
     (:func:`~trading_bot.interfaces.api.create_control_app`) is served over the same
-    supervisor on ``host:port`` (loopback by default — it can change what trades),
-    and **uvicorn owns the signal** (Ctrl-C ends serve, then the daemon tears down);
+    supervisor on ``host:port`` (loopback by default — it can change what trades);
     headless, the daemon installs its own ``SIGINT``/``SIGTERM`` handlers. Each step
     is idempotent over unchanged data, so a tick that finds nothing to do trades
-    nothing.
+    nothing. The scheduler's cadence (next run time + trigger description) is
+    wired into the served dashboard's ``/api/health`` via a ``schedule_info``
+    hook — the plain ``dashboard`` command has no scheduler, so its health always
+    reports ``next_tick_ts``/``tick`` as ``null``.
+
+    Signal ownership (``serve``) — **the daemon owns the signal, not uvicorn**
+    ---------------------------------------------------------------------------
+    uvicorn 0.49's ``Server.serve()`` unconditionally wraps its execution in a
+    ``capture_signals()`` context manager that installs its own ``SIGINT``/
+    ``SIGTERM`` handler for the duration of ``serve()`` and, in its ``finally``,
+    restores the pre-``serve()`` signal disposition and **re-raises the captured
+    signal** (``signal.raise_signal``) so an embedding app's own handler gets a
+    chance to react. With nothing installed beforehand, the restored disposition
+    is Python's default one, so the re-raised signal kills the process outright —
+    *before* this function's ``finally`` (scheduler + supervisor teardown) gets a
+    chance to run. There is no public config flag to opt out of this (the older
+    ``install_signal_handlers`` flag no longer exists), so the *instance's*
+    ``capture_signals`` is overridden with a no-op context manager, disabling
+    that capture/re-raise entirely; this function then installs its *own*
+    ``SIGINT``/``SIGTERM`` handlers on the running loop around
+    ``await server.serve()``: the first signal asks uvicorn to exit gracefully
+    (``server.should_exit = True`` — uvicorn's main loop polls this regardless of
+    who sets it), a second forces it (``server.force_exit = True``); the handlers
+    are removed in a ``finally`` once ``serve()`` returns. With uvicorn's own
+    signal capture disabled there is nothing left to re-raise, so this function's
+    outer ``finally`` (scheduler shutdown + ``supervisor.shutdown()``) always runs
+    to completion and the process exits normally.
     """
     from apscheduler.schedulers.asyncio import AsyncIOScheduler
     from apscheduler.triggers.cron import CronTrigger
@@ -801,13 +739,27 @@ async def _run_daemon(
         else IntervalTrigger(seconds=interval)
     )
     scheduler = AsyncIOScheduler()
-    scheduler.add_job(_tick, trigger)
+    job = scheduler.add_job(_tick, trigger)
     scheduler.start()
     _console.print(
         f"[green]daemon started[/green] (mode={config.mode}): "
         f"{len(supervisor.names())} strateg(ies), "
         f"tick={cron or f'every {interval:g}s'}"
     )
+
+    def _schedule_info() -> dict[str, Any]:
+        """The scheduler's cadence, for the dashboard's ``/api/health`` hook.
+
+        ``next_run_time`` is a tz-aware ``datetime`` (or ``None`` between ticks /
+        once exhausted); converted to epoch **ms** for JSON. ``tick`` is the same
+        human trigger description the startup banner above prints.
+        """
+        next_run = job.next_run_time
+        next_tick_ts = (
+            int(next_run.timestamp() * 1000) if next_run is not None else None
+        )
+        return {"next_tick_ts": next_tick_ts, "tick": cron or f"every {interval:g}s"}
+
     try:
         if serve:
             import uvicorn
@@ -824,8 +776,12 @@ async def _run_daemon(
             # The daemon's --serve dashboard is the single unified dashboard (the
             # same one `trading-bot dashboard` serves) — one code path, one set of
             # gates. The daemon owns the scheduler/lifecycle here, so no on_change
-            # manifest hook is wired (the daemon reads a static config).
-            api = create_dashboard_app(supervisor, auth_token=auth_token)
+            # manifest hook is wired (the daemon reads a static config); the
+            # scheduler cadence IS wired via `schedule_info` (this app owns the
+            # scheduler, unlike the plain `dashboard` command).
+            api = create_dashboard_app(
+                supervisor, auth_token=auth_token, schedule_info=_schedule_info
+            )
             if auth_token:
                 _console.print("[dim]control dashboard auth: token login enabled[/dim]")
             server = uvicorn.Server(
@@ -837,11 +793,54 @@ async def _run_daemon(
                     timeout_graceful_shutdown=_SHUTDOWN_GRACE_SECONDS,
                 )
             )
+            # uvicorn 0.49 has no public switch to opt out of its own signal
+            # handling (the older `install_signal_handlers` config flag is gone):
+            # `Server.serve()` unconditionally wraps itself in
+            # `with self.capture_signals(): ...`, which installs `self.handle_exit`
+            # via raw `signal.signal()`, and — once `serve()` returns — restores
+            # the pre-serve() disposition and **re-raises the captured signal**
+            # (`signal.raise_signal`) so an embedding app's own handler can react.
+            # With nothing installed beforehand that restored disposition is
+            # Python's default one, so the re-raised SIGINT/SIGTERM kills the
+            # process outright — before this function's `finally` (scheduler +
+            # supervisor teardown) can run. Overriding the *instance's*
+            # `capture_signals` with a no-op context manager disables that
+            # capture/re-raise entirely, so the daemon below is the only thing
+            # that ever touches SIGINT/SIGTERM on this path (see the docstring's
+            # "Signal ownership" note).
+            server.capture_signals = contextlib.nullcontext  # type: ignore[method-assign,assignment]
             _console.print(
                 f"[green]control dashboard[/green] on http://{host}:{port}"
                 "  —  Ctrl-C to stop"
             )
-            await server.serve()  # uvicorn owns SIGINT; blocks until Ctrl-C
+
+            loop = asyncio.get_running_loop()
+            graceful_requested = False
+
+            def _on_shutdown_signal() -> None:
+                # First signal: ask uvicorn to drain and exit gracefully (subject
+                # to timeout_graceful_shutdown; uvicorn's main loop polls
+                # `should_exit` regardless of how it was set). A second signal
+                # forces an immediate exit for an operator who really wants out
+                # now — the same should_exit/force_exit semantics uvicorn's own
+                # (now-disabled) handler would have applied.
+                nonlocal graceful_requested
+                if not graceful_requested:
+                    graceful_requested = True
+                    server.should_exit = True
+                else:
+                    server.force_exit = True
+
+            installed_signals: list[signal.Signals] = []
+            for sig in (signal.SIGINT, signal.SIGTERM):
+                with contextlib.suppress(NotImplementedError, RuntimeError):
+                    loop.add_signal_handler(sig, _on_shutdown_signal)
+                    installed_signals.append(sig)
+            try:
+                await server.serve()  # the daemon owns the signal; blocks until stopped
+            finally:
+                for sig in installed_signals:
+                    loop.remove_signal_handler(sig)
         else:
             stop = asyncio.Event()
             loop = asyncio.get_running_loop()
@@ -859,7 +858,11 @@ async def _run_daemon(
 @app.command()
 def start(
     config_path: pathlib.Path | None = typer.Option(
-        None, "--config", "-c", help="YAML AppConfig path. Defaults to a paper config."
+        None,
+        "--config",
+        "-c",
+        help="YAML AppConfig path. Defaults to the dashboard manifest "
+        "(configs/dashboard.yaml) when it exists, else a bare paper config.",
     ),
     interval: float = typer.Option(
         60.0,
@@ -877,18 +880,25 @@ def start(
         help="Also serve the control dashboard (start/stop strategies, switch mode) "
         "over HTTP — loopback by default, since it can change what trades.",
     ),
-    serve_host: str = typer.Option(
-        "127.0.0.1", "--serve-host", help="Control dashboard bind interface (loopback)."
+    serve_host: str | None = typer.Option(
+        None,
+        "--serve-host",
+        help="Control dashboard bind interface. Overrides the manifest's ui.host "
+        "(default 127.0.0.1 — loopback).",
     ),
-    serve_port: int = typer.Option(
-        8000, "--serve-port", help="Control dashboard TCP port."
+    serve_port: int | None = typer.Option(
+        None,
+        "--serve-port",
+        help="Control dashboard TCP port. Overrides the manifest's ui.port "
+        "(default 8000).",
     ),
     serve_token: str | None = typer.Option(
         None,
         "--serve-token",
         envvar="TRADING_BOT_UI_TOKEN",
         help="Require this token to log in to the control dashboard (enables auth). "
-        "Mandatory to bind a non-loopback --serve-host. Reads TRADING_BOT_UI_TOKEN.",
+        "Overrides the manifest's ui.token. Mandatory to bind a non-loopback "
+        "--serve-host. Reads TRADING_BOT_UI_TOKEN.",
     ),
 ) -> None:
     """Run the trading **daemon**: supervise the declared strategies, step on a schedule.
@@ -900,10 +910,40 @@ def start(
     testnet / live independently from the **control dashboard** (``--serve``). Going
     live still requires the explicit gates — the daemon never trades real money by
     merely starting, and the dashboard requires a typed confirmation to go live.
+
+    Web settings for ``--serve`` come from the manifest's ``ui:`` section (``host``
+    / ``port`` / ``token``) — the same resolution as ``dashboard``: an explicit
+    ``--serve-host`` / ``--serve-port`` / ``--serve-token`` (or ``TRADING_BOT_UI_TOKEN``)
+    wins; otherwise the config's ``ui.host`` / ``ui.port`` / ``ui.token`` apply. So a
+    manifest configured once for ``dashboard`` serves the control dashboard the same
+    way via ``start --serve`` — no flags to remember. ``ui.read_only`` does not apply
+    here (the control daemon is never read-only).
+
+    With no ``--config``, the daemon looks for the **dashboard manifest**
+    (:data:`_DEFAULT_MANIFEST`, ``configs/dashboard.yaml`` relative to the CWD) —
+    the persistent control plane ``dashboard`` reads and rewrites — so a bare
+    ``trading-bot start --serve`` runs the same book the dashboard manages, with
+    no path to remember. Only when that manifest is absent does it fall back to a
+    bare :class:`~trading_bot.application.config.AppConfig` (empty paper,
+    loopback, no auth) — unchanged from before. ``run``/``serve`` deliberately do
+    **not** get this default: silently picking up a manifest that declares real
+    strategies would surprise a casual ``trading-bot run``.
     """
+    if config_path is None and _DEFAULT_MANIFEST.is_file():
+        # The daemon runs the same manifest the dashboard manages — say so, since
+        # nothing was passed explicitly and the file governs what trades.
+        config_path = _DEFAULT_MANIFEST
+        _console.print(f"[dim]using default manifest {_DEFAULT_MANIFEST}[/dim]")
     config = (
         AppConfig.from_yaml(config_path) if config_path is not None else AppConfig()
     )
+    # Resolve the web settings: an explicit CLI flag (or TRADING_BOT_UI_TOKEN for the
+    # token, already merged into serve_token by typer's envvar=) wins; otherwise fall
+    # back to the manifest's `ui:` section — mirrors `dashboard`'s resolution so the
+    # same manifest serves the same way via either command.
+    host = serve_host if serve_host is not None else config.ui.host
+    port = serve_port if serve_port is not None else config.ui.port
+    token = serve_token if serve_token is not None else config.ui.token
     try:
         asyncio.run(
             _run_daemon(
@@ -911,9 +951,9 @@ def start(
                 interval=interval,
                 cron=cron,
                 serve=serve,
-                host=serve_host,
-                port=serve_port,
-                auth_token=serve_token,
+                host=host,
+                port=port,
+                auth_token=token,
             )
         )
     except Exception as exc:  # noqa: BLE001 - surface any build/config failure cleanly
@@ -1044,8 +1084,15 @@ def dashboard(
     daemon's ``start`` steps strategies on a tick; the dashboard just serves the
     restored + controllable units), so a plain ``uvicorn.run`` inside ``try/finally``
     is the whole loop — we deliberately do **not** also register a competing
-    ``loop.add_signal_handler(SIGINT, …)`` (that override is what makes
-    ``start --serve`` feel unquittable).
+    ``loop.add_signal_handler(SIGINT, …)`` here (an *additional* handler racing
+    uvicorn's own is what used to make a plain ``uvicorn.run``/``server.serve()``
+    feel unquittable, needing a second Ctrl-C). ``start --serve`` no longer has
+    that problem either — it now disables uvicorn's own signal capture (its
+    ``Server.capture_signals`` is overridden to a no-op) and installs the *only*
+    handler itself, so there is nothing left to compete with (see
+    ``_run_daemon``'s "Signal ownership" docstring note for why: uvicorn 0.49
+    otherwise re-raises the captured signal after ``serve()`` returns, killing
+    the process before its teardown ``finally`` runs).
     """
     import uvicorn
 

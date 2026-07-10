@@ -117,6 +117,7 @@ It then layers the engine's use-cases:
 
 from __future__ import annotations
 
+from trading_bot.application.capital_service import CapitalPolicy, CapitalService
 from trading_bot.application.config import (
     AppConfig,
     BrokerConfig,
@@ -205,6 +206,8 @@ __all__ = [
     "FillSource",
     "StrategySupervisor",
     "StrategyStatus",
+    "CapitalService",
+    "CapitalPolicy",
     "reconcile",
     "ReconResult",
     # data feed

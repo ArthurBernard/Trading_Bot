@@ -1,0 +1,1031 @@
+{% extends "base.html" %}
+{% block title %}{{ strategy_name }}{% endblock %}
+{% block head %}
+  {# uPlot's stylesheet — vendored, self-hosted (no CDN). Loaded on this page
+     only (the equity chart is per-strategy); the shell stays dependency-light. #}
+  <link rel="stylesheet" href="/static/uplot.min.css">
+{% endblock %}
+{% block content %}
+
+<!-- Header — the strategy's name, mode badge + run pill, and its control surface
+     (mode <select> + Start/Stop + Remove) moved here from the roster row. Switching
+     to LIVE (real money) opens the typed-confirmation modal (server-enforced ack).
+     Read-only dashboards hide every control. All values are client-fetched. -->
+<section class="card" id="detail-header">
+  <div class="row" style="justify-content:space-between; align-items:flex-start; gap:1rem;">
+    <div>
+      <div class="row" style="gap:.6rem; align-items:center;">
+        <h1 style="margin:0;">{{ strategy_name }}</h1>
+        <span id="detail-mode-badge"></span>
+        <span id="detail-run-pill"></span>
+      </div>
+      <p class="muted" id="detail-sub" style="margin:.45rem 0 0;">Loading…</p>
+      <p style="margin:.5rem 0 0;"><a href="/strategies" class="strat-link">← All strategies</a></p>
+    </div>
+    <div class="row" id="detail-controls" style="gap:.5rem; align-items:center;">
+      <!-- filled by JS: mode <select> + Start/Stop + Remove (hidden read-only). -->
+    </div>
+  </div>
+</section>
+
+<!-- CAPITAL — the money home: starting capital + realised/unrealised PnL = total
+     value, the withdrawable line, the fixed/compound policy toggle, the
+     Deposit/Withdraw modal and the ledger audit trail. Pure consumer of leaf 07's
+     GET/POST /api/strategies/{name}/capital + POST .../policy — no new backend.
+     Read-only hides the controls row (policy toggle + Deposit/Withdraw); the
+     figures (equation, withdrawable, ledger) still render — a dashboard visitor
+     can always SEE the money, only mutate it when writable. A unit that declares
+     no money base (legacy units, allocation/contributed null) shows a muted note
+     and hides the controls too (there is nothing to reinvest against). -->
+<section class="card" id="capital-card">
+  <div class="row" style="justify-content:space-between; align-items:flex-start;">
+    <h2 style="margin:0;">Capital</h2>
+    <span class="updated" id="capital-updated"></span>
+  </div>
+  <p class="muted" id="capital-none-note" style="display:none;">
+    No capital declared for this unit — it sizes without a money base.
+  </p>
+  <div class="cap-eq" id="cap-eq">
+    <div class="cap-cell">
+      <div class="cap-label">Starting capital</div>
+      <div class="cap-value" id="cap-contributed">—</div>
+    </div>
+    <div class="cap-op">+</div>
+    <div class="cap-cell">
+      <div class="cap-label">PnL</div>
+      <div class="cap-subrow"><span class="cap-sublabel">Realised</span><span id="cap-realised">—</span></div>
+      <div class="cap-subrow"><span class="cap-sublabel">Unrealised</span><span id="cap-unrealised">—</span></div>
+    </div>
+    <div class="cap-op">=</div>
+    <div class="cap-cell cap-total">
+      <div class="cap-label">Total value</div>
+      <div class="cap-value" id="cap-total-value">—</div>
+      <div class="cap-delta" id="cap-delta"></div>
+    </div>
+  </div>
+  <p class="muted" id="capital-withdrawable"></p>
+  {% if not read_only %}
+  <div class="row" id="capital-controls" style="justify-content:space-between; margin-top:.6rem;">
+    <div class="row" id="capital-policy-toggle" role="tablist" aria-label="Capital policy">
+      <button type="button" class="btn policy-opt" data-policy="compound">Reinvest</button>
+      <button type="button" class="btn policy-opt" data-policy="fixed">Cashout</button>
+    </div>
+    <div class="row">
+      <button type="button" id="capital-deposit-btn">Deposit</button>
+      <button type="button" id="capital-withdraw-btn">Withdraw</button>
+    </div>
+  </div>
+  {% endif %}
+  <details id="capital-ledger" style="margin-top:.8rem;">
+    <summary id="capital-ledger-summary">Ledger: 0 events &#9656;</summary>
+    <div class="table-wrap">
+      <table id="capital-ledger-table">
+        <thead>
+          <tr><th>Time</th><th>Type</th><th class="num">Amount</th><th>Note</th></tr>
+        </thead>
+        <tbody id="capital-ledger-body">
+          <tr class="empty"><td colspan="4">Loading…</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </details>
+</section>
+
+<!-- The equity/PnL chart — uPlot renders into #pnl-chart (moved from the retired
+     /pnl tab), pre-bound to this strategy (no selector). Live and testnet draw as
+     SEPARATE, colour-coded series (never combined; testnet is fake money). -->
+<section class="card" id="pnl-chart-card">
+  <div class="row" style="justify-content:space-between; align-items:flex-end;">
+    <h2 style="margin:0;">Equity over time</h2>
+    <div id="pnl-legend" class="pnl-legend" role="group" aria-label="Modes shown"></div>
+  </div>
+  <div id="pnl-chart"></div>
+  <p id="pnl-empty" class="muted" style="display:none;">
+    No fills yet — the equity curve appears once this strategy records a fill.
+  </p>
+</section>
+
+<!-- Per-mode stats — final equity + realised PnL, colour-coded by mode. -->
+<section class="card" id="pnl-stats-card">
+  <h2>By mode</h2>
+  <p class="muted" id="pnl-v0-note"></p>
+  <div class="table-wrap">
+    <table id="pnl-stats-table">
+      <thead>
+        <tr>
+          <th>Mode</th>
+          <th class="num">Final equity</th>
+          <th class="num">Realised PnL</th>
+          <th class="num">Unrealised</th>
+          <th class="num">Return</th>
+        </tr>
+      </thead>
+      <tbody id="pnl-stats-body">
+        <tr class="empty"><td colspan="5">Loading…</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<!-- Positions — this strategy's net exposure (client-filtered from
+     /api/positions?group_by=strategy). -->
+<section class="card" id="positions-card">
+  <div class="row" style="justify-content:space-between;">
+    <h2 style="margin:0;">Positions</h2>
+    <span class="updated" id="positions-updated"></span>
+  </div>
+  <div class="table-wrap">
+    <table id="positions-table">
+      <thead>
+        <tr>
+          <th>Exchange</th>
+          <th>Instrument</th>
+          <th class="num">Net qty</th>
+          <th class="num">Avg entry</th>
+          <th class="num">Realised PnL</th>
+          <th class="num">Fees</th>
+        </tr>
+      </thead>
+      <tbody id="positions-body">
+        <tr class="empty"><td colspan="6">Loading…</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<!-- Recent orders — this strategy's order history (open + recent, any status). -->
+<section class="card" id="orders-card">
+  <div class="row" style="justify-content:space-between;">
+    <h2 style="margin:0;">Recent orders</h2>
+    <span class="updated" id="orders-updated"></span>
+  </div>
+  <div class="table-wrap">
+    <table id="orders-table">
+      <thead>
+        <tr>
+          <th>Time</th>
+          <th>Instrument</th>
+          <th>Side</th>
+          <th>Type</th>
+          <th class="num">Qty</th>
+          <th class="num">Filled</th>
+          <th class="num">Avg fill</th>
+          <th>Status</th>
+        </tr>
+      </thead>
+      <tbody id="orders-body">
+        <tr class="empty"><td colspan="8">Loading…</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<!-- Recent fills — this strategy's confirmed executions (the PnL source of truth). -->
+<section class="card" id="fills-card">
+  <div class="row" style="justify-content:space-between;">
+    <h2 style="margin:0;">Recent fills</h2>
+    <span class="updated" id="fills-updated"></span>
+  </div>
+  <div class="table-wrap">
+    <table id="fills-table">
+      <thead>
+        <tr>
+          <th>Time</th>
+          <th>Instrument</th>
+          <th>Side</th>
+          <th class="num">Qty</th>
+          <th class="num">Price</th>
+          <th class="num">Fee</th>
+        </tr>
+      </thead>
+      <tbody id="fills-body">
+        <tr class="empty"><td colspan="6">Loading…</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<!-- Live confirmation modal (moved from the roster): the deliberate "go real
+     money" acknowledgement. Go-live enables only once the exact phrase is typed. -->
+<div id="live-modal" class="modal" role="dialog" aria-modal="true" aria-labelledby="live-modal-title">
+  <div class="modal-card">
+    <h3 id="live-modal-title"><span class="warn-mark">⚠</span> Switch to LIVE — real money</h3>
+    <p>
+      You are about to switch <b id="live-modal-name">—</b> to <b>live</b>. This
+      trades <b>real money</b> on the venue. Type <code>I UNDERSTAND</code> to confirm.
+    </p>
+    <input id="live-modal-input" type="text" placeholder="I UNDERSTAND" autocomplete="off" spellcheck="false">
+    <div class="modal-actions">
+      <button id="live-modal-cancel" type="button">Cancel</button>
+      <button id="live-modal-confirm" class="btn-primary" type="button" disabled>Go live</button>
+    </div>
+  </div>
+</div>
+
+<!-- Adjust-capital modal — shared by Deposit and Withdraw (leaf 08). One amount
+     input + a deposit/withdraw radio, a display-only preview (parseFloat is used
+     ONLY to render the "new" figures — the exact API strings are what actually
+     move), and a per-open op_id so a double-click/retry replays the same
+     idempotency key instead of minting a fresh one. Always rendered (like
+     live-modal above) — under read-only there is simply no button left that can
+     open it. -->
+<div id="capital-modal" class="modal" role="dialog" aria-modal="true" aria-labelledby="capital-modal-title">
+  <div class="modal-card">
+    <h3 id="capital-modal-title">Adjust capital</h3>
+    <p>
+      Move capital for <b id="capital-modal-name">—</b>. Paper/testnet only — a
+      live unit's capital ops are deferred to real-key enablement.
+    </p>
+    <div class="row" id="capital-modal-action" role="radiogroup" aria-label="Action" style="margin-bottom:.7rem;">
+      <label class="row" style="gap:.3rem;"><input type="radio" name="capital-action" value="deposit" checked> Deposit</label>
+      <label class="row" style="gap:.3rem;"><input type="radio" name="capital-action" value="withdraw"> Withdraw</label>
+    </div>
+    <input id="capital-modal-amount" type="text" inputmode="decimal" placeholder="Amount" autocomplete="off" spellcheck="false">
+    <p class="muted" id="capital-modal-preview"></p>
+    <p class="err" id="capital-modal-error" style="display:none;"></p>
+    <div class="modal-actions">
+      <button id="capital-modal-cancel" type="button">Cancel</button>
+      <button id="capital-modal-confirm" class="btn-primary" type="button" disabled>Confirm</button>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<!-- uPlot v1.6.31 (MIT) — vendored, self-hosted IIFE bundle exposing global uPlot. -->
+<script src="/static/uplot.min.js"></script>
+<script>
+  // Per-strategy detail page — the deep-linkable home for one strategy. It merges
+  // what the retired /pnl tab held (an interactive equity chart, uPlot, over
+  // /api/pnl, live/testnet as separate colour-coded series) with the control
+  // surface moved off the roster (mode switch, go-live, Start/Stop, Remove) plus
+  // this strategy's positions, recent orders and fills. Dependency-free vanilla
+  // JS; reuses base.html's api()/escapeHtml()/toast()/connect()/fmtDate() and
+  // format.js's tbFmt helpers. Money arrives as EXACT Decimal strings; Number()
+  // is used ONLY for plotting/display — the exact string survives in tooltips.
+
+  // The strategy name, injected server-side (the route validates it exists — a
+  // 404 for an unknown unit — before rendering this shell).
+  const STRATEGY = {{ strategy_name | tojson }};
+  const PHRASE = 'I UNDERSTAND';
+  const MODES = ['paper', 'testnet', 'live'];
+
+  var CURRENT_QUOTE = null;   // this strategy's quote currency (money labels)
+  var CURRENT_STATUS = null;  // the last /api/strategies row for this strategy
+  var CURRENT_CAPITAL = null; // the last GET .../capital breakdown for this strategy
+  var chart = null;           // the live uPlot instance (rebuilt on data shape change)
+  var HIDDEN = {};            // mode -> true when its series is toggled off
+  var pendingLive = false;    // a live switch awaiting typed confirmation
+  var capModalOpId = null;    // minted once per Adjust-capital modal open (idempotency key)
+
+  const controls = document.getElementById('detail-controls');
+  const modal = document.getElementById('live-modal');
+  const modalName = document.getElementById('live-modal-name');
+  const modalInput = document.getElementById('live-modal-input');
+  const modalConfirm = document.getElementById('live-modal-confirm');
+  const modalCancel = document.getElementById('live-modal-cancel');
+
+  // Adjust-capital modal elements — always present (see the template comment),
+  // so these are never null; only the buttons that OPEN it are conditional
+  // (guarded individually below).
+  const capModal = document.getElementById('capital-modal');
+  const capModalName = document.getElementById('capital-modal-name');
+  const capModalAmount = document.getElementById('capital-modal-amount');
+  const capModalPreview = document.getElementById('capital-modal-preview');
+  const capModalError = document.getElementById('capital-modal-error');
+  const capModalConfirm = document.getElementById('capital-modal-confirm');
+  const capModalCancel = document.getElementById('capital-modal-cancel');
+  const capDepositBtn = document.getElementById('capital-deposit-btn');
+  const capWithdrawBtn = document.getElementById('capital-withdraw-btn');
+
+  // The three deployment modes, colour-coded to match the mode badges
+  // (paper=accent/blue, testnet=amber, live=red). The plot order is stable.
+  var MODE_COLOR = {
+    paper:   getComputedStyle(document.documentElement).getPropertyValue('--accent').trim() || '#5ea2ff',
+    testnet: getComputedStyle(document.documentElement).getPropertyValue('--warn').trim()   || '#d6a132',
+    live:    getComputedStyle(document.documentElement).getPropertyValue('--err').trim()    || '#f85149',
+  };
+
+  // A signed-money cell class: green for a gain, red for a loss.
+  function pnlClass(v) {
+    if (v == null) return '';
+    const n = Number(v);
+    if (n > 0) return 'ok';
+    if (n < 0) return 'err';
+    return '';
+  }
+
+  // --- Header + control surface ------------------------------------------- //
+
+  function modeSelectHtml(s) {
+    const opts = MODES.map(function (m) {
+      return '<option value="' + m + '"' + (m === s.mode ? ' selected' : '') + '>' + m + '</option>';
+    }).join('');
+    return '<select id="detail-mode-select" class="mode-select" aria-label="mode">' + opts + '</select>';
+  }
+
+  function renderHeader(s) {
+    document.getElementById('detail-mode-badge').innerHTML =
+      '<span class="badge badge-' + escapeHtml(s.mode) + '">' + escapeHtml(s.mode) + '</span>';
+    document.getElementById('detail-run-pill').innerHTML = s.running
+      ? '<span class="run-pill is-running"><span class="dot"></span>running</span>'
+      : '<span class="run-pill is-stopped"><span class="dot"></span>stopped</span>';
+    // Sub-line: kind · exchange · cadence.
+    const cadence = tbTime.humanSpan(s.span);
+    const bits = [escapeHtml(s.kind), escapeHtml(s.exchange)];
+    if (cadence) bits.push(escapeHtml(cadence) + ' bars');
+    if (s.quote) bits.push('quote ' + escapeHtml(s.quote));
+    document.getElementById('detail-sub').innerHTML = bits.join(' · ');
+    // Controls — hidden entirely on a read-only dashboard.
+    if (TB_READ_ONLY) {
+      controls.innerHTML = '<span class="muted">read-only</span>';
+      return;
+    }
+    const toggle = s.running
+      ? '<button data-act="stop" class="btn-stop">Stop</button>'
+      : '<button data-act="start" class="btn-start">Start</button>';
+    const remove = '<button data-act="remove" class="btn-stop" title="Remove deployment">Remove</button>';
+    controls.innerHTML = modeSelectHtml(s) + toggle + remove;
+  }
+
+  async function loadStatus() {
+    let list;
+    try {
+      list = await api('GET', '/api/strategies');
+    } catch (e) {
+      document.getElementById('detail-sub').textContent = e.message;
+      return;
+    }
+    const s = list.find(function (x) { return x.name === STRATEGY; });
+    if (!s) {
+      // Removed elsewhere (another client / the daemon) — say so; controls go away.
+      document.getElementById('detail-sub').textContent = 'This strategy is no longer managed.';
+      controls.innerHTML = '';
+      return;
+    }
+    CURRENT_STATUS = s;
+    CURRENT_QUOTE = s.quote || null;
+    // Never rebuild the controls out from under an open mode <select> (the user is
+    // mid-interaction). The badge/pill/sub are cheap to always refresh, but the
+    // whole header render is skipped while a control here holds focus.
+    if (controls.contains(document.activeElement)) return;
+    renderHeader(s);
+  }
+
+  // --- Equity chart (uPlot) — moved verbatim from the retired /pnl tab ----- //
+
+  // Plot a money Decimal string as a Number — for the canvas only. This never
+  // feeds back into a computation; the stats table keeps the exact string in its
+  // title tooltip via tbFmt.moneyCell().
+  function plotNum(s) {
+    if (s == null) return null;
+    var n = Number(s);
+    return isNaN(n) ? null : n;
+  }
+
+  // Build uPlot's column-major data from /api/pnl: the union of all modes'
+  // timestamps (sorted ascending), and per mode a forward-filled step curve
+  // (equity holds until the next fill), null before the mode's first point.
+  function toChartData(payload, modes) {
+    var tsSet = {};
+    modes.forEach(function (mode) {
+      (payload.series[mode] || []).forEach(function (pt) {
+        tsSet[Math.floor(pt[0] / 1000)] = true;  // ms -> s
+      });
+    });
+    var xs = Object.keys(tsSet).map(Number).sort(function (a, b) { return a - b; });
+    var ys = modes.map(function (mode) {
+      var pts = (payload.series[mode] || []).map(function (pt) {
+        return [Math.floor(pt[0] / 1000), plotNum(pt[2])];  // [ts_s, equity]
+      });
+      var col = new Array(xs.length).fill(null);
+      var j = 0;
+      var last = null;
+      for (var i = 0; i < xs.length; i++) {
+        while (j < pts.length && pts[j][0] <= xs[i]) { last = pts[j][1]; j++; }
+        col[i] = last;
+      }
+      return col;
+    });
+    return [xs].concat(ys);
+  }
+
+  // The uPlot series descriptors for the modes present (x axis first).
+  function buildSeries(modes) {
+    var series = [{}];  // x (time) — the implicit first series
+    modes.forEach(function (mode) {
+      series.push({
+        label: mode,
+        stroke: MODE_COLOR[mode],
+        width: 2,
+        show: !HIDDEN[mode],
+        value: function (self, v) { return tbFmt.money(v); },
+      });
+    });
+    return series;
+  }
+
+  // Size the chart to its container width (uPlot needs explicit pixel sizes).
+  function chartSize() {
+    var el = document.getElementById('pnl-chart');
+    var w = (el && el.clientWidth) ? el.clientWidth : 800;
+    return { width: w, height: 340 };
+  }
+
+  // (Re)build the uPlot chart for the modes present. Destroys any prior instance.
+  function renderChart(payload, modes) {
+    var mount = document.getElementById('pnl-chart');
+    var empty = document.getElementById('pnl-empty');
+    if (chart) { chart.destroy(); chart = null; }
+    mount.innerHTML = '';
+    if (!modes.length) {
+      empty.style.display = '';
+      return;
+    }
+    empty.style.display = 'none';
+    var data = toChartData(payload, modes);
+    var size = chartSize();
+    var opts = {
+      width: size.width,
+      height: size.height,
+      axes: [
+        { stroke: '#8b97a7', grid: { stroke: 'rgba(255,255,255,.06)' },
+          ticks: { stroke: 'rgba(255,255,255,.06)' } },
+        { stroke: '#8b97a7', grid: { stroke: 'rgba(255,255,255,.06)' },
+          ticks: { stroke: 'rgba(255,255,255,.06)' },
+          values: function (self, ticks) {
+            return ticks.map(function (t) { return tbFmt.money(t, { dp: 0 }); });
+          } },
+      ],
+      series: buildSeries(modes),
+      legend: { show: false },  // we render our own colour-coded legend/toggle
+    };
+    chart = new uPlot(opts, data, mount);
+  }
+
+  // Fill the per-mode legend (a clickable colour chip toggling each series).
+  function renderLegend(modes) {
+    var root = document.getElementById('pnl-legend');
+    if (!modes.length) { root.innerHTML = ''; return; }
+    root.innerHTML = modes.map(function (mode) {
+      var off = HIDDEN[mode] ? ' is-off' : '';
+      return '<button type="button" class="pnl-mode' + off + '" data-mode="' +
+        escapeHtml(mode) + '">' +
+        '<span class="dot" style="background:' + MODE_COLOR[mode] + '"></span>' +
+        escapeHtml(mode) + '</button>';
+    }).join('');
+    root.querySelectorAll('.pnl-mode').forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        var mode = btn.dataset.mode;
+        HIDDEN[mode] = !HIDDEN[mode];
+        btn.classList.toggle('is-off', HIDDEN[mode]);
+        if (chart) {
+          var idx = modes.indexOf(mode) + 1;
+          chart.setSeries(idx, { show: !HIDDEN[mode] });
+        }
+      });
+    });
+  }
+
+  // Return = realised PnL / starting capital (v0) — display-only; "—" when there
+  // is no realised PnL yet or v0 doesn't parse to a non-zero finite number.
+  function returnCell(pnl, v0) {
+    if (pnl == null) return '<span class="muted">—</span>';
+    var v0n = Number(v0);
+    var pnlN = Number(pnl);
+    if (!isFinite(v0n) || v0n === 0 || !isFinite(pnlN)) return '<span class="muted">—</span>';
+    return tbFmt.pct(pnlN / v0n);
+  }
+
+  // Render the per-mode stats table (final equity + realised PnL + unrealised +
+  // Return).
+  function renderStats(payload, modes) {
+    var body = document.getElementById('pnl-stats-body');
+    if (!modes.length) {
+      body.innerHTML = '<tr class="empty"><td colspan="5">No fills yet.</td></tr>';
+      return;
+    }
+    var v0 = payload.v0;
+    body.innerHTML = modes.map(function (mode) {
+      var series = payload.series[mode] || [];
+      var lastPnl = series.length ? series[series.length - 1][1] : null;
+      var cur = (payload.current && payload.current[mode]) || {};
+      var pnlCls = lastPnl == null ? '' :
+        (Number(lastPnl) > 0 ? 'ok' : (Number(lastPnl) < 0 ? 'err' : ''));
+      return '<tr>' +
+        '<td><span class="badge badge-' + escapeHtml(mode) + '">' +
+          escapeHtml(mode) + '</span></td>' +
+        '<td class="num">' + tbFmt.moneyCell(cur.equity, { quote: CURRENT_QUOTE }) + '</td>' +
+        '<td class="num ' + pnlCls + '">' +
+          tbFmt.moneyCell(lastPnl, { quote: CURRENT_QUOTE }) + '</td>' +
+        '<td class="num">' + tbFmt.moneyCell(cur.unrealised, { quote: CURRENT_QUOTE }) + '</td>' +
+        '<td class="num ' + pnlCls + '">' + returnCell(lastPnl, v0) + '</td>' +
+        '</tr>';
+    }).join('');
+  }
+
+  // A muted note naming the strategy's starting capital (v0) — the Return
+  // column's denominator, spelled out once instead of buried in a tooltip.
+  function renderV0Note(payload) {
+    var el = document.getElementById('pnl-v0-note');
+    if (!el) return;
+    el.innerHTML = (payload && payload.v0 != null)
+      ? 'Starting capital (v0): ' + tbFmt.moneyCell(payload.v0, { quote: CURRENT_QUOTE })
+      : '';
+  }
+
+  // Set the chart heading to name the quote currency when known.
+  function renderChartHeading() {
+    var h = document.querySelector('#pnl-chart-card h2');
+    if (!h) return;
+    h.textContent = CURRENT_QUOTE ? 'Equity over time — ' + CURRENT_QUOTE : 'Equity over time';
+  }
+
+  // Load /api/pnl for THIS strategy (pre-bound — no selector) and (re)draw.
+  async function loadPnl() {
+    var payload;
+    try {
+      payload = await api('GET', '/api/pnl?strategy=' + encodeURIComponent(STRATEGY));
+    } catch (e) {
+      document.getElementById('pnl-stats-body').innerHTML =
+        '<tr class="empty"><td colspan="5">' + escapeHtml(e.message) + '</td></tr>';
+      renderChart({ series: {} }, []);
+      document.getElementById('pnl-legend').innerHTML = '';
+      renderV0Note(null);
+      return;
+    }
+    var modes = MODES.filter(function (m) {
+      return payload.series && payload.series[m] && payload.series[m].length;
+    });
+    renderChartHeading();
+    renderChart(payload, modes);
+    renderLegend(modes);
+    renderStats(payload, modes);
+    renderV0Note(payload);
+  }
+
+  // --- Capital block (contributed + PnL = total value, withdrawable, policy,
+  //     ledger) — leaf 08, a pure consumer of leaf 07's GET/POST .../capital and
+  //     POST .../policy. --------------------------------------------------- //
+
+  // The equation cells + the withdrawable line + hiding the controls row when
+  // this unit declares no money base (nothing to reinvest/withdraw against).
+  function renderCapitalEquation(b) {
+    const noCapital = b.contributed == null;
+    document.getElementById('capital-none-note').style.display = noCapital ? '' : 'none';
+    document.getElementById('cap-contributed').innerHTML = tbFmt.moneyCell(b.contributed, { quote: CURRENT_QUOTE });
+    document.getElementById('cap-realised').innerHTML = tbFmt.moneyCell(b.realised, { quote: CURRENT_QUOTE });
+    document.getElementById('cap-unrealised').innerHTML = b.unrealised == null
+      ? '<span class="muted" title="no open position to mark">—</span>'
+      : tbFmt.moneyCell(b.unrealised, { quote: CURRENT_QUOTE });
+    const totalEl = document.getElementById('cap-total-value');
+    totalEl.innerHTML = tbFmt.moneyCell(b.total_value, { quote: CURRENT_QUOTE });
+    const c = Number(b.contributed);
+    const t = Number(b.total_value);
+    const haveBoth = b.contributed != null && b.total_value != null && isFinite(c) && isFinite(t);
+    totalEl.className = 'cap-value' + (haveBoth ? (t > c ? ' ok' : t < c ? ' err' : '') : '');
+    // Δ% since funding = total/contributed − 1 — display-only, "—" when there is
+    // nothing to divide by (no capital declared, or a zero/unparseable base).
+    const deltaEl = document.getElementById('cap-delta');
+    if (!haveBoth || c === 0) {
+      deltaEl.innerHTML = '';
+    } else {
+      const delta = t / c - 1;
+      deltaEl.innerHTML = '<span class="' + (delta > 0 ? 'ok' : delta < 0 ? 'err' : '') + '">' +
+        tbFmt.pct(delta) + ' since funding</span>';
+    }
+    document.getElementById('capital-withdrawable').innerHTML =
+      'Withdrawable: ' + tbFmt.moneyCell(b.withdrawable, { quote: CURRENT_QUOTE });
+    // The controls row only exists in the DOM when writable (Jinja-gated) — hide
+    // it too when there is no money base to act on.
+    const controlsEl = document.getElementById('capital-controls');
+    if (controlsEl) controlsEl.style.display = noCapital ? 'none' : '';
+  }
+
+  // Reflect the unit's current policy on the segmented toggle's active state.
+  // `.policy-opt` only exists when writable — an empty NodeList under
+  // read-only/no-op here.
+  function renderPolicyToggle(b) {
+    document.querySelectorAll('.policy-opt').forEach(function (btn) {
+      btn.classList.toggle('is-active', btn.dataset.policy === b.policy);
+    });
+  }
+
+  // The ledger audit trail — most-recent-first (matches the Orders/Fills tables).
+  function renderLedger(b) {
+    const events = b.events || [];
+    document.getElementById('capital-ledger-summary').textContent =
+      'Ledger: ' + events.length + ' event' + (events.length === 1 ? '' : 's') + ' ▸';
+    const body = document.getElementById('capital-ledger-body');
+    if (!events.length) {
+      body.innerHTML = '<tr class="empty"><td colspan="4">No capital events yet.</td></tr>';
+      return;
+    }
+    const ordered = events.slice().reverse();
+    body.innerHTML = ordered.map(function (e) {
+      return '<tr>' +
+        '<td class="num" title="' + escapeHtml(fmtRelative(e.ts)) + '">' + escapeHtml(fmtDate(e.ts, { seconds: true })) + '</td>' +
+        '<td>' + escapeHtml(e.type) + '</td>' +
+        '<td class="num">' + tbFmt.moneyCell(e.amount, { quote: CURRENT_QUOTE }) + '</td>' +
+        '<td>' + escapeHtml(e.note || '') + '</td>' +
+        '</tr>';
+    }).join('');
+  }
+
+  // Load /api/strategies/{name}/capital for THIS strategy and (re)draw the block.
+  async function loadCapital() {
+    let b;
+    try {
+      b = await api('GET', '/api/strategies/' + encodeURIComponent(STRATEGY) + '/capital');
+    } catch (e) {
+      document.getElementById('capital-withdrawable').textContent = e.message;
+      return;
+    }
+    CURRENT_CAPITAL = b;
+    renderCapitalEquation(b);
+    renderPolicyToggle(b);
+    renderLedger(b);
+    stampUpdated('capital-updated');
+  }
+
+  // --- Positions (this strategy's bucket of ?group_by=strategy) ------------ //
+
+  function positionRowHtml(r) {
+    const unit = tbFmt.splitInstrument(r.instrument);
+    return '<tr>' +
+      '<td>' + escapeHtml(r.exchange) + '</td>' +
+      '<td>' + escapeHtml(r.instrument) + '</td>' +
+      '<td class="num">' + tbFmt.qtyCell(r.net_qty, { base: unit.base }) + '</td>' +
+      '<td class="num">' + tbFmt.priceCell(r.avg_entry_price, { quote: unit.quote }) + '</td>' +
+      '<td class="num ' + pnlClass(r.realised_pnl) + '">' +
+        tbFmt.moneyCell(r.realised_pnl, { quote: unit.quote }) + '</td>' +
+      '<td class="num">' + tbFmt.moneyCell(r.fees_paid, { quote: unit.quote }) + '</td>' +
+      '</tr>';
+  }
+
+  async function loadPositions() {
+    let data;
+    try {
+      data = await api('GET', '/api/positions?group_by=strategy');
+    } catch (e) {
+      document.getElementById('positions-body').innerHTML =
+        '<tr class="empty"><td colspan="6">' + escapeHtml(e.message) + '</td></tr>';
+      return;
+    }
+    const g = (data || []).find(function (x) { return x.group === STRATEGY; });
+    const rows = g ? g.rows : [];
+    const body = document.getElementById('positions-body');
+    const guard = tbRefreshGuard('detail-positions', body, rows);
+    if (guard === 'skip-silent') return;
+    stampUpdated('positions-updated');
+    if (guard === 'skip-stamp') return;
+    if (!rows.length) {
+      body.innerHTML = '<tr class="empty"><td colspan="6">No open positions.</td></tr>';
+      return;
+    }
+    body.innerHTML = rows.map(positionRowHtml).join('');
+  }
+
+  // --- Recent orders (this strategy's history) ----------------------------- //
+
+  async function loadOrders() {
+    let rows;
+    try {
+      rows = await api('GET', '/api/orders?history=true&strategy=' + encodeURIComponent(STRATEGY));
+    } catch (e) {
+      document.getElementById('orders-body').innerHTML =
+        '<tr class="empty"><td colspan="8">' + escapeHtml(e.message) + '</td></tr>';
+      return;
+    }
+    const body = document.getElementById('orders-body');
+    const guard = tbRefreshGuard('detail-orders', body, rows);
+    if (guard === 'skip-silent') return;
+    stampUpdated('orders-updated');
+    if (guard === 'skip-stamp') return;
+    if (!rows.length) {
+      body.innerHTML = '<tr class="empty"><td colspan="8">No orders.</td></tr>';
+      return;
+    }
+    // Most recent first (the API returns oldest-first).
+    const ordered = rows.slice().reverse();
+    body.innerHTML = ordered.map(function (o) {
+      const sideCls = o.side === 'buy' ? 'side-buy' : 'side-sell';
+      const unit = tbFmt.splitInstrument(o.instrument);
+      return '<tr>' +
+        '<td class="num" title="' + escapeHtml(fmtRelative(o.ts)) + '">' + escapeHtml(fmtDate(o.ts, { seconds: true })) + '</td>' +
+        '<td>' + escapeHtml(o.instrument) + '</td>' +
+        '<td class="' + sideCls + '">' + escapeHtml(o.side) + '</td>' +
+        '<td>' + escapeHtml(o.type) + '</td>' +
+        '<td class="num">' + tbFmt.qtyCell(o.qty, { base: unit.base }) + '</td>' +
+        '<td class="num">' + tbFmt.qtyCell(o.filled_qty, { base: unit.base }) + '</td>' +
+        '<td class="num">' + tbFmt.priceCell(o.avg_fill_price, { quote: unit.quote }) + '</td>' +
+        '<td>' + statusBadge(o.status) + '</td>' +
+        '</tr>';
+    }).join('');
+  }
+
+  // --- Recent fills (this strategy's confirmed executions) ----------------- //
+
+  async function loadFills() {
+    let rows;
+    try {
+      rows = await api('GET', '/api/fills?strategy=' + encodeURIComponent(STRATEGY));
+    } catch (e) {
+      document.getElementById('fills-body').innerHTML =
+        '<tr class="empty"><td colspan="6">' + escapeHtml(e.message) + '</td></tr>';
+      return;
+    }
+    const body = document.getElementById('fills-body');
+    const guard = tbRefreshGuard('detail-fills', body, rows);
+    if (guard === 'skip-silent') return;
+    stampUpdated('fills-updated');
+    if (guard === 'skip-stamp') return;
+    if (!rows.length) {
+      body.innerHTML = '<tr class="empty"><td colspan="6">No fills.</td></tr>';
+      return;
+    }
+    const ordered = rows.slice().reverse();
+    body.innerHTML = ordered.map(function (f) {
+      const sideCls = f.side === 'buy' ? 'side-buy' : 'side-sell';
+      const unit = tbFmt.splitInstrument(f.instrument);
+      return '<tr>' +
+        '<td class="num" title="' + escapeHtml(fmtRelative(f.ts)) + '">' + escapeHtml(fmtDate(f.ts, { seconds: true })) + '</td>' +
+        '<td>' + escapeHtml(f.instrument) + '</td>' +
+        '<td class="' + sideCls + '">' + escapeHtml(f.side) + '</td>' +
+        '<td class="num">' + tbFmt.qtyCell(f.qty, { base: unit.base }) + '</td>' +
+        '<td class="num">' + tbFmt.priceCell(f.price, { quote: unit.quote }) + '</td>' +
+        '<td class="num">' + tbFmt.moneyCell(f.fee, { quote: unit.quote }) + '</td>' +
+        '</tr>';
+    }).join('');
+  }
+
+  // --- Control actions (mode switch, start/stop, remove) ------------------- //
+
+  async function setMode(mode, confirm, ack) {
+    try {
+      // `ack` is the typed live-confirmation phrase; the server enforces it for a
+      // live switch (the modal is UX, the gate is server-side).
+      await api('POST', '/api/strategies/' + encodeURIComponent(STRATEGY) + '/mode',
+        { mode: mode, confirm: !!confirm, ack: ack || null });
+      toast(STRATEGY + ': mode → ' + mode, 'ok');
+    } catch (e) {
+      toast(STRATEGY + ': ' + e.message, 'err');
+    } finally {
+      await loadStatus();
+    }
+  }
+
+  async function doAction(act, btn) {
+    try {
+      if (act === 'remove') {
+        if (!window.confirm('Remove deployment "' + STRATEGY + '"? Its manifest entry is rewritten.')) {
+          if (btn) btn.disabled = false;
+          return;
+        }
+        await api('DELETE', '/api/strategies/' + encodeURIComponent(STRATEGY));
+        toast(STRATEGY + ': removed', 'ok');
+        // The unit is gone — the roster is the only sensible place to land.
+        window.location.href = '/strategies';
+        return;
+      }
+      await api('POST', '/api/strategies/' + encodeURIComponent(STRATEGY) + '/' + act);
+      toast(STRATEGY + ': ' + act + 'ed', 'ok');
+    } catch (e) {
+      toast(STRATEGY + ': ' + e.message, 'err');
+    } finally {
+      await loadStatus();
+    }
+  }
+
+  // --- Live confirmation modal --------------------------------------------- //
+
+  function openLiveModal() {
+    pendingLive = true;
+    modalName.textContent = STRATEGY;
+    modalInput.value = '';
+    modalConfirm.disabled = true;
+    modal.classList.add('open');
+    modalInput.focus();
+  }
+
+  function closeLiveModal() {
+    modal.classList.remove('open');
+    pendingLive = false;
+    loadStatus();  // re-render so a cancelled select reverts to the server's mode
+  }
+
+  modalInput.addEventListener('input', function () {
+    modalConfirm.disabled = modalInput.value.trim() !== PHRASE;
+  });
+  modalInput.addEventListener('keydown', function (e) {
+    if (e.key === 'Enter' && !modalConfirm.disabled) modalConfirm.click();
+    if (e.key === 'Escape') closeLiveModal();
+  });
+  modalConfirm.addEventListener('click', async function () {
+    const ack = modalInput.value.trim();  // the typed phrase — sent for server check
+    modal.classList.remove('open');
+    pendingLive = false;
+    await setMode('live', true, ack);
+  });
+  modalCancel.addEventListener('click', function () {
+    toast(STRATEGY + ': live switch cancelled', 'err');
+    closeLiveModal();
+  });
+  modal.addEventListener('click', function (e) { if (e.target === modal) closeLiveModal(); });
+
+  // --- Adjust-capital modal (Deposit / Withdraw) --------------------------- //
+
+  function capModalAction() {
+    const checked = document.querySelector('input[name="capital-action"]:checked');
+    return checked ? checked.value : 'deposit';
+  }
+
+  // Display-only preview: parseFloat renders the "new" figures for a human to
+  // sanity-check — the exact API Decimal strings are what actually get sent
+  // (never re-derived from this arithmetic).
+  function updateCapitalPreview() {
+    const amtStr = capModalAmount.value.trim();
+    const amt = parseFloat(amtStr);
+    const validAmount = amtStr !== '' && isFinite(amt) && amt > 0;
+    capModalConfirm.disabled = !validAmount;
+    capModalError.style.display = 'none';
+    if (!validAmount || !CURRENT_CAPITAL || CURRENT_CAPITAL.contributed == null) {
+      capModalPreview.textContent = '';
+      return;
+    }
+    const sign = capModalAction() === 'withdraw' ? -1 : 1;
+    const contributed0 = Number(CURRENT_CAPITAL.contributed) || 0;
+    const total0 = Number(CURRENT_CAPITAL.total_value) || 0;
+    const newContributed = contributed0 + sign * amt;
+    const newTotal = total0 + sign * amt;
+    const suffix = CURRENT_QUOTE ? ' ' + CURRENT_QUOTE : '';
+    capModalPreview.innerHTML =
+      'New starting capital: ' + tbFmt.money(newContributed) + suffix + '<br>' +
+      'New total value: ' + tbFmt.money(newTotal) + suffix;
+  }
+
+  // A UUID minted ONCE per modal open — a double-click or a retry after a
+  // failed POST re-sends this SAME op_id (idempotency on the wire), rather than
+  // silently minting a fresh one that would double-apply on the server.
+  function openCapitalModal(action) {
+    capModalOpId = crypto.randomUUID();
+    capModalName.textContent = STRATEGY;
+    capModalAmount.value = '';
+    capModalError.style.display = 'none';
+    document.querySelectorAll('input[name="capital-action"]').forEach(function (r) {
+      r.checked = r.value === action;
+    });
+    updateCapitalPreview();
+    capModal.classList.add('open');
+    capModalAmount.focus();
+  }
+
+  function closeCapitalModal() {
+    capModal.classList.remove('open');
+  }
+
+  if (capDepositBtn) capDepositBtn.addEventListener('click', function () { openCapitalModal('deposit'); });
+  if (capWithdrawBtn) capWithdrawBtn.addEventListener('click', function () { openCapitalModal('withdraw'); });
+
+  capModalAmount.addEventListener('input', updateCapitalPreview);
+  document.querySelectorAll('input[name="capital-action"]').forEach(function (r) {
+    r.addEventListener('change', updateCapitalPreview);
+  });
+  capModalCancel.addEventListener('click', closeCapitalModal);
+  capModal.addEventListener('click', function (e) { if (e.target === capModal) closeCapitalModal(); });
+  capModalAmount.addEventListener('keydown', function (e) {
+    if (e.key === 'Enter' && !capModalConfirm.disabled) capModalConfirm.click();
+    if (e.key === 'Escape') closeCapitalModal();
+  });
+  capModalConfirm.addEventListener('click', async function () {
+    const action = capModalAction();
+    const amount = capModalAmount.value.trim();  // the exact string sent — never the parsed preview
+    capModalConfirm.disabled = true;
+    try {
+      await api('POST', '/api/strategies/' + encodeURIComponent(STRATEGY) + '/capital',
+        { action: action, amount: amount, op_id: capModalOpId });
+      closeCapitalModal();
+      toast(STRATEGY + ': ' + action + ' ' + amount + ' ok', 'ok');
+      await loadCapital();
+    } catch (e) {
+      // Inline (the 422's `detail` carries the exact withdrawable figure — worth
+      // keeping on screen next to the input, not just a transient toast).
+      capModalError.textContent = e.message;
+      capModalError.style.display = '';
+      capModalConfirm.disabled = false;
+    }
+  });
+
+  // --- Capital policy toggle (Reinvest = compound / Cashout = fixed) ------- //
+
+  async function setPolicy(policy) {
+    // Compounding grows live order sizes — a deliberate, typed-free but
+    // confirmed step in live mode (paper/testnet flip silently, like mode
+    // switches away from live).
+    if (CURRENT_STATUS && CURRENT_STATUS.mode === 'live') {
+      if (!window.confirm('Switch ' + STRATEGY + ' to the ' + policy +
+          ' policy? Compounding grows live order sizes.')) {
+        return;
+      }
+    }
+    try {
+      await api('POST', '/api/strategies/' + encodeURIComponent(STRATEGY) + '/policy', { policy: policy });
+      toast(STRATEGY + ': policy → ' + policy, 'ok');
+    } catch (e) {
+      toast(STRATEGY + ': ' + e.message, 'err');
+    } finally {
+      await loadCapital();
+    }
+  }
+
+  document.querySelectorAll('.policy-opt').forEach(function (btn) {
+    btn.addEventListener('click', function () { setPolicy(btn.dataset.policy); });
+  });
+
+  function refreshAll() {
+    // Sequence status before the chart/capital so the quote currency is known
+    // when the stats table / chart heading / capital figures render (money
+    // labels want it on first paint).
+    loadStatus().then(function () { loadPnl(); loadCapital(); });
+    loadPositions();
+    loadOrders();
+    loadFills();
+  }
+
+  document.addEventListener('DOMContentLoaded', function () {
+    if (!TB_READ_ONLY) {
+      // Delegated control handlers (the controls are rebuilt on each status
+      // refresh, so bind once on the persistent container).
+      controls.addEventListener('change', function (ev) {
+        const sel = ev.target.closest('select.mode-select');
+        if (!sel) return;
+        const mode = sel.value;
+        if (mode === 'live') { openLiveModal(); return; }  // deliberate, typed ack
+        setMode(mode, false);  // paper / testnet — no confirmation
+      });
+      controls.addEventListener('click', function (ev) {
+        const btn = ev.target.closest('button[data-act]');
+        if (!btn) return;
+        btn.disabled = true;
+        doAction(btn.dataset.act, btn);
+      });
+    }
+
+    refreshAll();
+
+    // Live: an event (order/fill/log) may have moved this strategy — refetch.
+    connect('/api/events', function () { refreshAll(); });
+
+    // Resize: uPlot needs an explicit size, so re-size to the container on resize.
+    var resizeTimer = null;
+    window.addEventListener('resize', function () {
+      if (resizeTimer) clearTimeout(resizeTimer);
+      resizeTimer = setTimeout(function () {
+        if (chart) { var s = chartSize(); chart.setSize(s); }
+      }, 120);
+    });
+
+    // Polling fallback — refresh even if the SSE stream is down.
+    setInterval(refreshAll, 10000);
+  });
+</script>
+<style>
+  /* uPlot chart container — full width, sized in JS. The vendored uplot.css
+     handles the internals; this only frames it in the shell palette. */
+  #pnl-chart { width:100%; min-height:340px; }
+  .uplot { color:var(--fg); }
+  /* Per-mode legend chips — colour dot + label; dimmed when toggled off. */
+  .pnl-legend { display:flex; gap:.5rem; flex-wrap:wrap; }
+  .pnl-mode { display:inline-flex; align-items:center; gap:.4rem;
+          font-size:.8rem; color:var(--fg); background:var(--card);
+          border:1px solid var(--border); border-radius:999px;
+          padding:.28rem .7rem; cursor:pointer; }
+  .pnl-mode .dot { width:.6rem; height:.6rem; border-radius:50%;
+          display:inline-block; }
+  .pnl-mode.is-off { color:var(--muted); opacity:.55;
+          text-decoration:line-through; }
+  /* Capital block — three cells joined by explicit + and = glyphs, so the
+     reconciliation (starting capital + PnL = total value) reads left to right. */
+  .cap-eq { display:flex; align-items:stretch; gap:.9rem; flex-wrap:wrap;
+          margin:.2rem 0 .8rem; }
+  .cap-cell { background:var(--panel-hi); border:1px solid var(--border);
+          border-radius:8px; padding:.6rem .9rem; min-width:9.5rem; }
+  .cap-cell.cap-total { border-color:rgba(94,162,255,.35); }
+  .cap-op { display:flex; align-items:center; font-family:var(--font-display);
+          font-size:1.1rem; color:var(--muted); padding:0 .1rem; }
+  .cap-label { font-size:.72rem; text-transform:uppercase; letter-spacing:.08em;
+          color:var(--muted); margin-bottom:.3rem; }
+  .cap-value { font-family:var(--font-mono); font-size:1.05rem; }
+  .cap-subrow { display:flex; justify-content:space-between; gap:.8rem;
+          font-size:.85rem; font-family:var(--font-mono); }
+  .cap-subrow .cap-sublabel { color:var(--muted); font-family:var(--font-body); }
+  .cap-delta { font-size:.78rem; margin-top:.25rem; }
+  #capital-ledger summary { cursor:pointer; color:var(--muted); font-size:.85rem; }
+  #capital-ledger[open] summary { color:var(--fg); margin-bottom:.5rem; }
+  /* The Adjust-capital modal is a routine control, not a warning — override
+     live-modal's red top border (base.html's default .modal-card rule) with
+     the neutral accent colour. */
+  #capital-modal .modal-card { border-top-color:var(--accent); }
+  #capital-modal-action label { cursor:pointer; }
+</style>
+{% endblock %}

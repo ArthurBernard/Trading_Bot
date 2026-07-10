@@ -16,6 +16,184 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 
+## [0.11.0] - 2026-07-10
+
+### Added
+
+- **The capital block — the money story reconciles on screen (closes the
+  strategy-capital epic).** The strategy detail page opens with a CAPITAL card:
+  starting capital + PnL (realised / unrealised) = total value, joined by
+  explicit `+`/`=` glyphs with a Δ%-since-funding readout; a withdrawable line;
+  a Reinvest/Cashout segmented toggle (live mode asks for confirmation); one
+  shared Adjust-capital modal (deposit/withdraw, display-only preview, an
+  `op_id` minted once per open so a double-click never double-counts; a 422
+  renders the server's exact withdrawable inline); and a ledger expander — the
+  audit trail of every funding/deposit/withdrawal. The Strategies roster gains
+  a Total value column so the same figure reads at every altitude
+  (strategy-capital leaf 08). (#179)
+- **Capital control plane: fund, cash out, flip the policy — live from the
+  dashboard API.** `GET/POST /api/strategies/{name}/capital` (deposit/withdraw,
+  amounts as Decimal strings — a JSON float is refused) and
+  `POST /api/strategies/{name}/policy` (`fixed`/`compound`, persisted to the
+  manifest and hot next tick). Every mutation is idempotent by a caller-assigned
+  `op_id` (the client-order-id analogue — a retried POST never double-counts);
+  withdrawals are capped at `withdrawable = max(0, total_value − committed to
+  positions − reserved by open orders)` and a too-large request 422s with the
+  exact figure. Paper/testnet unconstrained; a live-mode capital op returns 409
+  (deferred to real-key enablement). New `WithdrawalTooLarge` /
+  `LiveCapitalOpsDeferred` domain errors (strategy-capital leaf 07). (#178)
+- **The capital ledger drives the engine.** New
+  `application/capital_service.py`: the declared `allocation` (or a portfolio's
+  `capital`) seeds a deterministic genesis `FUNDING` event once
+  (`<strategy>:funding`, idempotent — re-deploys never double-fund; the config
+  value is inert thereafter), and both runners now read their sizing base
+  through a **lazy `capital_provider` called once per tick** — `fixed` sizes on
+  contributed capital `C`, `compound` on `C + realised PnL` (floored at 0,
+  never unrealised) — so a deposit/withdrawal/policy flip is hot with no engine
+  rebuild. The KPI anchor `v0` repoints to the genesis amount while the ratios
+  stay on the **fill-only** equity curve (a deposit never reads as a return —
+  guardrail-tested). `/api/strategies` rows and `/api/pnl`'s `current` gain
+  `allocation` / `contributed` / `unrealised` / `total_value` /
+  `capital_policy` (strategy-capital leaf 06). (#177)
+- **Per-strategy detail page.** Every strategy now has a deep-linkable home,
+  `GET /strategies/{name}` (404 for an unknown unit): header with mode badge /
+  run pill / Start-Stop-Mode-Remove controls (incl. the typed go-live modal),
+  the uPlot equity chart + per-mode stats (moved from the PnL tab, strategy
+  pre-bound — no dropdown), and that strategy's positions, recent orders and
+  fills. The deploy form moves to its own `/strategies/new` page
+  (strategy-capital leaf 05). (#176)
+- **Per-strategy `allocation` + `capital_policy` config fields.** Both
+  `StrategyConfig` and `PortfolioStrategyConfig` gain an optional, strictly
+  positive `allocation` (the declared capital base — single-instrument
+  strategies had no money field at all) and a
+  `capital_policy: "fixed" | "compound"` (default `fixed`). `allocation`
+  supersedes a portfolio's `capital` when set; unset = exactly today's
+  behaviour, every existing manifest validates unchanged. Inert until the
+  capital service wires them (strategy-capital leaf 04). (#175)
+- **Capital ledger storage.** `SqliteStore` gains the append-only
+  `capital_events` table (composite PK `(event_id, strategy, mode)` +
+  `INSERT OR IGNORE` — the fills idempotency discipline; money as
+  `str(Decimal)`; `mode`/`venue` context tags) with `record_capital_event()` /
+  `capital_events()` and a presence-probing `_migrate_capital_events`, so an
+  existing store upgrades in place. Dormant until the capital service lands
+  (strategy-capital leaf 03). (#174)
+- **Domain capital primitives.** New pure `domain/capital.py`: `CapitalEvent`
+  (immutable money movement — `FUNDING`/`DEPOSIT`/`WITHDRAWAL`, strictly-positive
+  Decimal amount with the sign in the type, mirroring `Fill`'s discipline) plus
+  the folds `contributed_capital(events)` and `value_series(fills, events)`
+  (both streams interleaved by `ts`, event-before-fill on ties;
+  `value = contributed + realised`). Reconciles point-for-point with
+  `pnl_series.equity_series` when the only event is a genesis funding — verified
+  exact over 477 real paper fills (strategy-capital leaf 02). (#173)
+- **Dashboard shows WHEN things happened.** `/api/strategies` rows carry
+  `last_eval_ts` (wall-clock of the last tick attempt) and `last_asof_ts` (as-of
+  of the last completed evaluation); the Strategies table gains a **Last eval**
+  column (relative time, with the absolute eval instant + as-of data date on
+  hover). Every order row served by `/api/orders` now carries `ts` (epoch ms,
+  first-persisted time; `null` when the order predates any store) — the Orders
+  page's Orders table and the Overview's open-orders table both gain a **Time**
+  column (mirroring the Fills table's formatting), and order history now renders
+  most-recent-first.
+- **Dashboard read-API enrichment.** `/api/strategies` rows and `/api/kpi` rows now
+  carry `span` (bar cadence, seconds) and `quote` (currency; `null` when an
+  aggregate row folds mixed quote currencies); `/api/health` gains `next_tick_ts`
+  / `tick` (the daemon's APScheduler cadence, wired through a new
+  `schedule_info` hook — `null`/`null` outside the daemon); merged SSE frames on
+  `/api/events` are tagged with `strategy` and a server-side `ts` (epoch ms) so
+  the Logs page can attribute and timestamp events (ui-ux-overhaul leaf 01).
+- **Dashboard: visible evaluation cadence + freshness.** The health chip counts
+  down live (1 s tick) to the daemon's next scheduler check (`next check 42s` /
+  `12m05s`; a tooltip explains serve-only mode when there is no scheduler), the
+  Overview summary strip's next-check chip reuses the same shared countdown, the
+  Strategies table gains **Cadence** (humanized bar span) and **Next bar**
+  (countdown to the next epoch-aligned bar close, absolute local time on hover)
+  columns, and every data card on Overview / Strategies / Orders carries a muted
+  `updated HH:MM:SS` stamp set after each successful load — all driven by one
+  shared per-page 1 s interval over `data-countdown-ts` elements (`tbTime`
+  helpers in base.html), never a timer per cell (ui-ux-overhaul leaf 04).
+
+### Changed
+
+- **Dashboard IA: 5 tabs → 4; the PnL tab retired into the detail page.**
+  The nav is now Overview · Strategies · Orders · Logs; `GET /pnl` 303-redirects
+  to `/` so old bookmarks keep working. The Strategies page slims to a linked
+  roster (name links to the detail page; the mode `<select>`, Remove and the
+  go-live modal move there; quick Start/Stop stays), and strategy names across
+  Overview and Orders are links to `/strategies/{name}`
+  (strategy-capital leaf 05). (#176)
+- **Dashboard display formatting.** A new dependency-free `static/format.js`
+  (`tbFmt` namespace) rounds, thousands-groups and unit-labels every figure on
+  every page (money by quote currency, quantities by base asset, max-drawdown as
+  a `%`, ratios fixed-precision) while the exact Decimal string the API sent
+  always survives in a `title` tooltip; applied across Overview / Strategies /
+  Orders / PnL / Logs and the legacy single-engine dashboard (ui-ux-overhaul
+  leaf 02).
+- **Overview: positions by strategy + summary strip.** Positions now group by
+  strategy by default (dropping the redundant Strategy column from both header
+  and rows in that view), the group-by and KPI-level choices persist across
+  reloads (`localStorage`), and a summary strip above the KPI card shows
+  running/total strategies, open orders, total realised PnL (server-exact, no
+  client-side math) and the next scheduled tick (ui-ux-overhaul leaf 03).
+- **Dashboard: tables & event-feed polish (closes the ui-ux-overhaul epic).**
+  The Strategies/Overview/Orders tables no longer visibly rebuild on an
+  unchanged poll nor wipe an open mode `<select>` mid-interaction; order
+  statuses render as colour-coded badges (Orders page + Overview open-orders);
+  a history read at the server's default cap shows a "showing the most recent
+  200" caption; the Fills table gains a seconds-precision timestamp with a
+  relative ("3m ago") tooltip; the Logs feed stamps lines with the event's own
+  server time, tags them with the emitting strategy, and gains All/Orders/
+  Fills/Logs filter chips plus a min-level select (applied to both incoming
+  and already-buffered lines); the PnL stats table gains a Return column
+  (realised PnL ÷ starting capital) and a starting-capital note (ui-ux-overhaul
+  leaf 05).
+- **`start` defaults to the dashboard manifest.** With no `--config`,
+  `trading-bot start` now loads `configs/dashboard.yaml` when it exists (the
+  same persistent manifest `dashboard` reads and rewrites) instead of a bare
+  empty paper config — so a plain `trading-bot start --serve` runs and serves
+  the book the dashboard manages, no path to remember. Absent that file, the
+  bare-config fallback is unchanged; `run`/`serve` keep requiring an explicit
+  path (auto-picking up real strategies there would surprise).
+
+### Fixed
+
+- **Login: stable CSRF cookie + open favicon route.** `GET /login` no longer
+  rotates the `tb_csrf` double-submit cookie on every render — a background
+  request auth-redirected to `/login` (typically the browser's `/favicon.ico`
+  probe) used to rotate the cookie under the form the user was looking at, so
+  every submit 403'd. The render now reuses a well-formed existing cookie
+  (shape-checked so an arbitrary value is never echoed into the form), and
+  `/favicon.ico` is an open route (308 → `/static/favicon.svg`) so the probe
+  never bounces through the auth redirect at all.
+- **Clean Ctrl-C shutdown.** `start --serve`'s Ctrl-C/SIGTERM handling now
+  completes the supervisor teardown instead of the process dying mid-shutdown
+  (uvicorn 0.49's own signal capture re-raised the captured signal after
+  `serve()` returned, killing the process before the daemon's `finally` ran);
+  the dashboard's `/api/events` SSE stream also no longer spams an ERROR-level
+  cancellation traceback on every shutdown while a client holds it open.
+- **`start --serve` honours the manifest's `ui:` section.** `--serve-host` /
+  `--serve-port` / `--serve-token` now fall back to the manifest's `ui.host` /
+  `ui.port` / `ui.token` (like `dashboard` already does) instead of always
+  defaulting to loopback `:8000` with no token; explicit flags/env still
+  override.
+- **Daemon tick performance.** Idle daemon ticks no longer reload each unit's
+  full data history on every scheduler cadence (a daily-bar portfolio polled
+  every 60s was doing a multi-second, multi-GB reload ~1439 times a day for
+  nothing) — `StrategyRunner.step_latest` / `PortfolioRunner.rebalance_latest`
+  now gate on a cheap, bounded tail probe and skip the full reload when no new
+  bar/common date has appeared; when a full reload *is* needed, it runs off the
+  event loop (`asyncio.to_thread`) so the dashboard stays responsive during a
+  real rebalance.
+
+### Deprecated
+
+### Removed
+
+- **Legacy single-engine dashboard retired.** `create_app` (the read-only
+  one-engine FastAPI) with its `dashboard.html`/`app.js`/`style.css` assets and
+  the `run --serve` flag are gone — the unified dashboard (`start --serve` /
+  `dashboard` / `serve`) is the single web code path, and `run` is console-only;
+  the login page carries its own inline styles (strategy-capital leaf 01). (#172)
+
 ## [0.10.0] - 2026-07-02
 
 ### Added

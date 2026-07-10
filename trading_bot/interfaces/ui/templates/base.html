@@ -99,6 +99,13 @@
             box-shadow:inset 0 1px 0 var(--panel-hi), 0 1px 2px rgba(0,0,0,.35); }
     .row { display:flex; gap:.5rem; align-items:center; flex-wrap:wrap; }
     .muted { color:var(--muted); }
+    /* The muted unit suffix format.js's tbFmt.*Cell() helpers append to a
+       formatted figure (e.g. quote currency, base asset, "%"). */
+    .unit { color:var(--muted); font-size:.85em; margin-left:.18em; }
+    /* "updated HH:MM:SS" freshness stamp — stampUpdated() writes into it after
+       every successful data-card load (Overview KPI/positions/orders,
+       Strategies table, Orders page tables). */
+    .updated { color:var(--muted); font-size:.76rem; }
     .ok { color:var(--ok); } .err { color:var(--err); }
     /* Tables — a horizontally-scrollable wrapper keeps wide tables from pushing
        the page wide on a narrow viewport. */
@@ -111,6 +118,10 @@
     .num { text-align:right; font-family:var(--font-mono); }
     .empty td { color:var(--muted); text-align:center; padding:1rem; }
     .side-buy { color:var(--ok); } .side-sell { color:var(--err); }
+    /* Strategy-name -> detail-page link, shared across the roster, Overview and
+       Orders name cells so every place a strategy is named is deep-linkable. */
+    a.strat-link { color:var(--accent); text-decoration:none; }
+    a.strat-link:hover { text-decoration:underline; }
     /* Exchange group-header row in the strategies table. */
     tr.group td { background:var(--accent-soft);
             border-bottom:1px solid var(--border); padding:.4rem .6rem; }
@@ -129,6 +140,19 @@
     .badge-testnet { color:var(--warn); border-color:rgba(214,161,50,.45);
             background:var(--warn-soft); }
     .badge-live    { color:var(--err); border-color:rgba(248,81,73,.5);
+            background:var(--err-soft); }
+    /* Order-status badges (Orders page + Overview open-orders) — statusBadge()
+       below maps a lowercase order status to one of these; an unrecognized
+       status falls back to plain escaped text instead of guessing a colour. */
+    .badge-status-muted { color:var(--muted); border-color:var(--border);
+            background:var(--panel-hi); }
+    .badge-status-dim   { color:var(--muted); border-color:var(--border);
+            background:transparent; opacity:.6; }
+    .badge-status-warn  { color:var(--warn); border-color:rgba(214,161,50,.45);
+            background:var(--warn-soft); }
+    .badge-status-ok    { color:var(--ok); border-color:rgba(63,185,80,.4);
+            background:var(--ok-soft); }
+    .badge-status-err   { color:var(--err); border-color:rgba(248,81,73,.5);
             background:var(--err-soft); }
     /* Running / stopped pill with a status dot. */
     .run-pill { display:inline-flex; align-items:center; gap:.4rem;
@@ -152,6 +176,11 @@
     button.btn-primary { color:#08110a; background:var(--ok);
             border-color:var(--ok); font-weight:700; }
     button.btn-primary:hover { filter:brightness(1.08); background:var(--ok); }
+    /* Toggle button active state — reuses the nav's accent language. Shared by
+       every page-level toggle group (Overview's KPI-level/group-by chips,
+       Logs' event-type filter chips). */
+    .btn.is-active { color:var(--accent); border-color:rgba(94,162,255,.45);
+            background:var(--accent-soft); font-weight:600; }
     select.mode-select { font:inherit; font-size:.8rem; color:var(--fg);
             background:var(--bg); border:1px solid var(--border);
             border-radius:7px; padding:.28rem 1.6rem .28rem .55rem; cursor:pointer;
@@ -229,7 +258,6 @@
       ('/', 'Overview'),
       ('/strategies', 'Strategies'),
       ('/orders', 'Orders'),
-      ('/pnl', 'PnL'),
       ('/logs', 'Logs'),
     ] %}
     {% for href, text in tabs %}
@@ -253,6 +281,7 @@
     <a href="https://github.com/ArthurBernard/Trading_Bot">GitHub</a>
   </footer>
   <div id="toast-root"></div>
+  <script src="/static/format.js"></script>
   <script>
     // Shared vanilla helpers used across every page — no JS framework. The
     // read_only flag is surfaced so pages can hide/disable control affordances.
@@ -274,32 +303,169 @@
       return data;
     }
 
-    // Format a number with thousands separators (no scientific notation),
-    // trimming needless decimals — e.g. 1000 -> "1,000", 42153.7 -> "42,153.7".
+    // Back-compat thin wrappers over format.js's tbFmt namespace — kept so
+    // nothing silently breaks mid-migration, but every page's own rendering
+    // code now calls tbFmt.*Cell() directly (rounded, unit-labelled, exact
+    // value on hover). These two stay plain-text (no tooltip, no unit).
     function fmtNum(n) {
-      if (n == null || isNaN(n)) return '—';
-      return Number(n).toLocaleString('en-US', { maximumFractionDigits: 8 });
+      return tbFmt.qty(n, { maxDp: 8 });
     }
-    // Render a money value verbatim. The API sends money as EXACT Decimal strings;
-    // never parseFloat a money field (that would reintroduce binary-float error).
-    // A bare number is grouped for readability; a string passes through unchanged.
     function fmtMoney(v) {
-      if (v == null) return '—';
-      if (typeof v === 'number') return fmtNum(v);
-      return String(v);
+      return tbFmt.money(v);
     }
-    // Format a ms epoch as "YYYY-MM-DD HH:mm" in the browser's local zone.
-    function fmtDate(ms) {
+    // Format a ms epoch as "YYYY-MM-DD HH:mm" (or "HH:mm:ss" with
+    // {seconds:true}, e.g. the Fills table / Logs feed) in the browser's local
+    // zone.
+    function fmtDate(ms, opts) {
       if (ms == null) return '—';
-      const opts = { year:'numeric', month:'2-digit', day:'2-digit',
+      opts = opts || {};
+      const o = { year:'numeric', month:'2-digit', day:'2-digit',
                      hour:'2-digit', minute:'2-digit', hour12:false };
-      return new Date(ms).toLocaleString('en-CA', opts).replace(',', '');
+      if (opts.seconds) o.second = '2-digit';
+      return new Date(ms).toLocaleString('en-CA', o).replace(',', '');
+    }
+
+    // A compact "Ns ago" / "Nm ago" / "Nh ago" / "Nd ago" string for a past ms
+    // epoch — paired with fmtDate() as a `title` tooltip (e.g. the Fills
+    // table's absolute timestamp, a Logs feed line) so the exact and relative
+    // reading are both one hover away. "—" for a missing timestamp.
+    function fmtRelative(ms) {
+      if (ms == null) return '—';
+      const deltaS = Math.max(0, Math.floor((Date.now() - ms) / 1000));
+      if (deltaS < 1) return 'just now';
+      if (deltaS < 60) return deltaS + 's ago';
+      if (deltaS < 3600) return Math.floor(deltaS / 60) + 'm ago';
+      if (deltaS < 86400) return Math.floor(deltaS / 3600) + 'h ago';
+      return Math.floor(deltaS / 86400) + 'd ago';
     }
 
     function escapeHtml(s) {
       return String(s).replace(/[&<>"']/g, function (c) {
         return { '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c];
       });
+    }
+
+    // Order-status -> badge CSS suffix (the .badge-status-* rules above) — one
+    // lowercase-status map shared by the Orders page and Overview's open-orders
+    // table so both surfaces colour-code statuses identically. Covers every
+    // `OrderStatus` value the domain actually emits (new/submitted/open —
+    // still working; partially_filled; filled; cancelled; rejected), plus a
+    // few defensive synonyms (US "canceled" spelling, "working"/"expired") in
+    // case a future venue-side status differs. An unrecognized status falls
+    // back to plain escaped text rather than guessing a colour.
+    const ORDER_STATUS_BADGE_CLASS = {
+      new: 'muted',
+      submitted: 'muted',
+      open: 'muted',
+      working: 'muted',
+      partially_filled: 'warn',
+      filled: 'ok',
+      cancelled: 'dim',
+      canceled: 'dim',
+      rejected: 'err',
+      expired: 'err',
+    };
+    function statusBadge(status) {
+      const key = String(status == null ? '' : status).toLowerCase();
+      const cls = ORDER_STATUS_BADGE_CLASS[key];
+      if (!cls) return escapeHtml(status == null ? '—' : status);
+      return '<span class="badge badge-status-' + cls + '">' + escapeHtml(key) + '</span>';
+    }
+
+    // tbRefreshGuard(key, tableEl, payload) -> 'render' | 'skip-stamp' | 'skip-silent'
+    // Shared by the Strategies/Overview/Orders polling refreshes so a table
+    // never visibly rebuilds when nothing changed, and never rebuilds out from
+    // under an open control (e.g. an in-row mode <select>):
+    //   - 'skip-silent': `document.activeElement` sits inside `tableEl` — a
+    //     control is mid-interaction. The caller must defer EVERYTHING
+    //     (including the "updated" stamp: the visible rows are not verified
+    //     current, so stamping now would be dishonest) to the next refresh.
+    //   - 'skip-stamp': the payload is byte-identical (JSON.stringify) to the
+    //     last call for this `key` — nothing to redraw, but the fetch did
+    //     succeed and the visible rows ARE what the server just sent, so the
+    //     caller should still stamp "updated".
+    //   - 'render': the payload changed (or this is the first call) — rebuild.
+    // One cache entry per `key`, so unrelated tables (or the same table under a
+    // different grouping — pass a compound key) don't collide.
+    const _tbLastPayload = Object.create(null);
+    function tbRefreshGuard(key, tableEl, payload) {
+      if (tableEl && tableEl.contains(document.activeElement)) return 'skip-silent';
+      const json = JSON.stringify(payload);
+      const unchanged = _tbLastPayload[key] === json;
+      _tbLastPayload[key] = json;
+      return unchanged ? 'skip-stamp' : 'render';
+    }
+
+    // tbTime — shared cadence helpers reused by base.html's health chip and by
+    // strategies.html's Cadence/Next-bar columns. Plain global (like TB_READ_ONLY
+    // above), not window-attached — every page's inline script runs in the same
+    // classic-script global scope as this one, after this block has executed.
+    const tbTime = {
+      // countdown(tsMs) -> a compact, stable-width duration string counting down
+      // to an epoch-ms timestamp: "42s", "12m05s", "1h05m", "1d02h". Clamps to
+      // "due" once the target has passed (e.g. a next_tick_ts gone stale between
+      // 10s health polls) — never a negative duration.
+      countdown: function (tsMs) {
+        if (tsMs == null) return '';
+        const deltaMs = tsMs - Date.now();
+        if (deltaMs <= 0) return 'due';
+        const totalS = Math.ceil(deltaMs / 1000);
+        function pad(n) { return String(n).padStart(2, '0'); }
+        if (totalS < 60) return totalS + 's';
+        if (totalS < 3600) return Math.floor(totalS / 60) + 'm' + pad(totalS % 60) + 's';
+        if (totalS < 86400) {
+          const h = Math.floor(totalS / 3600);
+          const m = Math.floor((totalS % 3600) / 60);
+          return h + 'h' + pad(m) + 'm';
+        }
+        const d = Math.floor(totalS / 86400);
+        const h = Math.floor((totalS % 86400) / 3600);
+        return d + 'd' + pad(h) + 'h';
+      },
+      // humanSpan(seconds) -> "1d" / "1h" / "15m" / "Ns" (the largest exact unit
+      // the span divides into); null for a missing/zero/negative span (older
+      // payload, or a unit with no bar cadence) — callers render "—".
+      humanSpan: function (seconds) {
+        if (seconds == null || seconds <= 0) return null;
+        if (seconds % 86400 === 0) return (seconds / 86400) + 'd';
+        if (seconds % 3600 === 0) return (seconds / 3600) + 'h';
+        if (seconds % 60 === 0) return (seconds / 60) + 'm';
+        return seconds + 's';
+      },
+      // nextBarCloseMs(spanSeconds) -> the next epoch-aligned bar boundary, in
+      // epoch ms (UTC): ceil(now_s / span) * span * 1000. Null for a missing/
+      // zero/negative span.
+      nextBarCloseMs: function (spanSeconds) {
+        if (spanSeconds == null || spanSeconds <= 0) return null;
+        const nowS = Date.now() / 1000;
+        return Math.ceil(nowS / spanSeconds) * spanSeconds * 1000;
+      },
+    };
+
+    // Re-read every element carrying a `data-countdown-ts` attribute and
+    // re-render its text via tbTime.countdown() — one shared 1s interval driving
+    // every countdown on the page (health chip, Overview's next-tick chip,
+    // strategies.html's Next-bar column) instead of a timer per element. A
+    // table rebuild (e.g. strategies.html's 3s poll) simply re-stamps the
+    // attribute on the new elements; this loop just re-reads whatever is
+    // currently in the DOM.
+    function tickCountdowns() {
+      document.querySelectorAll('[data-countdown-ts]').forEach(function (el) {
+        const ts = Number(el.getAttribute('data-countdown-ts'));
+        if (!isFinite(ts)) return;
+        el.textContent = tbTime.countdown(ts);
+      });
+    }
+
+    // Stamp a data-card header with "updated HH:MM:SS" (local time), called
+    // after every successful load — never on a failed fetch, so a stale stamp
+    // honestly signals "this is the last time it actually refreshed".
+    function stampUpdated(elId) {
+      const el = document.getElementById(elId);
+      if (!el) return;
+      function pad(n) { return String(n).padStart(2, '0'); }
+      const now = new Date();
+      el.textContent = 'updated ' + pad(now.getHours()) + ':' + pad(now.getMinutes()) + ':' + pad(now.getSeconds());
     }
 
     // Toast — a transient bottom-right notification.
@@ -323,17 +489,40 @@
       el.innerHTML = '<span class="dot"></span>' + escapeHtml(txt);
     }
 
-    // Poll /api/health and reflect it in the header chip + connection dot. Page
-    // data lands in later leaves; the shell only proves liveness for now.
+    // The latest /api/health payload, kept so the 1s countdown tick (and other
+    // pages, e.g. overview.html's summary strip) can read next_tick_ts/tick
+    // without a separate fetch.
+    let lastHealth = null;
+
+    // Render the health chip from `lastHealth`. The countdown text itself lives
+    // in a `data-countdown-ts` span so tickCountdowns() keeps it live between
+    // 10s health polls — this function only needs to run when the payload (or
+    // its presence/absence of a scheduler) actually changes.
+    function renderHealthChip() {
+      const chip = document.getElementById('health-chip');
+      if (!chip || !lastHealth) return;
+      chip.className = 'chip health-ok';
+      let html = 'health <b>ok</b> · ' + escapeHtml(lastHealth.mode) +
+        ' · <b>' + fmtNum(lastHealth.strategies) + '</b> strat';
+      if (lastHealth.next_tick_ts != null) {
+        chip.removeAttribute('title');
+        const titleAttr = lastHealth.tick ? ' title="' + escapeHtml(lastHealth.tick) + '"' : '';
+        html += ' · next check <span data-countdown-ts="' + lastHealth.next_tick_ts + '"' + titleAttr + '>' +
+          escapeHtml(tbTime.countdown(lastHealth.next_tick_ts)) + '</span>';
+      } else {
+        // No scheduler hook (e.g. serve-only mode, or no daemon at all) — no
+        // countdown text, just an explanatory tooltip on the chip itself.
+        chip.title = 'no scheduler — the daemon (start --serve) steps strategies; serve-only mode does not';
+      }
+      chip.innerHTML = html;
+    }
+
+    // Poll /api/health and reflect it in the header chip + connection dot.
     async function refreshHealth() {
       try {
         const h = await api('GET', '/api/health');
-        const chip = document.getElementById('health-chip');
-        if (chip) {
-          chip.className = 'chip health-ok';
-          chip.innerHTML = 'health <b>ok</b> · ' + escapeHtml(h.mode) +
-            ' · <b>' + fmtNum(h.strategies) + '</b> strat';
-        }
+        lastHealth = h;
+        renderHealthChip();
         setConn('ok');
       } catch (e) {
         const chip = document.getElementById('health-chip');
@@ -356,6 +545,11 @@
     document.addEventListener('DOMContentLoaded', function () {
       refreshHealth();
       setInterval(refreshHealth, 10000);
+      // The one shared 1s countdown tick for the whole page (health chip, and
+      // any per-page data-countdown-ts element, e.g. the Overview summary
+      // strip's next-tick chip or strategies.html's Next-bar column).
+      tickCountdowns();
+      setInterval(tickCountdowns, 1000);
     });
   </script>
   {% block scripts %}{% endblock %}

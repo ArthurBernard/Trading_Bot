@@ -17,6 +17,25 @@
       <button type="button" class="btn" id="clear-log">Clear</button>
     </div>
   </div>
+  <!-- Event-type filter chips + a min-level select for log events. Filters
+       apply to both incoming AND already-buffered lines (the raw event ring
+       buffer is re-rendered on every filter change). -->
+  <div class="row" style="justify-content:space-between; align-items:center; margin-top:.6rem; flex-wrap:wrap; gap:.6rem;">
+    <div class="row" id="log-type-filters" role="tablist" aria-label="Event type filter" style="gap:.35rem;">
+      <button type="button" class="btn log-type-filter is-active" data-type="all">All</button>
+      <button type="button" class="btn log-type-filter" data-type="order">Orders</button>
+      <button type="button" class="btn log-type-filter" data-type="fill">Fills</button>
+      <button type="button" class="btn log-type-filter" data-type="log">Logs</button>
+    </div>
+    <label class="ctl-label" style="display:inline-flex; align-items:center; gap:.4rem; text-transform:none; letter-spacing:normal;">
+      Min level
+      <select id="log-min-level" class="mode-select" aria-label="Minimum log level">
+        <option value="info" selected>info</option>
+        <option value="warning">warning</option>
+        <option value="error">error</option>
+      </select>
+    </label>
+  </div>
   <div id="logs-feed" class="logs-feed" role="log" aria-live="polite">
     <div class="log-empty muted">Waiting for events…</div>
   </div>
@@ -29,80 +48,142 @@
   // Each order/fill/log event the dashboard fans in from every running unit's bus
   // is appended as a compact, timestamped line, with a bounded recent-history
   // buffer so the feed never grows unbounded. Dependency-free vanilla JS; reuses
-  // base.html's connect()/escapeHtml()/fmtMoney(). Money stays an EXACT Decimal
-  // string (rendered verbatim; never parseFloat'd).
+  // base.html's connect()/escapeHtml()/fmtDate()/fmtRelative() and format.js's
+  // tbFmt.*Cell() helpers. Money stays an EXACT Decimal string; Number() is used
+  // only for the rounded DISPLAY text — the exact string always survives in a
+  // title tooltip.
 
   // Cap the on-screen history so a long-running session cannot grow the DOM
-  // unbounded (dccd keeps a small rolling buffer likewise).
+  // unbounded (dccd keeps a small rolling buffer likewise). EVENTS is the raw,
+  // UNFILTERED ring buffer every incoming frame is pushed onto — filters
+  // (type chips + min-level select) never drop data from it, they only decide
+  // what renderFeed() shows, so switching a filter can always recover history
+  // that arrived before the switch.
   var MAX_LINES = 500;
   var feed = null;
-  var seededEmpty = true;  // the "Waiting…" placeholder is still shown
+  var EVENTS = [];
+  var FILTER_TYPE = 'all';    // 'all' | 'order' | 'fill' | 'log'
+  var FILTER_LEVEL = 'info';  // min level for 'log' events: info < warning < error
+
+  var LEVEL_RANK = { info: 0, warning: 1, error: 2, critical: 3 };
+
+  // True when a log event's level meets the current minimum (an unrecognized
+  // level — e.g. a future severity the map hasn't seen — always passes rather
+  // than being silently hidden).
+  function levelPasses(level) {
+    var lvl = (level || 'info').toLowerCase();
+    var rank = LEVEL_RANK.hasOwnProperty(lvl) ? LEVEL_RANK[lvl] : 99;
+    return rank >= LEVEL_RANK[FILTER_LEVEL];
+  }
+
+  function passesFilter(ev) {
+    if (FILTER_TYPE !== 'all' && ev.type !== FILTER_TYPE) return false;
+    if (ev.type === 'log') return levelPasses(ev.level);
+    return true;
+  }
 
   // Render one bus event (the /api/events frame shape) to a feed line's HTML.
-  // The frame is {type: 'order'|'fill'|'log', ...} — see _event_dict server-side.
+  // The frame is {type: 'order'|'fill'|'log', strategy, ts, ...} — see
+  // _event_dict/the merged /api/events handler server-side. Stamped with the
+  // event's own server `ts` (falling back to the client's receive time only
+  // for a frame that carries none); a muted strategy chip is added when the
+  // frame names the emitting unit.
   function eventLine(ev) {
-    var now = fmtDate(Date.now());
+    var tsMs = ev.ts != null ? ev.ts : Date.now();
+    var stamp = fmtDate(tsMs, { seconds: true });
+    var tsTitle = ev.ts != null ? ' title="' + escapeHtml(fmtRelative(ev.ts)) + '"' : '';
+    var stratChip = ev.strategy
+      ? '<span class="log-strategy muted">' + escapeHtml(ev.strategy) + '</span>'
+      : '';
     if (ev.type === 'fill') {
       var f = ev.fill;
       var sideCls = f.side === 'buy' ? 'side-buy' : 'side-sell';
+      var funit = tbFmt.splitInstrument(f.instrument);
       return '<div class="log-line log-fill">' +
-        '<span class="log-ts">' + escapeHtml(now) + '</span>' +
-        '<span class="log-tag tag-fill">FILL</span>' +
+        '<span class="log-ts"' + tsTitle + '>' + escapeHtml(stamp) + '</span>' +
+        '<span class="log-tag tag-fill">FILL</span>' + stratChip +
         '<span class="log-msg">' +
           '<span class="' + sideCls + '">' + escapeHtml(f.side) + '</span> ' +
-          fmtMoney(f.qty) + ' ' + escapeHtml(f.instrument) +
-          ' @ ' + fmtMoney(f.price) +
-          ' <span class="muted">(fee ' + fmtMoney(f.fee) + ')</span>' +
+          tbFmt.qtyCell(f.qty, { base: funit.base }) + ' ' + escapeHtml(f.instrument) +
+          ' @ ' + tbFmt.priceCell(f.price, { quote: funit.quote }) +
+          ' <span class="muted">(fee ' + tbFmt.moneyCell(f.fee, { quote: funit.quote }) + ')</span>' +
         '</span></div>';
     }
     if (ev.type === 'order') {
       var o = ev.order;
       var sc = o.side === 'buy' ? 'side-buy' : 'side-sell';
+      var ounit = tbFmt.splitInstrument(o.instrument);
       return '<div class="log-line log-order">' +
-        '<span class="log-ts">' + escapeHtml(now) + '</span>' +
-        '<span class="log-tag tag-order">ORDER</span>' +
+        '<span class="log-ts"' + tsTitle + '>' + escapeHtml(stamp) + '</span>' +
+        '<span class="log-tag tag-order">ORDER</span>' + stratChip +
         '<span class="log-msg">' +
           '<span class="' + sc + '">' + escapeHtml(o.side) + '</span> ' +
-          fmtMoney(o.qty) + ' ' + escapeHtml(o.instrument) +
+          tbFmt.qtyCell(o.qty, { base: ounit.base }) + ' ' + escapeHtml(o.instrument) +
           ' <span class="muted">[' + escapeHtml(o.status) + ']</span>' +
         '</span></div>';
     }
     if (ev.type === 'log') {
       var lvl = (ev.level || 'info').toLowerCase();
       return '<div class="log-line log-log level-' + escapeHtml(lvl) + '">' +
-        '<span class="log-ts">' + escapeHtml(now) + '</span>' +
-        '<span class="log-tag tag-log">' + escapeHtml(lvl.toUpperCase()) + '</span>' +
+        '<span class="log-ts"' + tsTitle + '>' + escapeHtml(stamp) + '</span>' +
+        '<span class="log-tag tag-log">' + escapeHtml(lvl.toUpperCase()) + '</span>' + stratChip +
         '<span class="log-msg">' + escapeHtml(ev.message || '') + '</span></div>';
     }
     // Defensive: an unknown frame type still renders a line.
-    return '<div class="log-line"><span class="log-ts">' + escapeHtml(now) +
-      '</span><span class="log-tag">EVENT</span>' +
+    return '<div class="log-line"><span class="log-ts"' + tsTitle + '>' + escapeHtml(stamp) +
+      '</span><span class="log-tag">EVENT</span>' + stratChip +
       '<span class="log-msg">' + escapeHtml(JSON.stringify(ev)) + '</span></div>';
   }
 
-  function appendEvent(ev) {
-    if (seededEmpty) { feed.innerHTML = ''; seededEmpty = false; }
-    var wrap = document.createElement('div');
-    wrap.innerHTML = eventLine(ev);
-    var node = wrap.firstChild;
-    feed.appendChild(node);
-    // Trim the oldest lines beyond the buffer cap.
-    while (feed.childNodes.length > MAX_LINES) {
-      feed.removeChild(feed.firstChild);
+  // Re-render the whole feed from EVENTS under the current filter — called on
+  // every incoming event and on every filter change, so both incoming and
+  // already-buffered lines always reflect the active filter.
+  function renderFeed() {
+    var visible = EVENTS.filter(passesFilter);
+    if (!visible.length) {
+      feed.innerHTML = '<div class="log-empty muted">' +
+        (EVENTS.length ? 'No events match the current filter.' : 'Waiting for events…') +
+        '</div>';
+      return;
     }
+    feed.innerHTML = visible.map(eventLine).join('');
     if (document.getElementById('autoscroll').checked) {
       feed.scrollTop = feed.scrollHeight;
     }
   }
 
+  function appendEvent(ev) {
+    EVENTS.push(ev);
+    if (EVENTS.length > MAX_LINES) EVENTS.shift();
+    renderFeed();
+  }
+
   function clearFeed() {
-    feed.innerHTML = '<div class="log-empty muted">Cleared. Waiting for events…</div>';
-    seededEmpty = true;
+    EVENTS = [];
+    renderFeed();
+  }
+
+  function setTypeFilter(type) {
+    FILTER_TYPE = type;
+    document.querySelectorAll('.log-type-filter').forEach(function (b) {
+      b.classList.toggle('is-active', b.dataset.type === type);
+    });
+    renderFeed();
   }
 
   document.addEventListener('DOMContentLoaded', function () {
     feed = document.getElementById('logs-feed');
     document.getElementById('clear-log').addEventListener('click', clearFeed);
+
+    document.querySelectorAll('.log-type-filter').forEach(function (btn) {
+      btn.addEventListener('click', function () { setTypeFilter(btn.dataset.type); });
+    });
+    document.getElementById('log-min-level').addEventListener('change', function (ev) {
+      FILTER_LEVEL = ev.target.value;
+      renderFeed();
+    });
+
+    renderFeed();  // seed the "Waiting for events…" placeholder
 
     // Subscribe to the merged SSE stream. Each message is one JSON event frame;
     // connect() also mirrors liveness on the connection dot.
@@ -132,5 +213,9 @@
   .log-empty { padding:.4rem 0; }
   .autoscroll { font-size:.8rem; color:var(--muted); display:inline-flex;
           align-items:center; gap:.35rem; cursor:pointer; }
+  /* The emitting strategy's name, when the frame carries one (leaf 01's
+     `strategy` tag on every merged /api/events frame). */
+  .log-strategy { font-size:.72rem; border:1px solid var(--border);
+          border-radius:4px; padding:.05rem .4rem; white-space:nowrap; }
 </style>
 {% endblock %}

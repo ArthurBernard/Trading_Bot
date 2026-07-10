@@ -3,15 +3,30 @@
 {% block content %}
 <h1>Overview</h1>
 
+<!-- Summary strip — running/total strategies, open orders, total realised PnL
+     (the server's exact Decimal total — never computed client-side) and the
+     next scheduled evaluation tick. Refreshed alongside the rest of the page. -->
+<section class="card" id="summary-card">
+  <div class="row" id="summary-strip">
+    <span class="chip"><b id="sum-running">—</b>/<b id="sum-total">—</b> strategies running</span>
+    <span class="chip"><b id="sum-open-orders">—</b> open orders</span>
+    <span class="chip" title="Total realised PnL across every running strategy">total PnL <b id="sum-pnl">—</b></span>
+    <span class="chip">next check <b id="sum-next-tick">—</b></span>
+  </div>
+</section>
+
 <!-- KPI strip — a level toggle (strategy / exchange / total) over the merged
      PnL / fees / ratios. The buttons refetch /api/kpi?level=. -->
 <section class="card" id="kpi-card">
   <div class="row" style="justify-content:space-between;">
     <h2 style="margin:0;">Performance</h2>
-    <div class="row" id="kpi-levels" role="tablist" aria-label="KPI level">
-      <button type="button" class="btn kpi-level is-active" data-level="strategy">Strategy</button>
-      <button type="button" class="btn kpi-level" data-level="exchange">Exchange</button>
-      <button type="button" class="btn kpi-level" data-level="total">Total</button>
+    <div class="row">
+      <span class="updated" id="kpi-updated"></span>
+      <div class="row" id="kpi-levels" role="tablist" aria-label="KPI level">
+        <button type="button" class="btn kpi-level is-active" data-level="strategy">Strategy</button>
+        <button type="button" class="btn kpi-level" data-level="exchange">Exchange</button>
+        <button type="button" class="btn kpi-level" data-level="total">Total</button>
+      </div>
     </div>
   </div>
   <div class="table-wrap">
@@ -24,7 +39,7 @@
           <th class="num">Sharpe</th>
           <th class="num">Sortino</th>
           <th class="num">Calmar</th>
-          <th class="num">Max DD</th>
+          <th class="num">Max DD (%)</th>
         </tr>
       </thead>
       <tbody id="kpi-body">
@@ -34,21 +49,28 @@
   </div>
 </section>
 
-<!-- Positions — a group-by control (none / crypto / exchange). -->
+<!-- Positions — a group-by control (none / strategy / crypto / exchange), by
+     strategy by default so the page answers "how is each strategy doing?" at a
+     glance. Grouping by strategy drops the now-redundant Strategy column from
+     both the header and the row cells (the group header already names it); the
+     <thead> is rebuilt in JS per grouping mode to keep colspans consistent. -->
 <section class="card" id="positions-card">
   <div class="row" style="justify-content:space-between;">
     <h2 style="margin:0;">Positions</h2>
-    <div class="row" id="pos-groups" role="tablist" aria-label="Group positions by">
-      <button type="button" class="btn pos-group is-active" data-group="">Flat</button>
-      <button type="button" class="btn pos-group" data-group="crypto">By crypto</button>
-      <button type="button" class="btn pos-group" data-group="exchange">By exchange</button>
+    <div class="row">
+      <span class="updated" id="positions-updated"></span>
+      <div class="row" id="pos-groups" role="tablist" aria-label="Group positions by">
+        <button type="button" class="btn pos-group" data-group="">Flat</button>
+        <button type="button" class="btn pos-group is-active" data-group="strategy">By strategy</button>
+        <button type="button" class="btn pos-group" data-group="crypto">By crypto</button>
+        <button type="button" class="btn pos-group" data-group="exchange">By exchange</button>
+      </div>
     </div>
   </div>
   <div class="table-wrap">
     <table id="positions-table">
-      <thead>
+      <thead id="positions-thead">
         <tr>
-          <th>Strategy</th>
           <th>Exchange</th>
           <th>Instrument</th>
           <th class="num">Net qty</th>
@@ -58,7 +80,7 @@
         </tr>
       </thead>
       <tbody id="positions-body">
-        <tr class="empty"><td colspan="7">Loading…</td></tr>
+        <tr class="empty"><td colspan="6">Loading…</td></tr>
       </tbody>
     </table>
   </div>
@@ -66,11 +88,15 @@
 
 <!-- Open orders — non-terminal orders across the units. -->
 <section class="card" id="orders-card">
-  <h2>Open orders</h2>
+  <div class="row" style="justify-content:space-between;">
+    <h2 style="margin:0;">Open orders</h2>
+    <span class="updated" id="overview-orders-updated"></span>
+  </div>
   <div class="table-wrap">
     <table id="orders-table">
       <thead>
         <tr>
+          <th>Time</th>
           <th>Strategy</th>
           <th>Exchange</th>
           <th>Instrument</th>
@@ -82,7 +108,7 @@
         </tr>
       </thead>
       <tbody id="orders-body">
-        <tr class="empty"><td colspan="8">Loading…</td></tr>
+        <tr class="empty"><td colspan="9">Loading…</td></tr>
       </tbody>
     </table>
   </div>
@@ -93,17 +119,35 @@
 <script>
   // Overview page — aggregates positions / open orders / KPI across the
   // supervisor's per-strategy engines, live via SSE with a polling fallback.
-  // Dependency-free vanilla JS; reuses base.html's api()/fmtMoney()/connect().
+  // Dependency-free vanilla JS; reuses base.html's api()/escapeHtml()/connect()
+  // and format.js's tbFmt.*Cell() helpers (rounded, unit-labelled, exact value
+  // on hover — quote/base derived client-side from each row's instrument).
 
-  // Current selections (mirrored on the toggle buttons).
-  let KPI_LEVEL = 'strategy';
-  let POS_GROUP = '';  // '' = flat, else 'crypto' | 'exchange'
+  // Current selections (mirrored on the toggle buttons), persisted across
+  // reloads in localStorage — restored on load, tolerating an absent or
+  // no-longer-valid stored value (falls back to the default below).
+  const POS_GROUP_KEY = 'tb.overview.posGroup';
+  const KPI_LEVEL_KEY = 'tb.overview.kpiLevel';
+  const POS_GROUPS = ['', 'strategy', 'crypto', 'exchange'];
+  const KPI_LEVELS = ['strategy', 'exchange', 'total'];
 
-  // Render a ratio: a JSON number, or '—' for a null (undefined / aggregate).
-  function fmtRatio(v) {
-    if (v == null) return '—';
-    return Number(v).toLocaleString('en-US', { maximumFractionDigits: 3 });
+  function loadPref(key, allowed, fallback) {
+    try {
+      const v = localStorage.getItem(key);
+      return allowed.indexOf(v) !== -1 ? v : fallback;
+    } catch (e) {
+      return fallback;  // storage disabled (e.g. private browsing) — use the default
+    }
   }
+  function savePref(key, value) {
+    try { localStorage.setItem(key, value); } catch (e) { /* ignore — in-memory state still works */ }
+  }
+
+  // 'strategy' by default — "how is each strategy doing?" is the page's
+  // headline question, so positions open grouped by strategy.
+  let KPI_LEVEL = loadPref(KPI_LEVEL_KEY, KPI_LEVELS, 'strategy');
+  let POS_GROUP = loadPref(POS_GROUP_KEY, POS_GROUPS, 'strategy');  // '' = flat
+
   // A signed-money cell class: green for a gain, red for a loss.
   function pnlClass(v) {
     if (v == null) return '';
@@ -111,6 +155,77 @@
     if (n > 0) return 'ok';
     if (n < 0) return 'err';
     return '';
+  }
+
+  // A strategy name rendered as a link to its detail page (/strategies/{name}) —
+  // used everywhere a strategy is named (the KPI table, the positions + open-orders
+  // rows) so each is deep-linkable. The href is URL-encoded; the text is escaped.
+  function stratLink(name) {
+    return '<a class="strat-link" href="/strategies/' + encodeURIComponent(name) + '">' +
+      escapeHtml(name) + '</a>';
+  }
+
+  // --- Summary strip ------------------------------------------------------ //
+  // Running/total strategies, open orders (reusing loadOrders()'s already-
+  // fetched payload — see below), total realised PnL, and the next tick.
+
+  async function loadSummaryStrategies() {
+    const totalEl = document.getElementById('sum-total');
+    const runningEl = document.getElementById('sum-running');
+    try {
+      const list = await api('GET', '/api/strategies');
+      totalEl.textContent = list.length;
+      runningEl.textContent = list.filter(function (s) { return s.running; }).length;
+    } catch (e) {
+      totalEl.textContent = '—';
+      runningEl.textContent = '—';
+    }
+  }
+
+  // Total realised PnL from /api/kpi?level=total — always exactly one row (a
+  // zero total even with nothing running), rendered via tbFmt.moneyCell with
+  // its quote (null quote -> no suffix + "mixed quote currencies" tooltip).
+  // No client-side money arithmetic — the server's exact Decimal total is the
+  // only source.
+  async function loadSummaryPnl() {
+    const pnlEl = document.getElementById('sum-pnl');
+    try {
+      const rows = await api('GET', '/api/kpi?level=total');
+      const total = rows[0];
+      if (total) {
+        pnlEl.className = pnlClass(total.realised_pnl);
+        pnlEl.innerHTML = tbFmt.moneyCell(total.realised_pnl, { quote: total.quote });
+      } else {
+        pnlEl.className = '';
+        pnlEl.textContent = '—';
+      }
+    } catch (e) {
+      pnlEl.className = '';
+      pnlEl.textContent = '—';
+    }
+  }
+
+  // Hooked into base.html's shared countdown mechanism: a `data-countdown-ts`
+  // span is re-rendered every second by the page-wide tickCountdowns() tick, so
+  // this only needs to (re)stamp the attribute + fall back text whenever the
+  // health payload is (re)fetched, not compute the label itself.
+  async function loadSummaryNextTick() {
+    const el = document.getElementById('sum-next-tick');
+    try {
+      const h = await api('GET', '/api/health');
+      if (h.next_tick_ts != null) {
+        el.setAttribute('data-countdown-ts', String(h.next_tick_ts));
+        if (h.tick) { el.title = h.tick; } else { el.removeAttribute('title'); }
+        el.textContent = tbTime.countdown(h.next_tick_ts);
+      } else {
+        el.removeAttribute('data-countdown-ts');
+        el.title = 'no scheduler — the daemon (start --serve) steps strategies; serve-only mode does not';
+        el.textContent = '—';
+      }
+    } catch (e) {
+      el.removeAttribute('data-countdown-ts');
+      el.textContent = '—';
+    }
   }
 
   // --- KPI strip --------------------------------------------------------- //
@@ -127,34 +242,62 @@
       return;
     }
     const body = document.getElementById('kpi-body');
+    // No-flicker refresh — keyed by level, since switching levels always
+    // renders (a different shape) while an unchanged poll at the same level
+    // skips the rebuild. See tbRefreshGuard's doc in base.html.
+    const guard = tbRefreshGuard('kpi:' + KPI_LEVEL, body, rows);
+    if (guard === 'skip-silent') return;
+    stampUpdated('kpi-updated');
+    if (guard === 'skip-stamp') return;
     if (!rows.length) {
       body.innerHTML = '<tr class="empty"><td colspan="7">No running strategy.</td></tr>';
       return;
     }
     body.innerHTML = rows.map(function (r) {
-      const label = r.strategy || r.exchange || 'Total';
+      // At the strategy level the key links to the detail page; the folded
+      // exchange / total levels are plain labels (not a single strategy).
+      const labelCell = r.strategy
+        ? stratLink(r.strategy)
+        : escapeHtml(r.exchange || 'Total');
       return '<tr>' +
-        '<td>' + escapeHtml(label) + '</td>' +
-        '<td class="num ' + pnlClass(r.realised_pnl) + '">' + fmtMoney(r.realised_pnl) + '</td>' +
-        '<td class="num">' + fmtMoney(r.fees_paid) + '</td>' +
-        '<td class="num">' + fmtRatio(r.sharpe) + '</td>' +
-        '<td class="num">' + fmtRatio(r.sortino) + '</td>' +
-        '<td class="num">' + fmtRatio(r.calmar) + '</td>' +
-        '<td class="num">' + fmtRatio(r.max_drawdown) + '</td>' +
+        '<td>' + labelCell + '</td>' +
+        '<td class="num ' + pnlClass(r.realised_pnl) + '">' +
+          tbFmt.moneyCell(r.realised_pnl, { quote: r.quote }) + '</td>' +
+        '<td class="num">' + tbFmt.moneyCell(r.fees_paid, { quote: r.quote }) + '</td>' +
+        '<td class="num">' + tbFmt.ratioCell(r.sharpe) + '</td>' +
+        '<td class="num">' + tbFmt.ratioCell(r.sortino) + '</td>' +
+        '<td class="num">' + tbFmt.ratioCell(r.calmar) + '</td>' +
+        '<td class="num">' + tbFmt.pctCell(r.max_drawdown) + '</td>' +
         '</tr>';
     }).join('');
   }
 
   // --- Positions --------------------------------------------------------- //
-  function positionRowHtml(r) {
+  // The Strategy column is redundant when grouping by strategy (the group
+  // header already names it) — dropped from both the header and the row cells,
+  // with the <thead> rebuilt per grouping mode so colspans stay consistent.
+  function positionsTheadHtml(includeStrategy) {
     return '<tr>' +
-      '<td>' + escapeHtml(r.strategy) + '</td>' +
+      (includeStrategy ? '<th>Strategy</th>' : '') +
+      '<th>Exchange</th>' +
+      '<th>Instrument</th>' +
+      '<th class="num">Net qty</th>' +
+      '<th class="num">Avg entry</th>' +
+      '<th class="num">Realised PnL</th>' +
+      '<th class="num">Fees</th>' +
+      '</tr>';
+  }
+  function positionRowHtml(r, includeStrategy) {
+    const unit = tbFmt.splitInstrument(r.instrument);  // {base, quote}
+    return '<tr>' +
+      (includeStrategy ? '<td>' + stratLink(r.strategy) + '</td>' : '') +
       '<td>' + escapeHtml(r.exchange) + '</td>' +
       '<td>' + escapeHtml(r.instrument) + '</td>' +
-      '<td class="num">' + fmtMoney(r.net_qty) + '</td>' +
-      '<td class="num">' + fmtMoney(r.avg_entry_price) + '</td>' +
-      '<td class="num ' + pnlClass(r.realised_pnl) + '">' + fmtMoney(r.realised_pnl) + '</td>' +
-      '<td class="num">' + fmtMoney(r.fees_paid) + '</td>' +
+      '<td class="num">' + tbFmt.qtyCell(r.net_qty, { base: unit.base }) + '</td>' +
+      '<td class="num">' + tbFmt.priceCell(r.avg_entry_price, { quote: unit.quote }) + '</td>' +
+      '<td class="num ' + pnlClass(r.realised_pnl) + '">' +
+        tbFmt.moneyCell(r.realised_pnl, { quote: unit.quote }) + '</td>' +
+      '<td class="num">' + tbFmt.moneyCell(r.fees_paid, { quote: unit.quote }) + '</td>' +
       '</tr>';
   }
   function groupHeaderHtml(name, count, colspan) {
@@ -163,6 +306,9 @@
       '<span class="group-count">' + count + '</span></td></tr>';
   }
   async function loadPositions() {
+    const includeStrategy = POS_GROUP !== 'strategy';
+    const colspan = includeStrategy ? 7 : 6;
+    document.getElementById('positions-thead').innerHTML = positionsTheadHtml(includeStrategy);
     let data;
     const url = POS_GROUP
       ? '/api/positions?group_by=' + encodeURIComponent(POS_GROUP)
@@ -171,27 +317,34 @@
       data = await api('GET', url);
     } catch (e) {
       document.getElementById('positions-body').innerHTML =
-        '<tr class="empty"><td colspan="7">' + escapeHtml(e.message) + '</td></tr>';
+        '<tr class="empty"><td colspan="' + colspan + '">' + escapeHtml(e.message) + '</td></tr>';
       return;
     }
     const body = document.getElementById('positions-body');
+    // No-flicker refresh — keyed by grouping, since switching POS_GROUP always
+    // renders (a different shape) while an unchanged poll at the same grouping
+    // skips the rebuild. See tbRefreshGuard's doc in base.html.
+    const guard = tbRefreshGuard('positions:' + (POS_GROUP || 'flat'), body, data);
+    if (guard === 'skip-silent') return;
+    stampUpdated('positions-updated');
+    if (guard === 'skip-stamp') return;
     let html = '';
     if (POS_GROUP) {
       // Grouped: [{group, rows}] — a header row per bucket.
       if (!data.length) {
-        body.innerHTML = '<tr class="empty"><td colspan="7">No open positions.</td></tr>';
+        body.innerHTML = '<tr class="empty"><td colspan="' + colspan + '">No open positions.</td></tr>';
         return;
       }
       data.forEach(function (g) {
-        html += groupHeaderHtml(g.group, g.rows.length, 7);
-        html += g.rows.map(positionRowHtml).join('');
+        html += groupHeaderHtml(g.group, g.rows.length, colspan);
+        html += g.rows.map(function (r) { return positionRowHtml(r, includeStrategy); }).join('');
       });
     } else {
       if (!data.length) {
-        body.innerHTML = '<tr class="empty"><td colspan="7">No open positions.</td></tr>';
+        body.innerHTML = '<tr class="empty"><td colspan="' + colspan + '">No open positions.</td></tr>';
         return;
       }
-      html = data.map(positionRowHtml).join('');
+      html = data.map(function (r) { return positionRowHtml(r, includeStrategy); }).join('');
     }
     body.innerHTML = html;
   }
@@ -203,55 +356,79 @@
       rows = await api('GET', '/api/orders');
     } catch (e) {
       document.getElementById('orders-body').innerHTML =
-        '<tr class="empty"><td colspan="8">' + escapeHtml(e.message) + '</td></tr>';
+        '<tr class="empty"><td colspan="9">' + escapeHtml(e.message) + '</td></tr>';
+      document.getElementById('sum-open-orders').textContent = '—';
       return;
     }
     const body = document.getElementById('orders-body');
+    // No-flicker refresh — see tbRefreshGuard's doc in base.html.
+    const guard = tbRefreshGuard('open-orders', body, rows);
+    if (guard === 'skip-silent') return;
+    // Feeds the summary strip's open-orders count — no separate fetch for it.
+    document.getElementById('sum-open-orders').textContent = rows.length;
+    stampUpdated('overview-orders-updated');
+    if (guard === 'skip-stamp') return;
     if (!rows.length) {
-      body.innerHTML = '<tr class="empty"><td colspan="8">No open orders.</td></tr>';
+      body.innerHTML = '<tr class="empty"><td colspan="9">No open orders.</td></tr>';
       return;
     }
     body.innerHTML = rows.map(function (o) {
       const sideCls = o.side === 'buy' ? 'side-buy' : 'side-sell';
+      const unit = tbFmt.splitInstrument(o.instrument);
+      // Absolute time with seconds, visible; relative ("3m ago") on hover —
+      // mirrors the Orders page / Fills table's Time column.
       return '<tr>' +
-        '<td>' + escapeHtml(o.strategy) + '</td>' +
+        '<td class="num" title="' + escapeHtml(fmtRelative(o.ts)) + '">' + escapeHtml(fmtDate(o.ts, { seconds: true })) + '</td>' +
+        '<td>' + stratLink(o.strategy) + '</td>' +
         '<td>' + escapeHtml(o.exchange) + '</td>' +
         '<td>' + escapeHtml(o.instrument) + '</td>' +
         '<td class="' + sideCls + '">' + escapeHtml(o.side) + '</td>' +
         '<td>' + escapeHtml(o.type) + '</td>' +
-        '<td class="num">' + fmtMoney(o.qty) + '</td>' +
-        '<td class="num">' + fmtMoney(o.filled_qty) + '</td>' +
-        '<td>' + escapeHtml(o.status) + '</td>' +
+        '<td class="num">' + tbFmt.qtyCell(o.qty, { base: unit.base }) + '</td>' +
+        '<td class="num">' + tbFmt.qtyCell(o.filled_qty, { base: unit.base }) + '</td>' +
+        '<td>' + statusBadge(o.status) + '</td>' +
         '</tr>';
     }).join('');
   }
 
   function refreshAll() {
+    loadSummaryStrategies();
+    loadSummaryPnl();
+    loadSummaryNextTick();
     loadKpi();
     loadPositions();
     loadOrders();
   }
 
+  // Reflect KPI_LEVEL / POS_GROUP (restored from localStorage, or the default)
+  // onto the toggle buttons' is-active state.
+  function syncToggleButtons() {
+    document.querySelectorAll('.kpi-level').forEach(function (b) {
+      b.classList.toggle('is-active', b.dataset.level === KPI_LEVEL);
+    });
+    document.querySelectorAll('.pos-group').forEach(function (b) {
+      b.classList.toggle('is-active', b.dataset.group === POS_GROUP);
+    });
+  }
+
   document.addEventListener('DOMContentLoaded', function () {
+    syncToggleButtons();  // apply the restored (or default) preferences
+
     // KPI level toggle.
     document.querySelectorAll('.kpi-level').forEach(function (btn) {
       btn.addEventListener('click', function () {
-        document.querySelectorAll('.kpi-level').forEach(function (b) {
-          b.classList.remove('is-active');
-        });
-        btn.classList.add('is-active');
         KPI_LEVEL = btn.dataset.level;
+        savePref(KPI_LEVEL_KEY, KPI_LEVEL);
+        syncToggleButtons();
         loadKpi();
       });
     });
     // Positions group-by control.
     document.querySelectorAll('.pos-group').forEach(function (btn) {
       btn.addEventListener('click', function () {
-        document.querySelectorAll('.pos-group').forEach(function (b) {
-          b.classList.remove('is-active');
-        });
-        btn.classList.add('is-active');
         POS_GROUP = btn.dataset.group;
+        savePref(POS_GROUP_KEY, POS_GROUP);
+        syncToggleButtons();
         loadPositions();
       });
     });
@@ -267,9 +444,4 @@
     setInterval(refreshAll, 10000);
   });
 </script>
-<style>
-  /* Toggle button active state — reuses the nav's accent language. */
-  .btn.is-active { color:var(--accent); border-color:rgba(94,162,255,.45);
-          background:var(--accent-soft); font-weight:600; }
-</style>
 {% endblock %}

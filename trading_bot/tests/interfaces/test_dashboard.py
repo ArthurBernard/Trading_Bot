@@ -15,17 +15,25 @@ non-loopback ``--host`` without a token is refused — mirroring the ``serve`` t
 
 from __future__ import annotations
 
+# Built-in
+import asyncio
+import json
+import logging
+import time
+from decimal import Decimal
+
+# Third-party
 import pytest
 from fastapi.testclient import TestClient
 from typer.testing import CliRunner
 
 from trading_bot.application.config import AppConfig
-from trading_bot.application.events import FillEvent
+from trading_bot.application.events import FillEvent, LogEvent, OrderEvent
 from trading_bot.application.supervisor import StrategySupervisor
 from trading_bot.domain.fill import Fill
 from trading_bot.domain.instrument import Instrument, Symbol
 from trading_bot.domain.money import money
-from trading_bot.domain.order import OrderSide
+from trading_bot.domain.order import Order, OrderSide, OrderType
 from trading_bot.interfaces.api import create_dashboard_app
 from trading_bot.interfaces.cli.main import app as cli_app
 from trading_bot.tests.application.test_supervisor import (
@@ -43,11 +51,22 @@ def _FakeStartClient() -> _FakeDccdClient:  # noqa: N802 — factory named like 
     return _FakeDccdClient({"BTC/USD": _dccd_ohlc(_trend())})
 
 
-#: The five page routes the shared nav links to (Overview at ``/``).
-_PAGES = ("/", "/strategies", "/orders", "/pnl", "/logs")
+#: Page routes rendered as shells over ``base.html`` — the four nav tabs (Overview
+#: at ``/``) plus the two sub-pages under Strategies (the deploy form and a
+#: per-strategy detail page for the declared ``btc-ma`` unit). Every one extends the
+#: shared shell, so the parametrized shell tests below sweep them all.
+_PAGES = (
+    "/",
+    "/strategies",
+    "/strategies/new",
+    "/strategies/btc-ma",
+    "/orders",
+    "/logs",
+)
 
-#: Nav labels every page carries (proves the shared shell, not a bespoke page).
-_NAV_LABELS = ("Overview", "Strategies", "Orders", "PnL", "Logs")
+#: Nav labels every page carries (proves the shared shell, not a bespoke page). The
+#: PnL tab retired into the per-strategy detail page — the nav is four tabs now.
+_NAV_LABELS = ("Overview", "Strategies", "Orders", "Logs")
 
 
 def _config() -> AppConfig:
@@ -93,6 +112,60 @@ def test_every_page_renders_the_shared_nav(path: str) -> None:
         assert label in html, f"{label} missing from {path}"
 
 
+@pytest.mark.parametrize("path", _PAGES)
+def test_every_page_references_format_js(path: str) -> None:
+    """Each page's shell (base.html) loads format.js before the inline helpers.
+
+    Leaf 02 (ui-ux-overhaul): the shared `tbFmt` display formatters (rounding,
+    units, currency) must be available on every page, not just the ones that
+    happen to render money — base.html is the single include point.
+    """
+    html = _client().get(path).text
+    assert "/static/format.js" in html, path
+
+
+@pytest.mark.parametrize("path", _PAGES)
+def test_every_page_carries_the_cadence_helpers(path: str) -> None:
+    """Every page's shell (base.html) exposes the shared `tbTime` cadence helpers.
+
+    Leaf 04 (ui-ux-overhaul): the live next-tick/next-bar countdowns and the
+    "updated at" stamps are driven from base.html's single shared 1s tick, so
+    every page must carry it — not just the ones with a countdown cell today.
+    """
+    html = _client().get(path).text
+    assert "tbTime" in html, path
+    assert "data-countdown-ts" in html, path
+    assert "stampUpdated" in html, path
+
+
+@pytest.mark.parametrize("path", _PAGES)
+def test_every_page_carries_the_status_badge_language(path: str) -> None:
+    """Every page's shell (base.html) carries the order-status badge CSS + helper.
+
+    Leaf 05 (ui-ux-overhaul): order-status badges (Orders page + Overview
+    open-orders) share one `statusBadge()` JS helper and `.badge-status-*` CSS
+    defined once in base.html, so every page must carry them.
+    """
+    html = _client().get(path).text
+    assert "statusBadge" in html, path
+    assert ".badge-status-ok" in html, path
+    assert ".badge-status-warn" in html, path
+    assert ".badge-status-err" in html, path
+
+
+@pytest.mark.parametrize("path", _PAGES)
+def test_nav_lists_four_tabs_and_no_pnl(path: str) -> None:
+    """Every page's nav lists the four surviving tabs; the retired PnL tab is gone.
+
+    The `/pnl` tab retired into the per-strategy detail page (its equity chart
+    lives on `/strategies/{name}` now), so no page shell links `/pnl` any more.
+    """
+    html = _client().get(path).text
+    for href in ('href="/"', 'href="/strategies"', 'href="/orders"', 'href="/logs"'):
+        assert href in html, (href, path)
+    assert 'href="/pnl"' not in html, path
+
+
 def test_active_tab_is_highlighted() -> None:
     """The nav marks the current route active (Overview on ``/``, Orders on ``/orders``)."""
     overview = _client().get("/").text
@@ -106,7 +179,11 @@ def test_active_tab_is_highlighted() -> None:
 
 
 def test_health_shape_and_values() -> None:
-    """`GET /api/health` returns ``{status, mode, strategies, read_only}``."""
+    """`GET /api/health` returns the health shape; `next_tick_ts`/`tick` null by default.
+
+    With no `schedule_info` hook (the plain `dashboard` command has no scheduler),
+    the cadence fields stay `null` — a scheduler-agnostic health payload.
+    """
     resp = _client().get("/api/health")
     assert resp.status_code == 200
     body = resp.json()
@@ -115,7 +192,34 @@ def test_health_shape_and_values() -> None:
         "mode": "paper",
         "strategies": 1,
         "read_only": False,
+        "next_tick_ts": None,
+        "tick": None,
     }
+
+
+def test_health_schedule_info_hook_surfaces_cadence() -> None:
+    """A `schedule_info` hook's `next_tick_ts` / `tick` surface on `/api/health`."""
+    app = create_dashboard_app(
+        _supervisor(),
+        schedule_info=lambda: {"next_tick_ts": 1_700_000_000_000, "tick": "every 60s"},
+    )
+    body = TestClient(app).get("/api/health").json()
+    assert body["next_tick_ts"] == 1_700_000_000_000
+    assert body["tick"] == "every 60s"
+
+
+def test_health_schedule_info_hook_that_raises_degrades_to_nulls() -> None:
+    """A raising `schedule_info` hook never breaks health — it degrades to nulls."""
+
+    def _boom() -> dict[str, object]:
+        raise RuntimeError("scheduler unavailable")
+
+    app = create_dashboard_app(_supervisor(), schedule_info=_boom)
+    resp = TestClient(app).get("/api/health")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["next_tick_ts"] is None
+    assert body["tick"] is None
 
 
 def test_read_only_reflected_everywhere() -> None:
@@ -170,6 +274,53 @@ def test_auth_login_flow_authenticates() -> None:
     )
     assert ok.status_code == 303
     assert client.get("/api/health").status_code == 200  # session cookie works
+
+
+def test_login_survives_a_background_login_rerender_stable_csrf() -> None:
+    """The CSRF cookie is stable across /login renders — the favicon race.
+
+    A browser fetches ``/favicon.ico`` in the background right after loading the
+    login page. Before the fix that fetch was auth-redirected to ``/login``,
+    whose render minted a FRESH token and rotated the ``tb_csrf`` cookie under
+    the form the user was already looking at — so every submit 403'd, forever.
+    The token embedded in the FIRST render's form must still authenticate after
+    a second (background) render.
+    """
+    import re as _re
+
+    client, token = _auth_client()
+    first = client.get("/login")
+    m = _re.search(r'name="csrf" value="([^"]+)"', first.text)
+    assert m, "login form must embed the CSRF field"
+    form_csrf = m.group(1)  # what the user's visible form will submit
+    # A background request re-renders /login (pre-fix: rotated the cookie).
+    client.get("/login?next=/favicon.ico")
+    assert client.cookies.get("tb_csrf", "") == form_csrf  # cookie is STABLE
+    ok = client.post(
+        "/login",
+        data={"token": token, "next": "/", "csrf": form_csrf},
+        follow_redirects=False,
+    )
+    assert ok.status_code == 303  # the form the user sees still works
+
+
+def test_favicon_is_open_and_never_bounces_to_login() -> None:
+    """``/favicon.ico`` needs no session and never triggers a /login re-render."""
+    client, _ = _auth_client()
+    r = client.get("/favicon.ico", follow_redirects=False)
+    assert r.status_code == 308
+    assert r.headers["location"] == "/static/favicon.svg"
+
+
+def test_login_render_rejects_a_malformed_csrf_cookie() -> None:
+    """A cookie not matching our minted shape is replaced, never echoed back."""
+    client, _ = _auth_client()
+    # Raw header (not the cookie jar) so the single malformed value is exactly
+    # what the server sees.
+    page = client.get("/login", headers={"cookie": "tb_csrf=<script>alert(1)</script>"})
+    assert "<script>alert(1)" not in page.text
+    set_cookie = page.headers.get("set-cookie", "")
+    assert "tb_csrf=" in set_cookie and "<script>" not in set_cookie  # fresh mint
 
 
 # --- aggregate read endpoints (Overview data) ------------------------------ #
@@ -259,6 +410,7 @@ async def test_kpi_strategy_level_shape() -> None:
     assert row["realised_pnl"] == "8"  # exact Decimal string, not 8.0
     assert row["fees_paid"] == "2"
     assert row["exchange"] == "kraken"
+    assert row["quote"] == "USD"  # from the unit's own symbol (BTC/USD)
     assert isinstance(row["sharpe"], (int, float)) or row["sharpe"] is None
 
 
@@ -270,15 +422,21 @@ async def test_kpi_exchange_level_folds_and_nulls_ratios() -> None:
     assert set(by_venue) == {"kraken", "binance"}
     assert by_venue["kraken"]["realised_pnl"] == "8"
     assert by_venue["kraken"]["sharpe"] is None  # aggregate ratio → null
+    # A single-strategy venue folds to that strategy's own (non-mixed) quote.
+    assert by_venue["kraken"]["quote"] == "USD"
+    assert by_venue["binance"]["quote"] == "USDT"
 
 
 async def test_kpi_total_level_sums() -> None:
-    """`level=total` is one row summing every unit."""
+    """`level=total` is one row summing every unit; a mixed-quote group is null."""
     client = await _seeded_client()
     [total] = client.get("/api/kpi?level=total").json()
     assert total["key"] == "total"
     assert total["realised_pnl"] == "16"
     assert total["fees_paid"] == "4"
+    # btc-kraken trades USD, eth-binance USDT — the folded total mixes quote
+    # currencies, so the UI must render "mixed" rather than a wrong single label.
+    assert total["quote"] is None
 
 
 def test_kpi_unknown_level_is_422() -> None:
@@ -395,18 +553,135 @@ def test_pnl_endpoint_unknown_mode_is_422() -> None:
     assert _client().get("/api/pnl?strategy=btc-ma&mode=bogus").status_code == 422
 
 
-# --- PnL page markup + vendored uPlot assets ------------------------------- #
+# --- Per-strategy detail page (the retired /pnl chart lives here now) ------- #
 
 
-def test_pnl_page_has_chart_container_and_selector() -> None:
-    """`GET /pnl` carries the chart container, strategy selector + uPlot reference."""
-    html = _client().get("/pnl").text
+def test_pnl_redirects_to_overview() -> None:
+    """`GET /pnl` (the retired tab) 303-redirects to Overview so bookmarks survive."""
+    r = _client().get("/pnl", follow_redirects=False)
+    assert r.status_code == 303
+    assert r.headers["location"] == "/"
+
+
+def test_strategy_detail_serves_the_shell_with_name_and_sections() -> None:
+    """`GET /strategies/{name}` is a 200 shell naming the strategy + its sections.
+
+    The per-strategy home merges the retired /pnl chart (uPlot equity + per-mode
+    stats, pre-bound to this strategy — no selector) with the moved control surface
+    (mode <select> + go-live modal) and this strategy's positions, orders and fills.
+    """
+    html = _client().get("/strategies/btc-ma").text
+    assert "btc-ma" in html  # the name injected server-side
+    assert 'id="detail-header"' in html  # the header + control block
+    # The equity chart (moved from /pnl), pre-bound to this strategy (no selector).
     assert 'id="pnl-chart"' in html  # the uPlot mount
-    assert 'id="pnl-strategy"' in html  # the strategy selector
+    assert 'id="pnl-strategy"' not in html  # no strategy dropdown — it's pre-bound
     assert "/static/uplot.min.js" in html  # the vendored chart library
     assert "/static/uplot.min.css" in html  # its stylesheet
     assert "/api/pnl" in html  # it fetches the per-mode series
-    assert "/api/strategies" in html  # it populates the selector
+    # The stats table's Return column + the muted starting-capital note.
+    assert '<th class="num">Return</th>' in html
+    assert 'id="pnl-v0-note"' in html
+    # This strategy's positions / orders / fills tables.
+    assert 'id="positions-table"' in html
+    assert 'id="orders-table"' in html
+    assert 'id="fills-table"' in html
+    # The control surface + go-live modal moved here from the roster row.
+    assert "mode-select" in html
+    assert 'id="live-modal"' in html
+    assert "I UNDERSTAND" in html
+
+
+def test_strategy_detail_unknown_name_is_404() -> None:
+    """`GET /strategies/{name}` for an unmanaged name is a 404 (not a blank shell)."""
+    assert _client().get("/strategies/does-not-exist").status_code == 404
+
+
+def test_strategy_detail_read_only_guards_the_controls() -> None:
+    """A read-only detail page surfaces the flag its client-rendered controls gate on."""
+    html = _client(read_only=True).get("/strategies/btc-ma").text
+    assert "const TB_READ_ONLY = true" in html  # the shell flag
+    # The control render is gated behind that flag (no mode switch / start-stop /
+    # remove when read-only) — the guard the client obeys.
+    assert "if (TB_READ_ONLY)" in html
+
+
+def test_strategy_detail_has_the_capital_card_and_ledger_expander() -> None:
+    """The detail page carries the CAPITAL block: equation, withdrawable, ledger, modal.
+
+    Leaf 08 — a pure consumer of leaf 07's GET/POST .../capital + POST .../policy;
+    the card sits above the equity chart (starting capital + PnL = total value).
+    """
+    html = _client().get("/strategies/btc-ma").text
+    assert 'id="capital-card"' in html
+    # The equation cells (starting capital + realised/unrealised = total value).
+    assert 'id="cap-contributed"' in html
+    assert 'id="cap-realised"' in html
+    assert 'id="cap-unrealised"' in html
+    assert 'id="cap-total-value"' in html
+    assert 'id="cap-delta"' in html
+    assert 'id="capital-withdrawable"' in html
+    # The policy toggle + Deposit/Withdraw controls (writable dashboard).
+    assert 'data-policy="compound"' in html
+    assert 'data-policy="fixed"' in html
+    assert 'id="capital-deposit-btn"' in html
+    assert 'id="capital-withdraw-btn"' in html
+    # The shared Adjust-capital modal + its op_id-minting idempotency comment.
+    assert 'id="capital-modal"' in html
+    assert "crypto.randomUUID()" in html
+    # The ledger audit-trail expander.
+    assert 'id="capital-ledger"' in html
+    assert 'id="capital-ledger-summary"' in html
+    assert 'id="capital-ledger-body"' in html
+    # It fetches the leaf-07 endpoints — no new backend.
+    assert "/capital" in html
+    assert "/policy" in html
+
+
+def test_strategy_detail_read_only_hides_capital_controls() -> None:
+    """A read-only detail page drops the capital mutation controls, keeps the figures."""
+    html = _client(read_only=True).get("/strategies/btc-ma").text
+    # The mutating controls are gone entirely (server-guarded, like the roster's
+    # Deploy link) — not just disabled client-side.
+    assert 'id="capital-deposit-btn"' not in html
+    assert 'id="capital-withdraw-btn"' not in html
+    assert 'data-policy="compound"' not in html
+    assert 'data-policy="fixed"' not in html
+    # The figures still render — a read-only dashboard shows the money, it just
+    # cannot move it.
+    assert 'id="capital-card"' in html
+    assert 'id="cap-total-value"' in html
+    assert 'id="capital-withdrawable"' in html
+    assert 'id="capital-ledger"' in html
+
+
+def test_format_js_is_served_with_the_tbfmt_namespace() -> None:
+    """`GET /static/format.js` is 200 and defines the `tbFmt` display formatters.
+
+    Leaf 02: display-only rounding/units/currency, with the exact raw value
+    preserved in a `title` tooltip. String containment is enough here — the
+    formatters' numeric behaviour has no server-side test surface.
+    """
+    resp = _client().get("/static/format.js")
+    assert resp.status_code == 200
+    assert "javascript" in resp.headers["content-type"]
+    js = resp.text
+    assert "global.tbFmt = {" in js  # the namespace object attached to `window`
+    for symbol in (
+        "money",
+        "qty",
+        "price",
+        "pct",
+        "ratio",
+        "cell",
+        "moneyCell",
+        "qtyCell",
+        "priceCell",
+        "pctCell",
+        "ratioCell",
+        "splitInstrument",
+    ):
+        assert symbol in js, symbol
 
 
 def test_vendored_uplot_assets_are_served() -> None:
@@ -745,6 +1020,118 @@ def test_orders_history_reads_stored_orders(tmp_path) -> None:  # noqa: ANN001
     assert only_kraken and all(o["exchange"] == "kraken" for o in only_kraken)
 
 
+def test_orders_history_limit_caps_to_the_most_recent(tmp_path) -> None:  # noqa: ANN001
+    """`GET /api/orders?history=true&limit=N` caps to the N most recent rows.
+
+    The Orders page's history-cap caption (ui-ux leaf 05) keys off the
+    response coming back at exactly the requested/default cap — this proves
+    that shape is real: several stored orders, a ``?limit=`` narrower than the
+    full history, and the response is exactly that many rows.
+    """
+    from trading_bot.domain.order import Order, OrderStatus, OrderType
+    from trading_bot.storage.sqlite_store import SqliteStore
+
+    db = str(tmp_path / "book.sqlite")
+    btc = Instrument(Symbol("BTC", "USD"))
+    store = SqliteStore(db)
+    for i in range(3):
+        order = Order(
+            f"oc{i}",
+            btc,
+            OrderSide.BUY,
+            money("1"),
+            OrderType.LIMIT,
+            limit_price=money("100"),
+        )
+        order.status = OrderStatus.FILLED
+        order.filled_qty = money("1")
+        store.upsert_order(order)
+
+    sup = StrategySupervisor(
+        _fills_config_with_store(db), dccd_client=_two_venue_client()
+    )
+    client = TestClient(create_dashboard_app(sup))
+
+    all_hist = client.get("/api/orders?history=true").json()
+    capped = client.get("/api/orders?history=true&limit=2").json()
+    assert len(capped) == 2 and len(all_hist) > 2
+
+
+async def test_orders_history_and_open_orders_carry_ts(tmp_path) -> None:  # noqa: ANN001
+    """History rows carry the store's stamped `ts`; open-order rows look it up too.
+
+    History rows read `ts` straight off the store column (an exact int match
+    to what `SqliteStore.upsert_order` stamped — the domain `Order` itself
+    carries no `ts`). Open-order rows come from the live router, which also
+    carries no `ts` of its own, so the supervisor looks the same
+    `client_order_id` up in the unit's store: a freshly-persisted id resolves
+    to its stamp, an id the store never saw is `null`.
+    """
+    from trading_bot.domain.order import Order, OrderStatus, OrderType
+    from trading_bot.storage.sqlite_store import SqliteStore
+
+    db = str(tmp_path / "book.sqlite")
+    btc = Instrument(Symbol("BTC", "USD"))
+
+    # A terminal, persisted order — feeds the history-row assertion.
+    filled = Order(
+        "hist-1",
+        btc,
+        OrderSide.BUY,
+        money("1"),
+        OrderType.LIMIT,
+        limit_price=money("100"),
+    )
+    filled.status = OrderStatus.FILLED
+    filled.filled_qty = money("1")
+    store = SqliteStore(db)
+    store.upsert_order(filled)
+    stamped_ts = store.order_ts_map()["hist-1"]
+    store.close()
+
+    sup = StrategySupervisor(
+        _fills_config_with_store(db), dccd_client=_two_venue_client()
+    )
+    client = TestClient(create_dashboard_app(sup))
+
+    hist = client.get("/api/orders?history=true").json()
+    hist_row = next(r for r in hist if r["client_order_id"] == "hist-1")
+    assert hist_row["ts"] == stamped_ts
+
+    # A running unit's open (non-terminal) order: persisted at submit, then
+    # seeded straight into the live router (mirrors `router.restore()` on
+    # startup) — `open_orders()` must resolve its `ts` from the same store.
+    await sup.start("btc-kraken")
+    unit = sup._units["btc-kraken"]  # noqa: SLF001 — seed the live router directly
+    open_order = Order(
+        "open-1",
+        btc,
+        OrderSide.BUY,
+        money("1"),
+        OrderType.LIMIT,
+        limit_price=money("90"),
+    )
+    assert unit.engine is not None and unit.engine.store is not None
+    unit.engine.store.upsert_order(open_order)
+    unit.engine.router.restore([open_order])
+    # An order the router tracks but the store never saw — ts must be null.
+    ghost = Order(
+        "ghost-1",
+        btc,
+        OrderSide.SELL,
+        money("1"),
+        OrderType.LIMIT,
+        limit_price=money("90"),
+    )
+    unit.engine.router.restore([ghost])
+
+    live = client.get("/api/orders").json()
+    live_row = next(r for r in live if r["client_order_id"] == "open-1")
+    ghost_row = next(r for r in live if r["client_order_id"] == "ghost-1")
+    assert isinstance(live_row["ts"], int) and live_row["ts"] > 0
+    assert ghost_row["ts"] is None
+
+
 # --- Orders + Logs page markup --------------------------------------------- #
 
 
@@ -760,6 +1147,16 @@ def test_orders_page_has_tables_and_filters() -> None:
     # It fetches both history endpoints (orders history + fills).
     assert "/api/orders" in html and "history=true" in html
     assert "/api/fills" in html
+    # Freshness stamps on both tables (ui-ux leaf 04).
+    assert 'id="orders-updated"' in html
+    assert 'id="fills-updated"' in html
+    # History-cap caption nodes, one per table (ui-ux leaf 05): shown when a
+    # history read comes back at exactly the server's default ?limit= cap.
+    assert 'id="orders-cap"' in html and "showing the most recent 200" in html
+    assert 'id="fills-cap"' in html
+    # The Orders table's Time column (order date/time, this leaf) — mirrors the
+    # Fills table's own Time column.
+    assert html.count("<th>Time</th>") == 2  # one in Orders, one in Fills
 
 
 def test_logs_page_has_feed_and_subscribes_to_sse() -> None:
@@ -768,6 +1165,12 @@ def test_logs_page_has_feed_and_subscribes_to_sse() -> None:
     assert 'id="logs-feed"' in html  # the feed container
     assert "/api/events" in html  # it subscribes to the merged SSE stream
     assert "connect(" in html  # via the shared connect() helper
+    # Event-type filter chips + a min-level select for log events (ui-ux leaf 05).
+    assert 'data-type="all"' in html
+    assert 'data-type="order"' in html
+    assert 'data-type="fill"' in html
+    assert 'data-type="log"' in html
+    assert 'id="log-min-level"' in html
 
 
 # --- Overview page markup + live SSE --------------------------------------- #
@@ -782,7 +1185,26 @@ def test_overview_page_has_kpi_strip_and_tables() -> None:
     assert 'id="positions-table"' in html
     assert "pos-group" in html  # the group-by control
     assert 'data-group="crypto"' in html and 'data-group="exchange"' in html
+    # The "By strategy" grouping is present and the default (ui-ux leaf 03).
+    assert 'data-group="strategy"' in html
+    assert 'class="btn pos-group is-active" data-group="strategy"' in html
     assert 'id="orders-table"' in html
+    # The open-orders table's Time column (order date/time, this leaf).
+    assert "<th>Time</th>" in html
+    # The summary strip (running/total strategies, open orders, total PnL, next
+    # tick) sits above the KPI card.
+    assert 'id="summary-strip"' in html
+    assert 'id="sum-running"' in html and 'id="sum-total"' in html
+    assert 'id="sum-open-orders"' in html
+    assert 'id="sum-pnl"' in html
+    assert 'id="sum-next-tick"' in html
+    # Freshness stamps on the KPI/positions/open-orders cards (ui-ux leaf 04).
+    assert 'id="kpi-updated"' in html
+    assert 'id="positions-updated"' in html
+    assert 'id="overview-orders-updated"' in html
+    # View preferences persist across reloads.
+    assert "tb.overview.posGroup" in html
+    assert "tb.overview.kpiLevel" in html
     # It wires the merged SSE stream + polling fallback.
     assert "/api/events" in html
     assert "/api/positions" in html
@@ -865,8 +1287,68 @@ async def test_events_stream_merges_and_yields_a_fill() -> None:
         payload = json.loads(frame[len("data:") :].strip())
         assert payload["type"] == "fill"
         assert payload["fill"]["fill_id"] == "SF1"
+        # Tagged with the emitting unit's name + a server-side epoch-ms timestamp
+        # (the Logs page's attribution + event time, not the client receive time).
+        assert payload["strategy"] == "eth-binance"  # emitted on buses[1]
+        assert isinstance(payload["ts"], int)
     finally:
         await frames.aclose()  # disconnect → generator finally removes every queue
+    assert [len(b._queues) for b in buses] == before  # noqa: SLF001
+
+
+async def test_events_stream_ends_cleanly_on_cancellation() -> None:
+    """Cancelling the merged generator's task (server shutdown) ends it cleanly.
+
+    Mirrors what uvicorn's graceful-shutdown timeout does to a connected SSE
+    client: the task driving the generator is force-cancelled while it is
+    suspended in ``asyncio.wait`` on the per-unit getter tasks. The generator
+    must convert that ``CancelledError`` into a clean end-of-stream
+    (``StopAsyncIteration``) rather than letting it propagate — which is what
+    used to make uvicorn log a scary ERROR-level traceback on every shutdown
+    while a dashboard client held this endpoint open — and every outstanding
+    per-iteration getter task plus every bus queue must still be cleaned up.
+    """
+    import asyncio
+
+    from fastapi import Request
+
+    sup = StrategySupervisor(_two_venue_config(), dccd_client=_two_venue_client())
+    await sup.start("btc-kraken")
+    await sup.start("eth-binance")
+    app = create_dashboard_app(sup)
+    buses = [sup._units[n].engine.bus for n in ("btc-kraken", "eth-binance")]  # noqa: SLF001
+    before = [len(b._queues) for b in buses]  # noqa: SLF001
+
+    scope = {
+        "type": "http",
+        "method": "GET",
+        "path": "/api/events",
+        "headers": [],
+        "query_string": b"",
+        "app": app,
+    }
+    request = Request(scope, _never_disconnect)
+    response = await _events_route(app)(request)  # type: ignore[operator]
+    frames = response.body_iterator
+
+    first = await frames.__anext__()
+    assert first.startswith(":")
+    assert [len(b._queues) for b in buses] == [n + 1 for n in before]  # noqa: SLF001
+
+    # Cancel the task while it is suspended in `asyncio.wait(getters, ...)` (no
+    # unit has emitted anything, so it is parked there — exactly where a real
+    # shutdown-time cancellation would land).
+    task = asyncio.ensure_future(frames.__anext__())
+    await asyncio.sleep(0)  # let the task actually start awaiting the getters
+    task.cancel()
+
+    with pytest.raises(StopAsyncIteration):
+        await task
+    assert not task.cancelled()  # the cancellation was converted, not propagated
+
+    # The `finally` still ran: every bus queue is unregistered like any other
+    # close, and no getter task is left dangling (no "was destroyed but it is
+    # pending" warning — pytest-asyncio would otherwise surface it).
     assert [len(b._queues) for b in buses] == before  # noqa: SLF001
 
 
@@ -874,7 +1356,12 @@ async def test_events_stream_merges_and_yields_a_fill() -> None:
 
 
 def test_strategies_endpoint_lists_units_with_exchange() -> None:
-    """`GET /api/strategies` lists the managed units, tagged with their exchange."""
+    """`GET /api/strategies` lists the managed units, tagged with their exchange.
+
+    Also carries `span` (the unit's `data.span`, seconds) and `quote` (the part
+    after `/` of its `symbol`) — read from the actually-wired config, not
+    hardcoded (`_config()` declares `data.span: 60` and `symbol: "BTC/USD"`).
+    """
     resp = _client().get("/api/strategies")
     assert resp.status_code == 200
     [s] = resp.json()
@@ -882,6 +1369,34 @@ def test_strategies_endpoint_lists_units_with_exchange() -> None:
     assert s["exchange"] == "kraken"  # grouped/displayed by exchange
     assert s["mode"] == "paper"
     assert s["running"] is False
+    assert s["span"] == 60
+    assert s["quote"] == "USD"
+
+
+async def test_strategies_endpoint_last_eval_and_asof_ts() -> None:
+    """`GET /api/strategies` carries `last_eval_ts`/`last_asof_ts`, set after a tick.
+
+    Both are `None` before the unit has ever ticked via its `*_latest` path
+    (incl. a never-started unit — PR #168's diagnostic fields). Driving one
+    tick through the supervisor's `step_all` (the daemon's own path) stamps
+    both: `last_eval_ts` is the wall-clock of the attempt, `last_asof_ts` the
+    as-of of the data actually evaluated.
+    """
+    pytest.importorskip("fynance")  # ma_crossover evaluates fynance.sma
+    sup = StrategySupervisor(_config(), dccd_client=_FakeStartClient())
+    client = TestClient(create_dashboard_app(sup))
+
+    # Never started/ticked -> both null.
+    [before] = client.get("/api/strategies").json()
+    assert before["last_eval_ts"] is None
+    assert before["last_asof_ts"] is None
+
+    await sup.start("btc-ma")
+    assert await sup.step_all() == 1  # the one running unit stepped once
+
+    [after] = client.get("/api/strategies").json()
+    assert isinstance(after["last_eval_ts"], int) and after["last_eval_ts"] > 0
+    assert isinstance(after["last_asof_ts"], int) and after["last_asof_ts"] > 0
 
 
 def test_set_mode_testnet_then_paper() -> None:
@@ -957,33 +1472,75 @@ def test_read_only_write_routes_are_403() -> None:
 # --- Strategies page markup ------------------------------------------------ #
 
 
-def test_strategies_page_has_table_and_live_modal() -> None:
-    """`GET /strategies` carries the grouped table + mode select + the live modal."""
+def test_strategies_page_is_a_linked_roster() -> None:
+    """`GET /strategies` is a slim roster: linked rows, columns; no mode-select/modal.
+
+    The roster slimmed to a linked index — each name links to its detail page
+    (/strategies/{name}) where the deep controls (mode switch, go-live, remove) and
+    charts live. The mode <select> and the go-live modal moved off this page.
+    """
     html = _client().get("/strategies").text
     assert 'id="strategies-body"' in html  # the table the page fills
-    assert "mode-select" in html  # the paper/testnet/live select
-    assert 'id="live-modal"' in html  # the deliberate go-live confirmation
-    assert "I UNDERSTAND" in html  # the typed-confirmation phrase
     assert "/api/strategies" in html  # it wires the control endpoints
+    # Rows link to the per-strategy detail page (client-rendered in the roster JS).
+    assert 'href="/strategies/' in html
+    assert "strat-link" in html
+    # The kept roster columns (cadence / next-bar / last-eval), plus the stamp.
+    assert "<th>Cadence</th>" in html
+    assert "<th>Next bar</th>" in html
+    assert "<th>Last eval</th>" in html
+    # The condensed Total-value column (leaf 08) — replaces nothing; Realised
+    # PnL stays alongside it so the same numbers read at every altitude.
+    assert '<th class="num">Realised PnL</th>' in html
+    assert '<th class="num">Total value</th>' in html
+    assert 'id="strategies-updated"' in html
+    # The go-live modal + its typed phrase MOVED to the detail page — the roster
+    # no longer carries the confirmation surface (the `.mode-select` CSS class
+    # lives in base.html for every page, so the modal id is the clean marker).
+    assert 'id="live-modal"' not in html
+    assert "I UNDERSTAND" not in html
 
 
-def test_strategies_page_read_only_note() -> None:
-    """A read-only dashboard's Strategies page advertises disabled controls."""
+def test_strategies_page_read_only_note_and_no_deploy_link() -> None:
+    """A read-only roster advertises disabled controls and hides the Deploy link."""
     html = _client(read_only=True).get("/strategies").text
     assert "read-only" in html.lower()
+    assert "const TB_READ_ONLY = true" in html  # Start/Stop rendering guards on it
+    # The Deploy link is server-guarded ({% if not read_only %}) — gone here.
+    assert 'href="/strategies/new"' not in html
 
 
-def test_strategies_page_has_deploy_form_when_writable() -> None:
-    """A writable Strategies page carries the deploy form wired to /api/signals."""
+def test_strategies_roster_links_to_the_deploy_page_when_writable() -> None:
+    """A writable roster carries the Deploy link to the relocated form."""
     html = _client().get("/strategies").text
+    assert 'href="/strategies/new"' in html
+
+
+def test_strategies_new_page_has_deploy_form_when_writable() -> None:
+    """`GET /strategies/new` carries the relocated deploy form wired to /api/signals."""
+    html = _client().get("/strategies/new").text
     assert 'id="deploy-form"' in html
     assert "/api/signals" in html  # the form fetches discoverable signal refs
+    assert 'href="/strategies"' in html  # a link back to the roster
+    # The form is no longer on the roster page (it moved here).
+    assert 'id="deploy-form"' not in _client().get("/strategies").text
 
 
-def test_strategies_page_hides_deploy_form_when_read_only() -> None:
-    """A read-only Strategies page omits the deploy form (no create affordance)."""
-    html = _client(read_only=True).get("/strategies").text
+def test_strategies_new_page_hides_deploy_form_when_read_only() -> None:
+    """A read-only `/strategies/new` omits the deploy form (no create affordance)."""
+    html = _client(read_only=True).get("/strategies/new").text
     assert 'id="deploy-form"' not in html
+
+
+def test_strategies_new_is_not_matched_as_a_strategy_name() -> None:
+    """`/strategies/new` binds the deploy form, never the detail route for a unit "new".
+
+    Route ordering: the `/strategies/new` shell is registered before the
+    parameterized `/strategies/{name}` route, so the exact "new" always wins.
+    """
+    r = _client().get("/strategies/new")
+    assert r.status_code == 200
+    assert 'id="deploy-form"' in r.text  # the form, not a per-strategy detail shell
 
 
 # --- restored paper book surfaces through the dashboard -------------------- #
@@ -1843,23 +2400,49 @@ def test_serve_alias_is_the_read_only_dashboard(
     """`trading-bot serve` now brings up the unified dashboard **read-only** (an alias).
 
     The retired split: `serve` folds onto `create_dashboard_app(read_only=True)` over
-    a supervisor. Patches `uvicorn.run`, asserts the built app is the unified shell
-    (Overview + Orders + Logs nav), health reports `read_only: true`, and a control
-    mutation is refused (403) — no separate read-only-over-one-engine app anymore.
+    a supervisor. Patches `uvicorn.run`, asserts it is called with a FastAPI app and
+    the requested host/port, that the built app is the unified shell (Overview +
+    Orders + Logs nav), health reports `read_only: true`, and a control mutation is
+    refused (403) — no separate read-only-over-one-engine app anymore.
     """
     import uvicorn
+    from fastapi import FastAPI
 
     captured: dict[str, object] = {}
-    monkeypatch.setattr(uvicorn, "run", lambda app, **kw: captured.update(app=app))
 
-    result = runner.invoke(cli_app, ["serve", "--port", "9151"])
+    def _fake_run(app: object, **kwargs: object) -> None:
+        captured["app"] = app
+        captured["kwargs"] = kwargs
+
+    monkeypatch.setattr(uvicorn, "run", _fake_run)
+
+    result = runner.invoke(cli_app, ["serve", "--host", "0.0.0.0", "--port", "9151"])
     assert result.exit_code == 0, result.output
+    assert isinstance(captured["app"], FastAPI)
+    kwargs = captured["kwargs"]
+    assert isinstance(kwargs, dict)
+    assert kwargs["host"] == "0.0.0.0"
+    assert kwargs["port"] == 9151
 
     client = TestClient(captured["app"])
     html = client.get("/").text
     assert "Overview" in html and "Orders" in html and "Logs" in html
     assert client.get("/api/health").json()["read_only"] is True
     assert client.post("/api/strategies/x/start").status_code == 403
+
+
+def test_serve_default_config_is_paper(monkeypatch: pytest.MonkeyPatch) -> None:
+    """With no ``--config``, ``serve`` defaults to a paper engine (never live)."""
+    import uvicorn
+
+    captured: dict[str, object] = {}
+    monkeypatch.setattr(uvicorn, "run", lambda app, **kw: captured.update(app=app))
+
+    result = runner.invoke(cli_app, ["serve"])
+    assert result.exit_code == 0, result.output
+
+    client = TestClient(captured["app"])
+    assert client.get("/api/health").json()["mode"] == "paper"
 
 
 def test_start_serve_folds_onto_create_dashboard_app(
@@ -1908,6 +2491,291 @@ def test_start_serve_folds_onto_create_dashboard_app(
     assert "app" in built  # the unified dashboard was built for --serve
     client = TestClient(built["app"])
     assert "Overview" in client.get("/").text  # the unified shell
+
+    # The daemon wires its scheduler cadence into `/api/health` via the
+    # `schedule_info` hook — unlike the plain `dashboard` command (no scheduler).
+    kwargs = built["kwargs"]
+    assert isinstance(kwargs, dict)
+    hook = kwargs["schedule_info"]
+    assert callable(hook)
+    info = hook()
+    assert isinstance(info["next_tick_ts"], int)  # apscheduler already scheduled it
+    assert info["tick"] == "every 0.05s"
+    health = client.get("/api/health").json()
+    assert isinstance(health["next_tick_ts"], int)
+    assert health["tick"] == "every 0.05s"
+
+
+def _patch_serve_stack(monkeypatch: pytest.MonkeyPatch) -> dict[str, object]:
+    """Patch the uvicorn Server/Config used by `start --serve` and spy the app factory.
+
+    Makes `_run_daemon`'s served branch return immediately (no socket ever opens)
+    and records the ``host``/``port`` handed to ``uvicorn.Config`` plus the kwargs
+    handed to ``create_dashboard_app`` (notably ``auth_token``) — the two places the
+    resolved web settings actually land.
+    """
+    import uvicorn
+
+    import trading_bot.interfaces.api as api_pkg
+
+    captured: dict[str, object] = {}
+    real_factory = api_pkg.create_dashboard_app
+
+    def _spy_factory(supervisor: object, **kwargs: object) -> object:
+        built_app = real_factory(supervisor, **kwargs)  # type: ignore[arg-type]
+        captured["app"] = built_app
+        captured["dashboard_kwargs"] = kwargs
+        return built_app
+
+    def _fake_config(app: object, **kwargs: object) -> object:
+        captured["config_kwargs"] = kwargs
+        return object()
+
+    class _FakeServer:
+        def __init__(self, config: object) -> None:
+            self.config = config
+
+        async def serve(self) -> None:
+            return None  # return immediately (no socket, no blocking)
+
+    monkeypatch.setattr(api_pkg, "create_dashboard_app", _spy_factory)
+    monkeypatch.setattr(uvicorn, "Config", _fake_config)
+    monkeypatch.setattr(uvicorn, "Server", _FakeServer)
+    return captured
+
+
+def test_start_serve_reads_ui_settings_from_the_manifest(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:  # noqa: ANN001
+    """`start --serve` with no `--serve-*` flags binds host/port/token from the manifest.
+
+    Mirrors ``dashboard``'s manifest resolution
+    (``test_dashboard_reads_ui_settings_from_the_manifest``): a manifest configured
+    once serves the control dashboard the same way whether launched via ``dashboard``
+    or ``start --serve``. Also proves a non-loopback manifest host is accepted when
+    the manifest itself carries the token.
+    """
+    monkeypatch.delenv("TRADING_BOT_UI_TOKEN", raising=False)
+    captured = _patch_serve_stack(monkeypatch)
+    manifest = _write_ui_manifest(
+        tmp_path, {"host": "0.0.0.0", "port": 9400, "token": "cfg-tok"}
+    )
+
+    result = runner.invoke(
+        cli_app, ["start", "--serve", "-c", manifest, "--interval", "0.05"]
+    )
+
+    assert result.exit_code == 0, result.output  # non-loopback allowed (config token)
+    config_kwargs = captured["config_kwargs"]
+    assert isinstance(config_kwargs, dict)
+    assert config_kwargs["host"] == "0.0.0.0"
+    assert config_kwargs["port"] == 9400
+    dashboard_kwargs = captured["dashboard_kwargs"]
+    assert isinstance(dashboard_kwargs, dict)
+    assert dashboard_kwargs["auth_token"] == "cfg-tok"
+
+
+def test_start_serve_cli_flags_override_the_ui_config(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:  # noqa: ANN001
+    """Explicit `--serve-host` / `--serve-port` / `--serve-token` win over the manifest."""
+    monkeypatch.delenv("TRADING_BOT_UI_TOKEN", raising=False)
+    captured = _patch_serve_stack(monkeypatch)
+    manifest = _write_ui_manifest(
+        tmp_path, {"host": "0.0.0.0", "port": 9400, "token": "cfg-tok"}
+    )
+
+    result = runner.invoke(
+        cli_app,
+        [
+            "start",
+            "--serve",
+            "-c",
+            manifest,
+            "--interval",
+            "0.05",
+            "--serve-host",
+            "127.0.0.1",
+            "--serve-port",
+            "9500",
+            "--serve-token",
+            "flag-tok",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    config_kwargs = captured["config_kwargs"]
+    assert isinstance(config_kwargs, dict)
+    assert config_kwargs["host"] == "127.0.0.1"  # flag overrode the manifest
+    assert config_kwargs["port"] == 9500
+    dashboard_kwargs = captured["dashboard_kwargs"]
+    assert isinstance(dashboard_kwargs, dict)
+    assert dashboard_kwargs["auth_token"] == "flag-tok"
+
+
+def test_start_serve_no_config_no_flags_defaults_to_loopback_no_auth(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """No `--config` and no `--serve-*` flags: `start --serve` stays loopback :8000, no auth.
+
+    A bare :class:`~trading_bot.application.config.AppConfig`'s ``ui`` defaults must
+    keep today's behaviour so an operator who never touches the manifest sees no
+    change.
+    """
+    monkeypatch.delenv("TRADING_BOT_UI_TOKEN", raising=False)
+    captured = _patch_serve_stack(monkeypatch)
+
+    result = runner.invoke(cli_app, ["start", "--serve", "--interval", "0.05"])
+
+    assert result.exit_code == 0, result.output
+    config_kwargs = captured["config_kwargs"]
+    assert isinstance(config_kwargs, dict)
+    assert config_kwargs["host"] == "127.0.0.1"
+    assert config_kwargs["port"] == 8000
+    dashboard_kwargs = captured["dashboard_kwargs"]
+    assert isinstance(dashboard_kwargs, dict)
+    assert dashboard_kwargs["auth_token"] is None
+
+
+def test_start_defaults_to_the_dashboard_manifest_when_present(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A bare `start --serve` picks up ./configs/dashboard.yaml when it exists.
+
+    The daemon runs the same manifest the dashboard manages (the persistent
+    control plane), so no ``--config`` is needed once that file exists — proven
+    here by the manifest's ``ui:`` settings landing on the served dashboard.
+    The autouse temp-CWD fixture guarantees the file seen is the one written.
+    """
+    import pathlib as _pathlib
+
+    from trading_bot.application.config import AppConfig
+
+    monkeypatch.delenv("TRADING_BOT_UI_TOKEN", raising=False)
+    captured = _patch_serve_stack(monkeypatch)
+    manifest = _pathlib.Path("configs/dashboard.yaml")
+    manifest.parent.mkdir(parents=True, exist_ok=True)
+    AppConfig.model_validate(
+        {"mode": "paper", "ui": {"host": "0.0.0.0", "port": 9600, "token": "cfg-tok"}}
+    ).to_yaml(manifest)
+
+    result = runner.invoke(cli_app, ["start", "--serve", "--interval", "0.05"])
+
+    assert result.exit_code == 0, result.output
+    assert "using default manifest" in result.output
+    config_kwargs = captured["config_kwargs"]
+    assert isinstance(config_kwargs, dict)
+    assert config_kwargs["host"] == "0.0.0.0"  # came from the default manifest
+    assert config_kwargs["port"] == 9600
+    dashboard_kwargs = captured["dashboard_kwargs"]
+    assert isinstance(dashboard_kwargs, dict)
+    assert dashboard_kwargs["auth_token"] == "cfg-tok"
+
+
+def test_start_serve_non_loopback_without_token_refuses(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A non-loopback `--serve-host` with no token anywhere refuses (never serves).
+
+    Mirrors ``test_dashboard_non_loopback_without_token_refuses``: the same guard
+    (currently evaluated in ``_run_daemon``) still applies once the host/token have
+    been resolved from flags/env/manifest.
+    """
+    monkeypatch.delenv("TRADING_BOT_UI_TOKEN", raising=False)
+    called = {"server": False}
+
+    class _FakeServer:
+        def __init__(self, config: object) -> None:  # pragma: no cover
+            called["server"] = True
+
+        async def serve(self) -> None:  # pragma: no cover
+            return None
+
+    import uvicorn
+
+    monkeypatch.setattr(uvicorn, "Server", _FakeServer)
+    monkeypatch.setattr(uvicorn, "Config", lambda *a, **k: object())
+
+    result = runner.invoke(cli_app, ["start", "--serve", "--serve-host", "0.0.0.0"])
+
+    assert result.exit_code != 0
+    assert called["server"] is False  # never reached uvicorn
+    assert "token" in result.output.lower()
+
+
+async def test_start_serve_disables_uvicorn_signal_capture_and_owns_shutdown(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`start --serve` disables uvicorn's own signal capture and owns Ctrl-C itself.
+
+    Regression test for the "Ctrl-C loses the teardown" bug: uvicorn 0.49's
+    ``Server.serve()`` unconditionally wraps itself in ``capture_signals()``,
+    which restores the pre-``serve()`` signal disposition and **re-raises** the
+    captured SIGINT/SIGTERM right after ``serve()`` returns — killing the
+    process before ``_run_daemon``'s own ``finally`` (scheduler + supervisor
+    teardown) can run. ``_run_daemon`` works around this (there is no public
+    ``install_signal_handlers`` config flag on this uvicorn version) by
+    overriding the server instance's ``capture_signals`` with a no-op context
+    manager and installing its own loop-level SIGINT/SIGTERM handlers around
+    ``await server.serve()``. This proves both halves: the override is applied,
+    and the daemon's own handlers are the ones registered *while* serving —
+    then removed once ``serve()`` returns. The end-to-end "the process actually
+    survives a real Ctrl-C and completes its teardown" claim is verified
+    separately by the pty-driver check (a unit test cannot deliver a real OS
+    signal to itself safely).
+    """
+    import asyncio
+    import contextlib
+    import signal
+
+    import trading_bot.interfaces.api as api_pkg
+
+    monkeypatch.setattr(api_pkg, "create_dashboard_app", lambda sup, **kw: object())
+
+    built: dict[str, object] = {}
+    ready = asyncio.Event()
+    release = asyncio.Event()
+    installed_during_serve: set[int] = set()
+
+    class _FakeServer:
+        def __init__(self, config: object) -> None:
+            self.config = config
+            self.should_exit = False
+            self.force_exit = False
+            built["server"] = self
+
+        async def serve(self) -> None:
+            loop = asyncio.get_running_loop()
+            installed_during_serve.update(loop._signal_handlers)  # noqa: SLF001
+            ready.set()
+            await release.wait()
+
+    import uvicorn
+
+    monkeypatch.setattr(uvicorn, "Server", _FakeServer)
+    monkeypatch.setattr(uvicorn, "Config", lambda *a, **k: object())
+
+    from trading_bot.interfaces.cli.main import _run_daemon
+
+    task = asyncio.ensure_future(
+        _run_daemon(AppConfig(), interval=0.05, cron=None, serve=True)
+    )
+    await ready.wait()
+
+    # The daemon's own handlers are installed WHILE serving — the exact window
+    # uvicorn 0.49 would otherwise own via its own (now-disabled) capture.
+    assert {signal.SIGINT, signal.SIGTERM} <= installed_during_serve
+    # uvicorn's own capture/re-raise is disabled on this server instance.
+    assert built["server"].capture_signals is contextlib.nullcontext  # type: ignore[attr-defined]
+
+    release.set()
+    await task
+
+    # Removed again once `serve()` returned — nothing left registered, so a
+    # later real signal has exactly one handler to reach: the OS default.
+    loop = asyncio.get_running_loop()
+    assert signal.SIGINT not in loop._signal_handlers  # noqa: SLF001
+    assert signal.SIGTERM not in loop._signal_handlers  # noqa: SLF001
 
 
 # --- web hardening (audit wave 3: I-4, I-6, I-7, I-9, I-10, I-11, I-13) ----- #
@@ -2001,7 +2869,13 @@ def test_session_and_rate_maps_are_pruned() -> None:
     old_ns = 0  # epoch — far past any TTL cutoff
     app.state.sessions = {sid: old_ns for sid in app.state.sessions}
     stale_key = next(iter(app.state.login_buckets))
-    app.state.login_buckets[stale_key] = (float(appmod._LOGIN_RATE_PER_MIN), 0.0)
+    # `time.monotonic()` counts machine uptime, not wall clock — backdate relative
+    # to "now" (not to epoch 0) so the bucket is stale even on a freshly booted VM.
+    stale_last_seen = time.monotonic() - appmod._RATE_BUCKET_TTL_SECONDS - 1
+    app.state.login_buckets[stale_key] = (
+        float(appmod._LOGIN_RATE_PER_MIN),
+        stale_last_seen,
+    )
 
     # Any auth check runs the prune sweep (session gone → 401; bucket swept).
     assert client.get("/api/health").status_code == 401
@@ -2073,3 +2947,178 @@ def test_secure_cookie_not_forced_by_x_forwarded_proto() -> None:
     set_cookie = ok.headers.get("set-cookie", "").lower()
     assert "tb_session=" in set_cookie
     assert "secure" not in set_cookie  # not forced by the spoofed header
+
+
+# --- shared serialization helpers (module-level, both apps build on) -------- #
+#
+# Ported from the retired ``test_api.py`` (leaf 01, single-engine dashboard):
+# these exercise ``trading_bot.interfaces.api.app``'s helper functions directly
+# — no engine/app fixture needed — so they survive the legacy ``create_app``'s
+# removal unchanged. The high-level positions/orders/health/kpi/SSE coverage
+# ``test_api.py`` also carried is superseded by this file's supervisor-level
+# equivalents (e.g. ``test_events_stream_merges_and_yields_a_fill``, the
+# ``/api/kpi`` level tests above) and was not re-ported.
+
+
+def test_decimal_json_response_renders_exact_string_not_lossy_float() -> None:
+    """The Decimal-as-string JSON response renders exact strings, never lossy floats.
+
+    Guards the Decimal-as-string invariant at the byte level: ``Decimal("0.1")``
+    must render as the JSON string ``"0.1"``, never the float ``0.1`` (whose true
+    binary value is ``0.1000000000000000055511151231257827021181583404541015625``).
+    """
+    from trading_bot.interfaces.api.app import _DecimalJSONResponse
+
+    resp = _DecimalJSONResponse(
+        {"net_qty": Decimal("0.1"), "avg_entry_price": Decimal("30000.1")}
+    )
+    raw = resp.body.decode()
+    assert '"net_qty":"0.1"' in raw
+    assert '"avg_entry_price":"30000.1"' in raw
+    assert '"net_qty":0.1' not in raw
+    assert "0.1000000000000000055511151231257827021181583404541015625" not in raw
+
+
+def test_decimal_encoder_renders_decimal_as_string_and_rejects_other() -> None:
+    """The JSON ``default`` hook stringifies a Decimal exactly, else raises."""
+    from trading_bot.interfaces.api.app import _default
+
+    assert _default(Decimal("0.1")) == "0.1"
+    assert json.dumps({"x": Decimal("1.5")}, default=_default) == '{"x": "1.5"}'
+    with pytest.raises(TypeError):
+        _default(object())
+
+
+def test_finite_or_none_maps_non_finite_and_none_to_null() -> None:
+    """A KPI ratio that is ``inf``/``nan``/``None`` degrades to JSON ``null``.
+
+    A *monotonically rising* equity curve has zero drawdown, so Calmar
+    (return / max-drawdown) is ``inf`` on an otherwise valid, winning curve — a
+    bare ``inf``/``nan`` is not valid JSON, so it must map to ``null`` rather
+    than raising or serializing lossily. A finite value passes through unchanged.
+    """
+    import math
+
+    from trading_bot.interfaces.api.app import _finite_or_none
+
+    assert _finite_or_none(None) is None
+    assert _finite_or_none(math.inf) is None
+    assert _finite_or_none(math.nan) is None
+    assert _finite_or_none(1.25) == 1.25
+
+
+def test_event_dict_serializes_each_event_type_with_string_money() -> None:
+    """``_event_dict`` tags + renders order/fill/log events (money as strings)."""
+    from trading_bot.interfaces.api.app import _event_dict
+
+    btc = Instrument(Symbol("BTC", "USD"))
+    order = Order(
+        client_order_id="cid-1",
+        instrument=btc,
+        side=OrderSide.BUY,
+        qty=money("0.1"),
+        type=OrderType.LIMIT,
+        limit_price=money("30000"),
+    )
+    order_payload = _event_dict(OrderEvent(order))
+    assert order_payload["type"] == "order"
+    assert order_payload["order"]["qty"] == "0.1"
+    assert order_payload["order"]["side"] == "buy"
+
+    log_payload = _event_dict(LogEvent(message="hi", level="warning"))
+    assert log_payload == {"type": "log", "message": "hi", "level": "warning"}
+
+
+def _log_record(*, msg: str, exc: BaseException | None) -> logging.LogRecord:
+    """Build a bare ``LogRecord`` carrying ``exc`` as its ``exc_info`` (or none)."""
+    exc_info = (type(exc), exc, exc.__traceback__) if exc is not None else None
+    return logging.LogRecord(
+        name="uvicorn.error",
+        level=logging.ERROR,
+        pathname=__file__,
+        lineno=1,
+        msg=msg,
+        args=(),
+        exc_info=exc_info,
+    )
+
+
+def test_graceful_shutdown_cancellation_filter_drops_only_the_expected_shape() -> None:
+    """The uvicorn.error filter drops a shutdown CancelledError, keeps real errors.
+
+    Regression test for the Ctrl-C quiet-shutdown fix: uvicorn 0.49 logs *any*
+    exception escaping the ASGI app as an ERROR "Exception in ASGI application"
+    record — including the deliberate ``CancelledError`` it raises itself when
+    force-cancelling a still-open SSE connection past the graceful-shutdown
+    timeout. The filter must drop *that* shape (regardless of the exception's
+    message — see the class docstring on why nested ``BaseHTTPMiddleware``
+    task groups can strip it) while leaving a genuine application error, or a
+    ``CancelledError`` logged under an unrelated message, alone.
+    """
+    from trading_bot.interfaces.api.app import _SuppressGracefulShutdownCancellation
+
+    carveout = _SuppressGracefulShutdownCancellation()
+
+    # Dropped: a CancelledError (message-bearing or not) under uvicorn's own
+    # "Exception in ASGI application" message.
+    assert (
+        carveout.filter(
+            _log_record(
+                msg="Exception in ASGI application",
+                exc=asyncio.CancelledError(
+                    "Task cancelled, timeout graceful shutdown exceeded"
+                ),
+            )
+        )
+        is False
+    )
+    assert (
+        carveout.filter(
+            _log_record(
+                msg="Exception in ASGI application",
+                exc=asyncio.CancelledError(),
+            )
+        )
+        is False
+    )
+
+    # Kept: a real bug under the same message.
+    assert (
+        carveout.filter(
+            _log_record(msg="Exception in ASGI application", exc=ValueError("boom"))
+        )
+        is True
+    )
+    # Kept: a CancelledError logged under a different, unrelated message.
+    assert (
+        carveout.filter(
+            _log_record(msg="some other message", exc=asyncio.CancelledError())
+        )
+        is True
+    )
+    # Kept: no exc_info at all.
+    assert carveout.filter(_log_record(msg="plain info line", exc=None)) is True
+
+
+def test_graceful_shutdown_cancellation_filter_installs_once_per_process() -> None:
+    """Building an app repeatedly never stacks up duplicate filter instances.
+
+    ``create_control_app``/``create_dashboard_app`` install the filter on the
+    shared, process-wide ``uvicorn.error`` logger every time they build an app
+    (tests build many); the installer must stay idempotent.
+    """
+    from trading_bot.interfaces.api.app import (
+        _suppress_graceful_shutdown_cancellation_logs,
+        _SuppressGracefulShutdownCancellation,
+    )
+
+    target = logging.getLogger("uvicorn.error")
+    before = sum(
+        isinstance(f, _SuppressGracefulShutdownCancellation) for f in target.filters
+    )
+    _suppress_graceful_shutdown_cancellation_logs()
+    _suppress_graceful_shutdown_cancellation_logs()
+    after = sum(
+        isinstance(f, _SuppressGracefulShutdownCancellation) for f in target.filters
+    )
+    assert after == max(before, 1)

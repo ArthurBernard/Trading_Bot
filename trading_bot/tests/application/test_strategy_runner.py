@@ -23,6 +23,7 @@ Async tests run un-decorated (``asyncio_mode = "auto"``).
 from __future__ import annotations
 
 import asyncio
+import time
 from collections.abc import Iterator
 from decimal import Decimal
 
@@ -30,6 +31,7 @@ import polars as pl
 import pytest
 
 from trading_bot.application import (
+    DccdFeed,
     EventBus,
     InMemoryFeed,
     LogEvent,
@@ -71,9 +73,9 @@ def _bars(closes: list[float], *, start_ts: int = 1_000) -> pl.DataFrame:
     )
 
 
-def _wire(
+def _wire_feed(
     strategy: Strategy,
-    frame: pl.DataFrame,
+    feed: object,
     *,
     mark: str = "100",
 ) -> tuple[StrategyRunner, PaperBroker, PositionTracker, EventBus]:
@@ -81,7 +83,9 @@ def _wire(
 
     The broker fills MARKET orders at the injected ``mark`` price and emits a
     ``FillEvent`` per fill onto the bus the tracker subscribes to, so the loop
-    closes (a step's fills update the *next* step's position).
+    closes (a step's fills update the *next* step's position). Takes any
+    ``DataFeed``-shaped ``feed`` — :func:`_wire` is the common case (an
+    ``InMemoryFeed`` over a fixed frame).
     """
     bus = EventBus()
     tracker = PositionTracker(event_bus=bus)
@@ -93,9 +97,18 @@ def _wire(
         event_bus=bus,
     )
     router = OrderRouter(broker, bus)
-    feed = InMemoryFeed(frame)
-    runner = StrategyRunner(strategy, feed, router, tracker, event_bus=bus)
+    runner = StrategyRunner(strategy, feed, router, tracker, event_bus=bus)  # type: ignore[arg-type]
     return runner, broker, tracker, bus
+
+
+def _wire(
+    strategy: Strategy,
+    frame: pl.DataFrame,
+    *,
+    mark: str = "100",
+) -> tuple[StrategyRunner, PaperBroker, PositionTracker, EventBus]:
+    """Build a fully wired runner over an ``InMemoryFeed`` of ``frame``."""
+    return _wire_feed(strategy, InMemoryFeed(frame), mark=mark)
 
 
 # --- end-to-end: trend up then down ---------------------------------------- #
@@ -627,3 +640,340 @@ async def test_step_latest_evaluates_latest_window_and_is_idempotent() -> None:
     again = tracker.position(BTC_USD)
     assert again is not None
     assert again.net_qty == Decimal("-2")  # unchanged
+
+
+# --- step_latest: the idle-tick freshness gate ------------------------------ #
+
+
+def _dccd_ohlc(closes: list[float], *, start_ns: int, span_ns: int) -> pl.DataFrame:
+    """A frame mimicking ``dccd.Client.read(..., 'ohlc')`` (its column names)."""
+    n = len(closes)
+    return pl.DataFrame(
+        {
+            "TS": [start_ns + span_ns * i for i in range(n)],
+            "open": closes,
+            "high": closes,
+            "low": closes,
+            "close": closes,
+            "volume": [1.0] * n,
+            "quote_volume": [10.0] * n,
+            "trades": [5] * n,
+        }
+    )
+
+
+class _CountingDccdClient:
+    """A fake dccd client counting **full** (``start_ns=None``) vs **tail**
+    (``start_ns`` given) reads, so a test can assert the freshness gate never
+    triggers a second full read when nothing new is available.
+    """
+
+    def __init__(self, frame: pl.DataFrame) -> None:
+        self._frame = frame
+        self.full_reads = 0
+        self.tail_reads = 0
+        self.raise_on_tail = False
+
+    def read(
+        self,
+        exchange: str,
+        symbol: str,
+        data_type: str = "ohlc",
+        span: int | None = None,
+        start_ns: int | None = None,
+        end_ns: int | None = None,
+    ) -> pl.DataFrame:
+        if start_ns is None:
+            self.full_reads += 1
+        else:
+            self.tail_reads += 1
+            if self.raise_on_tail:
+                raise RuntimeError("tail read boom")
+        frame = self._frame
+        if start_ns is not None:
+            frame = frame.filter(pl.col("TS") >= start_ns)
+        if end_ns is not None:
+            frame = frame.filter(pl.col("TS") <= end_ns)
+        return frame
+
+
+def _always_flat(bars: pl.DataFrame) -> Signal:
+    return Signal.exposure(BTC_USD, money("0"), ts=0)
+
+
+async def test_step_latest_gate_skips_full_read_when_no_new_bar() -> None:
+    """A second tick over unchanged data skips the full read and the signal.
+
+    The first-ever tick has no baseline, so it always runs the full path. A
+    second tick where the tail probe finds nothing newer than that baseline
+    must return ``None`` **without** a second full read and **without**
+    invoking ``signal_fn``.
+    """
+    span = 86_400
+    span_ns = span * 1_000_000_000
+    raw = _dccd_ohlc([100.0], start_ns=0, span_ns=span_ns)  # a single closed day
+    client = _CountingDccdClient(raw)
+    feed = DccdFeed(client, "kraken", "BTC/USD", span)
+
+    calls: list[int] = []
+
+    def _spy(bars: pl.DataFrame) -> Signal:
+        calls.append(bars.height)
+        return Signal.exposure(BTC_USD, money("1"), ts=0)
+
+    strat = Strategy(
+        name="gate", instrument=BTC_USD, signal_fn=_spy, reference_qty=money("1")
+    )
+    runner, _broker, _tracker, _bus = _wire_feed(strat, feed, mark="100")
+
+    first = await runner.step_latest()
+    assert first is not None  # first-ever tick: no baseline, always full
+    assert client.full_reads == 1
+    assert client.tail_reads == 0
+    assert len(calls) == 1
+    assert runner.last_asof_ms == 0  # the single day's asof (day 0)
+    assert runner.last_eval_ms is not None
+
+    second = await runner.step_latest()
+    assert second is None  # nothing new -> the gate skips
+    assert client.full_reads == 1  # NOT read again
+    assert client.tail_reads == 1  # exactly one cheap probe
+    assert len(calls) == 1  # the signal was never invoked on the skipped tick
+
+
+async def test_step_latest_gate_falls_through_when_a_new_bar_appears() -> None:
+    """A tail probe that finds a newer bar runs the full path exactly once more."""
+    span = 86_400
+    span_ns = span * 1_000_000_000
+    raw = _dccd_ohlc([100.0], start_ns=0, span_ns=span_ns)
+    client = _CountingDccdClient(raw)
+    feed = DccdFeed(client, "kraken", "BTC/USD", span)
+    strat = Strategy(
+        name="gate2",
+        instrument=BTC_USD,
+        signal_fn=_always_flat,
+        reference_qty=money("1"),
+    )
+    runner, _broker, _tracker, _bus = _wire_feed(strat, feed, mark="100")
+
+    await runner.step_latest()
+    assert client.full_reads == 1
+    assert runner.last_asof_ms == 0
+
+    # A new day lands in the store.
+    client._frame = _dccd_ohlc([100.0, 101.0], start_ns=0, span_ns=span_ns)
+
+    await runner.step_latest()
+    assert client.full_reads == 2  # the full path ran exactly once more
+    assert client.tail_reads == 1  # one probe, which saw the advance
+    assert runner.last_asof_ms == span_ns // 1_000_000  # day 1's asof
+
+
+async def test_step_latest_gate_falls_through_on_tail_probe_error() -> None:
+    """A tail-read failure is conservative: fall through to the full path."""
+    span = 86_400
+    span_ns = span * 1_000_000_000
+    raw = _dccd_ohlc([100.0], start_ns=0, span_ns=span_ns)
+    client = _CountingDccdClient(raw)
+    feed = DccdFeed(client, "kraken", "BTC/USD", span)
+    strat = Strategy(
+        name="gate3",
+        instrument=BTC_USD,
+        signal_fn=_always_flat,
+        reference_qty=money("1"),
+    )
+    runner, _broker, _tracker, _bus = _wire_feed(strat, feed, mark="100")
+
+    await runner.step_latest()
+    assert client.full_reads == 1
+
+    client.raise_on_tail = True
+    result = await runner.step_latest()
+
+    assert result is None  # nothing traded (flat signal), but no exception raised
+    assert client.tail_reads == 1
+    assert client.full_reads == 2  # correctness over speed: still ran the full path
+
+
+async def test_step_latest_last_asof_and_last_eval_update_on_skip_and_full() -> None:
+    """``last_asof_ms``/``last_eval_ms`` update correctly on both paths."""
+    span = 86_400
+    span_ns = span * 1_000_000_000
+    raw = _dccd_ohlc([100.0], start_ns=0, span_ns=span_ns)
+    client = _CountingDccdClient(raw)
+    feed = DccdFeed(client, "kraken", "BTC/USD", span)
+    strat = Strategy(
+        name="gate4",
+        instrument=BTC_USD,
+        signal_fn=_always_flat,
+        reference_qty=money("1"),
+    )
+    runner, _broker, _tracker, _bus = _wire_feed(strat, feed, mark="100")
+
+    assert runner.last_asof_ms is None
+    assert runner.last_eval_ms is None
+
+    await runner.step_latest()
+    asof_after_full = runner.last_asof_ms
+    eval_after_full = runner.last_eval_ms
+    assert asof_after_full == 0
+    assert eval_after_full is not None
+
+    await runner.step_latest()  # the skip path (nothing new)
+    assert runner.last_asof_ms == asof_after_full  # unchanged on a skip
+    assert runner.last_eval_ms is not None
+    assert runner.last_eval_ms >= eval_after_full  # still updated on a skip
+
+
+async def test_step_latest_offloads_the_full_read_off_the_event_loop() -> None:
+    """A slow, synchronous `latest()` does not block a concurrent coroutine.
+
+    Proves the `asyncio.to_thread` offload actually parallelises: while the
+    feed's blocking read sleeps, a concurrent loop gets many chances to run —
+    it would not if the read ran synchronously on the event loop.
+    """
+
+    class _SlowFeed:
+        def latest(self) -> pl.DataFrame:
+            time.sleep(0.15)  # a slow synchronous "dccd read"
+            return _bars([100.0])
+
+    strat = Strategy(
+        name="slow",
+        instrument=BTC_USD,
+        signal_fn=_always_flat,
+        reference_qty=money("1"),
+    )
+    runner, _broker, _tracker, _bus = _wire_feed(strat, _SlowFeed(), mark="100")
+
+    ticks = 0
+    stop = False
+
+    async def _concurrent_loop() -> None:
+        nonlocal ticks
+        while not stop:
+            ticks += 1
+            await asyncio.sleep(0.01)
+
+    ticker = asyncio.create_task(_concurrent_loop())
+    await runner.step_latest()
+    stop = True
+    ticker.cancel()
+
+    # The concurrent loop must have gotten several chances to run while the
+    # slow synchronous read was in flight on its own thread.
+    assert ticks >= 5
+
+
+# --- capital_provider: reference_qty = sizing_base / close ------------------ #
+
+
+def _always_long(bars: pl.DataFrame) -> Signal:
+    """A constant +1 (fully long) exposure signal for BTC/USD."""
+    return Signal.exposure(BTC_USD, money("1"), ts=0)
+
+
+def _wire_provider(
+    strategy: Strategy,
+    frame: pl.DataFrame,
+    provider: object,
+    *,
+    mark: str = "100",
+) -> tuple[StrategyRunner, PaperBroker, PositionTracker]:
+    """A wired runner whose sizing is driven by ``provider`` (a lazy base fn)."""
+    bus = EventBus()
+    tracker = PositionTracker(event_bus=bus)
+    broker = PaperBroker(
+        prices={BTC_USD: money(mark)},
+        fee_bps=money("0"),
+        fill_model="immediate",
+        starting_balances={"USD": money("10000000"), "BTC": money("0")},
+        event_bus=bus,
+    )
+    router = OrderRouter(broker, bus)
+    runner = StrategyRunner(
+        strategy,
+        InMemoryFeed(frame),
+        router,
+        tracker,
+        event_bus=bus,
+        capital_provider=provider,  # type: ignore[arg-type]
+    )
+    return runner, broker, tracker
+
+
+async def test_capital_provider_sizes_reference_qty_from_base() -> None:
+    """A step sizes ``reference_qty = base / close`` — target = exposure * that.
+
+    With base 100 at close 100, ``reference_qty = 1`` so a +1 exposure targets
+    long 1 from flat → an order for exactly 1 (money exact ``Decimal``).
+    """
+    strat = Strategy(name="cap", instrument=BTC_USD, signal_fn=_always_long)
+    frame = _bars([100.0])
+    runner, _broker, tracker = _wire_provider(strat, frame, lambda: money("100"))
+
+    order = await runner.step(frame)
+    assert order is not None
+    assert order.qty == Decimal("1")
+    pos = tracker.position(BTC_USD)
+    assert pos is not None and pos.net_qty == Decimal("1")
+
+
+async def test_capital_provider_reference_qty_tracks_close() -> None:
+    """The base translates to base units at the bar's close: qty = base / close.
+
+    Base 150 at close 30000 → ``reference_qty = 0.005`` → long 0.005, exact.
+    """
+    strat = Strategy(name="cap", instrument=BTC_USD, signal_fn=_always_long)
+    frame = _bars([30000.0])
+    runner, _broker, _tracker = _wire_provider(
+        strat, frame, lambda: money("150"), mark="30000"
+    )
+    order = await runner.step(frame)
+    assert order is not None
+    assert order.qty == Decimal("0.005")  # 150 / 30000, exact
+
+
+async def test_capital_provider_deposit_grows_next_step_no_rebuild() -> None:
+    """A base bump (a deposit) grows the *next* step's target on the same runner.
+
+    Step 1 (base 100) targets long 1; step 2 (base unchanged) is on target (no
+    order); after lifting the base to 200, step 3 tops up to long 2 — all on the
+    **same runner instance** (the lazy provider is re-read every step, no rebuild).
+    """
+    base = {"v": money("100")}
+    strat = Strategy(name="cap", instrument=BTC_USD, signal_fn=_always_long)
+    frame = _bars([100.0])
+    runner, _broker, tracker = _wire_provider(strat, frame, lambda: base["v"])
+
+    order1 = await runner.step(frame)
+    assert order1 is not None and order1.qty == Decimal("1")
+    assert tracker.position(BTC_USD).net_qty == Decimal("1")  # type: ignore[union-attr]
+
+    # Same base → already on target → no order.
+    assert await runner.step(frame) is None
+
+    # A "deposit": lift the base — the very next step tops the position up.
+    base["v"] = money("200")
+    order3 = await runner.step(frame)
+    assert order3 is not None and order3.qty == Decimal("1")  # 2 target - 1 held
+    assert tracker.position(BTC_USD).net_qty == Decimal("2")  # type: ignore[union-attr]
+
+
+async def test_no_provider_uses_static_reference_qty_unchanged() -> None:
+    """With no provider the runner sizes on the strategy's static reference_qty.
+
+    Byte-identical to the pre-ledger behaviour: a +1 exposure with a static
+    ``reference_qty = 3`` targets long 3 regardless of the close.
+    """
+    strat = Strategy(
+        name="static",
+        instrument=BTC_USD,
+        signal_fn=_always_long,
+        reference_qty=money("3"),
+    )
+    frame = _bars([100.0])
+    runner, _broker, tracker, _bus = _wire(strat, frame, mark="100")
+    order = await runner.step(frame)
+    assert order is not None and order.qty == Decimal("3")
+    assert tracker.position(BTC_USD).net_qty == Decimal("3")  # type: ignore[union-attr]

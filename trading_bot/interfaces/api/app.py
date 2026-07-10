@@ -1,23 +1,25 @@
-"""FastAPI application — a **read-only** HTTP view of the live engine.
+"""FastAPI application — the unified dashboard over the live engine(s).
 
-``create_app(engine)`` builds a :class:`fastapi.FastAPI` that renders the
-:class:`~trading_bot.application.service_factory.Engine`'s live state out over
-HTTP: positions, tracked orders and PnL/KPI as JSON, plus a Server-Sent-Events
-stream of order/fill/log events fed by the engine's
-:class:`~trading_bot.application.events.EventBus`. The UI (leaf 02) is a pure
-HTTP client of this API.
+The entrypoints are :func:`create_dashboard_app` (the unified monitoring +
+control dashboard over a :class:`~trading_bot.application.supervisor.StrategySupervisor`
+— every managed strategy's positions, tracked orders and PnL/KPI as JSON, plus a
+Server-Sent-Events stream of order/fill/log events) and :func:`create_control_app`
+(a thin backward-compat alias of the same app). This module also holds the shared
+serialization helpers (money-as-Decimal-string, SSE framing) and HTTP hardening
+both factories build on.
 
-Read-only — a hard invariant (carried into the ADR)
----------------------------------------------------
-**Every endpoint is a GET and no endpoint mutates the engine.** There is
-deliberately *no* route that places, amends or cancels an order: the write path
+No order-placement route — a hard invariant (carried into the ADR)
+--------------------------------------------------------------------
+**No endpoint places, amends or cancels an order.** The write path
 (:class:`~trading_bot.application.order_router.OrderRouter`) is reachable only
-in-process by the strategy runner, never from the network. A web client can
-*observe* the engine — it can never *trade* through it. This keeps the only
+in-process by the strategy runner, never from the network — a web client can
+*observe* the engine and, through the gated control routes, start/stop a unit or
+switch its mode, but it can never place a trade directly. This keeps the only
 money-moving surface (order submission) off the HTTP boundary entirely, so a
-compromised or misused web client cannot place an order. The absence of a POST
-order route is the invariant; a POST to a plausible order path returns ``405``
-(method not allowed) because only GET is registered for it.
+compromised or misused web client cannot place an order. Going ``live`` is
+further gated by a typed acknowledgement enforced server-side (see
+:func:`create_dashboard_app`), and ``read_only=True`` refuses every mutation
+outright (``403``).
 
 Money is serialized as Decimal **strings**, never floats (carried into the ADR)
 -------------------------------------------------------------------------------
@@ -44,17 +46,17 @@ serialized with money as strings and tagged with a ``type`` discriminator), and
 
 The dashboard UI — a pure HTTP client mounted on the same app (carried into the ADR)
 ------------------------------------------------------------------------------------
-``create_app`` also mounts the read-only web dashboard (leaf 02): ``StaticFiles``
-at ``/static`` over :data:`~trading_bot.interfaces.ui.STATIC_DIR`, a
+:func:`create_dashboard_app` mounts the unified web dashboard: ``StaticFiles`` at
+``/static`` over :data:`~trading_bot.interfaces.ui.STATIC_DIR`, a
 :class:`~fastapi.templating.Jinja2Templates` over
-:data:`~trading_bot.interfaces.ui.TEMPLATES_DIR`, and a single ``GET /`` that
-renders ``dashboard.html`` — a **shell** carrying only the package version and the
-engine ``mode`` (no engine data is rendered server-side). The page's ``app.js``
-fetches ``/api/positions|orders|kpi`` and live-updates from ``/api/events``, so the
-UI is a **pure HTTP client** of this API: it shares the API's read-only guarantee
-and has no path to place an order. The directories are resolved from the installed
-package (shipped via ``[tool.setuptools.package-data]``), and the mount is guarded
-on their existence so the API still builds if assets are absent.
+:data:`~trading_bot.interfaces.ui.TEMPLATES_DIR`, and one page per tab (Overview /
+Strategies / Orders / Logs), the per-strategy detail page (``/strategies/{name}``)
+and the deploy form (``/strategies/new``), rendered as **shells** carrying only the version
+and ``read_only``/auth flags (no supervisor data server-side). Each page's script
+fetches ``/api/*`` and live-updates from ``/api/events``, so the UI is a **pure
+HTTP client** of this API. The directories are resolved from the installed package
+(shipped via ``[tool.setuptools.package-data]``), and the mount is guarded on their
+existence so the API still builds if assets are absent.
 """
 
 from __future__ import annotations
@@ -65,12 +67,18 @@ import logging
 import math
 import re
 import secrets
+import time
 from collections.abc import Callable
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any, Literal
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
+from fastapi.responses import (
+    HTMLResponse,
+    JSONResponse,
+    RedirectResponse,
+    StreamingResponse,
+)
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, Field
@@ -89,7 +97,6 @@ if TYPE_CHECKING:
         PortfolioStrategyConfig,
         StrategyConfig,
     )
-    from trading_bot.application.service_factory import Engine
     from trading_bot.application.supervisor import (
         FillRow,
         KpiRow,
@@ -102,7 +109,7 @@ if TYPE_CHECKING:
     from trading_bot.domain.order import Order
     from trading_bot.domain.position import Position
 
-__all__ = ["create_app", "create_control_app", "create_dashboard_app"]
+__all__ = ["create_control_app", "create_dashboard_app"]
 
 logger = logging.getLogger(__name__)
 
@@ -217,37 +224,6 @@ def _fill_dict(fill: Fill) -> dict[str, Any]:
     }
 
 
-def _safe_ratio(compute: Callable[[], float]) -> float:
-    """Evaluate a KPI ratio, returning ``0.0`` when it is undefined on this curve.
-
-    The fynance-backed ratio estimators can both *raise* and *return a
-    non-finite value* on some real equity curves the fill-driven
-    :class:`~trading_bot.application.performance_service.PerformanceService`
-    produces:
-
-    * they **raise** a :class:`ValueError` when the curve is degenerate (e.g. a
-      curve that starts at / crosses zero — fynance's "initial value cannot be
-      null" / "must be of the same sign");
-    * they **return ``inf`` / ``nan``** when a ratio's denominator is zero on an
-      otherwise valid curve — e.g. a *monotonically rising* curve has zero
-      drawdown, so Calmar (return / max-drawdown) and Sortino (excess /
-      downside-deviation) are ``inf``. With a strictly-positive
-      ``starting_capital`` (the config default) this is now the *common* shape
-      for a winning run, where the old ``v0 = 0`` curve would instead have made
-      fynance raise.
-
-    A read-only KPI view must stay 200 + JSON-numeric in both cases (a bare
-    ``inf`` / ``nan`` is not valid JSON and serializes to ``null``). So this
-    reports ``0.0`` for a raised *and* a non-finite ratio — the same "undefined
-    estimator → 0.0" convention the service uses for a too-short series.
-    """
-    try:
-        value = compute()
-    except (ValueError, ZeroDivisionError, ArithmeticError):
-        return 0.0
-    return value if math.isfinite(value) else 0.0
-
-
 def _event_dict(event: Event) -> dict[str, Any]:
     """Serialize a bus :class:`~trading_bot.application.events.Event` for SSE.
 
@@ -286,6 +262,16 @@ def _event_key(event: Event) -> str | None:
     return None
 
 
+def _epoch_ms() -> int:
+    """The current server time, as integer epoch milliseconds.
+
+    Stamps every SSE frame with a server-side ``ts`` so the Logs page shows *when
+    the server emitted the event*, not the client's receive time (which drifts
+    under latency / reconnects).
+    """
+    return int(time.time() * 1000)
+
+
 # ---------------------------------------------------------------------------
 # Serialization — supervisor aggregate rows -> JSON-ready dicts
 # ---------------------------------------------------------------------------
@@ -311,13 +297,19 @@ def _position_row_dict(row: PositionRow) -> dict[str, Any]:
 
 
 def _order_row_dict(row: OrderRow) -> dict[str, Any]:
-    """Render a supervisor :class:`OrderRow` — the order dict + strategy/venue tags."""
+    """Render a supervisor :class:`OrderRow` — the order dict + strategy/venue tags.
+
+    ``ts`` (epoch ms, or ``null``) is when the order was **first** persisted to
+    the unit's store — already an integer, unlike the money fields, so it needs
+    no stringification.
+    """
     return {
         "strategy": row.strategy,
         "exchange": row.exchange,
         # The instrument's base asset — the crypto filter key (orders carry no base
         # tag of their own; derive it from the instrument for the ?crypto= filter).
         "base": str(row.order.instrument).split("/", 1)[0],
+        "ts": row.ts,
         **_order_dict(row.order),
     }
 
@@ -338,13 +330,15 @@ def _kpi_row_dict(row: KpiRow) -> dict[str, Any]:
     Money (``realised_pnl`` / ``fees_paid``) as exact Decimal strings; the ratios
     (``sharpe`` / ``sortino`` / ``calmar`` / ``max_drawdown``) as JSON numbers at
     ``level="strategy"`` and JSON ``null`` at the aggregate levels (no combined
-    curve yet).
+    curve yet); ``quote`` is the row's quote currency, or ``null`` when the row
+    folds units that mix quote currencies (the UI renders "mixed").
     """
     return {
         "level": row.level,
         "key": row.key,
         "strategy": row.strategy,
         "exchange": row.exchange,
+        "quote": row.quote,
         "realised_pnl": _money_str(row.realised_pnl),
         "fees_paid": _money_str(row.fees_paid),
         "sharpe": _finite_or_none(row.sharpe),
@@ -361,10 +355,12 @@ def _pnl_series_dict(
 
     The per-mode realised-PnL / equity curve: ``v0`` and every money field in the
     series points (``[ts_ms, pnl, equity]``) and the ``current`` end points
-    (``equity`` / ``unrealised``) are exact :class:`~decimal.Decimal` strings;
-    ``ts_ms`` stays the integer ms it already is. With ``only_mode`` set, only
-    that mode's series + current are kept (the ``?mode=`` filter) — an absent mode
-    yields empty ``series`` / ``current`` (200, not an error).
+    (``equity`` / ``unrealised`` / ``allocation`` / ``contributed`` /
+    ``total_value``) are exact :class:`~decimal.Decimal` strings, with
+    ``capital_policy`` passed through as a plain string; ``ts_ms`` stays the
+    integer ms it already is. With ``only_mode`` set, only that mode's series +
+    current are kept (the ``?mode=`` filter) — an absent mode yields empty
+    ``series`` / ``current`` (200, not an error).
     """
     series_in: dict[str, Any] = result["series"]
     current_in: dict[str, Any] = result["current"]
@@ -381,6 +377,10 @@ def _pnl_series_dict(
         mode: {
             "equity": _money_str(current_in[mode]["equity"]),
             "unrealised": _money_str(current_in[mode]["unrealised"]),
+            "allocation": _money_str(current_in[mode]["allocation"]),
+            "contributed": _money_str(current_in[mode]["contributed"]),
+            "total_value": _money_str(current_in[mode]["total_value"]),
+            "capital_policy": current_in[mode]["capital_policy"],
         }
         for mode in modes
         if mode in current_in
@@ -393,14 +393,46 @@ def _pnl_series_dict(
     }
 
 
+def _capital_breakdown_dict(breakdown: dict[str, Any]) -> dict[str, Any]:
+    """Render a supervisor :meth:`capital_breakdown` result for JSON (money as strings).
+
+    Every money field (``allocation`` / ``contributed`` / ``realised`` /
+    ``unrealised`` / ``total_value`` / ``withdrawable`` and each ledger event's
+    ``amount``) is an exact :class:`~decimal.Decimal` string (``None`` passes
+    through); ``policy`` is a plain string and each event ``ts`` the integer ms it
+    already is. ``events`` is the ledger audit trail (deposits / withdrawals /
+    the genesis funding) the UI renders.
+    """
+    return {
+        "strategy": breakdown["strategy"],
+        "allocation": _money_str(breakdown["allocation"]),
+        "contributed": _money_str(breakdown["contributed"]),
+        "realised": _money_str(breakdown["realised"]),
+        "unrealised": _money_str(breakdown["unrealised"]),
+        "total_value": _money_str(breakdown["total_value"]),
+        "withdrawable": _money_str(breakdown["withdrawable"]),
+        "policy": breakdown["policy"],
+        "events": [
+            {
+                "event_id": event["event_id"],
+                "type": event["type"],
+                "amount": _money_str(event["amount"]),
+                "ts": event["ts"],
+                "note": event["note"],
+            }
+            for event in breakdown["events"]
+        ],
+    }
+
+
 def _finite_or_none(value: float | None) -> float | None:
     """Pass a finite float through; map ``None`` / non-finite to JSON ``null``.
 
     The KPI ratios can be ``inf`` / ``nan`` on a degenerate curve (a monotonic
     winner has zero drawdown → Calmar is ``inf``); a bare ``inf`` / ``nan`` is not
     valid JSON. So a non-finite (or ``None``) ratio serializes as ``null`` — the
-    same "undefined estimator" convention :func:`_safe_ratio` uses for the
-    single-engine view, here surfaced as an explicit ``null`` rather than ``0.0``.
+    same "undefined estimator" convention a raised/non-finite ratio maps to
+    elsewhere, here surfaced as an explicit ``null``.
     """
     if value is None or not math.isfinite(value):
         return None
@@ -430,6 +462,81 @@ _SECURITY_HEADERS = {
 }
 
 
+class _SuppressGracefulShutdownCancellation(logging.Filter):
+    """Drop uvicorn's "Exception in ASGI application" record for an expected
+    graceful-shutdown cancellation — not a real application bug.
+
+    Why this lives at the logging layer, not in a route
+    -----------------------------------------------------
+    Every ``/api/events`` route below returns a plain
+    :class:`~starlette.responses.StreamingResponse`. uvicorn 0.49 declares ASGI
+    ``spec_version: "2.3"`` for HTTP (see
+    ``uvicorn/protocols/http/httptools_impl.py``), which is *below* the
+    ``(2, 4)`` threshold Starlette's own ``StreamingResponse.__call__`` checks
+    before picking its newer, single-await implementation — so under this
+    uvicorn version Starlette *always* falls back to its older code path: an
+    ``anyio`` task group racing "stream the body" against "listen for
+    disconnect" (``starlette/responses.py``). When
+    ``timeout_graceful_shutdown`` (:data:`_SHUTDOWN_GRACE_SECONDS`) elapses on a
+    still-open SSE connection, uvicorn force-cancels the per-connection task —
+    logging "Cancel N running task(s), timeout graceful shutdown exceeded" (a
+    legitimate, expected line, left alone). That cancellation lands *inside
+    Starlette's own task group*, which re-raises it unconverted all the way
+    back up to uvicorn's ``run_asgi``, which logs **any** exception escaping the
+    ASGI app — even a deliberate cancellation it just issued itself — as an
+    ERROR-level, multi-frame traceback ("Exception in ASGI application").
+    Operators read that as a crash on every shutdown while a client holds
+    ``/api/events`` open, even though the SSE generators in this module (see
+    their own ``except asyncio.CancelledError`` handling) already end cleanly
+    the moment cancellation reaches *their* frame — the noisy traceback
+    originates in Starlette's own plumbing, which this module does not control,
+    so suppressing it has to happen at the logging layer instead. This filter
+    drops *only* that exact, expected shape — an :class:`asyncio.CancelledError`
+    reaching uvicorn's "Exception in ASGI application" log call — so a genuine
+    application exception (any other exception type, or a ``CancelledError``
+    logged under a different message) is still logged normally.
+
+    Matching on exception *type* alone (not also uvicorn's own cancel message,
+    e.g. "Task cancelled, timeout graceful shutdown exceeded") is deliberate:
+    with **two** stacked ``@app.middleware("http")`` handlers here (see
+    :func:`_install_hardening`), each ``BaseHTTPMiddleware`` layer's own nested
+    ``anyio`` task group can re-signal the cancellation through its *own*
+    cancel scope on the way back out, which — per ``anyio``'s cancel-scope
+    bookkeeping — can substitute a **fresh, message-less**
+    ``CancelledError()`` for the one uvicorn originally raised. The message is
+    the only thing lost; every step in the chain is still a plain
+    cancellation. Restricting the match to uvicorn's own "Exception in ASGI
+    application" message keeps this from ever catching an unrelated
+    ``uvicorn.error`` record.
+    """
+
+    _EXPECTED_MESSAGE_PREFIX = "Exception in ASGI application"
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        """Return ``False`` (drop) only for the expected shutdown cancellation."""
+        if not record.exc_info:
+            return True
+        exc = record.exc_info[1]
+        is_expected = isinstance(
+            exc, asyncio.CancelledError
+        ) and record.getMessage().startswith(self._EXPECTED_MESSAGE_PREFIX)
+        return not is_expected
+
+
+def _suppress_graceful_shutdown_cancellation_logs() -> None:
+    """Install :class:`_SuppressGracefulShutdownCancellation` on ``uvicorn.error`` once.
+
+    Idempotent (checked by filter *type*), so calling this from every
+    :func:`create_dashboard_app` build — including in tests, which build many
+    apps per process — never stacks up duplicate filter instances.
+    """
+    target = logging.getLogger("uvicorn.error")
+    if not any(
+        isinstance(f, _SuppressGracefulShutdownCancellation) for f in target.filters
+    ):
+        target.addFilter(_SuppressGracefulShutdownCancellation())
+
+
 def _install_hardening(app: FastAPI) -> None:
     """Add the shared body-size cap + security-header middleware to ``app``.
 
@@ -443,11 +550,17 @@ def _install_hardening(app: FastAPI) -> None:
       :data:`_SECURITY_HEADERS` (nosniff / anti-clickjacking / no-referrer), and
       every authed JSON body (``/api/*``) additionally gets ``Cache-Control:
       no-store`` so the live book is never cached by a browser or intermediary.
+    * **Quiet shutdown.** Installs
+      :class:`_SuppressGracefulShutdownCancellation` on the ``uvicorn.error``
+      logger so a force-cancelled ``/api/events`` connection past
+      :data:`_SHUTDOWN_GRACE_SECONDS` doesn't spam an ERROR-level traceback for
+      what is an expected, controlled shutdown (see that class's docstring).
 
     Middleware runs outermost-first in registration order; the body cap is added
     last here so it runs **first** (it can reject before the header middleware even
     builds a response).
     """
+    _suppress_graceful_shutdown_cancellation_logs()
 
     @app.middleware("http")
     async def _security_headers(request: Request, call_next: Any) -> Any:
@@ -488,173 +601,6 @@ def _install_hardening(app: FastAPI) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Application factory
-# ---------------------------------------------------------------------------
-
-
-def create_app(engine: Engine) -> FastAPI:
-    """Build the read-only FastAPI over a wired :class:`Engine`.
-
-    Stores ``engine`` on ``app.state`` and registers the read-only GET endpoints
-    (``/api/health``, ``/api/positions``, ``/api/orders``, ``/api/kpi``) plus the
-    SSE stream (``/api/events``). Every response renders money as an exact
-    :class:`~decimal.Decimal` string (see the module docstring). **No** endpoint
-    mutates the engine — there is deliberately no route to place or cancel an
-    order.
-
-    Parameters
-    ----------
-    engine : Engine
-        The fully-wired engine to expose. Read through ``app.state.engine`` by the
-        handlers, so the wiring is explicit and the app is testable with a paper
-        engine.
-
-    Returns
-    -------
-    FastAPI
-        The configured application — pass it to a server (uvicorn) or to
-        :class:`fastapi.testclient.TestClient`.
-
-    """
-    app = FastAPI(
-        title="trading_bot API",
-        summary="Read-only HTTP view of the live trading engine.",
-        default_response_class=_DecimalJSONResponse,
-    )
-    app.state.engine = engine
-    _install_hardening(app)  # body-size cap + security headers (I-6, I-11)
-
-    def _engine(request: Request) -> Engine:
-        """Read the wired engine off ``app.state`` (explicit, testable access)."""
-        return request.app.state.engine  # type: ignore[no-any-return]
-
-    # -- UI: dashboard shell + static assets --------------------------------- #
-    # Mount the read-only web dashboard on the same app. The page is a *shell*
-    # (version + mode only); all engine data is fetched client-side from /api/*,
-    # so the UI is a pure HTTP client of this API (read-only, no order path).
-    # Guarded on the dirs existing so the API still builds without the assets.
-    if STATIC_DIR.is_dir():
-        app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
-
-    templates = (
-        Jinja2Templates(directory=str(TEMPLATES_DIR))
-        if TEMPLATES_DIR.is_dir()
-        else None
-    )
-
-    if templates is not None:
-
-        @app.get("/", response_class=HTMLResponse)
-        async def dashboard(request: Request) -> Any:
-            """Render the read-only dashboard shell (no engine data server-side).
-
-            Returns ``dashboard.html`` carrying only the package version and the
-            engine ``mode`` (for the header badge). The page's ``app.js`` fetches
-            ``/api/positions|orders|kpi`` and live-updates from ``/api/events`` —
-            the UI never renders engine state server-side and never mutates it.
-            """
-            eng = _engine(request)
-            return templates.TemplateResponse(
-                request,
-                "dashboard.html",
-                {
-                    "version": trading_bot.__version__,
-                    "mode": eng.config.mode,
-                },
-            )
-
-    # -- Health -------------------------------------------------------------- #
-
-    @app.get("/api/health")
-    async def health(request: Request) -> dict[str, Any]:
-        """Liveness + a snapshot of what the engine is configured to run."""
-        eng = _engine(request)
-        return {
-            "status": "ok",
-            "mode": eng.config.mode,
-            "strategies": len(eng.config.strategies),
-        }
-
-    # -- Positions ----------------------------------------------------------- #
-
-    @app.get("/api/positions")
-    async def positions(request: Request) -> list[dict[str, Any]]:
-        """Live net positions per instrument (money as Decimal strings)."""
-        eng = _engine(request)
-        return [
-            _position_dict(position)
-            for position in eng.tracker.all_positions().values()
-        ]
-
-    # -- Orders -------------------------------------------------------------- #
-
-    @app.get("/api/orders")
-    async def orders(request: Request) -> list[dict[str, Any]]:
-        """Every order the router has tracked (enums by value; money as strings)."""
-        eng = _engine(request)
-        return [_order_dict(order) for order in eng.router.tracked_orders().values()]
-
-    # -- KPI ----------------------------------------------------------------- #
-
-    @app.get("/api/kpi")
-    async def kpi(request: Request) -> dict[str, Any]:
-        """Aggregate PnL/KPI: money as Decimal strings, ratios as JSON numbers."""
-        perf = _engine(request).perf
-        equity = perf.equity_curve()
-        equity_end = equity[-1] if equity else None
-        return {
-            "realised_pnl": _money_str(perf.realised_pnl()),
-            "fees_paid": _money_str(perf.fees_paid()),
-            "equity_end": _money_str(equity_end),
-            "sharpe": _safe_ratio(perf.sharpe),
-            "sortino": _safe_ratio(perf.sortino),
-            "max_drawdown": _safe_ratio(perf.max_drawdown),
-            "calmar": _safe_ratio(perf.calmar),
-        }
-
-    # -- SSE events ---------------------------------------------------------- #
-
-    @app.get("/api/events")
-    async def events(request: Request) -> StreamingResponse:
-        """Server-Sent-Events stream of order/fill/log events from the bus.
-
-        Registers a fresh queue on the engine's
-        :class:`~trading_bot.application.events.EventBus`, yields each event as a
-        ``data: <json>\\n\\n`` frame (money as Decimal strings, tagged with a
-        ``type``), and unregisters the queue in a ``finally`` on disconnect.
-        """
-        bus = _engine(request).bus
-        queue = bus.add_queue()
-
-        async def _generator() -> Any:
-            try:
-                # Flush an immediate comment so the client's EventSource leaves
-                # "connecting" without waiting for the first real event (mirrors
-                # dccd, where a buffering middleware otherwise stalls the start).
-                yield ": connected\n\n"
-                while True:
-                    if await request.is_disconnected():
-                        break
-                    try:
-                        # Bounded wait so the loop periodically wakes to re-check
-                        # disconnection (and so a hung consumer cannot pin the
-                        # queue forever); on timeout, send an SSE heartbeat
-                        # comment. Mirrors dccd's /api/events.
-                        event = await asyncio.wait_for(queue.get(), timeout=15.0)
-                        yield (
-                            f"data: {json.dumps(_event_dict(event), default=_default)}\n\n"
-                        )
-                    except asyncio.TimeoutError:
-                        yield ": heartbeat\n\n"
-            finally:
-                bus.remove_queue(queue)
-
-        return StreamingResponse(_generator(), media_type="text/event-stream")
-
-    return app
-
-
-# ---------------------------------------------------------------------------
 # The control app — the daemon's read+write dashboard over a StrategySupervisor
 # ---------------------------------------------------------------------------
 
@@ -675,7 +621,16 @@ _SESSION_TTL_SECONDS = 12 * 3600
 #: Login attempts per minute per client (brute-force throttle).
 _LOGIN_RATE_PER_MIN = 10
 #: Path prefixes reachable without a session (the login flow + assets).
-_OPEN_PREFIXES = ("/login", "/logout", "/static")
+#: ``/favicon.ico`` is open on purpose: a browser fetches it in the background on
+#: every page — including the login page — and an auth redirect to ``/login``
+#: would re-render the form and (before the stable-cookie fix in ``_login_page``)
+#: rotate the CSRF cookie under the form the user is looking at.
+_OPEN_PREFIXES = ("/login", "/logout", "/static", "/favicon.ico")
+
+#: Shape of a CSRF token we minted (``secrets.token_urlsafe(32)`` → 43 urlsafe
+#: chars). An existing cookie is only reused when it matches, so an arbitrary
+#: value can never be echoed back into the login form.
+_CSRF_SHAPE = re.compile(r"^[A-Za-z0-9_-]{43}$")
 
 #: Hard cap on live sessions (I-7): once reached, the oldest session is evicted on a
 #: new login so the in-memory map cannot grow without bound over a long-lived daemon.
@@ -736,6 +691,38 @@ class _ModeBody(BaseModel):
     mode: str
     confirm: bool = False
     ack: str | None = None
+
+
+class _CapitalOpBody(BaseModel):
+    """Request body for ``POST /api/strategies/{name}/capital`` — deposit / withdraw.
+
+    ``amount`` is a **string** (never a JSON float): money crosses the wire as an
+    exact decimal string, so a client that sends ``12.5`` as a float is rejected
+    (422) rather than silently binary-rounded — the money-exactness invariant.
+    ``op_id`` is the caller-assigned idempotency key (the client-order-id
+    analogue): re-POSTing the same ``op_id`` is a no-op that returns the unchanged
+    breakdown. Kept **module-level** for the same reason as :class:`_ModeBody`
+    (FastAPI resolves body models against module globals under ``from __future__
+    import annotations``).
+    """
+
+    action: Literal["deposit", "withdraw"]
+    # I-6: bound the free-form strings so a giant field cannot amplify (the
+    # body-size middleware is the coarse gate; these are the per-field defence).
+    amount: str = Field(min_length=1, max_length=64)
+    op_id: str = Field(min_length=1, max_length=128)
+    note: str = Field(default="", max_length=256)
+
+
+class _PolicyBody(BaseModel):
+    """Request body for ``POST /api/strategies/{name}/policy`` — set the sizing policy.
+
+    Module-level (see :class:`_CapitalOpBody`). ``policy`` is the capital-evolution
+    policy the unit sizes under: ``fixed`` sizes against contributed capital,
+    ``compound`` reinvests realised PnL into the base.
+    """
+
+    policy: Literal["fixed", "compound"]
 
 
 class _CreateStrategyBody(BaseModel):
@@ -1099,17 +1086,31 @@ def _discover_signals() -> dict[str, list[str]]:
 
 
 def _status_dict(status: StrategyStatus) -> dict[str, Any]:
-    """Render a :class:`StrategyStatus` for JSON (money as exact Decimal string)."""
+    """Render a :class:`StrategyStatus` for JSON (money as exact Decimal string).
+
+    ``last_eval_ts`` / ``last_asof_ts`` are already integer epoch ms (or
+    ``None``) on the domain side — no stringification needed, unlike the money
+    fields.
+    """
     return {
         "name": status.name,
         "kind": status.kind,
         "exchange": status.exchange,
+        "span": status.span,
+        "quote": status.quote,
         "mode": status.mode,
         "running": status.running,
         "realised_pnl": (
             str(status.realised_pnl) if status.realised_pnl is not None else None
         ),
         "open_orders": status.open_orders,
+        "last_eval_ts": status.last_eval_ts,
+        "last_asof_ts": status.last_asof_ts,
+        "allocation": _money_str(status.allocation),
+        "contributed": _money_str(status.contributed),
+        "unrealised": _money_str(status.unrealised),
+        "total_value": _money_str(status.total_value),
+        "capital_policy": status.capital_policy,
     }
 
 
@@ -1397,10 +1398,16 @@ def _install_control_auth(
 
     def _login_page(request: Request, *, error: str = "", status: int = 200) -> Any:
         nxt = _safe_next(request.query_params.get("next"))
-        # I-13: mint (or reuse) a per-render CSRF token, embed it in the form AND
-        # set it as a SameSite=strict cookie — the POST must echo both (double
-        # submit). A fresh token each GET is fine (the browser keeps the latest).
-        csrf = secrets.token_urlsafe(32)
+        # I-13: double-submit CSRF — the POST must echo the form field AND the
+        # cookie, and they must match. REUSE the browser's existing cookie when it
+        # has the shape we mint: any background request landing on /login (e.g. an
+        # unauthenticated asset fetch redirected here) re-renders this page, and
+        # minting a fresh token per render would rotate the cookie *under* the form
+        # the user is already looking at — every submit would then 403. A stable
+        # per-browser token is the standard double-submit pattern.
+        csrf = request.cookies.get(_CSRF_COOKIE, "")
+        if not _CSRF_SHAPE.match(csrf):
+            csrf = secrets.token_urlsafe(32)
         if templates is not None:
             resp: Any = templates.TemplateResponse(
                 request,
@@ -1432,6 +1439,11 @@ def _install_control_auth(
             max_age=_SESSION_TTL_SECONDS,
         )
         return resp
+
+    @app.get("/favicon.ico", include_in_schema=False)
+    async def favicon() -> Any:
+        """Serve the browser's default icon probe (open route, see _OPEN_PREFIXES)."""
+        return RedirectResponse("/static/favicon.svg", status_code=308)
 
     @app.get("/login", response_class=HTMLResponse)
     async def login_form(request: Request) -> Any:
@@ -1498,8 +1510,8 @@ def _install_control_auth(
 _DASHBOARD_PAGES: tuple[tuple[str, str], ...] = (
     ("/", "overview.html"),
     ("/strategies", "strategies.html"),
+    ("/strategies/new", "strategies_new.html"),
     ("/orders", "orders.html"),
-    ("/pnl", "pnl.html"),
     ("/logs", "logs.html"),
 )
 
@@ -1579,19 +1591,22 @@ def create_dashboard_app(
     auth_token: str | None = None,
     read_only: bool = False,
     on_change: Callable[[], None] | None = None,
+    schedule_info: Callable[[], dict[str, Any]] | None = None,
 ) -> FastAPI:
     """Build the **unified dashboard** FastAPI over a :class:`StrategySupervisor`.
 
     The foundation that hosts both monitoring *and* control in one app and one
-    shell (``base.html``): a top nav across Overview / Strategies / Orders / PnL /
-    Logs, a brand + version + health chip + connection dot. This factory ships the
+    shell (``base.html``): a top nav across Overview / Strategies / Orders / Logs
+    (with the per-strategy detail page ``/strategies/{name}`` under Strategies), a
+    brand + version + health chip + connection dot. This factory ships the
     **shell + stub pages + health** — the per-page data (positions, orders, PnL,
     logs) lands in later leaves, fetched client-side over ``/api/*``.
 
     Every page renders a server-side *shell only* (version + ``read_only`` + auth
     flags); no supervisor data is rendered server-side, so the pages are pure HTTP
     clients of the API. ``GET /api/health`` reports liveness + a snapshot of what
-    the supervisor manages (``{status, mode, strategies, read_only}``).
+    the supervisor manages (``{status, mode, strategies, read_only, next_tick_ts,
+    tick}``).
 
     **Authentication (for remote exposure).** With ``auth_token`` set, the app is
     gated behind the same token login as the control app
@@ -1619,6 +1634,14 @@ def create_dashboard_app(
         manifest to disk (the control plane owns the manifest). ``None`` (default)
         skips persistence — the in-memory supervisor still mutates, nothing is
         written. Typically ``lambda: supervisor.manifest().to_yaml(path)``.
+    schedule_info : Callable[[], dict] or None, optional
+        A hook returning ``{"next_tick_ts": <epoch ms int or None>, "tick": <str
+        or None>}`` — the daemon's scheduler cadence, surfaced on ``/api/health``.
+        Keeps this app **scheduler-agnostic**: only the daemon (``_run_daemon``)
+        has an ``apscheduler`` job to report, so it injects this hook; the plain
+        ``dashboard`` command (no scheduler) passes ``None`` and both fields stay
+        ``null``. The hook is called under a ``try``/``except`` — a raising or
+        absent hook degrades to ``null``/``null``, never breaking health.
 
     Returns
     -------
@@ -1637,6 +1660,7 @@ def create_dashboard_app(
     app.state.read_only = read_only
     app.state.auth_enabled = bool(auth_token)
     app.state.on_change = on_change
+    app.state.schedule_info = schedule_info
 
     def _sup(request: Request) -> StrategySupervisor:
         """Read the wired supervisor off ``app.state`` (explicit, testable access)."""
@@ -1678,15 +1702,72 @@ def create_dashboard_app(
         for _route, _template in _DASHBOARD_PAGES:
             _page(_route, _template)
 
+        # The per-strategy detail page — a parameterized route the tuple above
+        # cannot express (it carries a `{name}` path param). Registered AFTER the
+        # `/strategies/new` shell (in the tuple, so it binds first) so the exact
+        # "new" is never mistaken for a strategy name. Still a pure shell: only the
+        # `name` is injected server-side (404 for an unknown unit — checked against
+        # the supervisor's names); every engine datum is client-fetched from /api/*.
+        @app.get(
+            "/strategies/{name}",
+            response_class=HTMLResponse,
+            name="page:strategy-detail",
+        )
+        async def strategy_detail(name: str, request: Request) -> Any:
+            if name not in _sup(request).names():
+                raise HTTPException(
+                    status_code=404, detail=f"unknown strategy {name!r}"
+                )
+            return templates.TemplateResponse(
+                request,
+                "strategy_detail.html",
+                {
+                    # Highlight the Strategies tab (the detail page lives under it).
+                    "active": "/strategies",
+                    "strategy_name": name,
+                    "version": trading_bot.__version__,
+                    "read_only": request.app.state.read_only,
+                    "auth": request.app.state.auth_enabled,
+                },
+            )
+
+    # `/pnl` retired INTO the per-strategy detail page (its equity chart + per-mode
+    # stats now live on `/strategies/{name}`). Redirect so an old bookmark still
+    # lands somewhere sensible — the Overview. Registered unconditionally (a
+    # redirect needs no templates) so the bookmark never 404s.
+    @app.get("/pnl", include_in_schema=False)
+    async def pnl_redirect() -> RedirectResponse:
+        return RedirectResponse("/", status_code=303)
+
     @app.get("/api/health")
     async def health(request: Request) -> dict[str, Any]:
-        """Liveness + a snapshot of what the supervisor manages."""
+        """Liveness + a snapshot of what the supervisor manages.
+
+        ``next_tick_ts`` (epoch ms) / ``tick`` (human trigger description) come
+        from the ``schedule_info`` hook when one was injected (the daemon's
+        cadence); both stay ``null`` with no hook, and a hook that raises
+        degrades to ``null``/``null`` too — health must never 500 because the
+        scheduler hiccuped.
+        """
         sup = _sup(request)
+        next_tick_ts: int | None = None
+        tick: str | None = None
+        hook = request.app.state.schedule_info
+        if hook is not None:
+            try:
+                info = hook() or {}
+                next_tick_ts = info.get("next_tick_ts")
+                tick = info.get("tick")
+            except Exception:  # noqa: BLE001 - health must degrade, never 500
+                next_tick_ts = None
+                tick = None
         return {
             "status": "ok",
             "mode": sup.mode,
             "strategies": len(sup.names()),
             "read_only": request.app.state.read_only,
+            "next_tick_ts": next_tick_ts,
+            "tick": tick,
         }
 
     # -- Positions (aggregated across the units, groupable) ------------------ #
@@ -1837,24 +1918,33 @@ def create_dashboard_app(
         Registers a fresh queue on each running unit's engine
         :class:`~trading_bot.application.events.EventBus` and multiplexes them onto
         a single generator, yielding each event as a ``data: <json>\\n\\n`` frame
-        (money as Decimal strings, tagged with a ``type``). Order and fill events
-        are de-duplicated by their domain id so an execution seen on two buses is
-        emitted once. Every registered queue is unregistered in a ``finally`` on
-        disconnect. Read-only — subscribing observes; it never trades.
+        (money as Decimal strings, tagged with a ``type``, the emitting unit's
+        ``strategy`` name, and a server ``ts`` epoch-ms — the Logs page's
+        attribution + timestamp). Order and fill events are de-duplicated by
+        their domain id so an execution seen on two buses is emitted once. Every
+        registered queue is unregistered in a ``finally`` on disconnect.
+        Read-only — subscribing observes; it never trades.
         """
         sup = _sup(request)
-        # Snapshot the running engines' buses now; the merged stream is over the
-        # set live at connect time (a unit started later is picked up on reconnect,
-        # like the single-engine SSE view).
-        buses = [
-            unit.engine.bus
+        # Snapshot the running units' (name, bus) pairs now; the merged stream is
+        # over the set live at connect time (a unit started later is picked up on
+        # reconnect, like the single-engine SSE view). The name travels alongside
+        # its bus/queue so every frame can be tagged with the emitting strategy.
+        units = [
+            (unit.name, unit.engine.bus)
             for unit in sup._running_units()  # noqa: SLF001 — read the wired buses
             if unit.engine is not None
         ]
+        names = [name for name, _ in units]
+        buses = [bus for _, bus in units]
         queues = [bus.add_queue() for bus in buses]
 
         async def _generator() -> Any:
             seen: set[str] = set()
+            # Tracks the current iteration's per-queue getter tasks so a
+            # cancellation between iterations (see the CancelledError handler
+            # below) can still cancel whichever ones are outstanding.
+            getters: list[asyncio.Task[Any]] = []
             try:
                 yield ": connected\n\n"
                 if not queues:
@@ -1868,8 +1958,11 @@ def create_dashboard_app(
                     if await request.is_disconnected():
                         break
                     # Wait on whichever queue produces first (bounded, so the loop
-                    # periodically re-checks disconnection and heartbeats).
+                    # periodically re-checks disconnection and heartbeats). Rebuilt
+                    # every iteration, so map each fresh getter task back to its
+                    # unit name for the frame tag below.
                     getters = [asyncio.ensure_future(q.get()) for q in queues]
+                    task_name = dict(zip(getters, names, strict=True))
                     done, pending = await asyncio.wait(
                         getters,
                         timeout=15.0,
@@ -1877,6 +1970,7 @@ def create_dashboard_app(
                     )
                     for task in pending:
                         task.cancel()
+                    getters = []
                     if not done:
                         yield ": heartbeat\n\n"
                         continue
@@ -1887,9 +1981,27 @@ def create_dashboard_app(
                             continue  # same execution on two buses — emit once.
                         if key is not None:
                             seen.add(key)
-                        yield (
-                            f"data: {json.dumps(_event_dict(event), default=_default)}\n\n"
-                        )
+                        frame = {
+                            **_event_dict(event),
+                            "strategy": task_name[task],
+                            "ts": _epoch_ms(),
+                        }
+                        yield f"data: {json.dumps(frame, default=_default)}\n\n"
+            except asyncio.CancelledError:
+                # Server shutdown (the graceful-shutdown timeout force-cancels this
+                # task while a client holds the merged stream open) or the ASGI
+                # server tearing the connection down: the stream is over, which is
+                # the correct time for this generator to end, not an error. Any
+                # getter task still outstanding at the point of cancellation (e.g.
+                # cancelled mid-`asyncio.wait`, before the per-iteration cleanup
+                # above ran) is cancelled here too, so no bare queue.get() task is
+                # left dangling. Left uncaught, this propagates as a bare
+                # CancelledError that uvicorn/starlette log as a scary ERROR-level
+                # traceback on every shutdown while a client holds this endpoint
+                # open.
+                for task in getters:
+                    if not task.done():
+                        task.cancel()
             finally:
                 for bus, queue in zip(buses, queues, strict=True):
                     bus.remove_queue(queue)
@@ -1991,6 +2103,89 @@ def create_dashboard_app(
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         _persist(request)
         return {"ok": True, "removed": name}
+
+    # -- Capital control plane: deposit / withdraw / policy (paper) ---------- #
+
+    @app.get("/api/strategies/{name}/capital")
+    async def capital(name: str, request: Request) -> dict[str, Any]:
+        """A unit's capital breakdown + ledger audit trail (a read; safe read-only).
+
+        ``{allocation, contributed, realised, unrealised, total_value,
+        withdrawable, policy, events}`` — money as exact Decimal strings; an
+        unknown unit is a 404.
+        """
+        from trading_bot.domain.errors import ConfigError
+
+        try:
+            breakdown = _sup(request).capital_breakdown(name)
+        except ConfigError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return _capital_breakdown_dict(breakdown)
+
+    @app.post("/api/strategies/{name}/capital")
+    async def capital_op(
+        name: str, body: _CapitalOpBody, request: Request
+    ) -> dict[str, Any]:
+        """Deposit into / withdraw from a unit's capital ledger — idempotent by ``op_id``.
+
+        This **never** places / amends / cancels an order — capital ops move
+        bookkeeping, not orders (the hard invariant). Re-POSTing the same ``op_id``
+        is a no-op that returns the unchanged breakdown. ``422`` on a bad amount /
+        an over-limit withdrawal (carrying the exact withdrawable figure); ``404``
+        an unknown unit; ``409`` a **live** unit (real-money ops are deferred to
+        real-key enablement — paper / testnet are unconstrained); ``403`` when the
+        dashboard is read-only.
+        """
+        from trading_bot.domain.errors import (
+            ConfigError,
+            LiveCapitalOpsDeferred,
+            MoneyError,
+            WithdrawalTooLarge,
+        )
+
+        if request.app.state.read_only:
+            raise HTTPException(
+                status_code=403,
+                detail="dashboard is read-only; capital control is disabled",
+            )
+        sup = _sup(request)
+        op = sup.deposit if body.action == "deposit" else sup.withdraw
+        try:
+            breakdown = await op(name, body.amount, op_id=body.op_id, note=body.note)
+        except LiveCapitalOpsDeferred as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except WithdrawalTooLarge as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except ConfigError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except (ValueError, MoneyError) as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        return _capital_breakdown_dict(breakdown)
+
+    @app.post("/api/strategies/{name}/policy")
+    async def set_policy(
+        name: str, body: _PolicyBody, request: Request
+    ) -> dict[str, Any]:
+        """Set a unit's capital-evolution policy (``fixed`` / ``compound``) — hot + persisted.
+
+        Flips the sizing policy live (the running unit reflects it next tick, no
+        restart) and **persists the manifest** so it survives a restart. ``404``
+        an unknown unit; ``403`` when the dashboard is read-only.
+        """
+        from trading_bot.domain.errors import ConfigError
+
+        if request.app.state.read_only:
+            raise HTTPException(
+                status_code=403,
+                detail="dashboard is read-only; capital control is disabled",
+            )
+        sup = _sup(request)
+        try:
+            breakdown = await sup.set_policy(name, body.policy)
+        except ConfigError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        _persist(request)
+        return _capital_breakdown_dict(breakdown)
 
     # The strategy control surface (list + start/stop/mode) — shared with the
     # control app. Under `read_only`, the write routes return 403 (the reads stay).

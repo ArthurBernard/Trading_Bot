@@ -27,11 +27,15 @@
 
 <!-- Orders — open + recent history (any status) across the units. -->
 <section class="card" id="orders-card">
-  <h2>Orders (open + recent)</h2>
+  <div class="row" style="justify-content:space-between;">
+    <h2 style="margin:0;">Orders (open + recent)</h2>
+    <span class="updated" id="orders-updated"></span>
+  </div>
   <div class="table-wrap">
     <table id="orders-table">
       <thead>
         <tr>
+          <th>Time</th>
           <th>Strategy</th>
           <th>Exchange</th>
           <th>Instrument</th>
@@ -44,15 +48,22 @@
         </tr>
       </thead>
       <tbody id="orders-body">
-        <tr class="empty"><td colspan="9">Loading…</td></tr>
+        <tr class="empty"><td colspan="10">Loading…</td></tr>
       </tbody>
     </table>
   </div>
+  <!-- Shown when the history read comes back at exactly the server's default
+       cap (?limit=200) — the list is silently truncated otherwise, which reads
+       as "these are ALL the orders" when they are not. -->
+  <p class="muted" id="orders-cap" style="display:none;">showing the most recent 200 — older rows are not displayed</p>
 </section>
 
 <!-- Fills — the confirmed execution history (the PnL source of truth). -->
 <section class="card" id="fills-card">
-  <h2>Fills (history)</h2>
+  <div class="row" style="justify-content:space-between;">
+    <h2 style="margin:0;">Fills (history)</h2>
+    <span class="updated" id="fills-updated"></span>
+  </div>
   <div class="table-wrap">
     <table id="fills-table">
       <thead>
@@ -72,6 +83,7 @@
       </tbody>
     </table>
   </div>
+  <p class="muted" id="fills-cap" style="display:none;">showing the most recent 200 — older rows are not displayed</p>
 </section>
 {% endblock %}
 
@@ -80,11 +92,24 @@
   // Orders/Fills page — the full order list (open + recent history) and the
   // confirmed fill history across the supervisor's per-strategy engines, filterable
   // by crypto / exchange / strategy. Dependency-free vanilla JS; reuses base.html's
-  // api()/fmtMoney()/fmtDate()/escapeHtml()/connect(). Money arrives as EXACT
-  // Decimal strings and is rendered verbatim (never parseFloat'd).
+  // api()/fmtDate()/escapeHtml()/connect() and format.js's tbFmt.*Cell() helpers.
+  // Money arrives as EXACT Decimal strings; Number() is used only for the
+  // rounded DISPLAY text — the exact string always survives in a title tooltip.
 
   // Current filter selections ('' = all). Mirrored on the three selects.
   var FILTERS = { crypto: '', exchange: '', strategy: '' };
+
+  // The server's default history cap (`_HISTORY_LIMIT_DEFAULT` in app.py) —
+  // kept in sync here so the "showing the most recent N" caption fires exactly
+  // when a table comes back at the cap (an unfiltered `?limit=` read never
+  // distinguishes "exactly N rows exist" from "truncated at N" on its own).
+  var HISTORY_CAP = 200;
+
+  // Toggle the muted history-cap caption for one table.
+  function toggleCapCaption(id, rows) {
+    var el = document.getElementById(id);
+    if (el) el.style.display = rows.length === HISTORY_CAP ? '' : 'none';
+  }
 
   // Build the ?crypto=&exchange=&strategy= query from the active filters.
   function filterQuery(extra) {
@@ -101,6 +126,13 @@
     if (v == null) return '';
     var n = Number(v);
     return n > 0 ? 'ok' : (n < 0 ? 'err' : '');
+  }
+
+  // A strategy name rendered as a link to its detail page (/strategies/{name}) —
+  // so a name in the orders / fills tables deep-links to that strategy's page.
+  function stratLink(name) {
+    return '<a class="strat-link" href="/strategies/' + encodeURIComponent(name) + '">' +
+      escapeHtml(name) + '</a>';
   }
 
   // Repopulate a filter <select> with the union of a column's values seen across
@@ -126,26 +158,39 @@
       rows = await api('GET', '/api/orders' + filterQuery('history=true'));
     } catch (e) {
       document.getElementById('orders-body').innerHTML =
-        '<tr class="empty"><td colspan="9">' + escapeHtml(e.message) + '</td></tr>';
+        '<tr class="empty"><td colspan="10">' + escapeHtml(e.message) + '</td></tr>';
       return [];
     }
     var body = document.getElementById('orders-body');
+    // No-flicker refresh — see tbRefreshGuard's doc in base.html.
+    var guard = tbRefreshGuard('orders', body, rows);
+    if (guard === 'skip-silent') return rows;
+    stampUpdated('orders-updated');
+    toggleCapCaption('orders-cap', rows);
+    if (guard === 'skip-stamp') return rows;
     if (!rows.length) {
-      body.innerHTML = '<tr class="empty"><td colspan="9">No orders.</td></tr>';
+      body.innerHTML = '<tr class="empty"><td colspan="10">No orders.</td></tr>';
       return rows;
     }
-    body.innerHTML = rows.map(function (o) {
+    // Most recent first (the API returns oldest-first, mirroring the Fills
+    // table below).
+    var ordered = rows.slice().reverse();
+    body.innerHTML = ordered.map(function (o) {
       var sideCls = o.side === 'buy' ? 'side-buy' : 'side-sell';
+      var unit = tbFmt.splitInstrument(o.instrument);
+      // Absolute time with seconds, visible; relative ("3m ago") on hover —
+      // mirrors the Fills table's Time column exactly.
       return '<tr>' +
-        '<td>' + escapeHtml(o.strategy) + '</td>' +
+        '<td class="num" title="' + escapeHtml(fmtRelative(o.ts)) + '">' + escapeHtml(fmtDate(o.ts, { seconds: true })) + '</td>' +
+        '<td>' + stratLink(o.strategy) + '</td>' +
         '<td>' + escapeHtml(o.exchange) + '</td>' +
         '<td>' + escapeHtml(o.instrument) + '</td>' +
         '<td class="' + sideCls + '">' + escapeHtml(o.side) + '</td>' +
         '<td>' + escapeHtml(o.type) + '</td>' +
-        '<td class="num">' + fmtMoney(o.qty) + '</td>' +
-        '<td class="num">' + fmtMoney(o.filled_qty) + '</td>' +
-        '<td class="num">' + fmtMoney(o.avg_fill_price) + '</td>' +
-        '<td>' + escapeHtml(o.status) + '</td>' +
+        '<td class="num">' + tbFmt.qtyCell(o.qty, { base: unit.base }) + '</td>' +
+        '<td class="num">' + tbFmt.qtyCell(o.filled_qty, { base: unit.base }) + '</td>' +
+        '<td class="num">' + tbFmt.priceCell(o.avg_fill_price, { quote: unit.quote }) + '</td>' +
+        '<td>' + statusBadge(o.status) + '</td>' +
         '</tr>';
     }).join('');
     return rows;
@@ -162,6 +207,12 @@
       return [];
     }
     var body = document.getElementById('fills-body');
+    // No-flicker refresh — see tbRefreshGuard's doc in base.html.
+    var guard = tbRefreshGuard('fills', body, rows);
+    if (guard === 'skip-silent') return rows;
+    stampUpdated('fills-updated');
+    toggleCapCaption('fills-cap', rows);
+    if (guard === 'skip-stamp') return rows;
     if (!rows.length) {
       body.innerHTML = '<tr class="empty"><td colspan="8">No fills.</td></tr>';
       return rows;
@@ -170,15 +221,17 @@
     var ordered = rows.slice().reverse();
     body.innerHTML = ordered.map(function (f) {
       var sideCls = f.side === 'buy' ? 'side-buy' : 'side-sell';
+      var unit = tbFmt.splitInstrument(f.instrument);
+      // Absolute time with seconds, visible; relative ("3m ago") on hover.
       return '<tr>' +
-        '<td class="num">' + fmtDate(f.ts) + '</td>' +
-        '<td>' + escapeHtml(f.strategy) + '</td>' +
+        '<td class="num" title="' + escapeHtml(fmtRelative(f.ts)) + '">' + escapeHtml(fmtDate(f.ts, { seconds: true })) + '</td>' +
+        '<td>' + stratLink(f.strategy) + '</td>' +
         '<td>' + escapeHtml(f.exchange) + '</td>' +
         '<td>' + escapeHtml(f.instrument) + '</td>' +
         '<td class="' + sideCls + '">' + escapeHtml(f.side) + '</td>' +
-        '<td class="num">' + fmtMoney(f.qty) + '</td>' +
-        '<td class="num">' + fmtMoney(f.price) + '</td>' +
-        '<td class="num">' + fmtMoney(f.fee) + '</td>' +
+        '<td class="num">' + tbFmt.qtyCell(f.qty, { base: unit.base }) + '</td>' +
+        '<td class="num">' + tbFmt.priceCell(f.price, { quote: unit.quote }) + '</td>' +
+        '<td class="num">' + tbFmt.moneyCell(f.fee, { quote: unit.quote }) + '</td>' +
         '</tr>';
     }).join('');
     return rows;

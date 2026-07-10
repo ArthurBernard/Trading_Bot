@@ -86,6 +86,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING
@@ -125,6 +126,15 @@ logger = logging.getLogger(__name__)
 PortfolioOrderFactory = Callable[["PortfolioStrategy", Instrument, Money, Money], Order]
 
 _ZERO: Money = money("0")
+
+
+def _now_ms() -> int:
+    """Wall-clock time in milliseconds since the Unix epoch (UTC).
+
+    Used only for :attr:`PortfolioRunner.last_eval_ms` bookkeeping — a
+    diagnostic, never consulted by the freshness gate itself.
+    """
+    return int(time.time() * 1000)
 
 
 @dataclass(frozen=True, slots=True)
@@ -195,10 +205,14 @@ class PortfolioRunner:
     feed : Iterable[Mapping[Symbol, polars.DataFrame]]
         The source of causal per-coin cross-sections (e.g. a
         :class:`~trading_bot.application.portfolio_feed.PortfolioFeed`). At step
-        ``t`` each coin's frame holds only bars ``≤ t`` — no lookahead. If the
-        feed exposes ``asof_ms()`` it is used for the signal/Signal timestamps;
-        otherwise the latest common ``time`` across the frames is derived (ns →
-        ms).
+        ``t`` each coin's frame holds only bars ``≤ t`` — no lookahead. The
+        as-of timestamp stamped on the signal/Signal is always derived from the
+        frames' latest common ``time`` (ns → ms) — a pure computation over data
+        already read, never a second fetch. If the feed additionally exposes
+        ``tail_asof_ms()`` (a cheap, bounded probe — see
+        :meth:`~trading_bot.application.portfolio_feed.PortfolioFeed
+        .tail_asof_ms`), :meth:`rebalance_latest` uses it as an idle-tick
+        freshness gate before paying for a full ``latest()`` read.
     router : OrderRouter
         The shared idempotent write path. Each leg is ``await``\\ ed through
         :meth:`OrderRouter.submit`; a duplicate ``client_order_id`` (a re-run)
@@ -223,6 +237,16 @@ class PortfolioRunner:
         self-contained). Whatever it returns, the runner overrides the
         ``client_order_id`` with its deterministic, symbol-namespaced per-step id
         (so idempotency is the runner's, not the factory's, concern).
+    capital_provider : Callable[[], Money] or None, optional
+        A **lazy** capital-base provider read on **every** :meth:`rebalance`. When
+        given, the tick sizes the weight vector against ``provider()`` instead of
+        the strategy's static ``capital`` — so a deposit / withdrawal / policy
+        flip is hot (it takes effect on the next rebalance with **no** runner
+        rebuild). The provider is called **exactly once per rebalance**, giving
+        the whole book one consistent base for the tick; **this single call — not
+        a lock — is the concurrency guarantee** that every leg of a tick sizes
+        against the same base even if a deposit lands mid-tick. ``None`` (default)
+        keeps the legacy static ``strategy.capital``, byte-for-byte unchanged.
 
     Examples
     --------
@@ -241,12 +265,14 @@ class PortfolioRunner:
         *,
         event_bus: EventBus | None = None,
         order_factory: PortfolioOrderFactory | None = None,
+        capital_provider: Callable[[], Money] | None = None,
     ) -> None:
         self._strategy = strategy
         self._feed = feed
         self._router = router
         self._tracker = tracker
         self._bus = event_bus
+        self._capital_provider = capital_provider
         self._order_factory = (
             order_factory
             if order_factory is not None
@@ -257,6 +283,19 @@ class PortfolioRunner:
         # same ids (deterministic re-run), while a single runner re-driven via
         # repeated ``run`` calls keeps advancing.
         self._step_index = 0
+        # The as-of (ms) of the last **completed** rebalance evaluation (the full
+        # path) — ``None`` before the first tick ever runs. The idle-tick
+        # freshness gate in `rebalance_latest` compares a cheap tail probe
+        # against this to decide whether a new common date might exist before
+        # paying for the full `feed.latest()` load. Only `rebalance_latest`
+        # updates it (a plain `rebalance`/`run` backtest drive is unaffected).
+        self._last_asof_ms: int | None = None
+        # Wall-clock (ms since epoch) of the last time `rebalance_latest` was
+        # *attempted* — set at the top of every call, whether it skips via the
+        # gate or runs the full evaluation. Not consulted by the gate itself;
+        # surfaced for a follow-up dashboard PR ("unit last checked at ...") so
+        # an idle-but-alive unit is distinguishable from a stalled one.
+        self._last_eval_ms: int | None = None
 
     @property
     def strategy(self) -> PortfolioStrategy:
@@ -267,6 +306,16 @@ class PortfolioRunner:
     def step_index(self) -> int:
         """The next rebalance index (== number of ticks processed so far)."""
         return self._step_index
+
+    @property
+    def last_asof_ms(self) -> int | None:
+        """The as-of (ms) of the last **completed** rebalance, or ``None`` before the first."""
+        return self._last_asof_ms
+
+    @property
+    def last_eval_ms(self) -> int | None:
+        """Wall-clock ms of the last `rebalance_latest` attempt, or ``None`` before the first."""
+        return self._last_eval_ms
 
     async def run(
         self,
@@ -341,8 +390,9 @@ class PortfolioRunner:
         ----------
         frames : Mapping[Symbol, polars.DataFrame]
             The causal per-coin cross-section for this tick. The runner reads the
-            latest close per coin (as exact :class:`~decimal.Decimal`) and the
-            as-of timestamp from it (or from the feed's ``asof_ms``).
+            latest close per coin (as exact :class:`~decimal.Decimal`) and derives
+            the as-of timestamp from these same frames (see
+            :meth:`_derive_asof_ms`) — never a fresh read.
 
         Returns
         -------
@@ -357,7 +407,7 @@ class PortfolioRunner:
         # tick sequence (re-run determinism does not depend on the outcome).
         self._step_index += 1
 
-        asof = self._asof_ms(frames)
+        asof = self._derive_asof_ms(frames)
         prices = self._latest_closes(frames)
         weights = self._strategy.signal_fn(asof, frames)
 
@@ -368,10 +418,20 @@ class PortfolioRunner:
             symbol: weights.get(symbol, _ZERO) for symbol in self._strategy.universe
         }
 
+        # Call the lazy capital provider exactly once per rebalance so the whole
+        # book sizes against one consistent base for this tick (a deposit landing
+        # mid-tick affects the *next* rebalance, never a half of this one) — this
+        # single call, not a lock, is the per-tick concurrency guarantee. With no
+        # provider the legacy static ``strategy.capital`` is used unchanged.
+        capital = (
+            self._capital_provider()
+            if self._capital_provider is not None
+            else self._strategy.capital
+        )
         signals = weights_to_signals(
             full_weights,
             prices=prices,
-            capital=self._strategy.capital,
+            capital=capital,
             asof_ms=asof,
         )
         signal_by_symbol = {sig.instrument.symbol: sig for sig in signals}
@@ -442,35 +502,120 @@ class PortfolioRunner:
         used when present (mirroring :meth:`~trading_bot.application.strategy_runner
         .StrategyRunner.step_latest`). That full window is *still causal*: it is the
         exact final window a full drain would yield (the last growing prefix is the
-        whole aligned frame), so there is no lookahead — the daemon just skips the
-        O(total bars) work of re-walking every intermediate prefix only to discard
-        all but the last. A feed that exposes no ``latest()`` (a plain iterable, a
-        backtest/test fake) falls back to draining and keeping the last yielded
-        cross-section, which is identically the final causal window.
+        whole aligned frame), so there is no lookahead. A feed that exposes no
+        ``latest()`` (a plain iterable, a backtest/test fake) falls back to
+        draining and keeping the last yielded cross-section, which is identically
+        the final causal window.
+
+        Idle-tick freshness gate
+        ------------------------
+        A daily-bar strategy polled every 60s has, at best, **one** new common
+        date per **1440** ticks — the other 1439 would call :meth:`latest`
+        (reads every coin's full history and re-aligns the cross-section) only
+        to conclude "nothing new". Before paying for that, a cheap tail probe
+        (:meth:`~trading_bot.application.portfolio_feed.PortfolioFeed
+        .tail_asof_ms`, when the feed exposes one) checks whether the universe's
+        latest common date might have advanced past :attr:`last_asof_ms`. When it
+        is certain there is none, the tick returns ``None`` **without** touching
+        :meth:`latest` or the ``signal_fn`` at all. Any doubt — no prior baseline
+        yet (the first-ever tick), the feed offers no tail probe, an empty tail
+        read, or the probe raising — falls through to the full path: the gate is
+        an optimisation only, never a correctness dependency.
+
+        Off the event loop
+        -------------------
+        When the full path does run, the heavy sync work (:meth:`latest`'s
+        per-coin history read + inner-join alignment, and the tail probe itself)
+        is offloaded via :func:`asyncio.to_thread`, so a real rebalance never
+        stalls concurrent event-loop traffic (e.g. the dashboard's
+        ``/api/health``). This is safe *for this unit*: each managed unit owns
+        its own engine (feed/tracker/router are never shared across units — see
+        :class:`~trading_bot.application.supervisor.StrategySupervisor`), and the
+        only caller of `rebalance_latest` is the daemon's scheduled tick, which
+        never re-enters the **same** unit concurrently (the daemon's APScheduler
+        job runs with its default ``max_instances=1``, and
+        :meth:`~trading_bot.application.supervisor.StrategySupervisor.step_all`
+        awaits each unit's step sequentially) — so no two threads ever touch this
+        instance's feed/tracker at once.
 
         Returns
         -------
         RebalanceResult or None
-            The tick's result, or ``None`` if the feed currently yields no closed
-            cross-section (e.g. the universe has no common closed bar yet).
+            The tick's result; ``None`` if the freshness gate skipped this tick,
+            or if the feed currently yields no closed cross-section (e.g. the
+            universe has no common closed bar yet).
 
         """
+        self._last_eval_ms = _now_ms()
         feed_latest = getattr(self._feed, "latest", None)
         if callable(feed_latest):
-            # Live path: one store read for the full aligned (causal) window,
-            # instead of draining every prefix to keep only the last.
-            latest: Mapping[Symbol, pl.DataFrame] | None = feed_latest()
+            if await self._should_skip_tick():
+                return None
+            # Heavy sync work off the loop — see the "Off the event loop" note
+            # above for why this is safe against concurrent access.
+            latest: Mapping[Symbol, pl.DataFrame] | None = await asyncio.to_thread(
+                feed_latest
+            )
             if not latest or not any(f.height > 0 for f in latest.values()):
                 return None
-            return await self.rebalance(latest)
-        # Fallback: a plain iterable feed (no ``latest()``). Drain and keep the
-        # last yielded cross-section — identically the final causal window.
+            result = await self.rebalance(latest)
+            self._last_asof_ms = self._derive_asof_ms(latest)
+            return result
+        # Fallback: a plain iterable feed (no ``latest()``) — the backtest/test
+        # fake path, never the live daemon's `PortfolioFeed`. No cheap probe
+        # exists for it (draining is the only way to find the last window), so
+        # the gate does not apply here; behaviour is unchanged from before.
         latest = None
         for frames in self._feed:  # type: ignore[attr-defined]
             latest = frames
         if latest is None:
             return None
-        return await self.rebalance(latest)
+        result = await self.rebalance(latest)
+        self._last_asof_ms = self._derive_asof_ms(latest)
+        return result
+
+    async def _should_skip_tick(self) -> bool:
+        """The idle-tick freshness gate: True only when certain nothing is new.
+
+        Conservative by construction — any doubt falls through to ``False``
+        (evaluate the full path): no prior baseline yet, the feed exposes no
+        ``tail_asof_ms`` probe, the probe finds no bar in its tail window, or the
+        probe raises. Only a **determinate** tail read that is not newer than
+        :attr:`last_asof_ms` causes a skip. The probe itself runs via
+        :func:`asyncio.to_thread` (it is still a dccd read, just a bounded one).
+        """
+        if self._last_asof_ms is None:
+            return False  # nothing to compare against yet (the first-ever tick)
+        tail_asof_ms = getattr(self._feed, "tail_asof_ms", None)
+        if not callable(tail_asof_ms):
+            return False  # the feed offers no cheap probe (e.g. a test fake)
+        try:
+            # Anchor the probe on our own last-known as-of (never wall-clock —
+            # see DccdFeed.tail_asof_ms's docstring for why), so a stale store
+            # never permanently defeats the gate.
+            tail_asof = await asyncio.to_thread(
+                tail_asof_ms, since_ms=self._last_asof_ms
+            )
+        except Exception:
+            logger.debug(
+                "%s: freshness-gate tail probe raised; falling through to a "
+                "full evaluation (the gate is an optimisation, never a "
+                "correctness dependency)",
+                self._strategy.name,
+                exc_info=True,
+            )
+            return False
+        if tail_asof is None:
+            return False
+        if tail_asof <= self._last_asof_ms:
+            logger.debug(
+                "%s: freshness gate skipped this tick (tail asof %s <= last asof %s)",
+                self._strategy.name,
+                tail_asof,
+                self._last_asof_ms,
+            )
+            return True
+        return False
 
     def _build_order(
         self,
@@ -495,23 +640,6 @@ class PortfolioRunner:
         # aggregate's identity and must not change once the Order exists.
         return replace(built, client_order_id=f"{self._strategy.name}-{symbol}-{step}")
 
-    def _asof_ms(self, frames: Mapping[Symbol, pl.DataFrame]) -> int:
-        """Resolve the as-of timestamp (ms) for this tick.
-
-        Prefers the feed's ``asof_ms()`` when it exposes one (a
-        :class:`~trading_bot.application.portfolio_feed.PortfolioFeed` reports the
-        latest common date's close in ms); otherwise derives it from the frames'
-        latest common ``time`` (dccd stamps bars in nanoseconds, so it is
-        converted ns → ms). Both paths read the *latest* bar across the
-        cross-section, never a future one.
-        """
-        feed_asof = getattr(self._feed, "asof_ms", None)
-        if callable(feed_asof):
-            value = feed_asof()
-            if value is not None:
-                return int(value)
-        return self._derive_asof_ms(frames)
-
     @staticmethod
     def _derive_asof_ms(frames: Mapping[Symbol, pl.DataFrame]) -> int:
         """Derive the as-of ms from the frames' latest common bar time (ns → ms).
@@ -520,6 +648,18 @@ class PortfolioRunner:
         as-of is the *minimum* of the per-coin latest ``time`` (the last day on
         which **every** coin has a bar — never beyond any coin's data). dccd
         timestamps are nanoseconds, so the value is integer-divided to ms.
+
+        A pure computation over ``frames`` already in hand — **never** a fresh
+        read. An earlier version of this resolution preferred a feed's own
+        ``asof_ms()`` (e.g. :meth:`~trading_bot.application.portfolio_feed
+        .PortfolioFeed.asof_ms`) when available, but that method performs its
+        own full ``_read_all()`` — calling it here, after ``frames`` had already
+        been loaded (by :meth:`rebalance_latest` or a backtest ``run``), read
+        every coin's whole history a **second** time for no new information: the
+        latest common time already in ``frames`` is exactly the same value (both
+        the live and replay callers pass either the full aligned cross-section
+        or a causal prefix of it). Deriving locally keeps a tick to the single
+        read it already paid for.
         """
         latest_per_coin = [
             int(frame["time"][-1]) for frame in frames.values() if frame.height > 0

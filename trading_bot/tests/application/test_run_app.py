@@ -783,7 +783,7 @@ def test_fill_streamer_built_for_live_kraken(monkeypatch: pytest.MonkeyPatch) ->
     assert isinstance(streamer, LiveFillStreamer)
 
 
-# --- prepare_system + live-dashboard monitoring (run --serve) -------------- #
+# --- prepare_system ---------------------------------------------------------- #
 
 
 async def test_prepare_system_builds_engine_and_loaded_orchestrator() -> None:
@@ -799,36 +799,132 @@ async def test_prepare_system_builds_engine_and_loaded_orchestrator() -> None:
     assert len(system.orchestrator.runners) == 2  # the two strategy runners
 
 
-def test_dashboard_reflects_a_live_run_engine() -> None:
-    """The read-only dashboard, built on the run's engine, shows its positions.
+# --- capital ledger: genesis seeding, v0 repoint, provider wiring ----------- #
 
-    This is exactly what ``run --serve`` does: `prepare_system`, run the
-    orchestrator, and serve the dashboard over the **same** engine. After a finite
-    offline run the dashboard's ``/api/positions`` reflects the engine's live
-    tracker — proving the dashboard monitors the running engine, not a fresh one.
+
+def custom_long_btc(bars: pl.DataFrame) -> Signal:
+    """A module:function signal: always fully long BTC/USD (drives capital sizing)."""
+    return Signal.exposure(BTC_USD, money("1"), ts=0)
+
+
+def custom_pf_weights(asof_ms, frames):  # type: ignore[no-untyped-def]  # noqa: ANN001, ANN201
+    """A module:function portfolio signal: hold nothing (genesis seeding is signal-free)."""
+    return {}
+
+
+def _alloc_config(
+    db_path: str, *, allocation: str = "100", policy: str = "fixed"
+) -> AppConfig:
+    """A single-instrument paper strategy declaring an ``allocation`` + a store."""
+    return AppConfig.model_validate(
+        {
+            "mode": "paper",
+            "storage": {"db_path": db_path},
+            "strategies": [
+                {
+                    "name": "btc-alloc",
+                    "symbol": "BTC/USD",
+                    "data": {"exchange": "kraken", "span": 60},
+                    "signal": {
+                        "ref": "trading_bot.tests.application.test_run_app:custom_long_btc"
+                    },
+                    "allocation": allocation,
+                    "capital_policy": policy,
+                }
+            ],
+        }
+    )
+
+
+async def test_build_runners_seeds_genesis_and_sizes_on_allocation(tmp_path) -> None:  # noqa: ANN001
+    """A strategy with ``allocation`` seeds the genesis once and sizes against it.
+
+    The runner sizes ``reference_qty = allocation / close`` = ``100 / 100 = 1``,
+    so a +1 exposure targets long 1 — driven end to end through the paper broker.
     """
-    import asyncio
+    db = str(tmp_path / "book.sqlite")
+    config = _alloc_config(db)
+    engine = build_engine(config, db_path=db)
+    runners = build_runners(
+        config,
+        engine,
+        dccd_client=_FakeDccdClient({"BTC/USD": _dccd_ohlc([100.0] * 3)}),
+    )
 
-    from fastapi.testclient import TestClient
+    # The genesis funding landed exactly once, under the deterministic id.
+    events = engine.store.capital_events(strategy="btc-alloc")  # type: ignore[union-attr]
+    assert len(events) == 1
+    assert events[0].event_id == "btc-alloc:funding"
+    assert events[0].amount == money("100")
 
-    from trading_bot.application.run_app import prepare_system
-    from trading_bot.interfaces.api import create_app
+    # Driving the runner sizes against the allocation: long 1 at close 100.
+    await runners[0].run()
+    pos = engine.tracker.position(BTC_USD)
+    assert pos is not None and pos.net_qty == money("1")
 
-    pytest.importorskip("fynance")
-    config = _two_strategy_config()
-    client = _fake_client_for(config)
 
-    async def _build_and_run():  # noqa: ANN202
-        system = await prepare_system(config, dccd_client=client)
-        await system.orchestrator.run()
-        return system
+def test_genesis_v0_anchors_at_allocation_else_starting_capital(tmp_path) -> None:  # noqa: ANN001
+    """`genesis_v0`: a single unit's allocation/capital; else ``starting_capital``."""
+    from trading_bot.application.config import (
+        DataSourceConfig,
+        PortfolioStrategyConfig,
+        SignalRefConfig,
+    )
+    from trading_bot.application.service_factory import genesis_v0
 
-    system = asyncio.run(_build_and_run())
+    # Single strategy with allocation → the allocation.
+    alloc = _alloc_config(str(tmp_path / "b.sqlite"), allocation="250")
+    assert genesis_v0(alloc) == money("250")
 
-    http = TestClient(create_app(system.engine))
-    resp = http.get("/api/positions")
-    assert resp.status_code == 200
+    # A 2-strategy config declares no single unit → starting_capital fallback.
+    legacy = _two_strategy_config()
+    assert genesis_v0(legacy) == legacy.starting_capital
 
-    instruments = {p["instrument"] for p in resp.json()}
-    # The run traded both instruments; the dashboard on the SAME engine sees them.
-    assert {"BTC/USD", "ETH/USD"} & instruments
+    # Single portfolio → allocation supersedes, else the required capital.
+    pf = PortfolioStrategyConfig(
+        name="book",
+        universe=["BTC/USDT", "ETH/USDT"],
+        signal=SignalRefConfig(
+            ref="trading_bot.tests.application.test_run_app:custom_pf_weights"
+        ),
+        capital=money("1000"),
+        data=DataSourceConfig(exchange="binance", span=86400),
+    )
+    cfg_capital = AppConfig(portfolios=[pf])
+    assert genesis_v0(cfg_capital) == money("1000")
+    cfg_alloc = AppConfig(
+        portfolios=[pf.model_copy(update={"allocation": money("777")})]
+    )
+    assert genesis_v0(cfg_alloc) == money("777")
+
+
+def test_build_portfolio_runners_seeds_portfolio_genesis(tmp_path) -> None:  # noqa: ANN001
+    """A portfolio always seeds its genesis (``allocation`` else required ``capital``)."""
+    # Building a portfolio runner wires its dccd bars feed — skip without dccd
+    # (the E5+ data-feed convention; unit CI has no dccd install).
+    pytest.importorskip("dccd")
+    from trading_bot.application.config import (
+        DataSourceConfig,
+        PortfolioStrategyConfig,
+        SignalRefConfig,
+    )
+    from trading_bot.application.run_app import build_portfolio_runners
+
+    db = str(tmp_path / "pf.sqlite")
+    pf = PortfolioStrategyConfig(
+        name="book",
+        universe=["BTC/USDT", "ETH/USDT"],
+        signal=SignalRefConfig(
+            ref="trading_bot.tests.application.test_run_app:custom_pf_weights"
+        ),
+        capital=money("1000"),
+        data=DataSourceConfig(exchange="binance", span=86400),
+    )
+    config = AppConfig(storage={"db_path": db}, portfolios=[pf])  # type: ignore[arg-type]
+    engine = build_engine(config, db_path=db)
+    build_portfolio_runners(config, engine)
+
+    events = engine.store.capital_events(strategy="book")  # type: ignore[union-attr]
+    assert len(events) == 1
+    assert events[0].event_id == "book:funding"
+    assert events[0].amount == money("1000")
