@@ -82,6 +82,38 @@ def test_default_config_builds_paper_engine() -> None:
     assert engine.store is None
 
 
+async def test_paper_engine_fills_carry_the_wall_clock() -> None:
+    """An engine-built PaperBroker stamps fills with the REAL wall clock.
+
+    The PaperBroker's *default* clock is deterministic (a fixed 2024-01-01 base
+    advancing +1ms per fill — reproducible tests). Left in the live-test daemon,
+    that fake time poisoned everything that trusts fill ``ts``: the equity-curve
+    x axis, the Fills table, and — silently — the ``max_daily_loss`` breaker's
+    ``realised_pnl_since`` midnight window, which never matched fills stamped in
+    2024. The factory must therefore inject the wall clock.
+    """
+    # Built-in
+    import time
+
+    engine = build_engine(AppConfig())
+    order = Order(
+        client_order_id="cid-wall-clock",
+        instrument=_BTCUSD,
+        side=OrderSide.BUY,
+        qty=money("1"),
+        type=OrderType.LIMIT,
+        limit_price=money("30000"),
+    )
+    before_ms = int(time.time() * 1000)
+    await engine.broker.place_order(order)
+    after_ms = int(time.time() * 1000)
+
+    fills = await engine.broker.fills()
+    assert len(fills) == 1
+    # Within the call window (generous slack for a slow CI box).
+    assert before_ms - 5_000 <= fills[0].ts <= after_ms + 5_000
+
+
 def test_starting_capital_anchors_perf_equity_curve() -> None:
     """The config's ``starting_capital`` seeds the perf service's equity curve.
 

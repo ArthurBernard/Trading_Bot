@@ -12,6 +12,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Paper fills now carry the real wall clock.** The factory-built `PaperBroker`
+  used the simulator's *default* deterministic clock (a fixed 2024-01-01 base
+  advancing +1 ms per fill — meant for reproducible tests), so every live-test
+  paper fill was stamped in 2024: the equity-chart x axis rendered a
+  milliseconds-wide window in January 2024, the Fills table showed 2024 dates,
+  and — silently — the `max_daily_loss` breaker's `realised_pnl_since` midnight
+  window never matched a single paper fill. `build_engine` now injects
+  `time.time()`-based epoch-ms into the engine's PaperBroker; the deterministic
+  default stays for direct/test construction. (#182)
+
 ### Deprecated
 
 ### Removed
