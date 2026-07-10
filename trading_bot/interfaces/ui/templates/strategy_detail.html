@@ -28,6 +28,69 @@
   </div>
 </section>
 
+<!-- CAPITAL — the money home: starting capital + realised/unrealised PnL = total
+     value, the withdrawable line, the fixed/compound policy toggle, the
+     Deposit/Withdraw modal and the ledger audit trail. Pure consumer of leaf 07's
+     GET/POST /api/strategies/{name}/capital + POST .../policy — no new backend.
+     Read-only hides the controls row (policy toggle + Deposit/Withdraw); the
+     figures (equation, withdrawable, ledger) still render — a dashboard visitor
+     can always SEE the money, only mutate it when writable. A unit that declares
+     no money base (legacy units, allocation/contributed null) shows a muted note
+     and hides the controls too (there is nothing to reinvest against). -->
+<section class="card" id="capital-card">
+  <div class="row" style="justify-content:space-between; align-items:flex-start;">
+    <h2 style="margin:0;">Capital</h2>
+    <span class="updated" id="capital-updated"></span>
+  </div>
+  <p class="muted" id="capital-none-note" style="display:none;">
+    No capital declared for this unit — it sizes without a money base.
+  </p>
+  <div class="cap-eq" id="cap-eq">
+    <div class="cap-cell">
+      <div class="cap-label">Starting capital</div>
+      <div class="cap-value" id="cap-contributed">—</div>
+    </div>
+    <div class="cap-op">+</div>
+    <div class="cap-cell">
+      <div class="cap-label">PnL</div>
+      <div class="cap-subrow"><span class="cap-sublabel">Realised</span><span id="cap-realised">—</span></div>
+      <div class="cap-subrow"><span class="cap-sublabel">Unrealised</span><span id="cap-unrealised">—</span></div>
+    </div>
+    <div class="cap-op">=</div>
+    <div class="cap-cell cap-total">
+      <div class="cap-label">Total value</div>
+      <div class="cap-value" id="cap-total-value">—</div>
+      <div class="cap-delta" id="cap-delta"></div>
+    </div>
+  </div>
+  <p class="muted" id="capital-withdrawable"></p>
+  {% if not read_only %}
+  <div class="row" id="capital-controls" style="justify-content:space-between; margin-top:.6rem;">
+    <div class="row" id="capital-policy-toggle" role="tablist" aria-label="Capital policy">
+      <button type="button" class="btn policy-opt" data-policy="compound">Reinvest</button>
+      <button type="button" class="btn policy-opt" data-policy="fixed">Cashout</button>
+    </div>
+    <div class="row">
+      <button type="button" id="capital-deposit-btn">Deposit</button>
+      <button type="button" id="capital-withdraw-btn">Withdraw</button>
+    </div>
+  </div>
+  {% endif %}
+  <details id="capital-ledger" style="margin-top:.8rem;">
+    <summary id="capital-ledger-summary">Ledger: 0 events &#9656;</summary>
+    <div class="table-wrap">
+      <table id="capital-ledger-table">
+        <thead>
+          <tr><th>Time</th><th>Type</th><th class="num">Amount</th><th>Note</th></tr>
+        </thead>
+        <tbody id="capital-ledger-body">
+          <tr class="empty"><td colspan="4">Loading…</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </details>
+</section>
+
 <!-- The equity/PnL chart — uPlot renders into #pnl-chart (moved from the retired
      /pnl tab), pre-bound to this strategy (no selector). Live and testnet draw as
      SEPARATE, colour-coded series (never combined; testnet is fake money). -->
@@ -158,6 +221,34 @@
     </div>
   </div>
 </div>
+
+<!-- Adjust-capital modal — shared by Deposit and Withdraw (leaf 08). One amount
+     input + a deposit/withdraw radio, a display-only preview (parseFloat is used
+     ONLY to render the "new" figures — the exact API strings are what actually
+     move), and a per-open op_id so a double-click/retry replays the same
+     idempotency key instead of minting a fresh one. Always rendered (like
+     live-modal above) — under read-only there is simply no button left that can
+     open it. -->
+<div id="capital-modal" class="modal" role="dialog" aria-modal="true" aria-labelledby="capital-modal-title">
+  <div class="modal-card">
+    <h3 id="capital-modal-title">Adjust capital</h3>
+    <p>
+      Move capital for <b id="capital-modal-name">—</b>. Paper/testnet only — a
+      live unit's capital ops are deferred to real-key enablement.
+    </p>
+    <div class="row" id="capital-modal-action" role="radiogroup" aria-label="Action" style="margin-bottom:.7rem;">
+      <label class="row" style="gap:.3rem;"><input type="radio" name="capital-action" value="deposit" checked> Deposit</label>
+      <label class="row" style="gap:.3rem;"><input type="radio" name="capital-action" value="withdraw"> Withdraw</label>
+    </div>
+    <input id="capital-modal-amount" type="text" inputmode="decimal" placeholder="Amount" autocomplete="off" spellcheck="false">
+    <p class="muted" id="capital-modal-preview"></p>
+    <p class="err" id="capital-modal-error" style="display:none;"></p>
+    <div class="modal-actions">
+      <button id="capital-modal-cancel" type="button">Cancel</button>
+      <button id="capital-modal-confirm" class="btn-primary" type="button" disabled>Confirm</button>
+    </div>
+  </div>
+</div>
 {% endblock %}
 
 {% block scripts %}
@@ -181,9 +272,11 @@
 
   var CURRENT_QUOTE = null;   // this strategy's quote currency (money labels)
   var CURRENT_STATUS = null;  // the last /api/strategies row for this strategy
+  var CURRENT_CAPITAL = null; // the last GET .../capital breakdown for this strategy
   var chart = null;           // the live uPlot instance (rebuilt on data shape change)
   var HIDDEN = {};            // mode -> true when its series is toggled off
   var pendingLive = false;    // a live switch awaiting typed confirmation
+  var capModalOpId = null;    // minted once per Adjust-capital modal open (idempotency key)
 
   const controls = document.getElementById('detail-controls');
   const modal = document.getElementById('live-modal');
@@ -191,6 +284,19 @@
   const modalInput = document.getElementById('live-modal-input');
   const modalConfirm = document.getElementById('live-modal-confirm');
   const modalCancel = document.getElementById('live-modal-cancel');
+
+  // Adjust-capital modal elements — always present (see the template comment),
+  // so these are never null; only the buttons that OPEN it are conditional
+  // (guarded individually below).
+  const capModal = document.getElementById('capital-modal');
+  const capModalName = document.getElementById('capital-modal-name');
+  const capModalAmount = document.getElementById('capital-modal-amount');
+  const capModalPreview = document.getElementById('capital-modal-preview');
+  const capModalError = document.getElementById('capital-modal-error');
+  const capModalConfirm = document.getElementById('capital-modal-confirm');
+  const capModalCancel = document.getElementById('capital-modal-cancel');
+  const capDepositBtn = document.getElementById('capital-deposit-btn');
+  const capWithdrawBtn = document.getElementById('capital-withdraw-btn');
 
   // The three deployment modes, colour-coded to match the mode badges
   // (paper=accent/blue, testnet=amber, live=red). The plot order is stable.
@@ -458,6 +564,90 @@
     renderV0Note(payload);
   }
 
+  // --- Capital block (contributed + PnL = total value, withdrawable, policy,
+  //     ledger) — leaf 08, a pure consumer of leaf 07's GET/POST .../capital and
+  //     POST .../policy. --------------------------------------------------- //
+
+  // The equation cells + the withdrawable line + hiding the controls row when
+  // this unit declares no money base (nothing to reinvest/withdraw against).
+  function renderCapitalEquation(b) {
+    const noCapital = b.contributed == null;
+    document.getElementById('capital-none-note').style.display = noCapital ? '' : 'none';
+    document.getElementById('cap-contributed').innerHTML = tbFmt.moneyCell(b.contributed, { quote: CURRENT_QUOTE });
+    document.getElementById('cap-realised').innerHTML = tbFmt.moneyCell(b.realised, { quote: CURRENT_QUOTE });
+    document.getElementById('cap-unrealised').innerHTML = b.unrealised == null
+      ? '<span class="muted" title="no open position to mark">—</span>'
+      : tbFmt.moneyCell(b.unrealised, { quote: CURRENT_QUOTE });
+    const totalEl = document.getElementById('cap-total-value');
+    totalEl.innerHTML = tbFmt.moneyCell(b.total_value, { quote: CURRENT_QUOTE });
+    const c = Number(b.contributed);
+    const t = Number(b.total_value);
+    const haveBoth = b.contributed != null && b.total_value != null && isFinite(c) && isFinite(t);
+    totalEl.className = 'cap-value' + (haveBoth ? (t > c ? ' ok' : t < c ? ' err' : '') : '');
+    // Δ% since funding = total/contributed − 1 — display-only, "—" when there is
+    // nothing to divide by (no capital declared, or a zero/unparseable base).
+    const deltaEl = document.getElementById('cap-delta');
+    if (!haveBoth || c === 0) {
+      deltaEl.innerHTML = '';
+    } else {
+      const delta = t / c - 1;
+      deltaEl.innerHTML = '<span class="' + (delta > 0 ? 'ok' : delta < 0 ? 'err' : '') + '">' +
+        tbFmt.pct(delta) + ' since funding</span>';
+    }
+    document.getElementById('capital-withdrawable').innerHTML =
+      'Withdrawable: ' + tbFmt.moneyCell(b.withdrawable, { quote: CURRENT_QUOTE });
+    // The controls row only exists in the DOM when writable (Jinja-gated) — hide
+    // it too when there is no money base to act on.
+    const controlsEl = document.getElementById('capital-controls');
+    if (controlsEl) controlsEl.style.display = noCapital ? 'none' : '';
+  }
+
+  // Reflect the unit's current policy on the segmented toggle's active state.
+  // `.policy-opt` only exists when writable — an empty NodeList under
+  // read-only/no-op here.
+  function renderPolicyToggle(b) {
+    document.querySelectorAll('.policy-opt').forEach(function (btn) {
+      btn.classList.toggle('is-active', btn.dataset.policy === b.policy);
+    });
+  }
+
+  // The ledger audit trail — most-recent-first (matches the Orders/Fills tables).
+  function renderLedger(b) {
+    const events = b.events || [];
+    document.getElementById('capital-ledger-summary').textContent =
+      'Ledger: ' + events.length + ' event' + (events.length === 1 ? '' : 's') + ' ▸';
+    const body = document.getElementById('capital-ledger-body');
+    if (!events.length) {
+      body.innerHTML = '<tr class="empty"><td colspan="4">No capital events yet.</td></tr>';
+      return;
+    }
+    const ordered = events.slice().reverse();
+    body.innerHTML = ordered.map(function (e) {
+      return '<tr>' +
+        '<td class="num" title="' + escapeHtml(fmtRelative(e.ts)) + '">' + escapeHtml(fmtDate(e.ts, { seconds: true })) + '</td>' +
+        '<td>' + escapeHtml(e.type) + '</td>' +
+        '<td class="num">' + tbFmt.moneyCell(e.amount, { quote: CURRENT_QUOTE }) + '</td>' +
+        '<td>' + escapeHtml(e.note || '') + '</td>' +
+        '</tr>';
+    }).join('');
+  }
+
+  // Load /api/strategies/{name}/capital for THIS strategy and (re)draw the block.
+  async function loadCapital() {
+    let b;
+    try {
+      b = await api('GET', '/api/strategies/' + encodeURIComponent(STRATEGY) + '/capital');
+    } catch (e) {
+      document.getElementById('capital-withdrawable').textContent = e.message;
+      return;
+    }
+    CURRENT_CAPITAL = b;
+    renderCapitalEquation(b);
+    renderPolicyToggle(b);
+    renderLedger(b);
+    stampUpdated('capital-updated');
+  }
+
   // --- Positions (this strategy's bucket of ?group_by=strategy) ------------ //
 
   function positionRowHtml(r) {
@@ -643,10 +833,120 @@
   });
   modal.addEventListener('click', function (e) { if (e.target === modal) closeLiveModal(); });
 
+  // --- Adjust-capital modal (Deposit / Withdraw) --------------------------- //
+
+  function capModalAction() {
+    const checked = document.querySelector('input[name="capital-action"]:checked');
+    return checked ? checked.value : 'deposit';
+  }
+
+  // Display-only preview: parseFloat renders the "new" figures for a human to
+  // sanity-check — the exact API Decimal strings are what actually get sent
+  // (never re-derived from this arithmetic).
+  function updateCapitalPreview() {
+    const amtStr = capModalAmount.value.trim();
+    const amt = parseFloat(amtStr);
+    const validAmount = amtStr !== '' && isFinite(amt) && amt > 0;
+    capModalConfirm.disabled = !validAmount;
+    capModalError.style.display = 'none';
+    if (!validAmount || !CURRENT_CAPITAL || CURRENT_CAPITAL.contributed == null) {
+      capModalPreview.textContent = '';
+      return;
+    }
+    const sign = capModalAction() === 'withdraw' ? -1 : 1;
+    const contributed0 = Number(CURRENT_CAPITAL.contributed) || 0;
+    const total0 = Number(CURRENT_CAPITAL.total_value) || 0;
+    const newContributed = contributed0 + sign * amt;
+    const newTotal = total0 + sign * amt;
+    const suffix = CURRENT_QUOTE ? ' ' + CURRENT_QUOTE : '';
+    capModalPreview.innerHTML =
+      'New starting capital: ' + tbFmt.money(newContributed) + suffix + '<br>' +
+      'New total value: ' + tbFmt.money(newTotal) + suffix;
+  }
+
+  // A UUID minted ONCE per modal open — a double-click or a retry after a
+  // failed POST re-sends this SAME op_id (idempotency on the wire), rather than
+  // silently minting a fresh one that would double-apply on the server.
+  function openCapitalModal(action) {
+    capModalOpId = crypto.randomUUID();
+    capModalName.textContent = STRATEGY;
+    capModalAmount.value = '';
+    capModalError.style.display = 'none';
+    document.querySelectorAll('input[name="capital-action"]').forEach(function (r) {
+      r.checked = r.value === action;
+    });
+    updateCapitalPreview();
+    capModal.classList.add('open');
+    capModalAmount.focus();
+  }
+
+  function closeCapitalModal() {
+    capModal.classList.remove('open');
+  }
+
+  if (capDepositBtn) capDepositBtn.addEventListener('click', function () { openCapitalModal('deposit'); });
+  if (capWithdrawBtn) capWithdrawBtn.addEventListener('click', function () { openCapitalModal('withdraw'); });
+
+  capModalAmount.addEventListener('input', updateCapitalPreview);
+  document.querySelectorAll('input[name="capital-action"]').forEach(function (r) {
+    r.addEventListener('change', updateCapitalPreview);
+  });
+  capModalCancel.addEventListener('click', closeCapitalModal);
+  capModal.addEventListener('click', function (e) { if (e.target === capModal) closeCapitalModal(); });
+  capModalAmount.addEventListener('keydown', function (e) {
+    if (e.key === 'Enter' && !capModalConfirm.disabled) capModalConfirm.click();
+    if (e.key === 'Escape') closeCapitalModal();
+  });
+  capModalConfirm.addEventListener('click', async function () {
+    const action = capModalAction();
+    const amount = capModalAmount.value.trim();  // the exact string sent — never the parsed preview
+    capModalConfirm.disabled = true;
+    try {
+      await api('POST', '/api/strategies/' + encodeURIComponent(STRATEGY) + '/capital',
+        { action: action, amount: amount, op_id: capModalOpId });
+      closeCapitalModal();
+      toast(STRATEGY + ': ' + action + ' ' + amount + ' ok', 'ok');
+      await loadCapital();
+    } catch (e) {
+      // Inline (the 422's `detail` carries the exact withdrawable figure — worth
+      // keeping on screen next to the input, not just a transient toast).
+      capModalError.textContent = e.message;
+      capModalError.style.display = '';
+      capModalConfirm.disabled = false;
+    }
+  });
+
+  // --- Capital policy toggle (Reinvest = compound / Cashout = fixed) ------- //
+
+  async function setPolicy(policy) {
+    // Compounding grows live order sizes — a deliberate, typed-free but
+    // confirmed step in live mode (paper/testnet flip silently, like mode
+    // switches away from live).
+    if (CURRENT_STATUS && CURRENT_STATUS.mode === 'live') {
+      if (!window.confirm('Switch ' + STRATEGY + ' to the ' + policy +
+          ' policy? Compounding grows live order sizes.')) {
+        return;
+      }
+    }
+    try {
+      await api('POST', '/api/strategies/' + encodeURIComponent(STRATEGY) + '/policy', { policy: policy });
+      toast(STRATEGY + ': policy → ' + policy, 'ok');
+    } catch (e) {
+      toast(STRATEGY + ': ' + e.message, 'err');
+    } finally {
+      await loadCapital();
+    }
+  }
+
+  document.querySelectorAll('.policy-opt').forEach(function (btn) {
+    btn.addEventListener('click', function () { setPolicy(btn.dataset.policy); });
+  });
+
   function refreshAll() {
-    // Sequence status before the chart so the quote currency is known when the
-    // stats table / chart heading render (money labels want it on first paint).
-    loadStatus().then(loadPnl);
+    // Sequence status before the chart/capital so the quote currency is known
+    // when the stats table / chart heading / capital figures render (money
+    // labels want it on first paint).
+    loadStatus().then(function () { loadPnl(); loadCapital(); });
     loadPositions();
     loadOrders();
     loadFills();
@@ -704,5 +1004,28 @@
           display:inline-block; }
   .pnl-mode.is-off { color:var(--muted); opacity:.55;
           text-decoration:line-through; }
+  /* Capital block — three cells joined by explicit + and = glyphs, so the
+     reconciliation (starting capital + PnL = total value) reads left to right. */
+  .cap-eq { display:flex; align-items:stretch; gap:.9rem; flex-wrap:wrap;
+          margin:.2rem 0 .8rem; }
+  .cap-cell { background:var(--panel-hi); border:1px solid var(--border);
+          border-radius:8px; padding:.6rem .9rem; min-width:9.5rem; }
+  .cap-cell.cap-total { border-color:rgba(94,162,255,.35); }
+  .cap-op { display:flex; align-items:center; font-family:var(--font-display);
+          font-size:1.1rem; color:var(--muted); padding:0 .1rem; }
+  .cap-label { font-size:.72rem; text-transform:uppercase; letter-spacing:.08em;
+          color:var(--muted); margin-bottom:.3rem; }
+  .cap-value { font-family:var(--font-mono); font-size:1.05rem; }
+  .cap-subrow { display:flex; justify-content:space-between; gap:.8rem;
+          font-size:.85rem; font-family:var(--font-mono); }
+  .cap-subrow .cap-sublabel { color:var(--muted); font-family:var(--font-body); }
+  .cap-delta { font-size:.78rem; margin-top:.25rem; }
+  #capital-ledger summary { cursor:pointer; color:var(--muted); font-size:.85rem; }
+  #capital-ledger[open] summary { color:var(--fg); margin-bottom:.5rem; }
+  /* The Adjust-capital modal is a routine control, not a warning — override
+     live-modal's red top border (base.html's default .modal-card rule) with
+     the neutral accent colour. */
+  #capital-modal .modal-card { border-top-color:var(--accent); }
+  #capital-modal-action label { cursor:pointer; }
 </style>
 {% endblock %}

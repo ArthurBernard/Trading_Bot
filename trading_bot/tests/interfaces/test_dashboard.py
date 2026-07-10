@@ -606,6 +606,55 @@ def test_strategy_detail_read_only_guards_the_controls() -> None:
     assert "if (TB_READ_ONLY)" in html
 
 
+def test_strategy_detail_has_the_capital_card_and_ledger_expander() -> None:
+    """The detail page carries the CAPITAL block: equation, withdrawable, ledger, modal.
+
+    Leaf 08 — a pure consumer of leaf 07's GET/POST .../capital + POST .../policy;
+    the card sits above the equity chart (starting capital + PnL = total value).
+    """
+    html = _client().get("/strategies/btc-ma").text
+    assert 'id="capital-card"' in html
+    # The equation cells (starting capital + realised/unrealised = total value).
+    assert 'id="cap-contributed"' in html
+    assert 'id="cap-realised"' in html
+    assert 'id="cap-unrealised"' in html
+    assert 'id="cap-total-value"' in html
+    assert 'id="cap-delta"' in html
+    assert 'id="capital-withdrawable"' in html
+    # The policy toggle + Deposit/Withdraw controls (writable dashboard).
+    assert 'data-policy="compound"' in html
+    assert 'data-policy="fixed"' in html
+    assert 'id="capital-deposit-btn"' in html
+    assert 'id="capital-withdraw-btn"' in html
+    # The shared Adjust-capital modal + its op_id-minting idempotency comment.
+    assert 'id="capital-modal"' in html
+    assert "crypto.randomUUID()" in html
+    # The ledger audit-trail expander.
+    assert 'id="capital-ledger"' in html
+    assert 'id="capital-ledger-summary"' in html
+    assert 'id="capital-ledger-body"' in html
+    # It fetches the leaf-07 endpoints — no new backend.
+    assert "/capital" in html
+    assert "/policy" in html
+
+
+def test_strategy_detail_read_only_hides_capital_controls() -> None:
+    """A read-only detail page drops the capital mutation controls, keeps the figures."""
+    html = _client(read_only=True).get("/strategies/btc-ma").text
+    # The mutating controls are gone entirely (server-guarded, like the roster's
+    # Deploy link) — not just disabled client-side.
+    assert 'id="capital-deposit-btn"' not in html
+    assert 'id="capital-withdraw-btn"' not in html
+    assert 'data-policy="compound"' not in html
+    assert 'data-policy="fixed"' not in html
+    # The figures still render — a read-only dashboard shows the money, it just
+    # cannot move it.
+    assert 'id="capital-card"' in html
+    assert 'id="cap-total-value"' in html
+    assert 'id="capital-withdrawable"' in html
+    assert 'id="capital-ledger"' in html
+
+
 def test_format_js_is_served_with_the_tbfmt_namespace() -> None:
     """`GET /static/format.js` is 200 and defines the `tbFmt` display formatters.
 
@@ -1440,6 +1489,10 @@ def test_strategies_page_is_a_linked_roster() -> None:
     assert "<th>Cadence</th>" in html
     assert "<th>Next bar</th>" in html
     assert "<th>Last eval</th>" in html
+    # The condensed Total-value column (leaf 08) — replaces nothing; Realised
+    # PnL stays alongside it so the same numbers read at every altitude.
+    assert '<th class="num">Realised PnL</th>' in html
+    assert '<th class="num">Total value</th>' in html
     assert 'id="strategies-updated"' in html
     # The go-live modal + its typed phrase MOVED to the detail page — the roster
     # no longer carries the confirmation surface (the `.mode-select` CSS class

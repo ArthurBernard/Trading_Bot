@@ -1,6 +1,6 @@
 # 06 — Status
 
-_Last updated: 2026-07-05_
+_Last updated: 2026-07-10_
 
 ## Where things stand
 
@@ -76,6 +76,29 @@ as colour-coded badges, a history read at the server's cap says so, and the
 merged Logs event feed is stamped with server time, tagged by emitting
 strategy, and filterable (event type + minimum log level). Plan tree:
 `doc/dev/plans/ui-ux-overhaul/` (all five leaves shipped).
+
+**Post-0.2.0 — per-strategy capital + dashboard IA reorg shipped (the
+`strategy-capital` epic, 8 leaves, PRs #172–#179):** each strategy now has an
+**append-only capital ledger** (`capital_events` — the fills discipline:
+composite PK, `INSERT OR IGNORE`, money as TEXT) seeded once from the config
+`allocation` (or a portfolio's `capital`) as a deterministic genesis event,
+after which the ledger is the single source of truth. Every figure is derived,
+never stored: contributed `C`, realised `R` (fills, unchanged), best-effort
+unrealised `U`, `total_value = C+R+U`,
+`withdrawable = max(0, total − committed − reserved)`. Sizing reads a **lazy
+`capital_provider` once per tick** (`fixed → C`, `compound → max(0, C+R)`), so
+**deposit / withdraw / policy-flip are hot** — one idempotent ledger write
+(caller `op_id`), no engine rebuild. The KPI anchor `v0` is the genesis amount
+and the ratios stay on the **fill-only** curve (a deposit never reads as a
+return). The IA reorg gives the money a home: the legacy single-engine
+dashboard is retired (one web code path), the nav is 4 tabs (Overview ·
+Strategies · Orders · Logs), every strategy has a deep-linkable
+`/strategies/{name}` **detail page** (controls + equity chart +
+positions/orders/fills + the **capital block**: starting capital + PnL = total
+value, withdrawable, Reinvest/Cashout toggle, Deposit/Withdraw modal, ledger
+audit trail), deployment lives on `/strategies/new`, and the roster carries a
+Total-value column. Live capital ops return **409** until real-key enablement
+lands the funds gate. Plan tree: `doc/dev/plans/strategy-capital/` (archived).
 
 **Remaining:** **real-key live enablement** (validate Kraken private endpoints +
 venue-level idempotency against a real-key sandbox, then flip `live_enabled`) — the one
