@@ -30,12 +30,21 @@ def test_ensure_genesis_records_one_deterministic_event(tmp_path) -> None:  # no
     store = _store(tmp_path)
     cap = CapitalService(store, "alloc1", "paper")
 
+    # Built-in
+    import time
+
+    before_ms = int(time.time() * 1000)
     assert cap.ensure_genesis(money("100")) is True  # newly recorded
+    after_ms = int(time.time() * 1000)
     events = store.capital_events(strategy="alloc1")
     assert len(events) == 1
     assert events[0].event_id == "alloc1:funding"
     assert events[0].event_type is CapitalEventType.FUNDING
     assert events[0].amount == money("100")
+    # The genesis carries the wall clock at first seeding (the audit trail shows
+    # WHEN the strategy was funded — not the retired ts=0 sentinel, which the UI
+    # rendered as 1970-01-01).
+    assert before_ms <= events[0].ts <= after_ms
 
 
 def test_ensure_genesis_is_idempotent(tmp_path) -> None:  # noqa: ANN001

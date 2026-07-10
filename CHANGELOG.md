@@ -12,6 +12,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The genesis funding event carries the real funding time.** `ensure_genesis`
+  stamped the ledger's genesis at the `ts=0` sentinel ("sorts before every
+  fill"), which the capital block's ledger trail rendered as **1970-01-01**.
+  With fills on the wall clock, the sentinel is unnecessary: the genesis now
+  records the wall clock at first seeding (a fresh unit funds before its first
+  fill, so the value-timeline ordering is preserved; idempotency is untouched —
+  only the first call ever writes). The ledger UI renders any legacy `ts=0` row
+  as "at deploy" instead of the epoch. (#184)
 - **Paper fills now carry the real wall clock.** The factory-built `PaperBroker`
   used the simulator's *default* deterministic clock (a fixed 2024-01-01 base
   advancing +1 ms per fill — meant for reproducible tests), so every live-test
