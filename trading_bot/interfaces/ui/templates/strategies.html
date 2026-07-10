@@ -36,11 +36,12 @@
           <th>Next bar</th>
           <th>Last eval</th>
           <th class="num">Realised PnL</th>
+          <th class="num">Total value</th>
           <th>Action</th>
         </tr>
       </thead>
       <tbody id="strategies-body">
-        <tr class="empty"><td colspan="9">Loading…</td></tr>
+        <tr class="empty"><td colspan="10">Loading…</td></tr>
       </tbody>
     </table>
   </div>
@@ -137,6 +138,7 @@
         : '<button data-name="' + escapeHtml(s.name) + '" data-act="start" class="btn-start">Start</button>';
     }
     const pnl = tbFmt.moneyCell(s.realised_pnl, { quote: s.quote });
+    const totalValue = tbFmt.moneyCell(s.total_value, { quote: s.quote });
     return '<tr>' +
       '<td>' + nameCell(s) + '</td>' +
       '<td>' + escapeHtml(s.kind) + '</td>' +
@@ -146,12 +148,13 @@
       '<td>' + nextBarCell(s) + '</td>' +
       '<td>' + lastEvalCell(s) + '</td>' +
       '<td class="num ' + pnlClass(s.realised_pnl) + '">' + pnl + '</td>' +
+      '<td class="num">' + totalValue + '</td>' +
       '<td>' + action + '</td>' +
       '</tr>';
   }
 
   function groupHeaderHtml(exchange, count) {
-    return '<tr class="group"><td colspan="9">' +
+    return '<tr class="group"><td colspan="10">' +
       '<span class="group-name">' + escapeHtml(exchange) + '</span>' +
       '<span class="group-count">' + count + '</span></td></tr>';
   }
@@ -161,7 +164,7 @@
     try {
       list = await api('GET', '/api/strategies');
     } catch (e) {
-      body.innerHTML = '<tr class="empty"><td colspan="9">' + escapeHtml(e.message) + '</td></tr>';
+      body.innerHTML = '<tr class="empty"><td colspan="10">' + escapeHtml(e.message) + '</td></tr>';
       return;
     }
     // No-flicker refresh: 'skip-silent' defers everything (including the stamp —
@@ -175,7 +178,7 @@
     sumTotal.textContent = list.length;
     sumRunning.textContent = list.filter(function (s) { return s.running; }).length;
     if (!list.length) {
-      body.innerHTML = '<tr class="empty"><td colspan="9">No strategies declared.</td></tr>';
+      body.innerHTML = '<tr class="empty"><td colspan="10">No strategies declared.</td></tr>';
       return;
     }
     // Group strategies by exchange (alphabetical), each under a header row.
