@@ -19,6 +19,11 @@ Public surface:
 * fill — the immutable :class:`~trading_bot.domain.fill.Fill` execution record;
 * position — the :class:`~trading_bot.domain.position.Position` net exposure
   rebuilt from fills;
+* capital — the immutable :class:`~trading_bot.domain.capital.CapitalEvent`
+  money movement and the pure folds
+  (:func:`~trading_bot.domain.capital.contributed_capital`,
+  :func:`~trading_bot.domain.capital.value_series`) that derive a strategy's
+  contributed capital and value curve from ``events ⊕ fills``;
 * signal — the venue-neutral :class:`~trading_bot.domain.signal.Signal` strategy
   target (:class:`~trading_bot.domain.signal.SignalMode`) and its delta to a
   position;
@@ -27,6 +32,13 @@ Public surface:
 
 from __future__ import annotations
 
+from trading_bot.domain.capital import (
+    CapitalEvent,
+    CapitalEventType,
+    ValuePoint,
+    contributed_capital,
+    value_series,
+)
 from trading_bot.domain.errors import (
     BrokerError,
     ConfigError,
@@ -113,6 +125,12 @@ __all__ = [
     "Fill",
     # position
     "Position",
+    # capital
+    "CapitalEvent",
+    "CapitalEventType",
+    "ValuePoint",
+    "contributed_capital",
+    "value_series",
     # signal
     "Signal",
     "SignalMode",
