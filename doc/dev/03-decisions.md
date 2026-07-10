@@ -6,6 +6,24 @@ rejected approaches as tombstones.
 
 ---
 
+### 2026-07-10 Engine paper fills use the wall clock; the deterministic clock stays a test default (PR #182)  [accepted]
+- **Choice**: `service_factory._build_broker` injects a real epoch-ms clock into
+  the engine's `PaperBroker`; the broker's own default (fixed 2024-01-01 base,
+  +1 ms per call) is unchanged and remains what direct construction — i.e.
+  tests — gets.
+- **Why**: fill `ts` is trusted downstream as real time — the equity-curve
+  x axis, the Fills table, and the `max_daily_loss` breaker's
+  `realised_pnl_since(midnight)` window. Fills stamped in 2024 made the chart
+  unreadable and, worse, silently disarmed the daily-loss breaker in paper mode
+  (no fill ever fell inside "today"). Injecting at the single wiring point
+  keeps test reproducibility intact while making every engine-run simulation
+  tell the truth about *when*.
+- **Rejected alternatives**: flipping the PaperBroker default to the wall clock
+  (breaks deterministic test expectations for every direct construction);
+  stamping fills with the bar's as-of time (this is a live-test runner, not a
+  backtester — wall clock at simulated-fill time is the honest analogue of a
+  venue timestamp).
+
 ### 2026-07-10 Capital operations: ledger events under the unit lock; withdrawable subtracts committed + reserved (PR #178)  [accepted]
 - **Choice**: `deposit`/`withdraw`/`set_policy` are supervisor methods (the
   `set_mode` idiom: `async with unit.lock`, manifest persisted on config
