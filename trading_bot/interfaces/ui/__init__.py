@@ -1,22 +1,25 @@
-"""Web UI — a read-only Jinja2 dashboard served by the FastAPI app.
+"""Web UI — the unified Jinja2 dashboard served by the FastAPI app.
 
 This package ships the **static assets** of the dashboard: the Jinja2
-``templates/`` (the server-rendered shell) and ``static/`` (the dependency-free
-``app.js`` + ``style.css``). It holds **no Python logic** — the
-:func:`~trading_bot.interfaces.api.app.create_app` factory mounts these
-directories (``StaticFiles`` at ``/static``, ``Jinja2Templates`` over
-``templates/``) and registers the ``GET /`` route that renders the shell.
+``templates/`` (``base.html`` — the shared shell — plus one template per tab:
+``overview.html``, ``strategies.html``, ``orders.html``, ``pnl.html``,
+``logs.html``, and the standalone ``login.html``) and ``static/`` (the
+dependency-free ``format.js``, fonts, logo/favicon, and the vendored uPlot
+chart assets). It holds **no Python logic** — the
+:func:`~trading_bot.interfaces.api.app.create_dashboard_app` factory mounts
+these directories (``StaticFiles`` at ``/static``, ``Jinja2Templates`` over
+``templates/``) and registers the ``GET`` route per tab that renders its shell.
 
-The dashboard is a **pure HTTP client** of the leaf-01 API (carried into the ADR)
------------------------------------------------------------------------------------
-The served HTML is a *shell only* — no engine data is ever rendered server-side.
-``app.js`` fetches ``/api/positions``, ``/api/orders`` and ``/api/kpi`` over HTTP
-and live-updates from the ``/api/events`` SSE stream; it never reaches the
-application layer. The UI can therefore only *observe* the engine — like the API
-it sits behind, it is **read-only** and has no path to place an order. Money
-arrives as exact :class:`~decimal.Decimal` strings and is rendered **verbatim**;
-the JS never ``parseFloat``\\ s a money field (that would reintroduce binary-float
-rounding the API took care to avoid).
+The dashboard is a **pure HTTP client** of the API (carried into the ADR)
+--------------------------------------------------------------------------
+Every page is a *shell only* — no supervisor data is ever rendered server-side.
+Each page's script fetches ``/api/*`` over HTTP and live-updates from the
+``/api/events`` SSE stream; it never reaches the application layer directly.
+The UI can therefore only *observe* the engine(s) and, through the gated
+control routes, start/stop a unit or switch its mode — it has no path to place
+an order directly. Money arrives as exact :class:`~decimal.Decimal` strings and
+is rendered **verbatim**; the JS never ``parseFloat``\\ s a money field (that
+would reintroduce binary-float rounding the API took care to avoid).
 """
 
 from __future__ import annotations
@@ -29,7 +32,8 @@ __all__ = ["UI_DIR", "STATIC_DIR", "TEMPLATES_DIR"]
 #: works both from a source checkout and an installed wheel (the templates/static
 #: are shipped via ``[tool.setuptools.package-data]``).
 UI_DIR = pathlib.Path(__file__).resolve().parent
-#: The Jinja2 templates directory (``dashboard.html`` + future pages).
+#: The Jinja2 templates directory (``base.html`` shell + one template per tab).
 TEMPLATES_DIR = UI_DIR / "templates"
-#: The static-assets directory mounted at ``/static`` (``app.js`` + ``style.css``).
+#: The static-assets directory mounted at ``/static`` (``format.js``, fonts,
+#: logo/favicon, and the vendored uPlot chart assets).
 STATIC_DIR = UI_DIR / "static"

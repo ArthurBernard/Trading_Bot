@@ -16,7 +16,11 @@ non-loopback ``--host`` without a token is refused — mirroring the ``serve`` t
 from __future__ import annotations
 
 # Built-in
+import asyncio
+import json
+import logging
 import time
+from decimal import Decimal
 
 # Third-party
 import pytest
@@ -24,12 +28,12 @@ from fastapi.testclient import TestClient
 from typer.testing import CliRunner
 
 from trading_bot.application.config import AppConfig
-from trading_bot.application.events import FillEvent
+from trading_bot.application.events import FillEvent, LogEvent, OrderEvent
 from trading_bot.application.supervisor import StrategySupervisor
 from trading_bot.domain.fill import Fill
 from trading_bot.domain.instrument import Instrument, Symbol
 from trading_bot.domain.money import money
-from trading_bot.domain.order import OrderSide
+from trading_bot.domain.order import Order, OrderSide, OrderType
 from trading_bot.interfaces.api import create_dashboard_app
 from trading_bot.interfaces.cli.main import app as cli_app
 from trading_bot.tests.application.test_supervisor import (
@@ -2254,23 +2258,49 @@ def test_serve_alias_is_the_read_only_dashboard(
     """`trading-bot serve` now brings up the unified dashboard **read-only** (an alias).
 
     The retired split: `serve` folds onto `create_dashboard_app(read_only=True)` over
-    a supervisor. Patches `uvicorn.run`, asserts the built app is the unified shell
-    (Overview + Orders + Logs nav), health reports `read_only: true`, and a control
-    mutation is refused (403) — no separate read-only-over-one-engine app anymore.
+    a supervisor. Patches `uvicorn.run`, asserts it is called with a FastAPI app and
+    the requested host/port, that the built app is the unified shell (Overview +
+    Orders + Logs nav), health reports `read_only: true`, and a control mutation is
+    refused (403) — no separate read-only-over-one-engine app anymore.
     """
     import uvicorn
+    from fastapi import FastAPI
 
     captured: dict[str, object] = {}
-    monkeypatch.setattr(uvicorn, "run", lambda app, **kw: captured.update(app=app))
 
-    result = runner.invoke(cli_app, ["serve", "--port", "9151"])
+    def _fake_run(app: object, **kwargs: object) -> None:
+        captured["app"] = app
+        captured["kwargs"] = kwargs
+
+    monkeypatch.setattr(uvicorn, "run", _fake_run)
+
+    result = runner.invoke(cli_app, ["serve", "--host", "0.0.0.0", "--port", "9151"])
     assert result.exit_code == 0, result.output
+    assert isinstance(captured["app"], FastAPI)
+    kwargs = captured["kwargs"]
+    assert isinstance(kwargs, dict)
+    assert kwargs["host"] == "0.0.0.0"
+    assert kwargs["port"] == 9151
 
     client = TestClient(captured["app"])
     html = client.get("/").text
     assert "Overview" in html and "Orders" in html and "Logs" in html
     assert client.get("/api/health").json()["read_only"] is True
     assert client.post("/api/strategies/x/start").status_code == 403
+
+
+def test_serve_default_config_is_paper(monkeypatch: pytest.MonkeyPatch) -> None:
+    """With no ``--config``, ``serve`` defaults to a paper engine (never live)."""
+    import uvicorn
+
+    captured: dict[str, object] = {}
+    monkeypatch.setattr(uvicorn, "run", lambda app, **kw: captured.update(app=app))
+
+    result = runner.invoke(cli_app, ["serve"])
+    assert result.exit_code == 0, result.output
+
+    client = TestClient(captured["app"])
+    assert client.get("/api/health").json()["mode"] == "paper"
 
 
 def test_start_serve_folds_onto_create_dashboard_app(
@@ -2775,3 +2805,178 @@ def test_secure_cookie_not_forced_by_x_forwarded_proto() -> None:
     set_cookie = ok.headers.get("set-cookie", "").lower()
     assert "tb_session=" in set_cookie
     assert "secure" not in set_cookie  # not forced by the spoofed header
+
+
+# --- shared serialization helpers (module-level, both apps build on) -------- #
+#
+# Ported from the retired ``test_api.py`` (leaf 01, single-engine dashboard):
+# these exercise ``trading_bot.interfaces.api.app``'s helper functions directly
+# — no engine/app fixture needed — so they survive the legacy ``create_app``'s
+# removal unchanged. The high-level positions/orders/health/kpi/SSE coverage
+# ``test_api.py`` also carried is superseded by this file's supervisor-level
+# equivalents (e.g. ``test_events_stream_merges_and_yields_a_fill``, the
+# ``/api/kpi`` level tests above) and was not re-ported.
+
+
+def test_decimal_json_response_renders_exact_string_not_lossy_float() -> None:
+    """The Decimal-as-string JSON response renders exact strings, never lossy floats.
+
+    Guards the Decimal-as-string invariant at the byte level: ``Decimal("0.1")``
+    must render as the JSON string ``"0.1"``, never the float ``0.1`` (whose true
+    binary value is ``0.1000000000000000055511151231257827021181583404541015625``).
+    """
+    from trading_bot.interfaces.api.app import _DecimalJSONResponse
+
+    resp = _DecimalJSONResponse(
+        {"net_qty": Decimal("0.1"), "avg_entry_price": Decimal("30000.1")}
+    )
+    raw = resp.body.decode()
+    assert '"net_qty":"0.1"' in raw
+    assert '"avg_entry_price":"30000.1"' in raw
+    assert '"net_qty":0.1' not in raw
+    assert "0.1000000000000000055511151231257827021181583404541015625" not in raw
+
+
+def test_decimal_encoder_renders_decimal_as_string_and_rejects_other() -> None:
+    """The JSON ``default`` hook stringifies a Decimal exactly, else raises."""
+    from trading_bot.interfaces.api.app import _default
+
+    assert _default(Decimal("0.1")) == "0.1"
+    assert json.dumps({"x": Decimal("1.5")}, default=_default) == '{"x": "1.5"}'
+    with pytest.raises(TypeError):
+        _default(object())
+
+
+def test_finite_or_none_maps_non_finite_and_none_to_null() -> None:
+    """A KPI ratio that is ``inf``/``nan``/``None`` degrades to JSON ``null``.
+
+    A *monotonically rising* equity curve has zero drawdown, so Calmar
+    (return / max-drawdown) is ``inf`` on an otherwise valid, winning curve — a
+    bare ``inf``/``nan`` is not valid JSON, so it must map to ``null`` rather
+    than raising or serializing lossily. A finite value passes through unchanged.
+    """
+    import math
+
+    from trading_bot.interfaces.api.app import _finite_or_none
+
+    assert _finite_or_none(None) is None
+    assert _finite_or_none(math.inf) is None
+    assert _finite_or_none(math.nan) is None
+    assert _finite_or_none(1.25) == 1.25
+
+
+def test_event_dict_serializes_each_event_type_with_string_money() -> None:
+    """``_event_dict`` tags + renders order/fill/log events (money as strings)."""
+    from trading_bot.interfaces.api.app import _event_dict
+
+    btc = Instrument(Symbol("BTC", "USD"))
+    order = Order(
+        client_order_id="cid-1",
+        instrument=btc,
+        side=OrderSide.BUY,
+        qty=money("0.1"),
+        type=OrderType.LIMIT,
+        limit_price=money("30000"),
+    )
+    order_payload = _event_dict(OrderEvent(order))
+    assert order_payload["type"] == "order"
+    assert order_payload["order"]["qty"] == "0.1"
+    assert order_payload["order"]["side"] == "buy"
+
+    log_payload = _event_dict(LogEvent(message="hi", level="warning"))
+    assert log_payload == {"type": "log", "message": "hi", "level": "warning"}
+
+
+def _log_record(*, msg: str, exc: BaseException | None) -> logging.LogRecord:
+    """Build a bare ``LogRecord`` carrying ``exc`` as its ``exc_info`` (or none)."""
+    exc_info = (type(exc), exc, exc.__traceback__) if exc is not None else None
+    return logging.LogRecord(
+        name="uvicorn.error",
+        level=logging.ERROR,
+        pathname=__file__,
+        lineno=1,
+        msg=msg,
+        args=(),
+        exc_info=exc_info,
+    )
+
+
+def test_graceful_shutdown_cancellation_filter_drops_only_the_expected_shape() -> None:
+    """The uvicorn.error filter drops a shutdown CancelledError, keeps real errors.
+
+    Regression test for the Ctrl-C quiet-shutdown fix: uvicorn 0.49 logs *any*
+    exception escaping the ASGI app as an ERROR "Exception in ASGI application"
+    record — including the deliberate ``CancelledError`` it raises itself when
+    force-cancelling a still-open SSE connection past the graceful-shutdown
+    timeout. The filter must drop *that* shape (regardless of the exception's
+    message — see the class docstring on why nested ``BaseHTTPMiddleware``
+    task groups can strip it) while leaving a genuine application error, or a
+    ``CancelledError`` logged under an unrelated message, alone.
+    """
+    from trading_bot.interfaces.api.app import _SuppressGracefulShutdownCancellation
+
+    carveout = _SuppressGracefulShutdownCancellation()
+
+    # Dropped: a CancelledError (message-bearing or not) under uvicorn's own
+    # "Exception in ASGI application" message.
+    assert (
+        carveout.filter(
+            _log_record(
+                msg="Exception in ASGI application",
+                exc=asyncio.CancelledError(
+                    "Task cancelled, timeout graceful shutdown exceeded"
+                ),
+            )
+        )
+        is False
+    )
+    assert (
+        carveout.filter(
+            _log_record(
+                msg="Exception in ASGI application",
+                exc=asyncio.CancelledError(),
+            )
+        )
+        is False
+    )
+
+    # Kept: a real bug under the same message.
+    assert (
+        carveout.filter(
+            _log_record(msg="Exception in ASGI application", exc=ValueError("boom"))
+        )
+        is True
+    )
+    # Kept: a CancelledError logged under a different, unrelated message.
+    assert (
+        carveout.filter(
+            _log_record(msg="some other message", exc=asyncio.CancelledError())
+        )
+        is True
+    )
+    # Kept: no exc_info at all.
+    assert carveout.filter(_log_record(msg="plain info line", exc=None)) is True
+
+
+def test_graceful_shutdown_cancellation_filter_installs_once_per_process() -> None:
+    """Building an app repeatedly never stacks up duplicate filter instances.
+
+    ``create_control_app``/``create_dashboard_app`` install the filter on the
+    shared, process-wide ``uvicorn.error`` logger every time they build an app
+    (tests build many); the installer must stay idempotent.
+    """
+    from trading_bot.interfaces.api.app import (
+        _suppress_graceful_shutdown_cancellation_logs,
+        _SuppressGracefulShutdownCancellation,
+    )
+
+    target = logging.getLogger("uvicorn.error")
+    before = sum(
+        isinstance(f, _SuppressGracefulShutdownCancellation) for f in target.filters
+    )
+    _suppress_graceful_shutdown_cancellation_logs()
+    _suppress_graceful_shutdown_cancellation_logs()
+    after = sum(
+        isinstance(f, _SuppressGracefulShutdownCancellation) for f in target.filters
+    )
+    assert after == max(before, 1)

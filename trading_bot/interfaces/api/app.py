@@ -1,23 +1,25 @@
-"""FastAPI application — a **read-only** HTTP view of the live engine.
+"""FastAPI application — the unified dashboard over the live engine(s).
 
-``create_app(engine)`` builds a :class:`fastapi.FastAPI` that renders the
-:class:`~trading_bot.application.service_factory.Engine`'s live state out over
-HTTP: positions, tracked orders and PnL/KPI as JSON, plus a Server-Sent-Events
-stream of order/fill/log events fed by the engine's
-:class:`~trading_bot.application.events.EventBus`. The UI (leaf 02) is a pure
-HTTP client of this API.
+The entrypoints are :func:`create_dashboard_app` (the unified monitoring +
+control dashboard over a :class:`~trading_bot.application.supervisor.StrategySupervisor`
+— every managed strategy's positions, tracked orders and PnL/KPI as JSON, plus a
+Server-Sent-Events stream of order/fill/log events) and :func:`create_control_app`
+(a thin backward-compat alias of the same app). This module also holds the shared
+serialization helpers (money-as-Decimal-string, SSE framing) and HTTP hardening
+both factories build on.
 
-Read-only — a hard invariant (carried into the ADR)
----------------------------------------------------
-**Every endpoint is a GET and no endpoint mutates the engine.** There is
-deliberately *no* route that places, amends or cancels an order: the write path
+No order-placement route — a hard invariant (carried into the ADR)
+--------------------------------------------------------------------
+**No endpoint places, amends or cancels an order.** The write path
 (:class:`~trading_bot.application.order_router.OrderRouter`) is reachable only
-in-process by the strategy runner, never from the network. A web client can
-*observe* the engine — it can never *trade* through it. This keeps the only
+in-process by the strategy runner, never from the network — a web client can
+*observe* the engine and, through the gated control routes, start/stop a unit or
+switch its mode, but it can never place a trade directly. This keeps the only
 money-moving surface (order submission) off the HTTP boundary entirely, so a
-compromised or misused web client cannot place an order. The absence of a POST
-order route is the invariant; a POST to a plausible order path returns ``405``
-(method not allowed) because only GET is registered for it.
+compromised or misused web client cannot place an order. Going ``live`` is
+further gated by a typed acknowledgement enforced server-side (see
+:func:`create_dashboard_app`), and ``read_only=True`` refuses every mutation
+outright (``403``).
 
 Money is serialized as Decimal **strings**, never floats (carried into the ADR)
 -------------------------------------------------------------------------------
@@ -44,17 +46,16 @@ serialized with money as strings and tagged with a ``type`` discriminator), and
 
 The dashboard UI — a pure HTTP client mounted on the same app (carried into the ADR)
 ------------------------------------------------------------------------------------
-``create_app`` also mounts the read-only web dashboard (leaf 02): ``StaticFiles``
-at ``/static`` over :data:`~trading_bot.interfaces.ui.STATIC_DIR`, a
+:func:`create_dashboard_app` mounts the unified web dashboard: ``StaticFiles`` at
+``/static`` over :data:`~trading_bot.interfaces.ui.STATIC_DIR`, a
 :class:`~fastapi.templating.Jinja2Templates` over
-:data:`~trading_bot.interfaces.ui.TEMPLATES_DIR`, and a single ``GET /`` that
-renders ``dashboard.html`` — a **shell** carrying only the package version and the
-engine ``mode`` (no engine data is rendered server-side). The page's ``app.js``
-fetches ``/api/positions|orders|kpi`` and live-updates from ``/api/events``, so the
-UI is a **pure HTTP client** of this API: it shares the API's read-only guarantee
-and has no path to place an order. The directories are resolved from the installed
-package (shipped via ``[tool.setuptools.package-data]``), and the mount is guarded
-on their existence so the API still builds if assets are absent.
+:data:`~trading_bot.interfaces.ui.TEMPLATES_DIR`, and one page per tab (Overview /
+Strategies / Orders / PnL / Logs) rendered as **shells** carrying only the version
+and ``read_only``/auth flags (no supervisor data server-side). Each page's script
+fetches ``/api/*`` and live-updates from ``/api/events``, so the UI is a **pure
+HTTP client** of this API. The directories are resolved from the installed package
+(shipped via ``[tool.setuptools.package-data]``), and the mount is guarded on their
+existence so the API still builds if assets are absent.
 """
 
 from __future__ import annotations
@@ -90,7 +91,6 @@ if TYPE_CHECKING:
         PortfolioStrategyConfig,
         StrategyConfig,
     )
-    from trading_bot.application.service_factory import Engine
     from trading_bot.application.supervisor import (
         FillRow,
         KpiRow,
@@ -103,7 +103,7 @@ if TYPE_CHECKING:
     from trading_bot.domain.order import Order
     from trading_bot.domain.position import Position
 
-__all__ = ["create_app", "create_control_app", "create_dashboard_app"]
+__all__ = ["create_control_app", "create_dashboard_app"]
 
 logger = logging.getLogger(__name__)
 
@@ -216,37 +216,6 @@ def _fill_dict(fill: Fill) -> dict[str, Any]:
         "fee": _money_str(fill.fee),
         "ts": fill.ts,
     }
-
-
-def _safe_ratio(compute: Callable[[], float]) -> float:
-    """Evaluate a KPI ratio, returning ``0.0`` when it is undefined on this curve.
-
-    The fynance-backed ratio estimators can both *raise* and *return a
-    non-finite value* on some real equity curves the fill-driven
-    :class:`~trading_bot.application.performance_service.PerformanceService`
-    produces:
-
-    * they **raise** a :class:`ValueError` when the curve is degenerate (e.g. a
-      curve that starts at / crosses zero — fynance's "initial value cannot be
-      null" / "must be of the same sign");
-    * they **return ``inf`` / ``nan``** when a ratio's denominator is zero on an
-      otherwise valid curve — e.g. a *monotonically rising* curve has zero
-      drawdown, so Calmar (return / max-drawdown) and Sortino (excess /
-      downside-deviation) are ``inf``. With a strictly-positive
-      ``starting_capital`` (the config default) this is now the *common* shape
-      for a winning run, where the old ``v0 = 0`` curve would instead have made
-      fynance raise.
-
-    A read-only KPI view must stay 200 + JSON-numeric in both cases (a bare
-    ``inf`` / ``nan`` is not valid JSON and serializes to ``null``). So this
-    reports ``0.0`` for a raised *and* a non-finite ratio — the same "undefined
-    estimator → 0.0" convention the service uses for a too-short series.
-    """
-    try:
-        value = compute()
-    except (ValueError, ZeroDivisionError, ArithmeticError):
-        return 0.0
-    return value if math.isfinite(value) else 0.0
 
 
 def _event_dict(event: Event) -> dict[str, Any]:
@@ -418,8 +387,8 @@ def _finite_or_none(value: float | None) -> float | None:
     The KPI ratios can be ``inf`` / ``nan`` on a degenerate curve (a monotonic
     winner has zero drawdown → Calmar is ``inf``); a bare ``inf`` / ``nan`` is not
     valid JSON. So a non-finite (or ``None``) ratio serializes as ``null`` — the
-    same "undefined estimator" convention :func:`_safe_ratio` uses for the
-    single-engine view, here surfaced as an explicit ``null`` rather than ``0.0``.
+    same "undefined estimator" convention a raised/non-finite ratio maps to
+    elsewhere, here surfaced as an explicit ``null``.
     """
     if value is None or not math.isfinite(value):
         return None
@@ -514,9 +483,8 @@ def _suppress_graceful_shutdown_cancellation_logs() -> None:
     """Install :class:`_SuppressGracefulShutdownCancellation` on ``uvicorn.error`` once.
 
     Idempotent (checked by filter *type*), so calling this from every
-    :func:`create_app` / :func:`create_dashboard_app` build — including in
-    tests, which build many apps per process — never stacks up duplicate
-    filter instances.
+    :func:`create_dashboard_app` build — including in tests, which build many
+    apps per process — never stacks up duplicate filter instances.
     """
     target = logging.getLogger("uvicorn.error")
     if not any(
@@ -586,183 +554,6 @@ def _install_hardening(app: FastAPI) -> None:
                     {"detail": "request body too large"}, status_code=413
                 )
         return await call_next(request)
-
-
-# ---------------------------------------------------------------------------
-# Application factory
-# ---------------------------------------------------------------------------
-
-
-def create_app(engine: Engine) -> FastAPI:
-    """Build the read-only FastAPI over a wired :class:`Engine`.
-
-    Stores ``engine`` on ``app.state`` and registers the read-only GET endpoints
-    (``/api/health``, ``/api/positions``, ``/api/orders``, ``/api/kpi``) plus the
-    SSE stream (``/api/events``). Every response renders money as an exact
-    :class:`~decimal.Decimal` string (see the module docstring). **No** endpoint
-    mutates the engine — there is deliberately no route to place or cancel an
-    order.
-
-    Parameters
-    ----------
-    engine : Engine
-        The fully-wired engine to expose. Read through ``app.state.engine`` by the
-        handlers, so the wiring is explicit and the app is testable with a paper
-        engine.
-
-    Returns
-    -------
-    FastAPI
-        The configured application — pass it to a server (uvicorn) or to
-        :class:`fastapi.testclient.TestClient`.
-
-    """
-    app = FastAPI(
-        title="trading_bot API",
-        summary="Read-only HTTP view of the live trading engine.",
-        default_response_class=_DecimalJSONResponse,
-    )
-    app.state.engine = engine
-    _install_hardening(app)  # body-size cap + security headers (I-6, I-11)
-
-    def _engine(request: Request) -> Engine:
-        """Read the wired engine off ``app.state`` (explicit, testable access)."""
-        return request.app.state.engine  # type: ignore[no-any-return]
-
-    # -- UI: dashboard shell + static assets --------------------------------- #
-    # Mount the read-only web dashboard on the same app. The page is a *shell*
-    # (version + mode only); all engine data is fetched client-side from /api/*,
-    # so the UI is a pure HTTP client of this API (read-only, no order path).
-    # Guarded on the dirs existing so the API still builds without the assets.
-    if STATIC_DIR.is_dir():
-        app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
-
-    templates = (
-        Jinja2Templates(directory=str(TEMPLATES_DIR))
-        if TEMPLATES_DIR.is_dir()
-        else None
-    )
-
-    if templates is not None:
-
-        @app.get("/", response_class=HTMLResponse)
-        async def dashboard(request: Request) -> Any:
-            """Render the read-only dashboard shell (no engine data server-side).
-
-            Returns ``dashboard.html`` carrying only the package version and the
-            engine ``mode`` (for the header badge). The page's ``app.js`` fetches
-            ``/api/positions|orders|kpi`` and live-updates from ``/api/events`` —
-            the UI never renders engine state server-side and never mutates it.
-            """
-            eng = _engine(request)
-            return templates.TemplateResponse(
-                request,
-                "dashboard.html",
-                {
-                    "version": trading_bot.__version__,
-                    "mode": eng.config.mode,
-                },
-            )
-
-    # -- Health -------------------------------------------------------------- #
-
-    @app.get("/api/health")
-    async def health(request: Request) -> dict[str, Any]:
-        """Liveness + a snapshot of what the engine is configured to run."""
-        eng = _engine(request)
-        return {
-            "status": "ok",
-            "mode": eng.config.mode,
-            "strategies": len(eng.config.strategies),
-        }
-
-    # -- Positions ----------------------------------------------------------- #
-
-    @app.get("/api/positions")
-    async def positions(request: Request) -> list[dict[str, Any]]:
-        """Live net positions per instrument (money as Decimal strings)."""
-        eng = _engine(request)
-        return [
-            _position_dict(position)
-            for position in eng.tracker.all_positions().values()
-        ]
-
-    # -- Orders -------------------------------------------------------------- #
-
-    @app.get("/api/orders")
-    async def orders(request: Request) -> list[dict[str, Any]]:
-        """Every order the router has tracked (enums by value; money as strings)."""
-        eng = _engine(request)
-        return [_order_dict(order) for order in eng.router.tracked_orders().values()]
-
-    # -- KPI ----------------------------------------------------------------- #
-
-    @app.get("/api/kpi")
-    async def kpi(request: Request) -> dict[str, Any]:
-        """Aggregate PnL/KPI: money as Decimal strings, ratios as JSON numbers."""
-        perf = _engine(request).perf
-        equity = perf.equity_curve()
-        equity_end = equity[-1] if equity else None
-        return {
-            "realised_pnl": _money_str(perf.realised_pnl()),
-            "fees_paid": _money_str(perf.fees_paid()),
-            "equity_end": _money_str(equity_end),
-            "sharpe": _safe_ratio(perf.sharpe),
-            "sortino": _safe_ratio(perf.sortino),
-            "max_drawdown": _safe_ratio(perf.max_drawdown),
-            "calmar": _safe_ratio(perf.calmar),
-        }
-
-    # -- SSE events ---------------------------------------------------------- #
-
-    @app.get("/api/events")
-    async def events(request: Request) -> StreamingResponse:
-        """Server-Sent-Events stream of order/fill/log events from the bus.
-
-        Registers a fresh queue on the engine's
-        :class:`~trading_bot.application.events.EventBus`, yields each event as a
-        ``data: <json>\\n\\n`` frame (money as Decimal strings, tagged with a
-        ``type``), and unregisters the queue in a ``finally`` on disconnect.
-        """
-        bus = _engine(request).bus
-        queue = bus.add_queue()
-
-        async def _generator() -> Any:
-            try:
-                # Flush an immediate comment so the client's EventSource leaves
-                # "connecting" without waiting for the first real event (mirrors
-                # dccd, where a buffering middleware otherwise stalls the start).
-                yield ": connected\n\n"
-                while True:
-                    if await request.is_disconnected():
-                        break
-                    try:
-                        # Bounded wait so the loop periodically wakes to re-check
-                        # disconnection (and so a hung consumer cannot pin the
-                        # queue forever); on timeout, send an SSE heartbeat
-                        # comment. Mirrors dccd's /api/events.
-                        event = await asyncio.wait_for(queue.get(), timeout=15.0)
-                        frame = {**_event_dict(event), "ts": _epoch_ms()}
-                        yield f"data: {json.dumps(frame, default=_default)}\n\n"
-                    except asyncio.TimeoutError:
-                        yield ": heartbeat\n\n"
-            except asyncio.CancelledError:
-                # Server shutdown (the graceful-shutdown timeout force-cancels this
-                # task while it is suspended in the wait above) or the ASGI server
-                # tearing the connection down: either way the stream is over, which
-                # is the *correct* time for this generator to end — not an error.
-                # Left uncaught, this propagates as a bare CancelledError that
-                # uvicorn/starlette log as a scary ERROR-level traceback on every
-                # shutdown while a client holds this endpoint open; ending the
-                # generator cleanly here is the intended response to "server is
-                # going away", not a swallowed real failure.
-                pass
-            finally:
-                bus.remove_queue(queue)
-
-        return StreamingResponse(_generator(), media_type="text/event-stream")
-
-    return app
 
 
 # ---------------------------------------------------------------------------

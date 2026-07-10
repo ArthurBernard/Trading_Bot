@@ -5,7 +5,63 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>trading_bot — sign in</title>
   <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
-  <link rel="stylesheet" href="/static/style.css">
+  <style>
+    /* Self-contained login-page styles. The login page is unauthenticated and
+       stands alone (it does not extend base.html's nav shell), so it carries
+       just the small subset of the dashboard's dark theme the login card
+       needs — no external stylesheet, no self-hosted fonts. */
+    :root {
+      --bg: #0a0d13; --fg: #e8eaed; --muted: #8a96a3; --accent: #5ea2ff;
+      --border: #222a33; --card: #131922; --ok: #3fb950; --err: #f85149;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font: 14px/1.55 system-ui, -apple-system, "Segoe UI", sans-serif;
+      color: var(--fg);
+      background:
+        radial-gradient(900px 420px at 50% -10%, rgba(94, 162, 255, .06), transparent 60%),
+        var(--bg);
+      background-attachment: fixed;
+      -webkit-font-smoothing: antialiased;
+    }
+    .card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 1rem 1.2rem;
+      margin: 0 0 1.2rem;
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, .04), 0 1px 2px rgba(0, 0, 0, .35);
+    }
+    .brand-group { display: flex; align-items: baseline; gap: .5rem; }
+    .brand {
+      font-family: ui-monospace, "SF Mono", monospace;
+      font-weight: 700;
+      font-size: 1.05rem;
+      letter-spacing: .04em;
+    }
+    .ver { color: var(--muted); font-size: .8rem; font-family: ui-monospace, monospace; }
+    .login-body { display: flex; min-height: 100vh; align-items: center; justify-content: center; }
+    .login-card { width: min(92vw, 360px); }
+    .login-card h2 {
+      margin: 0 0 1rem; font-size: .82rem; font-weight: 700; letter-spacing: .12em;
+      text-transform: uppercase; color: var(--muted);
+    }
+    .login-card label { display: block; font-size: .82rem; color: var(--muted); margin-bottom: .35rem; }
+    .login-card input[type="password"] {
+      width: 100%; font: inherit; color: var(--fg); font-family: ui-monospace, monospace;
+      background: var(--bg); border: 1px solid var(--border); border-radius: 8px;
+      padding: .6rem .7rem;
+    }
+    .login-card input[type="password"]:focus { outline: none; border-color: var(--accent); }
+    .login-err { margin: .9rem 0 0; color: var(--err); font-size: .85rem; }
+    button.btn-primary {
+      font: inherit; font-size: .82rem; cursor: pointer;
+      color: #08110a; background: var(--ok); border: 1px solid var(--ok);
+      border-radius: 7px; padding: .32rem .8rem; font-weight: 700;
+    }
+    button.btn-primary:hover { filter: brightness(1.08); }
+  </style>
 </head>
 <body class="login-body">
   <form class="login-card card" method="post" action="/login" autocomplete="off">
