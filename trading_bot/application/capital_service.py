@@ -48,6 +48,7 @@ performs I/O only through the injected store.
 
 from __future__ import annotations
 
+import time
 from typing import TYPE_CHECKING, Literal
 
 from trading_bot.domain.capital import (
@@ -67,14 +68,6 @@ __all__ = ["CapitalPolicy", "CapitalService"]
 CapitalPolicy = Literal["fixed", "compound"]
 
 _ZERO: Money = money("0")
-
-#: ``ts`` (epoch ms) stamped on the genesis funding event. Fixed at ``0`` so the
-#: genesis always sorts **before** any real fill (whose ``ts`` is a live epoch-ms
-#: bar time) on the merged value timeline
-#: (:func:`~trading_bot.domain.capital.value_series`) — the funded capital is in
-#: place for the first fill, and the derived value curve reconciles to the
-#: fill-only equity curve. Matches the domain tests' genesis convention.
-_GENESIS_TS_MS = 0
 
 
 class CapitalService:
@@ -121,6 +114,16 @@ class CapitalService:
         exactly once and the config ``allocation`` never re-funds after the
         first seeding (it has gone inert; the ledger is now the source of truth).
 
+        The genesis ``ts`` is the **wall clock at first seeding** (epoch ms) —
+        the moment the strategy was actually funded, which is what the ledger's
+        audit trail shows the operator. A fresh unit funds before its first
+        fill, so the genesis still sorts ahead of every fill on the merged
+        :func:`~trading_bot.domain.capital.value_series` timeline. (An earlier
+        revision pinned the genesis at ``ts=0`` to force that ordering — which
+        rendered as 1970-01-01 in the UI; with fills on the wall clock too, the
+        sentinel is unnecessary.) Only the FIRST call ever records a row, so a
+        restart's later wall clock never rewrites the funding time.
+
         Parameters
         ----------
         amount : Money
@@ -141,7 +144,7 @@ class CapitalService:
             strategy=self._strategy,
             event_type=CapitalEventType.FUNDING,
             amount=money(amount),
-            ts=_GENESIS_TS_MS,
+            ts=int(time.time() * 1000),
             note="genesis funding",
         )
         return self._store.record_capital_event(event)

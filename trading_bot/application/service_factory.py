@@ -50,6 +50,7 @@ from __future__ import annotations
 
 import os
 import pathlib
+import time
 from dataclasses import dataclass
 from typing import Protocol, runtime_checkable
 
@@ -309,7 +310,13 @@ def _build_broker(config: AppConfig, bus: EventBus) -> Broker:
 
     if config.mode == "paper" or venue == _PAPER_VENUE:
         # Paper-by-default: the simulator, wired to the bus so its fills fan out.
-        return PaperBroker(event_bus=bus)
+        # The engine's simulator gets the REAL wall clock (epoch ms), not the
+        # PaperBroker default (a deterministic 2024-01-01 base advancing +1ms per
+        # fill, kept for reproducible tests): a live-test daemon's paper fills are
+        # read by everything that trusts fill `ts` — the equity-curve x axis, the
+        # Fills table, and the `max_daily_loss` breaker's `realised_pnl_since`
+        # midnight window, which silently never matched fills stamped in 2024.
+        return PaperBroker(event_bus=bus, clock=lambda: int(time.time() * 1000))
 
     # Testnet path: a venue's sandbox (paper money on the real testnet venue). The
     # adapter is **hard-pinned** to the testnet endpoint (it cannot reach mainnet),

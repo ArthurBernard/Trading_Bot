@@ -623,8 +623,13 @@
     }
     const ordered = events.slice().reverse();
     body.innerHTML = ordered.map(function (e) {
+      // A legacy genesis row may carry the retired ts=0 sentinel — render it as
+      // "at deploy" rather than the epoch (1970-01-01), which reads as a bug.
+      const timeCell = e.ts
+        ? '<td class="num" title="' + escapeHtml(fmtRelative(e.ts)) + '">' + escapeHtml(fmtDate(e.ts, { seconds: true })) + '</td>'
+        : '<td class="num muted" title="recorded before funding times were stamped">at deploy</td>';
       return '<tr>' +
-        '<td class="num" title="' + escapeHtml(fmtRelative(e.ts)) + '">' + escapeHtml(fmtDate(e.ts, { seconds: true })) + '</td>' +
+        timeCell +
         '<td>' + escapeHtml(e.type) + '</td>' +
         '<td class="num">' + tbFmt.moneyCell(e.amount, { quote: CURRENT_QUOTE }) + '</td>' +
         '<td>' + escapeHtml(e.note || '') + '</td>' +
