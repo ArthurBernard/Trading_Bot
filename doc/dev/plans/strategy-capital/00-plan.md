@@ -70,7 +70,7 @@ file-disjoint until they join at 08.
 ## Leaf checklist
 
 - [x] 01 retire-legacy-dashboard — chore/retire-legacy-dashboard — medium
-- [ ] 02 domain-capital-event — feat/domain-capital-event — medium
+- [x] 02 domain-capital-event — feat/domain-capital-event — medium
 - [ ] 03 storage-capital-events — feat/storage-capital-events — medium
 - [ ] 04 config-allocation-policy — feat/config-allocation-policy — low
 - [ ] 05 strategy-detail-page — feat/strategy-detail-page — high
