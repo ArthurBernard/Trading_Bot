@@ -1,7 +1,7 @@
 ---
 plan: strategy-capital
 kind: global
-status: planning
+status: executing
 roadmap: "- [ ] **Per-strategy capital & dashboard IA reorg** (`strategy-capital`): append-only capital ledger per strategy (fund/refund/cashout, fixed|compound policy, capital/PnL/value split) + IA reorg (retire the legacy dashboard, per-strategy detail page). Plan: `doc/dev/plans/strategy-capital/`."
 release_on_done: true
 ---
@@ -69,7 +69,7 @@ file-disjoint until they join at 08.
 
 ## Leaf checklist
 
-- [ ] 01 retire-legacy-dashboard — chore/retire-legacy-dashboard — medium
+- [x] 01 retire-legacy-dashboard — chore/retire-legacy-dashboard — medium
 - [ ] 02 domain-capital-event — feat/domain-capital-event — medium
 - [ ] 03 storage-capital-events — feat/storage-capital-events — medium
 - [ ] 04 config-allocation-policy — feat/config-allocation-policy — low
