@@ -41,7 +41,9 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Literal, cast
 
+from trading_bot.application.accounting import Violation, check_book
 from trading_bot.application.capital_service import CapitalService
+from trading_bot.application.events import EventBus, LogEvent
 from trading_bot.application.pnl_series import by_mode, equity_series
 from trading_bot.application.reconcile import reconcile
 from trading_bot.application.run_app import build_portfolio_runners, build_runners
@@ -103,6 +105,12 @@ KpiLevel = Literal["strategy", "exchange", "total"]
 _KIND = Literal["strategy", "portfolio"]
 
 _ZERO: Money = money("0")
+
+#: The accounting checker's cache TTL, in milliseconds (see ``_accounting_of``).
+#: The dashboard polls every 10 s; a 60 s window means the checker recomputes
+#: at most once a minute per unit, and only while something is actually
+#: reading its status — never a background poll of its own.
+_ACCOUNTING_TTL_MS = 60_000
 
 
 @dataclass(frozen=True, slots=True)
@@ -361,6 +369,20 @@ class KpiRow:
     max_drawdown: float | None
 
 
+@dataclass(slots=True)
+class _AccountingState:
+    """A unit's last-computed accounting report — cached across the TTL window.
+
+    See :meth:`StrategySupervisor._accounting_of`: ``violations`` is the last
+    :func:`~trading_bot.application.accounting.check_book` result, and
+    ``computed_at_ms`` (epoch ms, the injected clock) is when it was computed —
+    the cache is served as-is until it goes stale past ``_ACCOUNTING_TTL_MS``.
+    """
+
+    violations: list[Violation]
+    computed_at_ms: int
+
+
 @dataclass
 class _Unit:
     """One managed strategy: its config slice, mode, and (when running) engine.
@@ -383,6 +405,13 @@ class _Unit:
     runner: StrategyRunner | PortfolioRunner | None = None
     running: bool = False
     lock: asyncio.Lock = field(default_factory=asyncio.Lock, repr=False, compare=False)
+    #: The last accounting report computed for this unit (``None`` before the
+    #: first startup check ever runs — see
+    #: :meth:`StrategySupervisor._start_locked` / :meth:`StrategySupervisor.
+    #: _accounting_of`). Survives ``stop`` (only ``running``/``runner``/``engine``
+    #: are cleared by :meth:`StrategySupervisor._teardown`) so a stopped unit still
+    #: reports its last-known state.
+    accounting: _AccountingState | None = None
 
 
 class StrategySupervisor:
@@ -400,14 +429,30 @@ class StrategySupervisor:
     dccd_client : DccdClient or None, optional
         The dccd client every unit's feed reads through (injected for an offline
         run/test). ``None`` lets each feed construct a real client.
+    clock : callable, optional
+        Zero-arg callable returning the current wall-clock time as epoch
+        milliseconds — the seam :meth:`_accounting_of` uses to time its 60 s TTL
+        (mirrors :class:`~trading_bot.application.risk.RiskManager`'s injected
+        clock). ``None`` (default) uses the real wall clock (:func:`_now_ms`).
+        Tests pass a fake to advance time deterministically without sleeping.
 
     """
 
     def __init__(
-        self, base_config: AppConfig, *, dccd_client: DccdClient | None = None
+        self,
+        base_config: AppConfig,
+        *,
+        dccd_client: DccdClient | None = None,
+        clock: Callable[[], int] | None = None,
     ) -> None:
         self._base = base_config
         self._dccd_client = dccd_client
+        # `_now_ms` is defined further down this module (mirroring where its only
+        # other use, a ledger event's `ts`, already sits); referencing it here in
+        # the body (rather than as the parameter's default) is safe because the
+        # name is only looked up when `__init__` actually runs, long after the
+        # whole module has finished loading.
+        self._clock: Callable[[], int] = clock if clock is not None else _now_ms
         self._units: dict[str, _Unit] = {}
         seed = _mode_of(base_config)
         for strategy in base_config.strategies:
@@ -698,6 +743,14 @@ class StrategySupervisor:
             # idempotent by `fill_id`, so a start-twice (guarded by `unit.running`
             # anyway) never double-applies.
             self._replay_paper_book(engine)
+        # The book is now fully rebuilt (reconciled from the venue, plus the
+        # paper replay above when applicable) — this is the moment the
+        # accounting guardrail's startup check runs, in every mode (not just
+        # paper: on testnet/live the book is just as "fully rebuilt", by
+        # `reconcile` rather than `_replay_paper_book`). `unit.engine`/
+        # `unit.running` are not yet flipped (below), so `engine` is threaded
+        # through explicitly rather than read back off `unit`.
+        self._record_accounting(unit, engine, self._clock())
         if unit.kind == "strategy":
             runners = build_runners(unit.config, engine, dccd_client=self._dccd_client)
             unit.runner = runners[0]
@@ -742,6 +795,116 @@ class StrategySupervisor:
                 continue
             engine.tracker.apply(record.fill)
             engine.perf.apply(record.fill)
+
+    # --- accounting guardrail (the book proves itself) ---------------------- #
+
+    def _accounting_of(self, unit: _Unit) -> list[Violation]:
+        """``unit``'s accounting report, recomputed at most once per TTL window.
+
+        The lazy read-side counterpart of the startup check in
+        :meth:`_start_locked`: a stopped unit (no live engine) has nothing fresh
+        to compute against, so it returns its last known report unchanged
+        (``[]`` if it was never started/checked at all — mirroring
+        :meth:`_stored_fills_of`'s "nothing to read" contract). A running unit's
+        cached report is served as-is until it goes stale past
+        :data:`_ACCOUNTING_TTL_MS`; the dashboard polls every 10 s, so this
+        recomputes at most once a minute per unit, and only while something is
+        actually reading it — no new background task, no scheduler change.
+
+        This is a plain (unlocked) read, matching :meth:`_status_of` /
+        :meth:`positions` / :meth:`order_history`: those never take
+        ``unit.lock`` either, because a snapshot read racing a concurrent
+        ``start``/``stop`` is expected to see either the old or the new state,
+        never a torn one (the *mutations* are what the lock serialises).
+        """
+        cached = unit.accounting
+        if not unit.running or unit.engine is None:
+            return cached.violations if cached is not None else []
+        now = self._clock()
+        if cached is not None and now - cached.computed_at_ms < _ACCOUNTING_TTL_MS:
+            return cached.violations
+        return self._record_accounting(unit, unit.engine, now)
+
+    def _record_accounting(
+        self, unit: _Unit, engine: Engine, now_ms: int
+    ) -> list[Violation]:
+        """Recompute ``unit``'s report against ``engine``, alert, cache, return it.
+
+        The one code path shared by the startup check (:meth:`_start_locked`,
+        which has not yet assigned ``unit.engine`` at the point it calls this —
+        hence ``engine`` is threaded through explicitly rather than read off
+        ``unit``) and the TTL recompute (:meth:`_accounting_of`): computes the
+        fresh :func:`~trading_bot.application.accounting.check_book` report,
+        diffs it against the unit's previously-cached one to alert only what
+        changed (:meth:`_emit_accounting_diff`), then caches the fresh report +
+        ``now_ms`` on ``unit.accounting`` for the TTL window.
+        """
+        fresh = self._compute_accounting_report(unit, engine)
+        previous = unit.accounting.violations if unit.accounting is not None else []
+        self._emit_accounting_diff(engine.bus, previous, fresh)
+        unit.accounting = _AccountingState(violations=fresh, computed_at_ms=now_ms)
+        return fresh
+
+    @staticmethod
+    def _compute_accounting_report(unit: _Unit, engine: Engine) -> list[Violation]:
+        """Fold ``engine``'s live book through :func:`check_book`. ``[]`` with no store.
+
+        Mirrors :meth:`_stored_fills_of`'s flush-then-read discipline: drains
+        the store's off-loop writer first so a just-recorded fill/order is
+        never missed by this reconciliation-source read. Fills are filtered to
+        ``unit.mode`` — the same rule :meth:`_replay_paper_book` enforces (a
+        paper book must never see live/testnet fills, and vice versa); orders
+        carry no mode tag in the store (see ``SqliteStore``'s schema), so every
+        stored order is handed through as-is, matching how :meth:`order_history`
+        reads them.
+        """
+        if engine.store is None:
+            return []
+        engine.store.flush()
+        fills = [
+            record.fill
+            for record in engine.store.stored_fills()
+            if record.mode == unit.mode
+        ]
+        orders = engine.store.orders()
+        return check_book(engine.tracker.all_positions(), fills, orders)
+
+    @staticmethod
+    def _emit_accounting_diff(
+        bus: EventBus, previous: list[Violation], fresh: list[Violation]
+    ) -> None:
+        """Emit one ``LogEvent`` per newly-appeared/newly-resolved violation.
+
+        Keyed by ``(kind, subject)`` — a violation's identity, not its exact
+        wording (``detail``/``measured``/``expected`` may reword between
+        recomputes without counting as "new"). A violation present in both
+        ``previous`` and ``fresh`` is **stable** and stays silent: this is what
+        keeps the legacy ``duplicate_venue_ids`` warns from spamming every
+        recompute. A newly-appeared violation alerts once, at its own severity
+        (``"error"`` -> ``level="error"``; ``"warn"`` -> ``level="warning"``,
+        the codebase's existing ``LogEvent.level`` spelling — see
+        ``trading_bot.application.portfolio_runner``). A violation that
+        disappeared (healed by a replay/reconcile/manual fix since the last
+        check) emits one ``level="info"`` resolution note.
+        """
+        prev_by_key = {(v.kind, v.subject): v for v in previous}
+        fresh_by_key = {(v.kind, v.subject): v for v in fresh}
+        for key, violation in fresh_by_key.items():
+            if key in prev_by_key:
+                continue
+            level = "error" if violation.severity == "error" else "warning"
+            bus.emit(LogEvent(message=f"accounting: {violation.detail}", level=level))
+        for key, violation in prev_by_key.items():
+            if key in fresh_by_key:
+                continue
+            bus.emit(
+                LogEvent(
+                    message=(
+                        f"accounting: resolved {violation.kind} for {violation.subject}"
+                    ),
+                    level="info",
+                )
+            )
 
     async def stop(self, name: str) -> None:
         """Tear down the unit's engine — it is no longer stepped. Idempotent."""
