@@ -73,7 +73,7 @@ Per rebalance leg with a resolved spec (min = the binding one of `min_qty` /
 ## Leaf checklist
 
 - [x] 01 spec-resolver — feat/instrument-spec-resolver — medium (#203)
-- [ ] 02 order-prep-policy — feat/order-prep-policy — high
+- [x] 02 order-prep-policy — feat/order-prep-policy — high (#204)
 - [ ] 03 strict-paper — feat/strict-paper-default — medium
 - [ ] 04 e2e-real-specs — chore/venue-minimums-e2e — medium
 

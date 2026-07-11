@@ -6,6 +6,28 @@ rejected approaches as tombstones.
 
 ---
 
+### 2026-07-11 Venue minimums shape quantities upstream; the Order keeps the bare Instrument (PR #204)  [accepted]
+- **Choice**: the round-up-or-skip policy (`order_prep.prepare_leg`) runs at
+  leg preparation with the resolved venue spec — but the routed `Order`
+  carries the **bare** `Instrument(symbol)`. Round-up band
+  `[min_order_ratio × min, min)` (config, default 0.5); dust below the band
+  is skipped with a log, never submitted; spot sells reducing a long are
+  capped at the held quantity (cap < min → skip); short-extending sells are
+  uncapped; the bump target is snapped UP to the lot grid.
+- **Why**: `Instrument` is frozen+hashable and the `PositionTracker` buckets
+  by the FULL instrument, while every fill-side population (store replay,
+  live adapters) builds symbol-only instruments — a metadata-rich instrument
+  on orders would split a restored book into two position buckets (runaway
+  rebalance deltas) and blind the `max_position` gate on live. Skipping dust
+  instead of letting the venue reject keeps the logs clean and the rebalance
+  loop reject-free; the residual self-corrects because each rebalance diffs
+  target vs actual from scratch.
+- **Rejected alternatives**: enriching `order.instrument` (the identity trap
+  above — revisit only with a Symbol-keyed tracker refactor);
+  reject-and-retry via strict paper (reject noise every tick for permanent
+  dust residuals); a global absolute dust floor (venue minimums differ
+  per symbol — the fetched DOGE 1-USDT floor vs 5 USDT elsewhere).
+
 ### 2026-07-11 Venue specs resolve in the application layer, keyless, cached, degradable (PR #203)  [accepted]
 - **Choice**: an `InstrumentSpecResolver` in `application/` dispatches to the
   venue adapters' existing public `instrument()` builders, constructed
