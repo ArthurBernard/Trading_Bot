@@ -100,6 +100,7 @@ if TYPE_CHECKING:
         StrategyConfig,
     )
     from trading_bot.application.supervisor import (
+        BalanceRow,
         FillRow,
         KpiRow,
         OrderRow,
@@ -340,6 +341,26 @@ def _fill_row_dict(row: FillRow) -> dict[str, Any]:
         "exchange": row.exchange,
         "base": row.base,
         **_fill_dict(row.fill),
+    }
+
+
+def _balance_row_dict(row: BalanceRow) -> dict[str, Any]:
+    """Render a supervisor :class:`BalanceRow` as a JSON-ready dict.
+
+    ``balances`` is a per-asset mapping to exact Decimal strings (never a plain
+    ``str(dict)`` — each amount is stringified individually so no value ever
+    round-trips through ``float``). ``error`` is ``None`` (JSON ``null``) on a
+    successful fetch, or the broker's error message when its ``balances()`` call
+    raised — the row still renders (an empty ``balances`` dict), never a 500.
+    """
+    return {
+        "strategy": row.strategy,
+        "exchange": row.exchange,
+        "mode": row.mode,
+        "balances": {
+            asset: _money_str(amount) for asset, amount in row.balances.items()
+        },
+        "error": row.error,
     }
 
 
@@ -1228,7 +1249,15 @@ def _register_strategy_control(app: FastAPI, *, read_only: bool = False) -> None
 
     @app.get("/api/strategies")
     async def strategies(request: Request) -> list[dict[str, Any]]:
-        """List every managed strategy with its exchange / mode / running / PnL."""
+        """List every managed strategy with its exchange / mode / running / PnL.
+
+        ``last_asof_ts`` is the as-of (epoch ms) of the last **completed**
+        evaluation — the latest bar time the strategy actually computed on, as
+        opposed to ``last_eval_ts`` (the wall-clock of the last *attempted*
+        tick). ``None`` before the first completed evaluation. This is the field
+        the future "last bar → next bar" timing chip (dashboard-tables-ux) reads;
+        it needs no further server change.
+        """
         sup = _sup(request)
         config = sup.manifest()
         return [_status_dict(s, config) for s in sup.status()]
@@ -1874,6 +1903,33 @@ def create_dashboard_app(
         rows = [_position_row_dict(row, config) for row in sup.positions()]
         return _grouped(rows, group_by)
 
+    # -- Balances (broker-reported free balances, one row per running unit) -- #
+
+    @app.get("/api/balances")
+    async def balances(
+        request: Request, strategy: str | None = None
+    ) -> list[dict[str, Any]]:
+        """Broker-reported free balances, one row per running unit.
+
+        A read (safe under ``read_only``). Each row is ``{strategy, exchange,
+        mode, balances: {asset: "exact-decimal"}, error}`` — the venue's own view
+        of what it holds (see :meth:`~trading_bot.application.supervisor.
+        StrategySupervisor.balances`), as opposed to the locally-tracked
+        exposure ``/api/positions`` reports. A stopped unit contributes nothing.
+        A broker error degrades that unit's row to an empty ``balances`` dict
+        plus a non-``null`` ``error`` string — **HTTP 200**, never a 500, so the
+        dashboard can poll this endpoint safely through a transient venue outage.
+        ``?strategy=`` filters to one unit (mirroring ``/api/orders``'s /
+        ``/api/fills``'s filter). Money is rendered as exact Decimal strings.
+
+        This is the prerequisite seam for the positions<->balances cross-check
+        (an accounting-guardrail extension) and the canary-roundtrip live oracle
+        (roadmap #6): both need the venue's own reported balances, not just the
+        engine's locally-tracked positions.
+        """
+        rows = [_balance_row_dict(row) for row in await _sup(request).balances()]
+        return _filtered(rows, crypto=None, exchange=None, strategy=strategy)
+
     # -- Orders (open + history, aggregated, groupable + filterable) --------- #
 
     @app.get("/api/orders")
@@ -1982,6 +2038,10 @@ def create_dashboard_app(
         (default ``all``) filters to a single mode. Money as exact Decimal
         strings; ``ts_ms`` integer. An unknown ``strategy`` is a 404; a strategy
         with no fills is an empty series (200, not an error).
+
+        Carries no ``last_asof_ts`` of its own — each series point already
+        carries its own ``ts_ms``, so there is no separate "as of" to surface
+        (unlike ``/api/strategies``, a single evaluation-cadence snapshot).
         """
         from trading_bot.domain.errors import ConfigError
 
@@ -2201,6 +2261,11 @@ def create_dashboard_app(
         ``{allocation, contributed, realised, unrealised, total_value,
         withdrawable, policy, events}`` — money as exact Decimal strings; an
         unknown unit is a 404.
+
+        Carries no ``last_asof_ts``: each ledger ``event`` already carries its
+        own ``ts`` (when the deposit/withdrawal happened), and this breakdown is
+        not tied to a strategy evaluation cadence the way ``/api/strategies``' /
+        ``/api/positions``' marks are.
         """
         from trading_bot.domain.errors import ConfigError
 

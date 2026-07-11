@@ -1020,6 +1020,269 @@ def test_api_positions_contract_regression(tmp_path) -> None:  # noqa: ANN001
     assert row["fee_ccy"] == "USD"
 
 
+# --- Balances (broker-reported free balances, one row per running unit) --- #
+
+
+async def test_api_balances_running_unit_reports_broker_balances() -> None:
+    """`/api/balances` relays the running unit's own broker-reported balances.
+
+    Seeds the paper simulator's ledger directly (mirroring the leaf-02
+    mark-cache seeding technique) so the row is proven to come from
+    `Broker.balances()` itself, not the locally-tracked position — the whole
+    point of this endpoint (the positions<->balances cross-check seam).
+    """
+    sup = StrategySupervisor(_two_venue_config(), dccd_client=_two_venue_client())
+    await sup.start("btc-kraken")
+    unit = sup._units["btc-kraken"]  # noqa: SLF001 — direct broker seed, test-only
+    unit.engine.broker._balances.update(  # noqa: SLF001
+        {"USD": money("998"), "BTC": money("2")}
+    )
+
+    [row] = TestClient(create_dashboard_app(sup)).get("/api/balances").json()
+    assert row["strategy"] == "btc-kraken"
+    assert row["exchange"] == "kraken"
+    assert row["mode"] == "paper"
+    assert row["balances"] == {"USD": "998", "BTC": "2"}
+    assert row["error"] is None
+
+
+async def test_api_balances_stopped_unit_absent() -> None:
+    """A stopped unit contributes no row; empty list before anything starts."""
+    sup = StrategySupervisor(_two_venue_config(), dccd_client=_two_venue_client())
+    client = TestClient(create_dashboard_app(sup))
+    assert client.get("/api/balances").json() == []
+
+    await sup.start("btc-kraken")
+    sup._units["btc-kraken"].engine.broker._balances.update(  # noqa: SLF001
+        {"USD": money("100")}
+    )
+    rows = client.get("/api/balances").json()
+    assert {r["strategy"] for r in rows} == {"btc-kraken"}
+
+
+async def test_api_balances_strategy_filter() -> None:
+    """`?strategy=` narrows the balances rows to one unit, mirroring orders/fills."""
+    sup = StrategySupervisor(_two_venue_config(), dccd_client=_two_venue_client())
+    await sup.start("btc-kraken")
+    await sup.start("eth-binance")
+    sup._units["btc-kraken"].engine.broker._balances.update(  # noqa: SLF001
+        {"USD": money("100")}
+    )
+    sup._units["eth-binance"].engine.broker._balances.update(  # noqa: SLF001
+        {"USDT": money("200")}
+    )
+    client = TestClient(create_dashboard_app(sup))
+    rows = client.get("/api/balances?strategy=btc-kraken").json()
+    assert [r["strategy"] for r in rows] == ["btc-kraken"]
+
+
+async def test_api_balances_broker_error_degrades_to_error_row() -> None:
+    """A broker error is never a 500 — it degrades to an ``error`` row (poll-safe)."""
+    from trading_bot.domain.errors import BrokerError
+
+    sup = StrategySupervisor(_two_venue_config(), dccd_client=_two_venue_client())
+    await sup.start("btc-kraken")
+    unit = sup._units["btc-kraken"]  # noqa: SLF001 — direct broker patch, test-only
+
+    async def _boom() -> dict[str, object]:
+        raise BrokerError("kraken: rate limited")
+
+    unit.engine.broker.balances = _boom  # type: ignore[method-assign]
+
+    resp = TestClient(create_dashboard_app(sup)).get("/api/balances")
+    assert resp.status_code == 200
+    [row] = resp.json()
+    assert row["strategy"] == "btc-kraken"
+    assert row["balances"] == {}
+    assert row["error"] == "kraken: rate limited"
+
+
+# --- Epic-wide contract sweep (api-completeness leaf 04) ------------------- #
+
+
+async def test_api_completeness_contract_sweep(tmp_path) -> None:  # noqa: ANN001
+    """Every pre-existing field on the six read endpoints still holds, in one pass.
+
+    The additive-only proof for the whole `api-completeness` epic, right before
+    the API contract freeze (road-to-1.0 #5): `/api/strategies`, `/api/positions`
+    and `/api/kpi` each already have a dedicated, per-field contract-regression
+    test proving the leaf-02/03 additions never displaced a pre-existing field
+    (`test_api_positions_contract_regression`,
+    `test_api_strategies_display_fields_and_contract_regression`,
+    `test_api_kpi_display_fields_and_contract_regression` — test_display_ccy.py)
+    and `/api/health`'s shape is pinned by `test_health_shape_and_values` (above).
+    This sweep extends that established pattern to `/api/fills` and
+    `/api/orders` (untouched by any leaf, but still part of the frozen contract)
+    and exercises all six together against one running unit, so the whole
+    epic's additive-only guarantee is proven in a single place.
+    """
+    from trading_bot.domain.order import Order, OrderType
+    from trading_bot.storage.sqlite_store import SqliteStore
+
+    db = str(tmp_path / "book.sqlite")
+    inst = Instrument(Symbol("BTC", "USD"))
+    store = SqliteStore(db)
+    store.record_fill(
+        Fill(
+            "SWEEP-F1",
+            "sweep-c1",
+            inst,
+            OrderSide.BUY,
+            money("2"),
+            money("100"),
+            money("1"),
+            1,
+        )
+    )
+    store.close()
+    config = AppConfig.model_validate(
+        {
+            "mode": "paper",
+            "storage": {"db_path": db},
+            "brokers": [{"name": "kraken", "exchange": "kraken"}],
+            "strategies": [
+                {
+                    "name": "btc-ma",
+                    "symbol": "BTC/USD",
+                    "data": {"exchange": "kraken", "span": 60},
+                    "signal": {"ref": "ma_crossover", "params": {"fast": 3, "slow": 6}},
+                    "reference_qty": "2",
+                    "lookback": 6,
+                }
+            ],
+        }
+    )
+    sup = StrategySupervisor(config, dccd_client=_FakeStartClient())
+    await sup.start("btc-ma")
+    unit = sup._units["btc-ma"]  # noqa: SLF001 — direct seed, test-only
+    unit.engine.mark_cache.update(Symbol("BTC", "USD"), money("110"), 9_000)
+    # An open (non-terminal) order so `/api/orders` (default: open only) has a row.
+    unit.engine.router.restore(
+        [
+            Order(
+                "sweep-open-1",
+                inst,
+                OrderSide.BUY,
+                money("1"),
+                OrderType.LIMIT,
+                limit_price=money("90"),
+            )
+        ]
+    )
+
+    client = TestClient(create_dashboard_app(sup))
+
+    [strategy_row] = client.get("/api/strategies").json()
+    assert set(strategy_row) == {
+        "name",
+        "kind",
+        "exchange",
+        "span",
+        "quote",
+        "mode",
+        "running",
+        "realised_pnl",
+        "open_orders",
+        "last_eval_ts",
+        "last_asof_ts",
+        "allocation",
+        "contributed",
+        "unrealised",
+        "total_value",
+        "capital_policy",
+        "health",
+        "health_detail",
+        "display_currency",
+        "total_value_display",
+        "unrealised_display",
+    }
+
+    [position_row] = client.get("/api/positions").json()
+    assert set(position_row) == {
+        "strategy",
+        "exchange",
+        "instrument",
+        "base",
+        "net_qty",
+        "avg_entry_price",
+        "realised_pnl",
+        "fees_paid",
+        "mark",
+        "mark_asof_ts",
+        "mark_source",
+        "value",
+        "unrealised",
+        "fee_ccy",
+        "display_currency",
+        "value_display",
+        "unrealised_display",
+    }
+
+    [fill_row] = client.get("/api/fills").json()
+    assert set(fill_row) == {
+        "strategy",
+        "exchange",
+        "base",
+        "fill_id",
+        "client_order_id",
+        "instrument",
+        "side",
+        "qty",
+        "price",
+        "fee",
+        "ts",
+    }
+
+    [order_row] = client.get("/api/orders").json()
+    assert set(order_row) == {
+        "strategy",
+        "exchange",
+        "base",
+        "ts",
+        "client_order_id",
+        "venue_order_id",
+        "instrument",
+        "side",
+        "type",
+        "qty",
+        "limit_price",
+        "stop_price",
+        "status",
+        "filled_qty",
+        "avg_fill_price",
+    }
+
+    [kpi_row] = client.get("/api/kpi?level=strategy").json()
+    assert set(kpi_row) == {
+        "level",
+        "key",
+        "strategy",
+        "exchange",
+        "quote",
+        "realised_pnl",
+        "fees_paid",
+        "sharpe",
+        "sortino",
+        "calmar",
+        "max_drawdown",
+        "display_currency",
+        "realised_pnl_display",
+        "fees_paid_display",
+    }
+
+    health_body = client.get("/api/health").json()
+    assert set(health_body) == {
+        "status",
+        "mode",
+        "strategies",
+        "read_only",
+        "next_tick_ts",
+        "tick",
+        "worst",
+        "unhealthy",
+    }
+
+
 def test_orders_endpoint_present_and_empty() -> None:
     """`GET /api/orders` exists and is an empty list when nothing is open."""
     assert _client().get("/api/orders").json() == []
