@@ -103,16 +103,14 @@ A dashboard-driven audit (position ≠ Σ orders on `alloc1-binance`) uncovered 
 engine bugs and a set of API/UX gaps. Shipped 2026-07-11 (plan trees archived):
 the `paper-integrity` epic (durable paper ids, order↔fill lifecycle sync,
 persisted orphan-closes — PRs #190–#194, v0.12.0; restart the daemon to heal
-the live books) and the `accounting-guardrail` epic (pure invariant checker,
+the live books), the `accounting-guardrail` epic (pure invariant checker,
 startup + 60 s-TTL wiring with SSE alerts, per-strategy health surface incl.
 the kill-switch fold — the *status* half of road-to-1.0 #3 — and the dashboard
-health pill; PRs #197–#201). In dependency order:
+health pill; PRs #197–#201), and the `venue-minimums` epic (keyless cached
+spec resolver, round-up-or-skip order prep with the spot-sell cap, strict
+factory paper — PRs #203–#206; sub-minimum orders are structurally
+impossible on the portfolio path). In dependency order:
 
-3. [ ] **`venue-minimums` — venue minimums end-to-end.** Flip the dashboard
-   wiring to `PaperBroker(strict=True)`; add the order-prep policy in the
-   portfolio runner (round up to venue minimum when close, skip + log when far
-   below — never fail the whole rebalance; the next rebalance recomputes the
-   residual naturally).
 4. [ ] **`api-completeness` — API exposes what the app layer knows.** Per-
    position mark price (v1 = last dccd bar close, always with its `asof` ts;
    live ticker is post-1.0), value + unrealised PnL per position; display

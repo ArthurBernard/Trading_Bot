@@ -8,6 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Venue-minimums E2E** (`tests/application/test_venue_minimums_e2e.py`,
+  closes the `venue-minimums` epic) — two rebalance ticks over one strict
+  engine exercising all four leg shapes (above-min, round-up, dust, capped
+  sell): every stored order clears its lot-quantized minimum, zero rejects,
+  tick 2 converges (residuals shrink, no submit/skip flip-flop). (#206)
 - **Instrument-spec resolver** (`application/instrument_specs.py`) — venue
   minimums and precisions fetched once per `(exchange, symbol)` from the
   venues' PUBLIC endpoints via the adapters' existing keyless builders
