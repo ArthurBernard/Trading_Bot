@@ -42,6 +42,15 @@ Design choices (carried into the ADR):
   :class:`~trading_bot.brokers.paper.PaperBroker` construction is unaffected —
   its own constructor default stays permissive (``strict=False``) for existing
   callers/tests.
+* **One display currency, converted server-side.** ``display_currency``
+  (default ``"USD"``) is the single unit the API's ``*_display`` money fields
+  are converted into (:mod:`trading_bot.application.display_ccy`) so every
+  consumer reads the same converted figure — never re-derived per client.
+  ``display_currency_overrides`` relabels specific exchanges' rows (e.g.
+  ``{"binance": "USDT"}``); ``conversion_rates`` declares one unit of a quote
+  currency's worth in ``display_currency`` (the display currency itself is an
+  implied identity — no entry needed). A quote with no declared rate converts
+  to ``None`` (JSON ``null``) rather than a guessed figure.
 
 This module is the only place the application layer reads YAML; everything
 downstream consumes a validated :class:`AppConfig`.
@@ -684,6 +693,26 @@ class AppConfig(BaseModel):
         everything regardless of venue minimums). Ignored outside paper mode;
         direct :class:`~trading_bot.brokers.paper.PaperBroker` construction is
         unaffected — its constructor default stays ``strict=False``.
+    display_currency : str, optional
+        The single currency the API's ``*_display`` money fields are converted
+        into (:mod:`trading_bot.application.display_ccy`) — the "one truth for
+        every consumer" numeraire. Defaults to ``"USD"``. Must be non-empty.
+    display_currency_overrides : dict of str to str, optional
+        Per-exchange relabelling of the ``display_currency`` **field** shown on
+        that exchange's rows (e.g. ``{"binance": "USDT"}`` — Binance trades
+        USDT-quoted). Does not change what currency ``*_display`` amounts are
+        *converted into* (still the single global ``display_currency`` above);
+        keep an override numerically truthful by pairing it with an identity
+        (``"1"``) ``conversion_rates`` entry for that currency. Empty by
+        default (every exchange labelled with the global default).
+    conversion_rates : dict of str to Decimal, optional
+        One unit of a quote currency's worth in ``display_currency`` (e.g.
+        ``{"USDT": "1", "EUR": "1.08"}``); the display currency itself needs no
+        entry (an implied identity rate). Parsed exactly from a YAML scalar
+        (``str``/``int``) without touching ``float``; every declared rate must
+        be **strictly positive**. A quote with no declared rate converts to
+        ``None`` (JSON ``null``) rather than a guessed figure — never a
+        fabricated conversion. Empty by default (no cross-quote conversion).
     brokers : list of BrokerConfig, optional
         The brokers to wire up. Empty by default.
     strategies : list of StrategyConfig, optional
@@ -720,12 +749,34 @@ class AppConfig(BaseModel):
     live_enabled: bool = False
     paper_strict: bool = True
     starting_capital: Decimal = Field(default_factory=lambda: money("100000"))
+    display_currency: str = "USD"
+    display_currency_overrides: dict[str, str] = Field(default_factory=dict)
+    conversion_rates: dict[str, Decimal] = Field(default_factory=dict)
     brokers: list[BrokerConfig] = Field(default_factory=list)
     strategies: list[StrategyConfig] = Field(default_factory=list)
     portfolios: list[PortfolioStrategyConfig] = Field(default_factory=list)
     risk: RiskConfig = Field(default_factory=RiskConfig)
     storage: StorageConfig = Field(default_factory=StorageConfig)
     ui: UIConfig = Field(default_factory=UIConfig)
+
+    @field_validator("display_currency")
+    @classmethod
+    def _non_empty_display_currency(cls, v: str) -> str:
+        """Reject a blank ``display_currency`` (whitespace-only too)."""
+        if not v or not v.strip():
+            raise ValueError("display_currency must be a non-empty string")
+        return v
+
+    @field_validator("conversion_rates")
+    @classmethod
+    def _positive_rates(cls, v: dict[str, Decimal]) -> dict[str, Decimal]:
+        """Reject a non-positive declared ``conversion_rates`` entry (zero too)."""
+        for ccy, rate in v.items():
+            if rate <= 0:
+                raise ValueError(
+                    f"conversion_rates[{ccy!r}] must be positive, got {rate}"
+                )
+        return v
 
     @field_validator("starting_capital")
     @classmethod
