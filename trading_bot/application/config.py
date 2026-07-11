@@ -32,6 +32,16 @@ Design choices (carried into the ADR):
   fields in later leaves (E5 / E8). :class:`BrokerConfig` carries only the
   ``name`` (logical id) and ``exchange`` (venue key) needed to resolve an
   adapter.
+* **Paper predicts the venue by default.** ``paper_strict`` defaults to
+  ``True``: the factory-built simulator (see
+  :func:`~trading_bot.application.service_factory._build_broker`) enforces
+  venue lot/precision quantization and ``min_qty``/``min_notional`` rejection
+  (:class:`~trading_bot.domain.errors.OrderTooSmall`) exactly like a real venue
+  would, instead of silently filling a sub-minimum order. Set it ``False`` to
+  restore the historical permissive simulator (pre venue-minimums). Direct
+  :class:`~trading_bot.brokers.paper.PaperBroker` construction is unaffected —
+  its own constructor default stays permissive (``strict=False``) for existing
+  callers/tests.
 
 This module is the only place the application layer reads YAML; everything
 downstream consumes a validated :class:`AppConfig`.
@@ -394,6 +404,16 @@ class PortfolioStrategyConfig(BaseModel):
 
         Single-instrument strategies need no equivalent: they read under the exact
         ``symbol`` string the config gives, so there is nothing to re-render.
+    min_order_ratio : Decimal, optional
+        The round-up threshold of the venue-minimum order policy (see
+        :func:`~trading_bot.application.order_prep.prepare_leg`), as a fraction
+        of the binding venue minimum, in ``(0, 1]``. A rebalance leg whose
+        lot-quantized quantity is at least ``min_order_ratio`` of the venue
+        minimum (but below it) is rounded **up** to the minimum; a smaller leg
+        is skipped (no submit, one log) and its residual recomputes next
+        rebalance. ``1`` disables rounding up entirely (sub-minimum legs are
+        always skipped). Parsed exactly from a YAML scalar (``str``/``int``)
+        without touching ``float``. Defaults to ``0.5``.
     db_path : str or None, optional
         Per-strategy SQLite store path; overrides the global ``storage.db_path``
         for this strategy so its book/PnL are isolated. ``None`` → use the global
@@ -412,6 +432,7 @@ class PortfolioStrategyConfig(BaseModel):
     capital_policy: Literal["fixed", "compound"] = "fixed"
     venue: str = "binance"
     store_key_format: Literal["venue", "hyphen", "slash"] = "venue"
+    min_order_ratio: Decimal = Field(default_factory=lambda: money("0.5"))
     db_path: str | None = None
 
     @field_validator("name", "venue")
@@ -420,6 +441,14 @@ class PortfolioStrategyConfig(BaseModel):
         """Reject blank portfolio ``name`` / ``venue`` (whitespace-only too)."""
         if not v or not v.strip():
             raise ValueError("must be a non-empty string")
+        return v
+
+    @field_validator("min_order_ratio")
+    @classmethod
+    def _ratio_in_unit_interval(cls, v: Decimal) -> Decimal:
+        """Reject a ``min_order_ratio`` outside ``(0, 1]``."""
+        if not (0 < v <= 1):
+            raise ValueError(f"min_order_ratio must be in (0, 1], got {v}")
         return v
 
     @field_validator("universe")
@@ -643,6 +672,18 @@ class AppConfig(BaseModel):
         ``Decimal("100000")``. Wired into the engine's
         :class:`~trading_bot.application.performance_service.PerformanceService`
         (``v0``) by :func:`~trading_bot.application.service_factory.build_engine`.
+    paper_strict : bool, optional
+        Whether the factory-built paper broker (see
+        :func:`~trading_bot.application.service_factory._build_broker`)
+        enforces venue lot/precision quantization and minimum-order rejection
+        (:class:`~trading_bot.domain.errors.OrderTooSmall`), the same as a
+        real venue. Defaults to ``True`` — paper should predict the venue, and
+        the upstream order-preparation policy (rounding up / skipping dust
+        legs) already keeps this reject path exceptional in normal operation.
+        Set ``False`` to restore the historical permissive simulator (fills
+        everything regardless of venue minimums). Ignored outside paper mode;
+        direct :class:`~trading_bot.brokers.paper.PaperBroker` construction is
+        unaffected — its constructor default stays ``strict=False``.
     brokers : list of BrokerConfig, optional
         The brokers to wire up. Empty by default.
     strategies : list of StrategyConfig, optional
@@ -677,6 +718,7 @@ class AppConfig(BaseModel):
 
     mode: Literal["paper", "live"] = "paper"
     live_enabled: bool = False
+    paper_strict: bool = True
     starting_capital: Decimal = Field(default_factory=lambda: money("100000"))
     brokers: list[BrokerConfig] = Field(default_factory=list)
     strategies: list[StrategyConfig] = Field(default_factory=list)

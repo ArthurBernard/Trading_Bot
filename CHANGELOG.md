@@ -16,6 +16,77 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 
+## [0.13.0] - 2026-07-11
+
+### Added
+
+- **Venue-minimums E2E** (`tests/application/test_venue_minimums_e2e.py`,
+  closes the `venue-minimums` epic) — two rebalance ticks over one strict
+  engine exercising all four leg shapes (above-min, round-up, dust, capped
+  sell): every stored order clears its lot-quantized minimum, zero rejects,
+  tick 2 converges (residuals shrink, no submit/skip flip-flop). (#206)
+- **Instrument-spec resolver** (`application/instrument_specs.py`) — venue
+  minimums and precisions fetched once per `(exchange, symbol)` from the
+  venues' PUBLIC endpoints via the adapters' existing keyless builders
+  (Kraken `AssetPairs`, Binance `exchangeInfo`), process-lifetime cache,
+  permissive fallback on fetch failure (`degraded` seam for the caller's
+  one-shot warn). Real values verified: Binance 5 USDT min-notional (DOGE:
+  1 USDT), Kraken BTC `ordermin` 0.00005. Feeds the upcoming venue-minimums
+  order-prep policy. (#203)
+- **Rebalance legs respect venue minimums upstream.** New pure
+  `application/order_prep.py` (`prepare_leg` → `LegDecision`): each portfolio
+  leg is lot-quantized, then compared to the binding minimum (`min_qty` /
+  `min_notional/price`) — **round up** to the minimum when the delta is ≥
+  `min_order_ratio` of it (new config field, default `0.5`), **skip** with an
+  info log otherwise (no submit, no reject noise; the next rebalance
+  recomputes the residual). Spot sells reducing a long are capped at the held
+  position (cap below the minimum → skip); short-extending sells uncapped.
+  The venue spec shapes quantities only — routed orders keep the bare
+  instrument (position identity; see the ADR). Verified on the live books'
+  copies with real venue specs: Binance 14/14 dust legs skip (incl. the
+  audit's 0.50-USDT case), Kraken real round-ups land exactly on `ordermin`. (#204)
+- **Accounting invariant checker** (`application/accounting.py`) — a pure,
+  side-effect-free recomputation of the book's self-consistency: per-instrument
+  `position_drift` (tracker vs Σ signed store fills, `error`), per-order
+  `order_fill_mismatch` and `status_incoherent` (tolerance-aware, `warn`), and
+  `duplicate_venue_ids` (`warn`). Typed `Violation` results carry exact
+  `str(Decimal)` figures. Verified on copies of the live books: flags the
+  27 pre-v0.12.0 frozen rows and the legacy id duplicates, zero position
+  drift, and comes back clean (legacy warns aside) post-healing. Wiring into
+  the engine/API/UI follows in the next `accounting-guardrail` leaves. (#197)
+- **The accounting checker now runs by itself.** Each unit checks its book at
+  startup (right after the restart healing/replay) and lazily behind the
+  dashboard reads on a 60 s TTL — no new background task. Violations are
+  diffed against the previous report: only **new** ones alert (one `LogEvent`
+  per violation, `error`/`warning` level, on the existing SSE stream);
+  resolved ones log an info line; a stable set — e.g. the legacy duplicate
+  venue ids — stays silent. (#199)
+- **Per-strategy health on the API — the kill-switch is finally visible.**
+  `/api/strategies` rows carry `health` (`ok`/`warn`/`error`) and
+  `health_detail` (the exact violation sentences; a tripped kill-switch's
+  reason first — `RiskManager.tripped` previously had zero readers anywhere).
+  `/api/health` gains `worst` (across running units) and `unhealthy` (count,
+  all units). Existing fields untouched. Delivers the kill-switch *status*
+  half of road-to-1.0 #3. (#200)
+- **Health pill in the dashboard (closes the `accounting-guardrail` epic).**
+  The Strategies roster and the strategy detail header show an amber `warn` /
+  red `error` pill (nothing when healthy — silence is the healthy state);
+  the hover tooltip lists the checker's exact violation sentences. Reuses the
+  existing badge styles and the SSE + 10 s-poll refresh; violation text is
+  HTML-escaped (sentences contain quotes). (#201)
+
+### Changed
+
+- **Factory-built paper brokers are strict by default** (`paper_strict: true`
+  in `AppConfig`): a spec-carrying sub-minimum or over-precise order is
+  rejected with `OrderTooSmall` exactly as the live venue would, and a
+  retried client-order-id dedups venue-side. Bare instruments (the runner
+  path — see #204) pass through unchanged; `paper_strict: false` restores
+  the historical permissive simulator; direct `PaperBroker()` construction
+  keeps its permissive default. Verified: the audit's 0.0000079-BTC dust
+  order is rejected on the real Binance lot step while the engine keeps
+  trading. (#205)
+
 ## [0.12.0] - 2026-07-11
 
 ### Added

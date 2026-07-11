@@ -130,6 +130,22 @@ and `CHANGELOG.md` for what shipped.
   instrument on the first post-restart rebalance — unrecoverable (never
   persisted); the book is self-consistent and the next rebalance self-corrects,
   but KPIs measured before 2026-07-11 carry that drift.
+- **`accounting-guardrail` (2026-07-11, PRs #197–#201)**: the book proves
+  itself continuously — pure invariant checker (`application/accounting.py`),
+  run at unit startup + on a 60 s TTL behind dashboard reads, new violations
+  alert once on the SSE stream, per-strategy `health`/`health_detail` on the
+  API (folding the kill-switch, previously unreadable) down to a roster/detail
+  pill. The live books surface a *stable* `warn` for the 14+13 legacy
+  pre-v0.12.0 duplicate venue ids (disappears if the books are reset).
+- **`venue-minimums` (2026-07-11, PRs #203–#206)**: sub-minimum orders are
+  structurally impossible on the portfolio path — venue specs fetched keyless
+  from the public endpoints (cached, degradable), each rebalance leg
+  lot-quantized and rounded up to the minimum when ≥ `min_order_ratio`
+  (default 0.5) of it or skipped with a log, spot sells capped at the held
+  position, and factory paper is strict (`paper_strict: true`) so the
+  simulator rejects like the venue. Verified on the live books' copies with
+  real specs: the audit's whole dust rebalance (14 legs) skips; Kraken
+  round-ups land exactly on `ordermin`; two-pass convergence proven.
 
 ## Pending
 

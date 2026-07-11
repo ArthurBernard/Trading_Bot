@@ -17,6 +17,7 @@
       <div class="row" style="gap:.6rem; align-items:center;">
         <h1 style="margin:0;">{{ strategy_name }}</h1>
         <span id="detail-mode-badge"></span>
+        <span id="detail-health-pill"></span>
         <span id="detail-run-pill"></span>
       </div>
       <p class="muted" id="detail-sub" style="margin:.45rem 0 0;">Loading…</p>
@@ -327,6 +328,15 @@
   function renderHeader(s) {
     document.getElementById('detail-mode-badge').innerHTML =
       '<span class="badge badge-' + escapeHtml(s.mode) + '">' + escapeHtml(s.mode) + '</span>';
+    // Health pill (leaf 04, accounting-guardrail) — empty on "ok" (no pill).
+    // The header row is a flex `.row` with a `gap`, which reserves space for
+    // every child regardless of content — hide the span entirely on "ok" so
+    // an empty pill slot doesn't sneak an extra gap between the mode badge
+    // and the run pill.
+    const healthPill = healthPillHtml(s);
+    const healthPillEl = document.getElementById('detail-health-pill');
+    healthPillEl.innerHTML = healthPill;
+    healthPillEl.style.display = healthPill ? '' : 'none';
     document.getElementById('detail-run-pill').innerHTML = s.running
       ? '<span class="run-pill is-running"><span class="dot"></span>running</span>'
       : '<span class="run-pill is-stopped"><span class="dot"></span>stopped</span>';

@@ -372,6 +372,23 @@
       return '<span class="badge badge-status-' + cls + '">' + escapeHtml(key) + '</span>';
     }
 
+    // healthPillHtml(s) -> the per-strategy accounting-health pill (leaf 04,
+    // accounting-guardrail), fed by a `/api/strategies` row's `health` /
+    // `health_detail` (leaf 03). "ok" renders NO pill — silence is the healthy
+    // state; a green badge on every row would be noise. "warn"/"error" reuse
+    // the existing `.badge-status-warn` / `.badge-status-err` CSS pair above
+    // (the order-status badges) rather than inventing new pill classes. The
+    // `title` tooltip lists `health_detail` verbatim, newline-joined — the
+    // exact sentences the accounting checker produced, never reworded here.
+    function healthPillHtml(s) {
+      if (!s || !s.health || s.health === 'ok') return '';
+      const cls = s.health === 'error' ? 'err' : 'warn';
+      const detail = (s.health_detail || []).join('\n');
+      const titleAttr = detail ? ' title="' + escapeHtml(detail) + '"' : '';
+      return '<span class="badge badge-status-' + cls + '"' + titleAttr + '>' +
+        escapeHtml(s.health) + '</span>';
+    }
+
     // tbRefreshGuard(key, tableEl, payload) -> 'render' | 'skip-stamp' | 'skip-silent'
     // Shared by the Strategies/Overview/Orders polling refreshes so a table
     // never visibly rebuilds when nothing changed, and never rebuilds out from

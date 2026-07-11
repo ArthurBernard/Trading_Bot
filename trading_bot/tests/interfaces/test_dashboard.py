@@ -27,6 +27,7 @@ import pytest
 from fastapi.testclient import TestClient
 from typer.testing import CliRunner
 
+from trading_bot.application.accounting import Violation
 from trading_bot.application.config import AppConfig
 from trading_bot.application.events import FillEvent, LogEvent, OrderEvent
 from trading_bot.application.supervisor import StrategySupervisor
@@ -154,6 +155,19 @@ def test_every_page_carries_the_status_badge_language(path: str) -> None:
 
 
 @pytest.mark.parametrize("path", _PAGES)
+def test_every_page_carries_the_health_pill_helper(path: str) -> None:
+    """Every page's shell (base.html) carries the shared health-pill helper.
+
+    Leaf 04 (accounting-guardrail): the per-strategy health pill (roster row +
+    detail header) is fed by `healthPillHtml()`, defined once in base.html and
+    reusing the existing `.badge-status-warn`/`.badge-status-err` CSS pair
+    (leaf 05's order-status badges) rather than inventing new pill classes.
+    """
+    html = _client().get(path).text
+    assert "healthPillHtml" in html, path
+
+
+@pytest.mark.parametrize("path", _PAGES)
 def test_nav_lists_four_tabs_and_no_pnl(path: str) -> None:
     """Every page's nav lists the four surviving tabs; the retired PnL tab is gone.
 
@@ -194,6 +208,8 @@ def test_health_shape_and_values() -> None:
         "read_only": False,
         "next_tick_ts": None,
         "tick": None,
+        "worst": "ok",
+        "unhealthy": 0,
     }
 
 
@@ -220,6 +236,80 @@ def test_health_schedule_info_hook_that_raises_degrades_to_nulls() -> None:
     body = resp.json()
     assert body["next_tick_ts"] is None
     assert body["tick"] is None
+
+
+async def test_api_health_worst_and_count() -> None:
+    """`worst` is the worst *running* unit's health; `unhealthy` counts every non-ok unit.
+
+    Two running units (``btc-kraken`` clean, ``eth-binance`` seeded warn) prove
+    the worst-of aggregation and the count; stopping the unhealthy unit then
+    proves `unhealthy` still counts it (a stopped unit keeps its last cached
+    report) while `worst` drops (it only looks at running units). Every
+    pre-existing `/api/health` field must still be present and correct — this
+    is a public-contract regression check, not just the two new fields.
+    """
+    import trading_bot.application.supervisor as sup_mod
+
+    # A frozen clock: the seeded `unit.accounting` below carries `computed_at_ms
+    # == 0`, so it must stay inside the 60s TTL window for every `/api/health`
+    # call below (a real wall clock would blow straight past it and recompute
+    # a fresh, and here always empty, report instead of serving what was seeded).
+    sup = StrategySupervisor(
+        _two_venue_config(), dccd_client=_two_venue_client(), clock=lambda: 0
+    )
+    await sup.start_all()
+
+    warn = Violation(
+        kind="duplicate_venue_ids",
+        severity="warn",
+        subject="VID-1",
+        detail="venue_order_id 'VID-1' is shared by 2 order rows.",
+        measured="2",
+        expected="1",
+    )
+    error = Violation(
+        kind="position_drift",
+        severity="error",
+        subject="ETH/USDT",
+        detail="ETH/USDT: tracked net qty disagrees with its fills.",
+        measured="5",
+        expected="3",
+    )
+    sup._units["btc-kraken"].accounting = sup_mod._AccountingState(  # noqa: SLF001
+        violations=[], computed_at_ms=0
+    )
+    sup._units["eth-binance"].accounting = sup_mod._AccountingState(  # noqa: SLF001
+        violations=[warn], computed_at_ms=0
+    )
+
+    client = TestClient(create_dashboard_app(sup))
+    body = client.get("/api/health").json()
+    # Every pre-existing field, unchanged.
+    assert body["status"] == "ok"
+    assert body["mode"] == "paper"
+    assert body["strategies"] == 2
+    assert body["read_only"] is False
+    assert body["next_tick_ts"] is None
+    assert body["tick"] is None
+    # Both units running: worst is the warn one; one unhealthy unit.
+    assert body["worst"] == "warn"
+    assert body["unhealthy"] == 1
+
+    # Escalate to error (still running) -> worst follows.
+    sup._units["eth-binance"].accounting = sup_mod._AccountingState(  # noqa: SLF001
+        violations=[error], computed_at_ms=0
+    )
+    escalated = client.get("/api/health").json()
+    assert escalated["worst"] == "error"
+    assert escalated["unhealthy"] == 1
+
+    # Stop the unhealthy unit: `worst` only looks at running units (drops to
+    # "ok", the one clean unit left running); `unhealthy` still counts it (its
+    # cached report survives stop).
+    await sup.stop("eth-binance")
+    stopped = client.get("/api/health").json()
+    assert stopped["worst"] == "ok"
+    assert stopped["unhealthy"] == 1
 
 
 def test_read_only_reflected_everywhere() -> None:
@@ -636,6 +726,18 @@ def test_strategy_detail_has_the_capital_card_and_ledger_expander() -> None:
     # It fetches the leaf-07 endpoints — no new backend.
     assert "/capital" in html
     assert "/policy" in html
+
+
+def test_strategy_detail_carries_the_health_pill_hook() -> None:
+    """The detail header wires the shared health pill next to the mode badge.
+
+    Leaf 04 (accounting-guardrail) — `#detail-health-pill` sits between
+    `#detail-mode-badge` and `#detail-run-pill` (the pinned "next to the mode
+    badge" placement); `renderHeader()` fills it from `healthPillHtml(s)`.
+    """
+    html = _client().get("/strategies/btc-ma").text
+    assert 'id="detail-health-pill"' in html
+    assert "healthPillHtml(s)" in html
 
 
 def test_strategy_detail_read_only_hides_capital_controls() -> None:
@@ -1373,6 +1475,36 @@ def test_strategies_endpoint_lists_units_with_exchange() -> None:
     assert s["quote"] == "USD"
 
 
+def test_api_strategies_carries_health() -> None:
+    """`GET /api/strategies` row carries `health`/`health_detail`, JSON-safe.
+
+    A stopped unit with a cached warn-only accounting report (seeded directly
+    on ``unit.accounting`` — no live engine needed to exercise the JSON shape)
+    surfaces `health: "warn"` and its violation's `detail` sentence in a plain
+    JSON list of strings (never a raw ``Violation`` or a ``Decimal``).
+    """
+    import trading_bot.application.supervisor as sup_mod
+
+    sup = _supervisor()
+    warn = Violation(
+        kind="duplicate_venue_ids",
+        severity="warn",
+        subject="VID-1",
+        detail="venue_order_id 'VID-1' is shared by 2 order rows.",
+        measured="2",
+        expected="1",
+    )
+    sup._units["btc-ma"].accounting = sup_mod._AccountingState(  # noqa: SLF001
+        violations=[warn], computed_at_ms=0
+    )
+    client = TestClient(create_dashboard_app(sup))
+    [row] = client.get("/api/strategies").json()
+    assert row["health"] == "warn"
+    assert row["health_detail"] == [warn.detail]
+    assert isinstance(row["health_detail"], list)
+    assert all(isinstance(sentence, str) for sentence in row["health_detail"])
+
+
 async def test_strategies_endpoint_last_eval_and_asof_ts() -> None:
     """`GET /api/strategies` carries `last_eval_ts`/`last_asof_ts`, set after a tick.
 
@@ -1499,6 +1631,16 @@ def test_strategies_page_is_a_linked_roster() -> None:
     # lives in base.html for every page, so the modal id is the clean marker).
     assert 'id="live-modal"' not in html
     assert "I UNDERSTAND" not in html
+
+
+def test_strategies_roster_carries_the_health_pill_hook() -> None:
+    """The roster's row renderer calls the shared health-pill helper (leaf 04).
+
+    Placed next to the existing run-pill status cell content, per the pinned
+    display rule ("ok" -> no pill; "warn"/"error" -> the badge-status-* pill).
+    """
+    html = _client().get("/strategies").text
+    assert "healthPillHtml(s)" in html
 
 
 def test_strategies_page_read_only_note_and_no_deploy_link() -> None:

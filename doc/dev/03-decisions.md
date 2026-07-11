@@ -6,6 +6,81 @@ rejected approaches as tombstones.
 
 ---
 
+### 2026-07-11 Venue minimums shape quantities upstream; the Order keeps the bare Instrument (PR #204)  [accepted]
+- **Choice**: the round-up-or-skip policy (`order_prep.prepare_leg`) runs at
+  leg preparation with the resolved venue spec — but the routed `Order`
+  carries the **bare** `Instrument(symbol)`. Round-up band
+  `[min_order_ratio × min, min)` (config, default 0.5); dust below the band
+  is skipped with a log, never submitted; spot sells reducing a long are
+  capped at the held quantity (cap < min → skip); short-extending sells are
+  uncapped; the bump target is snapped UP to the lot grid.
+- **Why**: `Instrument` is frozen+hashable and the `PositionTracker` buckets
+  by the FULL instrument, while every fill-side population (store replay,
+  live adapters) builds symbol-only instruments — a metadata-rich instrument
+  on orders would split a restored book into two position buckets (runaway
+  rebalance deltas) and blind the `max_position` gate on live. Skipping dust
+  instead of letting the venue reject keeps the logs clean and the rebalance
+  loop reject-free; the residual self-corrects because each rebalance diffs
+  target vs actual from scratch.
+- **Rejected alternatives**: enriching `order.instrument` (the identity trap
+  above — revisit only with a Symbol-keyed tracker refactor);
+  reject-and-retry via strict paper (reject noise every tick for permanent
+  dust residuals); a global absolute dust floor (venue minimums differ
+  per symbol — the fetched DOGE 1-USDT floor vs 5 USDT elsewhere).
+
+### 2026-07-11 Venue specs resolve in the application layer, keyless, cached, degradable (PR #203)  [accepted]
+- **Choice**: an `InstrumentSpecResolver` in `application/` dispatches to the
+  venue adapters' existing public `instrument()` builders, constructed
+  keyless and lazily; results cached per `(exchange, symbol)` for the process
+  lifetime; ANY fetch failure degrades to a bare instrument (cached too) and
+  is surfaced via a `degraded` set — spec resolution may never block trading.
+- **Why**: the `Broker` port stays execution-only (`instrument()` is
+  adapter-level, public-data, needs no credentials); `application/` already
+  wires adapters (`service_factory`), so no new layering edge. Minimums
+  change on venue announcements, not intraday — a restart-refreshed cache is
+  honest and cheap. Degradation must be visible but non-blocking: a venue
+  metadata outage must not stop a rebalance that has traded fine for weeks.
+- **Rejected alternatives**: extending the `Broker` port with `instrument()`
+  (forces PaperBroker to fake venue metadata and widens the execution
+  contract for a read-only concern); static hardcoded spec tables (drift
+  silently — the fetched DOGE 1-USDT floor vs 5 elsewhere is exactly the kind
+  of venue quirk a table would get wrong); per-tick refetch (rate-limit spend
+  for data that changes yearly).
+
+### 2026-07-11 One health surface folds accounting and the kill-switch (PR #200)  [accepted]
+- **Choice**: `StrategyStatus.health` = worst of the accounting report and
+  `RiskManager.tripped` (`error` > `warn` > `ok`); `health_detail` orders the
+  trip reason first, then error sentences, then warns. `/api/health.worst`
+  aggregates **running** units only; `unhealthy` counts **all** units
+  (matching the existing `strategies` count semantics).
+- **Why**: the kill-switch had zero readers — a tripped breaker was invisible
+  to the operator. Rather than a second parallel surface, both signals share
+  one field the UI can render as a single pill; a stopped-but-unhealthy unit
+  stays counted (it needs attention) without dragging `worst` red (it cannot
+  trade). Delivers the *status* half of road-to-1.0 #3; the trip/reset
+  endpoint remains in that roadmap item.
+- **Rejected alternatives**: a separate `kill_switch` API field (two things
+  for the UI to merge, and the semantics are the same: "needs attention");
+  folding stopped units into `worst` (a stopped unit poses no live risk —
+  redlining the global chip for it would train alarm fatigue).
+
+### 2026-07-11 The accounting checker is pure and only reports (PR #197)  [accepted]
+- **Choice**: `check_book(positions, fills, orders)` is a pure function over
+  domain data — no store handle, no bus, no mutation. Taxonomy pinned in the
+  plan: `position_drift` is the only `error`; order-level mismatches,
+  status incoherence and duplicate venue ids are `warn`. Legacy pre-#190
+  duplicate venue ids in the live books surface as a *stable, non-red* warn.
+- **Why**: purity makes the checker trivially testable and callable from any
+  hook (startup, TTL, API) without lifecycle coupling; a guardrail that
+  mutated state could itself corrupt the book it audits. Position drift is
+  the one condition with no benign explanation, hence the only `error`.
+  Severity policy keeps known history honest without permanent red alarms.
+- **Rejected alternatives**: a store-coupled checker (untestable without I/O,
+  and the store is a *party* being audited); auto-repair on detection (the
+  healing path already exists in `OrderFillSync.replay` — the guardrail's
+  job is to prove, not to touch); erroring on legacy duplicate ids (would
+  permanently redline books whose history is known and accepted).
+
 ### 2026-07-11 Orphan-closes are persisted, even on a refused transition (PR #193)  [accepted]
 - **Choice**: `reconcile()` emits one `OrderEvent` per orphan-close (persisting
   the `CANCELLED` terminal to the store), and emits it **even when the close

@@ -129,6 +129,9 @@
     const status = s.running
       ? '<span class="run-pill is-running"><span class="dot"></span>running</span>'
       : '<span class="run-pill is-stopped"><span class="dot"></span>stopped</span>';
+    // Health pill (leaf 04, accounting-guardrail) — empty string on "ok" (no
+    // pill), so no separator is added when the unit is healthy.
+    const health = healthPillHtml(s);
     let action;
     if (TB_READ_ONLY) {
       action = '<span class="muted">—</span>';
@@ -143,7 +146,7 @@
       '<td>' + nameCell(s) + '</td>' +
       '<td>' + escapeHtml(s.kind) + '</td>' +
       '<td><span class="badge badge-' + escapeHtml(s.mode) + '">' + escapeHtml(s.mode) + '</span></td>' +
-      '<td>' + status + '</td>' +
+      '<td>' + status + (health ? ' ' + health : '') + '</td>' +
       '<td>' + cadenceCell(s) + '</td>' +
       '<td>' + nextBarCell(s) + '</td>' +
       '<td>' + lastEvalCell(s) + '</td>' +

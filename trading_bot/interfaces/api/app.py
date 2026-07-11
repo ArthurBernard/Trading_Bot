@@ -68,7 +68,7 @@ import math
 import re
 import secrets
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any, Literal
 
@@ -1085,6 +1085,26 @@ def _discover_signals() -> dict[str, list[str]]:
     return {"builtins": builtins, "discovered": discovered}
 
 
+#: Health severity ranking — the basis of `/api/health`'s `worst` aggregation
+#: (:func:`_worst_health`): the highest-ranked value among running units' own
+#: `health` wins.
+_HEALTH_RANK = {"ok": 0, "warn": 1, "error": 2}
+
+
+def _worst_health(healths: Iterable[str]) -> str:
+    """The worst of ``healths`` by severity rank; ``"ok"`` when ``healths`` is empty.
+
+    An empty ``healths`` means no running unit to report on — no unit failing
+    beats no unit at all, so the aggregate degrades to ``"ok"`` rather than an
+    arbitrary sentinel.
+    """
+    worst = "ok"
+    for health in healths:
+        if _HEALTH_RANK[health] > _HEALTH_RANK[worst]:
+            worst = health
+    return worst
+
+
 def _status_dict(status: StrategyStatus) -> dict[str, Any]:
     """Render a :class:`StrategyStatus` for JSON (money as exact Decimal string).
 
@@ -1111,6 +1131,8 @@ def _status_dict(status: StrategyStatus) -> dict[str, Any]:
         "unrealised": _money_str(status.unrealised),
         "total_value": _money_str(status.total_value),
         "capital_policy": status.capital_policy,
+        "health": status.health,
+        "health_detail": list(status.health_detail),
     }
 
 
@@ -1748,6 +1770,13 @@ def create_dashboard_app(
         cadence); both stay ``null`` with no hook, and a hook that raises
         degrades to ``null``/``null`` too — health must never 500 because the
         scheduler hiccuped.
+
+        ``worst`` is the worst per-unit :attr:`~trading_bot.application.
+        supervisor.StrategyStatus.health` among **running** units
+        (:func:`_worst_health`; ``"ok"`` with none running — no unit failing
+        beats no unit at all). ``unhealthy`` counts every unit (running or
+        stopped — a stopped unit still carries its last cached accounting
+        report) whose ``health`` is not ``"ok"``.
         """
         sup = _sup(request)
         next_tick_ts: int | None = None
@@ -1761,6 +1790,9 @@ def create_dashboard_app(
             except Exception:  # noqa: BLE001 - health must degrade, never 500
                 next_tick_ts = None
                 tick = None
+        statuses = sup.status()
+        worst = _worst_health(s.health for s in statuses if s.running)
+        unhealthy = sum(1 for s in statuses if s.health != "ok")
         return {
             "status": "ok",
             "mode": sup.mode,
@@ -1768,6 +1800,8 @@ def create_dashboard_app(
             "read_only": request.app.state.read_only,
             "next_tick_ts": next_tick_ts,
             "tick": tick,
+            "worst": worst,
+            "unhealthy": unhealthy,
         }
 
     # -- Positions (aggregated across the units, groupable) ------------------ #
