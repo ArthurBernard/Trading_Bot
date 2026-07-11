@@ -74,7 +74,7 @@ Per rebalance leg with a resolved spec (min = the binding one of `min_qty` /
 
 - [x] 01 spec-resolver — feat/instrument-spec-resolver — medium (#203)
 - [x] 02 order-prep-policy — feat/order-prep-policy — high (#204)
-- [ ] 03 strict-paper — feat/strict-paper-default — medium
+- [x] 03 strict-paper — feat/strict-paper-default — medium (#205)
 - [ ] 04 e2e-real-specs — chore/venue-minimums-e2e — medium
 
 ## Dependencies

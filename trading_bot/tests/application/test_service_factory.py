@@ -32,6 +32,7 @@ from trading_bot.brokers.paper import PaperBroker
 from trading_bot.domain.errors import (
     BrokerError,
     LiveTradingNotEnabled,
+    OrderTooSmall,
     RiskLimitBreached,
 )
 from trading_bot.domain.fill import Fill
@@ -404,6 +405,96 @@ async def test_engine_is_live_end_to_end() -> None:
     # And to the performance service: a fee was charged (realised PnL net of it).
     assert engine.perf.fees_paid() > money("0")
     assert len(engine.perf.equity_curve()) == 1
+
+
+# --- strict paper (paper_strict) --------------------------------------------- #
+
+# A spec-carrying instrument (min_qty=1) — the factory never builds one of
+# these itself (runner-built orders keep the bare Instrument, leaf 02), but a
+# hand-built order (or a future spec-carrying path) can, and strict paper must
+# enforce it exactly like a live venue would.
+_SPEC_BTCUSD = Instrument(Symbol("BTC", "USD"), min_qty=money("1"))
+
+
+async def test_factory_paper_is_strict_by_default() -> None:
+    """A factory-built engine (default config) rejects a sub-minimum order.
+
+    ``paper_strict`` defaults to ``True``: when the order's instrument carries
+    a resolved spec, the factory-built simulator quantizes and checks it
+    against the venue minimum exactly like a live venue, rejecting with
+    :class:`OrderTooSmall` instead of silently filling.
+    """
+    engine = build_engine(AppConfig())
+    order = Order(
+        client_order_id="cid-strict-dust",
+        instrument=_SPEC_BTCUSD,
+        side=OrderSide.BUY,
+        qty=money("0.5"),  # below the spec's min_qty=1
+        type=OrderType.MARKET,
+    )
+    with pytest.raises(OrderTooSmall):
+        await engine.broker.place_order(order)
+
+
+async def test_paper_strict_flag_off_restores_permissive() -> None:
+    """``paper_strict=False`` restores the historical permissive simulator.
+
+    The same sub-minimum order that ``test_factory_paper_is_strict_by_default``
+    rejects must fill when the flag is explicitly turned off.
+    """
+    engine = build_engine(AppConfig(paper_strict=False))
+    engine.broker.set_price(_SPEC_BTCUSD, money("100"))
+    order = Order(
+        client_order_id="cid-permissive-dust",
+        instrument=_SPEC_BTCUSD,
+        side=OrderSide.BUY,
+        qty=money("0.5"),  # below the spec's min_qty=1
+        type=OrderType.MARKET,
+    )
+    venue_id = await engine.broker.place_order(order)
+    assert venue_id is not None
+
+
+async def test_strict_with_bare_instrument_is_passthrough() -> None:
+    """Strict mode + a bare (no-spec) instrument fills exactly as before.
+
+    Runner-built orders keep the BARE ``Instrument(symbol)`` by design (see
+    ``portfolio_runner``'s module docstring): the venue spec shapes the order's
+    *quantity* upstream, but the order itself never carries the spec. Strict
+    paper must therefore be a no-op passthrough on this path — the audit's
+    dust order (0.0000079 BTC), submitted with a bare instrument, still fills.
+    """
+    engine = build_engine(AppConfig())  # paper_strict=True (the default)
+    engine.broker.set_price(_BTCUSD, money("100"))
+    order = Order(
+        client_order_id="cid-bare-dust",
+        instrument=_BTCUSD,  # no min_qty / min_notional / precision
+        side=OrderSide.BUY,
+        qty=money("0.0000079"),  # the 2026-07-11 audit's dust order
+        type=OrderType.MARKET,
+    )
+    venue_id = await engine.broker.place_order(order)
+    assert venue_id is not None
+
+
+async def test_constructor_default_unchanged() -> None:
+    """Direct ``PaperBroker()`` construction stays permissive (regression pin).
+
+    Only the factory threads ``paper_strict`` into the constructor; existing
+    direct/test construction of ``PaperBroker()`` must keep behaving exactly
+    as it did before this leaf — a sub-minimum order still fills.
+    """
+    broker = PaperBroker()
+    broker.set_price(_SPEC_BTCUSD, money("100"))
+    order = Order(
+        client_order_id="cid-ctor-default-dust",
+        instrument=_SPEC_BTCUSD,
+        side=OrderSide.BUY,
+        qty=money("0.5"),  # below the spec's min_qty=1
+        type=OrderType.MARKET,
+    )
+    venue_id = await broker.place_order(order)
+    assert venue_id is not None
 
 
 # --- testnet path: a venue sandbox between paper and live -------------------- #

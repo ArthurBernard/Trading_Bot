@@ -87,6 +87,20 @@ def test_live_enabled_omitted_in_yaml_defaults_false(
     assert cfg.live_enabled is False
 
 
+def test_paper_strict_defaults_to_true() -> None:
+    """``paper_strict`` is ON by default — paper predicts the venue."""
+    cfg = AppConfig()
+    assert cfg.paper_strict is True
+
+
+def test_paper_strict_round_trips_from_yaml(tmp_path: pathlib.Path) -> None:
+    """``paper_strict: false`` survives a YAML round-trip as a bool."""
+    path = tmp_path / "permissive.yml"
+    path.write_text("paper_strict: false\n")
+    cfg = AppConfig.from_yaml(path)
+    assert cfg.paper_strict is False
+
+
 def test_starting_capital_defaults_to_100000() -> None:
     """An unset ``starting_capital`` is the strictly-positive default 100000."""
     cfg = AppConfig()

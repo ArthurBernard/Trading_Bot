@@ -60,6 +60,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Factory-built paper brokers are strict by default** (`paper_strict: true`
+  in `AppConfig`): a spec-carrying sub-minimum or over-precise order is
+  rejected with `OrderTooSmall` exactly as the live venue would, and a
+  retried client-order-id dedups venue-side. Bare instruments (the runner
+  path — see #204) pass through unchanged; `paper_strict: false` restores
+  the historical permissive simulator; direct `PaperBroker()` construction
+  keeps its permissive default. Verified: the audit's 0.0000079-BTC dust
+  order is rejected on the real Binance lot step while the engine keeps
+  trading. (#205)
+
 ### Fixed
 
 ### Deprecated
