@@ -8,6 +8,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Display currency** — `display_currency` (global default), per-exchange
+  `display_currency_overrides` and static `conversion_rates` in `AppConfig`;
+  server-side converted `*_display` money fields (pure
+  `application/display_ccy.py`) on position rows
+  (`value_display`/`unrealised_display`), strategy rows
+  (`total_value_display`/`unrealised_display`) and KPI rows
+  (`realised_pnl_display`/`fees_paid_display`), each tagged with the resolved
+  `display_currency`. Missing rate → `null`, never a guessed conversion;
+  native-quote fields untouched. (#212)
 - **Position rows carry mark, value, unrealised and fee currency.**
   `/api/positions` rows gain `mark` / `mark_asof_ts` / `mark_source`
   (`bar_close` from the mark cache, `last_fill` fallback, never untagged),

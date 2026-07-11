@@ -6,6 +6,24 @@ rejected approaches as tombstones.
 
 ---
 
+### 2026-07-11 One display numeraire, converted server-side, never guessed (PR #212)  [accepted]
+- **Choice**: `convert()` always targets the single global
+  `display_currency` (exact Decimal, identity when the source quote already
+  matches, `conversion_rates` lookup otherwise, `None` on a missing rate —
+  never guessed). The per-exchange override is a display **label** on the
+  row (`resolve_currency`), numerically truthful only when paired with an
+  identity-equivalent rate — exactly the stablecoin case it exists for
+  (binance→USDT with `USDT: 1`).
+- **Why**: server-side conversion gives every consumer the same figures (no
+  per-client drift); a single numeraire keeps cross-exchange aggregation
+  meaningful; refusing to guess a rate keeps a missing `EUR` declaration
+  visibly `null` instead of silently wrong — money display errors are worse
+  than money display gaps.
+- **Rejected alternatives**: client-side conversion from an exposed rates
+  config (N consumers, N roundings, N bugs); per-exchange numeraires
+  (aggregates across exchanges become meaningless); defaulting unknown
+  rates to 1 (silently wrong for anything non-stable).
+
 ### 2026-07-11 Marks are bar closes with a mandatory as-of, one policy at every altitude (PR #211)  [accepted]
 - **Choice**: v1 mark = the last dccd bar close the runner saw (published to
   a per-engine cache at rebalance time), serialized ONLY together with
