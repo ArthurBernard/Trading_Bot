@@ -20,8 +20,10 @@ lost order, and never inferring a fill the broker did not confirm.
 broker views once, then mutates only local state (the router map and the tracker)
 to match — it never places, cancels or otherwise writes to the venue, because the
 venue is the authority being converged *to*. It returns a :class:`ReconResult`
-counting exactly what changed, and emits one
-:class:`~trading_bot.application.events.LogEvent` summarising the pass.
+counting exactly what changed, emits one
+:class:`~trading_bot.application.events.LogEvent` summarising the pass, and, per
+orphan closed, an :class:`~trading_bot.application.events.OrderEvent` so an
+attached store persists the terminal (see the orphan-policy paragraph below).
 
 The rules (carried into the ADR)
 --------------------------------
@@ -45,7 +47,13 @@ The rules (carried into the ADR)
   is no longer live on the venue* — it is the least-surprising terminal state and
   it stops any further engine action on a phantom order. A non-terminal tracked
   order that has **no venue open record but does have fills** is treated the same
-  way (it is no longer open) — its fills still rebuild the position below.
+  way (it is no longer open) — its fills still rebuild the position below. The
+  close is **persisted**: an :class:`~trading_bot.application.events.OrderEvent`
+  is emitted for the order right after it is closed (and evicted), so an attached
+  store's row moves to the terminal ``CANCELLED`` status instead of keeping its
+  stale pre-restart value forever — this is emitted even when the close
+  transition itself was refused, since the order's current state is still more
+  truthful than the stale row.
 * *Terminal local order* — a tracked order already in a terminal state
   (``FILLED`` / ``CANCELLED`` / ``REJECTED``) is left untouched; it is history,
   not live state, and the venue not reporting it as open is expected.
@@ -72,7 +80,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from trading_bot.application.events import EventBus, LogEvent
+from trading_bot.application.events import EventBus, LogEvent, OrderEvent
 from trading_bot.application.order_router import OrderRouter
 from trading_bot.application.position_tracker import PositionTracker
 from trading_bot.brokers.base import Broker
@@ -166,7 +174,10 @@ async def reconcile(
         where the tracker is rebuilt from the complete fill history.
     event_bus : EventBus, optional
         If given, a single :class:`~trading_bot.application.events.LogEvent`
-        summarising the pass is emitted on it. Defaults to ``None`` (no event).
+        summarising the pass is emitted on it, plus one
+        :class:`~trading_bot.application.events.OrderEvent` per orphan closed
+        (so an attached store persists the terminal). Defaults to ``None`` (no
+        events).
 
     Returns
     -------
@@ -208,6 +219,14 @@ async def reconcile(
         _close_orphan(order)
         router.forget(cid)
         closed_orphans += 1
+        if event_bus is not None:
+            # Persist the close: without this, the store's row for this order
+            # keeps whatever status it last saw pre-restart, even though the
+            # engine has already corrected its own in-memory view. Emitted even
+            # if _close_orphan's transition was refused (its except-path) —
+            # the order's actual current state is still more truthful than the
+            # stale row.
+            event_bus.emit(OrderEvent(order))
 
     # --- 3. Positions: rebuild from the broker's confirmed fills (truth). --- #
     tracker.reset(broker_fills)

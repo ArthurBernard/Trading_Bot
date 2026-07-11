@@ -6,6 +6,59 @@ rejected approaches as tombstones.
 
 ---
 
+### 2026-07-11 Orphan-closes are persisted, even on a refused transition (PR #193)  [accepted]
+- **Choice**: `reconcile()` emits one `OrderEvent` per orphan-close (persisting
+  the `CANCELLED` terminal to the store), and emits it **even when the close
+  transition was refused** by the state machine.
+- **Why**: the in-memory correction was invisible to the store — order history
+  kept the stale pre-restart status forever. With the fill replay healing
+  running first (PR #191), only genuinely-unfilled resting orders reach the
+  orphan rule, so the persisted cancel is always truthful. On a refused
+  transition, the order's actual current state is still more truthful than
+  the stale row.
+- **Rejected alternatives**: persisting via a direct store write from
+  `reconcile` (bypasses the bus — every persistence path goes through
+  `OrderEvent`/`upsert_order`); emitting only on a successful cancel (leaves
+  refused-transition rows permanently stale).
+
+### 2026-07-11 Fill ingestion is a dedicated bus consumer, healing before reconcile (PR #191)  [accepted]
+- **Choice**: a new `OrderFillSync` component (not a router method) subscribes
+  to the bus and applies every `FillEvent` to the router's tracked `Order`,
+  re-emitting `OrderEvent` so the store row follows. Paper ordering is handled
+  by **stash-and-drain** (the synchronous paper `FillEvent` fires before the
+  router tracks the order; fills wait keyed by `client_order_id` and drain on
+  the order's own event). On startup, `replay()` runs **between**
+  `router.restore()` and `reconcile()`, with a **prefix-skip** contract (fills
+  already covered by the persisted `filled_qty` are consumed, not re-applied).
+- **Why**: nothing ever called `Order.apply_fill` on the tracked instance —
+  every filled order froze at `open`/`filled_qty=0` forever in store and UI,
+  and the startup reconcile then mis-cancelled genuinely-filled restored
+  orders as orphans. Healing *before* reconcile makes a filled order terminal
+  when the orphan rule runs; the prefix-skip keeps replay exact for accurate
+  post-fix rows and crash-lagged rows alike (never an over-count).
+- **Rejected alternatives**: ingesting fills inside `OrderRouter` (its module
+  contract deliberately scopes fill ingestion out of the write path);
+  applying eagerly at `FillEvent` time only (impossible on the paper path —
+  the order is not yet tracked); replaying without the prefix-skip (would
+  re-apply fills to an accurate `PARTIALLY_FILLED` row and over-count its
+  `filled_qty` after a restart).
+
+### 2026-07-11 Paper ids get a lifetime token, not persisted counters (PR #190)  [accepted]
+- **Choice**: `PaperBroker` embeds a per-instance token in every synthetic id
+  (`PAPER-{token}-{n}` / `PAPER-FILL-{token}-{n}`), `uuid4().hex[:8]` by
+  default, injectable (`id_token=`) for exact-string test determinism.
+  Counters still restart at 1 within a lifetime.
+- **Why**: ids must be unique *across* engine lifetimes — a rebuilt engine
+  re-minting `PAPER-FILL-1` had its fills silently dropped by the fill-id
+  idempotency layer (tracker, perf, store all dedup by `fill_id`, and
+  `_replay_paper_book` pre-seeds the previous lifetime's ids at startup), so
+  the paper book lost real simulated fills after every restart.
+- **Rejected alternatives**: store-backed counters (a broker adapter must not
+  depend on `storage/` — hexagonal layering; threading a persisted counter
+  through the `Broker` port for a simulator buys nothing a random token
+  doesn't); wall-clock/lifetime-timestamp prefixes (collide under frozen test
+  clocks and add nothing over a random token).
+
 ### 2026-07-10 Genesis funding is stamped at seeding time; the ts=0 sentinel is retired (PR #184)  [accepted]
 - **Choice**: `CapitalService.ensure_genesis` stamps the genesis `FUNDING`
   event with the wall clock at **first** seeding (idempotency unchanged — a

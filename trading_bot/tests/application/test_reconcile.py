@@ -24,9 +24,12 @@ Async tests run un-decorated (``asyncio_mode = "auto"``).
 
 from __future__ import annotations
 
+import pathlib
+
 from trading_bot.application import (
     EventBus,
     LogEvent,
+    OrderEvent,
     OrderRouter,
     PositionTracker,
     ReconResult,
@@ -43,6 +46,7 @@ from trading_bot.domain import (
     Symbol,
     money,
 )
+from trading_bot.storage import SqliteStore
 
 BTC_USD = Instrument(Symbol("BTC", "USD"))
 ETH_USD = Instrument(Symbol("ETH", "USD"))
@@ -256,6 +260,111 @@ async def test_reconcile_leaves_terminal_local_order_alone() -> None:
     assert router.get("done-1") is done
     assert done.status is OrderStatus.FILLED
     assert result.closed_orphans == 0
+
+
+# --- the orphan close is persisted (OrderEvent) ----------------------------- #
+
+
+async def test_orphan_close_emits_order_event() -> None:
+    """Closing an orphan emits an ``OrderEvent`` carrying its CANCELLED state.
+
+    Without this, the store's row for the orphan would keep its stale
+    pre-restart status forever even though the engine corrected its own
+    in-memory view.
+    """
+    broker = PaperBroker(starting_balances={"USD": money("1000000")})
+    bus, router, tracker = _engine(broker)
+
+    phantom = _limit("orphan-1", qty="1", price="30000")
+    phantom.submit()
+    phantom.open("VENUE-GONE")
+    router.ingest(phantom)  # setup only — pre-dates the subscriber below
+
+    # Subscribe only now, so the sink captures reconcile's own emissions, not
+    # the setup ingest's.
+    seen: list[object] = []
+    bus.subscribe(seen.append)
+
+    await reconcile(broker, router, tracker, event_bus=bus)
+
+    order_events = [e for e in seen if isinstance(e, OrderEvent)]
+    assert len(order_events) == 1
+    assert order_events[0].order.client_order_id == "orphan-1"
+    assert order_events[0].order.status is OrderStatus.CANCELLED
+
+
+async def test_orphan_close_persists_to_store(tmp_path: pathlib.Path) -> None:
+    """A real ``SqliteStore`` attached to the bus persists the orphan's close.
+
+    This is the persistence regression: before this fix, ``reconcile`` closed
+    the orphan in memory but never told the store, so the row stayed at its
+    last-known (non-terminal) status forever.
+    """
+    db = tmp_path / "book.sqlite"
+    broker = PaperBroker(starting_balances={"USD": money("1000000")})
+    bus, router, tracker = _engine(broker)
+    store = SqliteStore(db)
+    store.attach(bus)
+
+    phantom = _limit("orphan-1", qty="1", price="30000")
+    phantom.submit()
+    phantom.open("VENUE-GONE")
+    store.upsert_order(phantom)  # the stale pre-restart row: status=open
+    router.ingest(phantom)
+
+    result = await reconcile(broker, router, tracker, event_bus=bus)
+    assert result.closed_orphans == 1
+
+    store.flush()
+    row = store.get_order("orphan-1")
+    store.close()
+    assert row is not None
+    assert row.status is OrderStatus.CANCELLED
+
+
+async def test_no_event_bus_still_works() -> None:
+    """``event_bus=None``: the orphan is still closed and evicted, no crash."""
+    broker = PaperBroker(starting_balances={"USD": money("1000000")})
+    _bus, router, tracker = _engine(broker)
+
+    phantom = _limit("orphan-1", qty="1", price="30000")
+    phantom.submit()
+    phantom.open("VENUE-GONE")
+    router.ingest(phantom)
+
+    result = await reconcile(broker, router, tracker)  # no event_bus
+
+    assert phantom.status is OrderStatus.CANCELLED
+    assert router.get("orphan-1") is None
+    assert result.closed_orphans == 1
+
+
+async def test_terminal_orders_untouched() -> None:
+    """A terminal (e.g. FILLED, healed) tracked order is neither cancelled nor
+    re-emitted by the orphan loop — only genuinely non-terminal orders reach it.
+    """
+    broker = PaperBroker(starting_balances={"USD": money("1000000")})
+    bus, router, tracker = _engine(broker)
+
+    healed = _limit("healed-1", qty="1", price="30000")
+    healed.submit()
+    healed.open("VENUE-1")
+    healed.apply_fill(money("1"), money("30000"))
+    assert healed.status is OrderStatus.FILLED
+    router.ingest(healed)  # setup only — pre-dates the subscriber below
+
+    # Subscribe only now, so the sink captures reconcile's own emissions, not
+    # the setup ingest's.
+    seen: list[object] = []
+    bus.subscribe(seen.append)
+
+    result = await reconcile(broker, router, tracker, event_bus=bus)
+
+    assert result.closed_orphans == 0
+    assert router.get("healed-1") is healed
+    assert healed.status is OrderStatus.FILLED
+    order_events = [e for e in seen if isinstance(e, OrderEvent)]
+    assert order_events == []  # not re-emitted by the orphan loop
 
 
 # --- positions equal Position.from_fills over the broker's fills ----------- #

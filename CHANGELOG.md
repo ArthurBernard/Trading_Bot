@@ -16,6 +16,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 
+## [0.12.0] - 2026-07-11
+
+### Added
+
+- **Restart/replay end-to-end regression test** — two engine lifetimes over one
+  SQLite store (`tests/application/test_restart_replay_e2e.py`): asserts unique
+  venue/fill ids across lifetimes, no fill swallowed (positions == signed fold
+  of stored fills), every filled row terminal + the resting row's orphan-close
+  persisted, and realised PnL equal to an independent fold over the store's
+  fills. Locks the three `paper-integrity` fixes together (closes the epic). (#194)
+
+### Fixed
+
+- **Reconcile's orphan-closes are persisted.** `reconcile()` now emits an
+  `OrderEvent` per orphan it cancels (same `event_bus` guard as its summary
+  log), so the store row moves to the terminal `cancelled` instead of keeping
+  its stale pre-restart status forever — order history stays truthful after
+  the engine corrects its in-memory view. (#193)
+- **Fills now reach the tracked order — and its store row.** New
+  `application/order_fill_sync.py` (`OrderFillSync`, wired in `build_engine`):
+  every venue-confirmed fill is applied to the router's tracked `Order`
+  (stash-and-drain, since the paper `FillEvent` fires before the router tracks
+  the order) and the updated order is re-emitted so the store persists it.
+  Filled orders no longer freeze at `open`/`filled_qty=0` in the store and the
+  dashboard's Filled/Avg-fill columns. On startup, `replay()` heals restored
+  rows from persisted fills (skipping the prefix already covered by the
+  persisted `filled_qty`) **before** reconcile — a genuinely-filled restored
+  order is terminal, so the orphan rule no longer mis-cancels it. (#191)
+- **PaperBroker ids are unique across engine lifetimes.** Synthetic ids now
+  embed a per-instance lifetime token (`PAPER-{token}-{n}`,
+  `PAPER-FILL-{token}-{n}`; `uuid4` fragment by default, injectable in tests).
+  A rebuilt engine (unit restart, `set_mode`, daemon restart) re-minted
+  `PAPER-FILL-1`, and the fill-id idempotency dedup in tracker / performance /
+  store then **silently swallowed real simulated fills** — the paper book lost
+  a fill per instrument on the first post-restart rebalance. (#190)
+
 ## [0.11.1] - 2026-07-10
 
 ### Fixed
