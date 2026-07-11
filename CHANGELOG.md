@@ -8,6 +8,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Per-engine mark cache** (`application/mark_cache.py`) — the portfolio
+  runner publishes each rebalance's last dccd bar closes per symbol
+  (`Mark(price, asof_ms, source="bar_close")`, exact Decimal) into
+  `Engine.mark_cache`, so the API layer can serve marks with their as-of
+  timestamp without any I/O. Single-instrument `StrategyRunner` is a
+  documented follow-up seam. Verified against the real dccd store: cache ==
+  independently-read frame closes, exact price and asof. (#209)
+
 ### Changed
 
 ### Fixed
