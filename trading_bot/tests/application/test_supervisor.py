@@ -14,6 +14,7 @@ import asyncio
 import polars as pl
 import pytest
 
+from trading_bot.application.accounting import Violation
 from trading_bot.application.config import (
     AppConfig,
     DataSourceConfig,
@@ -21,7 +22,7 @@ from trading_bot.application.config import (
     SignalRefConfig,
     StrategyConfig,
 )
-from trading_bot.application.events import FillEvent
+from trading_bot.application.events import FillEvent, LogEvent
 from trading_bot.application.strategy_runner import StrategyRunner
 from trading_bot.application.supervisor import StrategySupervisor
 from trading_bot.domain.capital import CapitalEvent, CapitalEventType
@@ -34,7 +35,7 @@ from trading_bot.domain.errors import (
 from trading_bot.domain.fill import Fill
 from trading_bot.domain.instrument import Instrument, Symbol
 from trading_bot.domain.money import money
-from trading_bot.domain.order import OrderSide
+from trading_bot.domain.order import Order, OrderSide, OrderStatus, OrderType
 from trading_bot.storage.sqlite_store import SqliteStore
 
 
@@ -1771,3 +1772,228 @@ def test_capital_breakdown_unknown_unit_raises() -> None:
     sup = _supervisor()
     with pytest.raises(ConfigError):
         sup.capital_breakdown("nope")
+
+
+# --- accounting guardrail: startup check, TTL cache, alert-on-new-only ------- #
+
+
+def _accounting_config(db_path: str) -> AppConfig:
+    """A single paper BTC/USD strategy storing to ``db_path`` (no allocation)."""
+    return AppConfig.model_validate(
+        {
+            "mode": "paper",
+            "storage": {"db_path": db_path},
+            "brokers": [{"name": "kraken", "exchange": "kraken"}],
+            "strategies": [
+                {
+                    "name": "btc-ma",
+                    "symbol": "BTC/USD",
+                    "data": {"exchange": "kraken", "span": 60},
+                    "signal": {"ref": "ma_crossover", "params": {"fast": 3, "slow": 6}},
+                    "reference_qty": "2",
+                    "lookback": 6,
+                }
+            ],
+        }
+    )
+
+
+def _seed_duplicate_venue_orders(db_path: str) -> None:
+    """Persist two OPEN orders sharing one ``venue_order_id`` (a warn violation).
+
+    Left OPEN (not FILLED) and with no fills recorded, so the only violation
+    ``check_book`` raises against them is ``duplicate_venue_ids`` — the
+    reconcile pass that runs during ``start`` closes them as orphans (no venue
+    reports them open), but that only flips their status; the shared
+    ``venue_order_id`` survives, so the violation still fires after startup.
+    """
+    inst = Instrument(Symbol("BTC", "USD"))
+    store = SqliteStore(db_path, mode="paper", venue="kraken")
+    for cid in ("dup-a", "dup-b"):
+        order = Order(
+            client_order_id=cid,
+            instrument=inst,
+            side=OrderSide.BUY,
+            qty=money("1"),
+            type=OrderType.LIMIT,
+            limit_price=money("100"),
+        )
+        order.status = OrderStatus.OPEN
+        order.venue_order_id = "VID-DUP"
+        store.upsert_order(order)
+
+
+async def test_startup_check_runs_and_stores_report(tmp_path, monkeypatch) -> None:  # noqa: ANN001
+    """Starting over a store with a seeded inconsistency populates the unit's
+    accounting holder and alerts the violation once, at the right level.
+    """
+    import trading_bot.application.supervisor as sup_mod
+
+    db = str(tmp_path / "book.sqlite")
+    _seed_duplicate_venue_orders(db)
+
+    captured: list[LogEvent] = []
+    real_build_engine = sup_mod.build_engine
+
+    def _capturing_build_engine(config, **kwargs):  # noqa: ANN001, ANN003, ANN202
+        engine = real_build_engine(config, **kwargs)
+        engine.bus.subscribe(captured.append)
+        return engine
+
+    monkeypatch.setattr(sup_mod, "build_engine", _capturing_build_engine)
+
+    sup = StrategySupervisor(
+        _accounting_config(db),
+        dccd_client=_FakeDccdClient({"BTC/USD": _dccd_ohlc(_trend())}),
+    )
+    await sup.start("btc-ma")
+
+    unit = sup._units["btc-ma"]  # noqa: SLF001
+    assert unit.accounting is not None
+    assert [v.kind for v in unit.accounting.violations] == ["duplicate_venue_ids"]
+    assert unit.accounting.computed_at_ms is not None
+
+    accounting_events = [
+        e
+        for e in captured
+        if isinstance(e, LogEvent) and e.message.startswith("accounting:")
+    ]
+    assert len(accounting_events) == 1
+    assert accounting_events[0].level == "warning"
+    assert "VID-DUP" in accounting_events[0].message
+
+
+async def test_ttl_recompute(tmp_path, monkeypatch) -> None:  # noqa: ANN001
+    """Two calls within the TTL compute once; past the TTL, a call recomputes."""
+    import trading_bot.application.supervisor as sup_mod
+
+    db = str(tmp_path / "book.sqlite")
+    now = [1_000_000]
+    sup = StrategySupervisor(
+        _accounting_config(db),
+        dccd_client=_FakeDccdClient({"BTC/USD": _dccd_ohlc(_trend())}),
+        clock=lambda: now[0],
+    )
+    await sup.start("btc-ma")
+    unit = sup._units["btc-ma"]  # noqa: SLF001
+    # Reset the cache the real startup check just populated so the TTL story
+    # below starts clean (only the patched calls below are counted).
+    unit.accounting = None  # noqa: SLF001
+
+    calls = 0
+    real_check_book = sup_mod.check_book
+
+    def _counting_check_book(*args, **kwargs):  # noqa: ANN002, ANN003, ANN202
+        nonlocal calls
+        calls += 1
+        return real_check_book(*args, **kwargs)
+
+    monkeypatch.setattr(sup_mod, "check_book", _counting_check_book)
+
+    sup._accounting_of(unit)  # noqa: SLF001 — no cache yet: computes once
+    assert calls == 1
+    sup._accounting_of(unit)  # noqa: SLF001 — still within the 60s TTL: cached
+    assert calls == 1
+
+    now[0] += 61_000  # past the TTL
+    sup._accounting_of(unit)  # noqa: SLF001 — stale: recomputes
+    assert calls == 2
+
+
+async def test_alerts_only_on_new_violations(tmp_path, monkeypatch) -> None:  # noqa: ANN001
+    """A stable violation set stays silent; only new/resolved ones alert once."""
+    import trading_bot.application.supervisor as sup_mod
+
+    db = str(tmp_path / "book.sqlite")
+    now = [0]
+    sup = StrategySupervisor(
+        _accounting_config(db),
+        dccd_client=_FakeDccdClient({"BTC/USD": _dccd_ohlc(_trend())}),
+        clock=lambda: now[0],
+    )
+    await sup.start("btc-ma")
+    unit = sup._units["btc-ma"]  # noqa: SLF001
+    assert unit.engine is not None
+
+    stable = Violation(
+        kind="duplicate_venue_ids",
+        severity="warn",
+        subject="VID-1",
+        detail="venue_order_id 'VID-1' is shared by 2 order rows.",
+        measured="2",
+        expected="1",
+    )
+    drift = Violation(
+        kind="position_drift",
+        severity="error",
+        subject="BTC/USD",
+        detail="BTC/USD: tracked net qty disagrees with its fills.",
+        measured="5",
+        expected="3",
+    )
+    # Prime the cache with `stable` already known, so the recomputes below only
+    # exercise the diff against it (not the "everything is new" first-ever call).
+    unit.accounting = sup_mod._AccountingState(  # noqa: SLF001
+        violations=[stable], computed_at_ms=now[0]
+    )
+
+    captured: list[LogEvent] = []
+    unit.engine.bus.subscribe(captured.append)
+
+    plan = iter([[stable], [stable, drift], [drift]])
+    monkeypatch.setattr(sup_mod, "check_book", lambda *a, **k: next(plan))  # noqa: ARG005
+
+    now[0] += 61_000
+    sup._accounting_of(unit)  # noqa: SLF001 — same set as cached: silent
+    assert captured == []
+
+    now[0] += 61_000
+    sup._accounting_of(unit)  # noqa: SLF001 — `drift` newly appeared: one alert
+    assert len(captured) == 1
+    assert captured[0].level == "error"
+    assert captured[0].message.startswith("accounting:")
+
+    now[0] += 61_000
+    sup._accounting_of(unit)  # noqa: SLF001 — `stable` resolved, `drift` stable
+    assert len(captured) == 2
+    assert captured[1].level == "info"
+    assert "resolved" in captured[1].message
+
+
+async def test_mode_filtering(tmp_path) -> None:  # noqa: ANN001
+    """A fill recorded under a different mode in the same store is excluded."""
+    import trading_bot.application.supervisor as sup_mod
+
+    db = str(tmp_path / "book.sqlite")
+    sup = StrategySupervisor(
+        _accounting_config(db),
+        dccd_client=_FakeDccdClient({"BTC/USD": _dccd_ohlc(_trend())}),
+    )
+    await sup.start("btc-ma")
+    unit = sup._units["btc-ma"]  # noqa: SLF001
+    assert unit.engine is not None
+    assert unit.accounting is not None
+    assert unit.accounting.violations == []  # empty paper book -> clean startup
+
+    # A fill recorded under "testnet" in the SAME underlying file. Unfiltered,
+    # it would drift BTC/USD from zero (no tracked position sees it) — proving
+    # the mode filter, not just an accidentally-clean book.
+    foreign_store = SqliteStore(db, mode="testnet", venue="kraken")
+    inst = Instrument(Symbol("BTC", "USD"))
+    foreign_store.record_fill(
+        Fill(
+            "foreign-F1",
+            "foreign-c1",
+            inst,
+            OrderSide.BUY,
+            money("1"),
+            money("100"),
+            money("0"),
+            1,
+        )
+    )
+
+    violations = sup_mod.StrategySupervisor._compute_accounting_report(  # noqa: SLF001
+        unit, unit.engine
+    )
+    assert violations == []
