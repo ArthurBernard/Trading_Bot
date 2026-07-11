@@ -6,6 +6,25 @@ rejected approaches as tombstones.
 
 ---
 
+### 2026-07-11 Venue specs resolve in the application layer, keyless, cached, degradable (PR #203)  [accepted]
+- **Choice**: an `InstrumentSpecResolver` in `application/` dispatches to the
+  venue adapters' existing public `instrument()` builders, constructed
+  keyless and lazily; results cached per `(exchange, symbol)` for the process
+  lifetime; ANY fetch failure degrades to a bare instrument (cached too) and
+  is surfaced via a `degraded` set — spec resolution may never block trading.
+- **Why**: the `Broker` port stays execution-only (`instrument()` is
+  adapter-level, public-data, needs no credentials); `application/` already
+  wires adapters (`service_factory`), so no new layering edge. Minimums
+  change on venue announcements, not intraday — a restart-refreshed cache is
+  honest and cheap. Degradation must be visible but non-blocking: a venue
+  metadata outage must not stop a rebalance that has traded fine for weeks.
+- **Rejected alternatives**: extending the `Broker` port with `instrument()`
+  (forces PaperBroker to fake venue metadata and widens the execution
+  contract for a read-only concern); static hardcoded spec tables (drift
+  silently — the fetched DOGE 1-USDT floor vs 5 elsewhere is exactly the kind
+  of venue quirk a table would get wrong); per-tick refetch (rate-limit spend
+  for data that changes yearly).
+
 ### 2026-07-11 One health surface folds accounting and the kill-switch (PR #200)  [accepted]
 - **Choice**: `StrategyStatus.health` = worst of the accounting report and
   `RiskManager.tripped` (`error` > `warn` > `ok`); `health_detail` orders the
