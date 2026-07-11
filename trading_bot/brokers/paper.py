@@ -36,9 +36,17 @@ Determinism
 -----------
 The simulation is fully deterministic so tests assert exact values:
 
-* **Synthetic order ids** are ``"PAPER-{n}"`` from a monotonic counter, so the
-  *k*-th placed order always gets the same id within a run.
-* **Fill ids** are ``"PAPER-FILL-{n}"`` from a second counter.
+* **Synthetic order ids** are ``"PAPER-{token}-{n}"`` from a monotonic counter
+  scoped to a per-instance **lifetime token** (``id_token``), so the *k*-th
+  placed order always gets the same id within a run. The token defaults to a
+  random ``uuid4`` hex fragment minted once per instance so ids stay unique
+  *across* engine lifetimes too — a rebuilt engine (a fresh ``PaperBroker`` per
+  ``build_engine``) never re-mints an id a previous lifetime already used,
+  which matters because a repeated ``fill_id`` would be silently dropped by
+  the fill-id idempotency dedup in the tracker / performance service / store.
+  Pass a fixed ``id_token`` to get the old exact-string determinism in tests.
+* **Fill ids** are ``"PAPER-FILL-{token}-{n}"`` from a second counter, sharing
+  the same token.
 * **Timestamps** come from an injectable ``clock`` callable returning
   milliseconds since the Unix epoch (UTC). The default clock is *not* the wall
   clock — it returns a fixed base time and advances by one millisecond per call,
@@ -89,6 +97,7 @@ simulator, not a risk gate); margin/funding checks live in the engine.
 
 from __future__ import annotations
 
+import uuid
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from itertools import count
@@ -201,6 +210,15 @@ class PaperBroker(Broker):
           side dedup the idempotency invariant relies on (Binance ``-2010``). A
           retried client-order-id never duplicates a paper order.
 
+    id_token : str, optional
+        The per-instance **lifetime token** embedded in every minted id (see the
+        module docstring's Determinism section): ``"PAPER-{id_token}-{n}"`` and
+        ``"PAPER-FILL-{id_token}-{n}"``. Defaults to ``None``, which mints a
+        fresh random ``uuid4().hex[:8]`` — so two broker instances (e.g. two
+        successive engine lifetimes) never mint the same id even though each
+        restarts its counters at ``1``. Pass a fixed value (e.g. in tests) to
+        get exact, reproducible id strings. Must be non-empty when given.
+
     Attributes
     ----------
     name : str
@@ -222,6 +240,7 @@ class PaperBroker(Broker):
         partial_chunks: int = 2,
         partial_fill_ratio: Money = money("1"),
         strict: bool = False,
+        id_token: str | None = None,
     ) -> None:
         if fill_model not in ("immediate", "partial"):
             raise BrokerError(
@@ -235,6 +254,8 @@ class PaperBroker(Broker):
             raise BrokerError(
                 f"partial_fill_ratio must be in (0, 1], got {partial_fill_ratio}"
             )
+        if id_token is not None and not id_token:
+            raise BrokerError("id_token must be non-empty when given")
 
         self._prices: dict[Instrument, Money] = dict(prices or {})
         self._fee_bps = fee_bps
@@ -245,8 +266,14 @@ class PaperBroker(Broker):
         self._partial_chunks = partial_chunks
         self._partial_fill_ratio = partial_fill_ratio
         self._strict = strict
+        # Lifetime-unique id seam: a per-instance token embedded in every minted
+        # id so ids never collide across engine lifetimes (see the module
+        # docstring's Determinism section). Random by default; a fixed value
+        # (e.g. in tests) gives exact, reproducible id strings.
+        self._id_token = id_token if id_token is not None else uuid.uuid4().hex[:8]
 
-        # Deterministic id seams.
+        # Deterministic id seams (counters restart at 1 within this lifetime;
+        # ``self._id_token`` is what keeps them unique across lifetimes).
         self._order_ids = count(1)
         self._fill_ids = count(1)
         # Live orders keyed by their synthetic venue id — the simulator's *own*
@@ -354,10 +381,11 @@ class PaperBroker(Broker):
         **Port-pure**: the caller's ``order`` object is *never mutated* — its
         status, ``filled_qty`` and ``venue_order_id`` are untouched. The simulator
         reads only the order's *data* (side, qty, price, type), allocates a fresh
-        ``"PAPER-{n}"`` id, simulates fills per the configured fill model (see the
-        module docstring) into its own per-venue-id record, records each
-        :class:`Fill`, and moves internal balances. Any unfilled remainder is kept
-        live (a reconstructed snapshot) and surfaced by :meth:`open_orders`.
+        ``"PAPER-{id_token}-{n}"`` id, simulates fills per the configured fill
+        model (see the module docstring) into its own per-venue-id record,
+        records each :class:`Fill`, and moves internal balances. Any unfilled
+        remainder is kept live (a reconstructed snapshot) and surfaced by
+        :meth:`open_orders`.
 
         Parameters
         ----------
@@ -368,7 +396,7 @@ class PaperBroker(Broker):
         Returns
         -------
         str
-            The synthetic venue order id (``"PAPER-{n}"``).
+            The synthetic venue order id (``"PAPER-{id_token}-{n}"``).
 
         Raises
         ------
@@ -404,7 +432,7 @@ class PaperBroker(Broker):
                 stop_price=order.stop_price,
             )
 
-        venue_order_id = f"PAPER-{next(self._order_ids)}"
+        venue_order_id = f"PAPER-{self._id_token}-{next(self._order_ids)}"
         record = _OpenOrder(
             client_order_id=order.client_order_id,
             instrument=order.instrument,
@@ -494,7 +522,7 @@ class PaperBroker(Broker):
         """
         fee = self._fee(qty, price)
         fill = Fill(
-            fill_id=f"PAPER-FILL-{next(self._fill_ids)}",
+            fill_id=f"PAPER-FILL-{self._id_token}-{next(self._fill_ids)}",
             client_order_id=record.client_order_id,
             instrument=record.instrument,
             side=record.side,
