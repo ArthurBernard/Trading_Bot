@@ -666,6 +666,24 @@ class StrategySupervisor:
             # pure domain Fill); set it before any fill flows onto the bus.
             engine.store.set_context(mode=unit.mode, venue=unit.exchange)
             engine.router.restore(engine.store.orders())
+            # Heal the restored orders from their persisted fills BEFORE the
+            # reconcile below: a genuinely-filled order becomes terminal here,
+            # so the orphan rule can no longer mis-cancel it, and the healed row
+            # is re-persisted via the re-emitted OrderEvent (the store is
+            # attached to the bus). Same mode filter as `_replay_paper_book` —
+            # only this unit's mode's fills touch its orders (live fills never
+            # heal a paper book, and vice versa) — sorted by ts so partial fills
+            # accumulate in execution order.
+            engine.fill_sync.replay(
+                sorted(
+                    (
+                        record.fill
+                        for record in engine.store.stored_fills()
+                        if record.mode == unit.mode
+                    ),
+                    key=lambda fill: fill.ts,
+                )
+            )
         await reconcile(
             engine.broker, engine.router, engine.tracker, event_bus=engine.bus
         )
@@ -1410,8 +1428,11 @@ class StrategySupervisor:
         filled, filled, cancelled and rejected — across every unit. The **store** is
         the source of truth for the history (its append-only ``orders`` table keeps
         every order the unit ever recorded, whereas a running unit's live router map
-        only holds *currently-tracked* orders — the startup reconcile evicts a
-        restored historical order as an "orphan" the venue no longer reports). A
+        only holds *currently-tracked* orders — on startup the fill replay
+        (:meth:`~trading_bot.application.order_fill_sync.OrderFillSync.replay`)
+        heals a genuinely-filled restored order to terminal ``FILLED``, and the
+        reconcile then evicts a restored, still-*unfilled* historical order as an
+        "orphan" the venue no longer reports). A
         **running** unit's live router orders are **unioned** in on top (keyed by
         ``client_order_id``, the live object winning) so a freshly-submitted,
         not-yet-persisted order still surfaces. Money stays exact

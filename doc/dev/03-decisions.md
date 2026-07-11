@@ -6,6 +6,28 @@ rejected approaches as tombstones.
 
 ---
 
+### 2026-07-11 Fill ingestion is a dedicated bus consumer, healing before reconcile (PR #191)  [accepted]
+- **Choice**: a new `OrderFillSync` component (not a router method) subscribes
+  to the bus and applies every `FillEvent` to the router's tracked `Order`,
+  re-emitting `OrderEvent` so the store row follows. Paper ordering is handled
+  by **stash-and-drain** (the synchronous paper `FillEvent` fires before the
+  router tracks the order; fills wait keyed by `client_order_id` and drain on
+  the order's own event). On startup, `replay()` runs **between**
+  `router.restore()` and `reconcile()`, with a **prefix-skip** contract (fills
+  already covered by the persisted `filled_qty` are consumed, not re-applied).
+- **Why**: nothing ever called `Order.apply_fill` on the tracked instance —
+  every filled order froze at `open`/`filled_qty=0` forever in store and UI,
+  and the startup reconcile then mis-cancelled genuinely-filled restored
+  orders as orphans. Healing *before* reconcile makes a filled order terminal
+  when the orphan rule runs; the prefix-skip keeps replay exact for accurate
+  post-fix rows and crash-lagged rows alike (never an over-count).
+- **Rejected alternatives**: ingesting fills inside `OrderRouter` (its module
+  contract deliberately scopes fill ingestion out of the write path);
+  applying eagerly at `FillEvent` time only (impossible on the paper path —
+  the order is not yet tracked); replaying without the prefix-skip (would
+  re-apply fills to an accurate `PARTIALLY_FILLED` row and over-count its
+  `filled_qty` after a restart).
+
 ### 2026-07-11 Paper ids get a lifetime token, not persisted counters (PR #190)  [accepted]
 - **Choice**: `PaperBroker` embeds a per-instance token in every synthetic id
   (`PAPER-{token}-{n}` / `PAPER-FILL-{token}-{n}`), `uuid4().hex[:8]` by

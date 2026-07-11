@@ -12,6 +12,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Fills now reach the tracked order — and its store row.** New
+  `application/order_fill_sync.py` (`OrderFillSync`, wired in `build_engine`):
+  every venue-confirmed fill is applied to the router's tracked `Order`
+  (stash-and-drain, since the paper `FillEvent` fires before the router tracks
+  the order) and the updated order is re-emitted so the store persists it.
+  Filled orders no longer freeze at `open`/`filled_qty=0` in the store and the
+  dashboard's Filled/Avg-fill columns. On startup, `replay()` heals restored
+  rows from persisted fills (skipping the prefix already covered by the
+  persisted `filled_qty`) **before** reconcile — a genuinely-filled restored
+  order is terminal, so the orphan rule no longer mis-cancels it. (#191)
 - **PaperBroker ids are unique across engine lifetimes.** Synthetic ids now
   embed a per-instance lifetime token (`PAPER-{token}-{n}`,
   `PAPER-FILL-{token}-{n}`; `uuid4` fragment by default, injectable in tests).
