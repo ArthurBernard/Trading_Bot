@@ -6,6 +6,23 @@ rejected approaches as tombstones.
 
 ---
 
+### 2026-07-11 The accounting checker is pure and only reports (PR #197)  [accepted]
+- **Choice**: `check_book(positions, fills, orders)` is a pure function over
+  domain data — no store handle, no bus, no mutation. Taxonomy pinned in the
+  plan: `position_drift` is the only `error`; order-level mismatches,
+  status incoherence and duplicate venue ids are `warn`. Legacy pre-#190
+  duplicate venue ids in the live books surface as a *stable, non-red* warn.
+- **Why**: purity makes the checker trivially testable and callable from any
+  hook (startup, TTL, API) without lifecycle coupling; a guardrail that
+  mutated state could itself corrupt the book it audits. Position drift is
+  the one condition with no benign explanation, hence the only `error`.
+  Severity policy keeps known history honest without permanent red alarms.
+- **Rejected alternatives**: a store-coupled checker (untestable without I/O,
+  and the store is a *party* being audited); auto-repair on detection (the
+  healing path already exists in `OrderFillSync.replay` — the guardrail's
+  job is to prove, not to touch); erroring on legacy duplicate ids (would
+  permanently redline books whose history is known and accepted).
+
 ### 2026-07-11 Orphan-closes are persisted, even on a refused transition (PR #193)  [accepted]
 - **Choice**: `reconcile()` emits one `OrderEvent` per orphan-close (persisting
   the `CANCELLED` terminal to the store), and emits it **even when the close

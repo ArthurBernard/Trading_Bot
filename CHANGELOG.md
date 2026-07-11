@@ -8,6 +8,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Accounting invariant checker** (`application/accounting.py`) — a pure,
+  side-effect-free recomputation of the book's self-consistency: per-instrument
+  `position_drift` (tracker vs Σ signed store fills, `error`), per-order
+  `order_fill_mismatch` and `status_incoherent` (tolerance-aware, `warn`), and
+  `duplicate_venue_ids` (`warn`). Typed `Violation` results carry exact
+  `str(Decimal)` figures. Verified on copies of the live books: flags the
+  27 pre-v0.12.0 frozen rows and the legacy id duplicates, zero position
+  drift, and comes back clean (legacy warns aside) post-healing. Wiring into
+  the engine/API/UI follows in the next `accounting-guardrail` leaves. (#197)
+
 ### Changed
 
 ### Fixed
