@@ -137,6 +137,22 @@ In dependency order:
    expanded state survives the SSE re-render); fills demoted to order detail
    (flat audit view stays on the Orders page); "last bar → next bar" timing
    chip; timezone affordance.
+6. [ ] **`canary-roundtrip` — deterministic self-test strategy.** A minimal
+   round-trip canary run as its own strategy unit with its own tiny ledger
+   (~10 USDT): **sequential** market buy *x* then sell *x* (never simultaneous
+   — self-trade prevention would make it non-deterministic), plus two free
+   probes: a far-off-limit **cancel** (the real kill-switch path) and a
+   client-order-id **idempotency** re-submit. Two oracles: **paper** = exact
+   Decimal equality against the precomputed expectation (PnL = −2·fees, flat
+   position, terminal orders — CI-runnable, per release); **live** = exact
+   *accounting identity* (our fills/balances == venue-reported) + **bounded**
+   total cost (≤ 1–2 EUR) — never a precomputed absolute PnL (spread/drift are
+   not deterministic). Cadence: paper per release; testnet at will; live once
+   per venue at go-live + after any broker-adapter change. Depends on #1
+   (order lifecycle) + #2 (health surface for the pass/fail report) + #3
+   (venue minimums; Binance BNB-fee discount must be off or modeled). The live
+   canary is the validation vehicle for **Road to v1.0.0 #1** (real-key
+   enablement: venue idempotency, real cancel, balance reconciliation).
 
 ## Not gating 1.0 (post-1.0 candidates)
 
