@@ -618,7 +618,10 @@ def build_portfolio_runners(
     :class:`~trading_bot.application.instrument_specs.InstrumentSpecResolver`
     is threaded in (with the portfolio's ``venue`` and ``min_order_ratio``) so
     every rebalance leg is prepared against the venue's real minimums
-    (:func:`~trading_bot.application.order_prep.prepare_leg`).
+    (:func:`~trading_bot.application.order_prep.prepare_leg`). The engine's
+    :class:`~trading_bot.application.mark_cache.MarkCache` is threaded in too,
+    so every rebalance publishes its per-symbol closes for the API layer to
+    read without any I/O of its own.
 
     The dccd ``client`` is threaded into every :class:`PortfolioFeed` so the build
     is offline-testable. A daily portfolio reading a 1-minute store should inject
@@ -716,6 +719,11 @@ def build_portfolio_runners(
             spec_resolver=engine.spec_resolver,
             exchange=portfolio_cfg.venue,
             min_order_ratio=money(portfolio_cfg.min_order_ratio),
+            # Mark-cache publish: the engine's per-symbol cache (one per unit,
+            # like spec_resolver above) so every rebalance's closes are readable
+            # by the API layer with no fresh I/O — see
+            # `trading_bot.application.mark_cache`.
+            mark_cache=engine.mark_cache,
         )
         runners.append(runner)
     return runners

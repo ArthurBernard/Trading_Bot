@@ -58,6 +58,7 @@ from typing import Protocol, runtime_checkable
 from trading_bot.application.config import AppConfig, BrokerConfig
 from trading_bot.application.events import EventBus
 from trading_bot.application.instrument_specs import InstrumentSpecResolver
+from trading_bot.application.mark_cache import MarkCache
 from trading_bot.application.order_fill_sync import OrderFillSync
 from trading_bot.application.order_router import OrderRouter
 from trading_bot.application.performance_service import PerformanceService
@@ -149,6 +150,13 @@ class Engine:
         exactly as long as the engine does. Threaded into the portfolio runners
         (:func:`~trading_bot.application.run_app.build_portfolio_runners`) so
         every rebalance leg is prepared against the venue's real minimums.
+    mark_cache : MarkCache
+        The engine's per-symbol mark cache — one per engine (so, under the
+        supervisor, one per unit), living exactly as long as the engine does.
+        The portfolio runner publishes every rebalance's per-symbol closes here
+        (:func:`~trading_bot.application.run_app.build_portfolio_runners`); the
+        API layer will read it (leaf 02) without any I/O of its own — see
+        :mod:`~trading_bot.application.mark_cache`.
 
     """
 
@@ -166,6 +174,7 @@ class Engine:
     spec_resolver: InstrumentSpecResolver = field(
         default_factory=InstrumentSpecResolver
     )
+    mark_cache: MarkCache = field(default_factory=MarkCache)
 
 
 def build_engine(
@@ -265,6 +274,11 @@ def build_engine(
         # die with the engine. Constructed here, the single wiring point, and
         # threaded to the portfolio runners by build_portfolio_runners.
         spec_resolver=InstrumentSpecResolver(),
+        # One mark cache per engine (= per supervised unit), same lifetime
+        # discipline as spec_resolver above: constructed here and threaded to
+        # the portfolio runners by build_portfolio_runners, which publish every
+        # rebalance's per-symbol closes into it.
+        mark_cache=MarkCache(),
     )
 
 

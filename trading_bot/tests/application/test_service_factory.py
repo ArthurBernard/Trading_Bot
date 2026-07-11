@@ -21,6 +21,7 @@ import pytest
 
 from trading_bot.application.config import AppConfig, BrokerConfig
 from trading_bot.application.events import EventBus, FillEvent
+from trading_bot.application.mark_cache import MarkCache
 from trading_bot.application.order_router import OrderRouter
 from trading_bot.application.performance_service import PerformanceService
 from trading_bot.application.position_tracker import PositionTracker
@@ -81,6 +82,23 @@ def test_default_config_builds_paper_engine() -> None:
     assert isinstance(engine.risk, RiskManager)
     # No db_path → no store.
     assert engine.store is None
+
+
+def test_engine_carries_mark_cache() -> None:
+    """Every built engine gets a fresh, empty :class:`MarkCache` by default.
+
+    Mirrors ``spec_resolver`` — a default-factory field, so direct
+    ``Engine(...)`` constructions (tests wire engines by hand) keep working
+    unchanged, and every ``build_engine`` call gets its own cache (never
+    shared across units).
+    """
+    engine_a = build_engine(AppConfig())
+    engine_b = build_engine(AppConfig())
+
+    assert isinstance(engine_a.mark_cache, MarkCache)
+    assert engine_a.mark_cache.all() == {}
+    # Two engines never share the same cache instance.
+    assert engine_a.mark_cache is not engine_b.mark_cache
 
 
 async def test_paper_engine_fills_carry_the_wall_clock() -> None:
