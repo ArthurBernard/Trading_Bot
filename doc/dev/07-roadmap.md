@@ -100,20 +100,11 @@ order — none started yet, each is a `/pick-task` candidate:
 ## UI consistency & accounting integrity (2026-07-11)
 
 A dashboard-driven audit (position ≠ Σ orders on `alloc1-binance`) uncovered two
-engine bugs and a set of API/UX gaps. **The `paper-integrity` epic is urgent: the
-paper broker's in-memory id counters reset on every engine rebuild, so a
-restarted unit re-mints `PAPER-FILL-1` and the fill-id idempotency layer
-(tracker, perf, store) silently swallows real simulated fills — the running
-paper soak's KPIs (Road to 1.0 #4) are corrupted evidence until it lands.**
+engine bugs and a set of API/UX gaps. The `paper-integrity` epic (durable paper
+ids, order↔fill lifecycle sync, persisted orphan-closes) **shipped 2026-07-11**
+(PRs #190–#194; plan tree archived) — restart the daemon to heal the live books.
 In dependency order:
 
-1. [ ] **`paper-integrity` — paper engine integrity.** Durable order/fill ids
-   across engine rebuilds (today `count(1)` in-memory, `paper.py`); order
-   lifecycle sync (nothing ever calls `Order.apply_fill` on the router's
-   tracked instance — every filled order stays `open`/`filled_qty=0` in store
-   and UI; wire a `FillEvent` subscriber that updates the order and re-emits
-   `OrderEvent`); reconcile persists its orphan-closes (today it emits no
-   `OrderEvent`, so even cancels never reach the store).
 2. [ ] **`accounting-guardrail` — accounting invariant checker.** Position ==
    Σ signed store fills per instrument; `filled_qty` == Σ fills per order;
    venue/fill id uniqueness. Hooks: end of `reconcile()` + a `FillEvent`

@@ -8,6 +8,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Restart/replay end-to-end regression test** — two engine lifetimes over one
+  SQLite store (`tests/application/test_restart_replay_e2e.py`): asserts unique
+  venue/fill ids across lifetimes, no fill swallowed (positions == signed fold
+  of stored fills), every filled row terminal + the resting row's orphan-close
+  persisted, and realised PnL equal to an independent fold over the store's
+  fills. Locks the three `paper-integrity` fixes together (closes the epic). (#194)
+
 ### Changed
 
 ### Fixed
