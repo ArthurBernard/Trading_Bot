@@ -8,6 +8,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Position rows carry mark, value, unrealised and fee currency.**
+  `/api/positions` rows gain `mark` / `mark_asof_ts` / `mark_source`
+  (`bar_close` from the mark cache, `last_fill` fallback, never untagged),
+  `value` (mark × |qty|), `unrealised` (sign-correct for shorts) and
+  `fee_ccy` — and the strategy aggregate now uses the SAME mark policy, so
+  the roster total equals the row sum (verified Decimal-exact on both live
+  books' copies against real dccd frames). All additive; existing fields
+  contract-regression-tested. (#211)
 - **Per-engine mark cache** (`application/mark_cache.py`) — the portfolio
   runner publishes each rebalance's last dccd bar closes per symbol
   (`Mark(price, asof_ms, source="bar_close")`, exact Decimal) into
