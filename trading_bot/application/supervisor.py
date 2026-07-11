@@ -184,6 +184,20 @@ class StrategyStatus:
         The unit's capital-evolution policy (its config ``capital_policy``):
         ``fixed`` sizes against ``contributed``; ``compound`` reinvests realised
         PnL into the sizing base.
+    health : {"ok", "warn", "error"}
+        The unit's aggregate health — the accounting guardrail's report folded
+        with the until-now-invisible kill-switch (see :meth:`StrategySupervisor.
+        _health_of` for the pinned mapping and the ``health_detail`` ordering).
+        A stopped unit (no engine) is computed from its last cached accounting
+        report only (:meth:`StrategySupervisor._accounting_of`) — there is no
+        live :class:`~trading_bot.application.risk.RiskManager` to fold in, so
+        a stopped unit is never flagged for a kill-switch it no longer runs.
+    health_detail : tuple of str
+        The human-readable sentences behind :attr:`health`: the kill-switch's
+        own :attr:`~trading_bot.application.risk.RiskManager.trip_reason` first
+        (when tripped), then every ``error``-severity
+        :class:`~trading_bot.application.accounting.Violation`'s ``detail``,
+        then every ``warn`` one's. Empty when :attr:`health` is ``"ok"``.
 
     """
 
@@ -203,6 +217,8 @@ class StrategyStatus:
     unrealised: Money | None = None
     total_value: Money | None = None
     capital_policy: str = "fixed"
+    health: str = "ok"
+    health_detail: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -1433,6 +1449,7 @@ class StrategySupervisor:
         open_orders = 0
         last_eval_ts: int | None = None
         last_asof_ts: int | None = None
+        trip_reason: str | None = None
         if unit.running and unit.engine is not None:
             realised = unit.engine.perf.realised_pnl()
             open_orders = sum(
@@ -1440,6 +1457,8 @@ class StrategySupervisor:
                 for order in unit.engine.router.tracked_orders().values()
                 if not order.is_terminal
             )
+            if unit.engine.risk.tripped:
+                trip_reason = unit.engine.risk.trip_reason
         if unit.runner is not None:
             # The runner survives independently of `unit.running` in practice
             # (it is nulled by the same teardown that flips `running` off — see
@@ -1462,6 +1481,7 @@ class StrategySupervisor:
         total_value = self._total_value_of(
             contributed, realised, mode_fills, unrealised
         )
+        health, health_detail = self._health_of(self._accounting_of(unit), trip_reason)
         return StrategyStatus(
             name=unit.name,
             kind=unit.kind,
@@ -1479,7 +1499,41 @@ class StrategySupervisor:
             unrealised=unrealised,
             total_value=total_value,
             capital_policy=entry.capital_policy,
+            health=health,
+            health_detail=health_detail,
         )
+
+    @staticmethod
+    def _health_of(
+        violations: list[Violation], trip_reason: str | None
+    ) -> tuple[str, tuple[str, ...]]:
+        """Fold ``violations`` + a kill-switch ``trip_reason`` into one health signal.
+
+        Health mapping (pinned in ``doc/dev/plans/accounting-guardrail/00-plan.md``):
+        any ``error``-severity :class:`~trading_bot.application.accounting.
+        Violation` **or** a tripped kill-switch (``trip_reason is not None``) →
+        ``"error"``; else any ``warn`` violation → ``"warn"``; else ``"ok"``.
+
+        The detail tuple orders the kill-switch's own ``trip_reason`` **first**
+        (it is the most actionable signal — a halted engine), then every
+        ``error`` violation's ``detail``, then every ``warn`` violation's
+        ``detail`` — errors before warns mirrors the severity mapping itself
+        and stays stable regardless of the checkers' own internal ordering.
+        """
+        errors = [v.detail for v in violations if v.severity == "error"]
+        warns = [v.detail for v in violations if v.severity == "warn"]
+        detail: list[str] = []
+        if trip_reason is not None:
+            detail.append(trip_reason)
+        detail.extend(errors)
+        detail.extend(warns)
+        if trip_reason is not None or errors:
+            health = "error"
+        elif warns:
+            health = "warn"
+        else:
+            health = "ok"
+        return health, tuple(detail)
 
     @staticmethod
     def _total_value_of(

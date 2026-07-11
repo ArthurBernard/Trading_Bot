@@ -6,6 +6,23 @@ rejected approaches as tombstones.
 
 ---
 
+### 2026-07-11 One health surface folds accounting and the kill-switch (PR #200)  [accepted]
+- **Choice**: `StrategyStatus.health` = worst of the accounting report and
+  `RiskManager.tripped` (`error` > `warn` > `ok`); `health_detail` orders the
+  trip reason first, then error sentences, then warns. `/api/health.worst`
+  aggregates **running** units only; `unhealthy` counts **all** units
+  (matching the existing `strategies` count semantics).
+- **Why**: the kill-switch had zero readers — a tripped breaker was invisible
+  to the operator. Rather than a second parallel surface, both signals share
+  one field the UI can render as a single pill; a stopped-but-unhealthy unit
+  stays counted (it needs attention) without dragging `worst` red (it cannot
+  trade). Delivers the *status* half of road-to-1.0 #3; the trip/reset
+  endpoint remains in that roadmap item.
+- **Rejected alternatives**: a separate `kill_switch` API field (two things
+  for the UI to merge, and the semantics are the same: "needs attention");
+  folding stopped units into `worst` (a stopped unit poses no live risk —
+  redlining the global chip for it would train alarm fatigue).
+
 ### 2026-07-11 The accounting checker is pure and only reports (PR #197)  [accepted]
 - **Choice**: `check_book(positions, fills, orders)` is a pure function over
   domain data — no store handle, no bus, no mutation. Taxonomy pinned in the

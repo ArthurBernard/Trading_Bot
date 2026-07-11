@@ -56,7 +56,7 @@ soak. The checker never mutates anything — it only reports.
 
 - [x] 01 invariant-checker — feat/accounting-checker — medium (#197)
 - [x] 02 engine-wiring — feat/accounting-wiring — medium (#199)
-- [ ] 03 health-surface — feat/health-surface — medium
+- [x] 03 health-surface — feat/health-surface — medium (#200)
 - [ ] 04 ui-health-pill — feat/health-pill — medium
 
 ## Dependencies

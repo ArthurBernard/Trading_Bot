@@ -1997,3 +1997,104 @@ async def test_mode_filtering(tmp_path) -> None:  # noqa: ANN001
         unit, unit.engine
     )
     assert violations == []
+
+
+# --- health surface: accounting report + kill-switch, one field ------------- #
+
+
+def _three_unit_config() -> AppConfig:
+    """Three stopped paper BTC/USD strategies (no allocation/store needed)."""
+    return AppConfig.model_validate(
+        {
+            "mode": "paper",
+            "brokers": [{"name": "kraken", "exchange": "kraken"}],
+            "strategies": [
+                {
+                    "name": name,
+                    "symbol": "BTC/USD",
+                    "data": {"exchange": "kraken", "span": 60},
+                    "signal": {"ref": "ma_crossover", "params": {"fast": 3, "slow": 6}},
+                    "reference_qty": "2",
+                    "lookback": 6,
+                }
+                for name in ("clean", "warny", "errory")
+            ],
+        }
+    )
+
+
+def test_status_health_ok_warn_error() -> None:
+    """Three units seeded with clean / warn-only / error accounting reports.
+
+    None of the three is ever started: a stopped unit's health is computed
+    from its last cached accounting report alone (:meth:`StrategySupervisor.
+    _accounting_of`'s "nothing fresh to compute against" contract) — there is
+    no live engine, so no kill-switch fold either. ``errory`` also proves the
+    detail ordering: errors before warns.
+    """
+    import trading_bot.application.supervisor as sup_mod
+
+    sup = StrategySupervisor(_three_unit_config())
+
+    warn = Violation(
+        kind="duplicate_venue_ids",
+        severity="warn",
+        subject="VID-1",
+        detail="venue_order_id 'VID-1' is shared by 2 order rows.",
+        measured="2",
+        expected="1",
+    )
+    error = Violation(
+        kind="position_drift",
+        severity="error",
+        subject="BTC/USD",
+        detail="BTC/USD: tracked net qty disagrees with its fills.",
+        measured="5",
+        expected="3",
+    )
+
+    sup._units["clean"].accounting = sup_mod._AccountingState(  # noqa: SLF001
+        violations=[], computed_at_ms=0
+    )
+    sup._units["warny"].accounting = sup_mod._AccountingState(  # noqa: SLF001
+        violations=[warn], computed_at_ms=0
+    )
+    sup._units["errory"].accounting = sup_mod._AccountingState(  # noqa: SLF001
+        violations=[error, warn], computed_at_ms=0
+    )
+
+    clean_status = sup.status("clean")[0]
+    assert clean_status.health == "ok"
+    assert clean_status.health_detail == ()
+
+    warny_status = sup.status("warny")[0]
+    assert warny_status.health == "warn"
+    assert warny_status.health_detail == (warn.detail,)
+
+    errory_status = sup.status("errory")[0]
+    assert errory_status.health == "error"
+    assert errory_status.health_detail == (error.detail, warn.detail)  # errors first
+
+
+async def test_kill_switch_folds_to_error(tmp_path) -> None:  # noqa: ANN001
+    """A tripped kill-switch folds to `"error"`, `trip_reason` first in the detail.
+
+    ``btc-ma`` starts with a clean (empty paper) book — proving the fold comes
+    from the kill-switch itself, not a pre-existing violation.
+    """
+    db = str(tmp_path / "book.sqlite")
+    sup = StrategySupervisor(
+        _accounting_config(db),
+        dccd_client=_FakeDccdClient({"BTC/USD": _dccd_ohlc(_trend())}),
+    )
+    await sup.start("btc-ma")
+    unit = sup._units["btc-ma"]  # noqa: SLF001
+    assert unit.engine is not None
+    assert unit.accounting is not None
+    assert unit.accounting.violations == []  # clean startup
+
+    unit.engine.risk.trip("daily loss limit breached")
+
+    status = sup.status("btc-ma")[0]
+    assert status.health == "error"
+    assert status.health_detail == ("daily loss limit breached",)
