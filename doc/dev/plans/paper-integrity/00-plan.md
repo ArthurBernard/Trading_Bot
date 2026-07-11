@@ -69,7 +69,7 @@ target vs actual and self-corrects. The fix is entirely forward-looking; leaf
 
 - [x] 01 paper-durable-ids — fix/paper-durable-ids — medium (#190)
 - [x] 02 order-fill-sync — fix/order-fill-sync — high (#191)
-- [ ] 03 reconcile-persist-orphan — fix/reconcile-persist-orphan — medium
+- [x] 03 reconcile-persist-orphan — fix/reconcile-persist-orphan — medium (#193)
 - [ ] 04 restart-replay-e2e — chore/paper-restart-e2e — medium
 
 ## Dependencies

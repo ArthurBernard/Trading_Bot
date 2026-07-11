@@ -12,6 +12,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Reconcile's orphan-closes are persisted.** `reconcile()` now emits an
+  `OrderEvent` per orphan it cancels (same `event_bus` guard as its summary
+  log), so the store row moves to the terminal `cancelled` instead of keeping
+  its stale pre-restart status forever — order history stays truthful after
+  the engine corrects its in-memory view. (#193)
 - **Fills now reach the tracked order — and its store row.** New
   `application/order_fill_sync.py` (`OrderFillSync`, wired in `build_engine`):
   every venue-confirmed fill is applied to the router's tracked `Order`
