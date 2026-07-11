@@ -420,6 +420,7 @@ async def test_real_paperbroker_duplicate_id_yields_one_paper_order() -> None:
     broker = PaperBroker(
         prices={BTC_USD: money("30000")},
         starting_balances={"USD": money("100000")},
+        id_token="t",
     )
     bus = EventBus()
     seen = _capture(bus)
@@ -429,7 +430,7 @@ async def test_real_paperbroker_duplicate_id_yields_one_paper_order() -> None:
     # Port-pure broker: the router drives the order to OPEN and sets the venue id;
     # the broker's *own* fill of it lives in broker.fills(), not on this order.
     assert first.status is OrderStatus.OPEN
-    assert first.venue_order_id == "PAPER-1"
+    assert first.venue_order_id == "PAPER-t-1"
 
     # Same client-order-id again -> dedup, no second paper order/fill.
     second = await router.submit(_order(cid="real-1"))

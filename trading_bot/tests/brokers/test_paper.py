@@ -148,12 +148,12 @@ async def test_place_order_does_not_emit_without_a_bus() -> None:
 
 async def test_immediate_limit_buy_one_fill_at_limit_price() -> None:
     """A LIMIT buy fully fills in one :class:`Fill` at the limit price."""
-    broker = PaperBroker(starting_balances={"USD": money("100000")})
+    broker = PaperBroker(starting_balances={"USD": money("100000")}, id_token="t")
     order = _limit_buy(qty="2", price="30000")
 
     venue_order_id = await broker.place_order(order)
 
-    assert venue_order_id == "PAPER-1"
+    assert venue_order_id == "PAPER-t-1"
     # Port-pure: a fully-filled order is not live, so no open order remains.
     assert await broker.open_orders() == []
 
@@ -384,11 +384,126 @@ async def test_zero_fee_model() -> None:
 
 
 async def test_order_ids_are_deterministic_and_monotonic() -> None:
-    """Synthetic order ids are ``PAPER-1``, ``PAPER-2``, ... in placement order."""
-    broker = PaperBroker(starting_balances={"USD": money("1000000")})
+    """Synthetic order ids are ``PAPER-{token}-1``, ``-2``, ... in placement order."""
+    broker = PaperBroker(starting_balances={"USD": money("1000000")}, id_token="t")
     id1 = await broker.place_order(_limit_buy(qty="1", price="30000", cid="a"))
     id2 = await broker.place_order(_limit_buy(qty="1", price="30000", cid="b"))
-    assert (id1, id2) == ("PAPER-1", "PAPER-2")
+    assert (id1, id2) == ("PAPER-t-1", "PAPER-t-2")
+
+
+# --- lifetime-unique ids (B-fix: rebuilt engines must never collide) ------- #
+
+
+async def test_ids_unique_across_instances() -> None:
+    """Two default (random-token) instances never mint the same venue/fill id.
+
+    Simulates the motivating scenario at the id level: ``build_engine`` mints a
+    fresh ``PaperBroker`` per engine lifetime, with no ``id_token`` given, so two
+    instances placing the same sequence of orders must still land on disjoint id
+    sets — the per-instance random token is what makes that true.
+    """
+    broker_a = PaperBroker(starting_balances={"USD": money("1000000")})
+    broker_b = PaperBroker(starting_balances={"USD": money("1000000")})
+
+    id_a1 = await broker_a.place_order(_limit_buy(qty="1", price="30000", cid="a1"))
+    id_a2 = await broker_a.place_order(_limit_buy(qty="1", price="30000", cid="a2"))
+    id_b1 = await broker_b.place_order(_limit_buy(qty="1", price="30000", cid="b1"))
+    id_b2 = await broker_b.place_order(_limit_buy(qty="1", price="30000", cid="b2"))
+
+    assert {id_a1, id_a2}.isdisjoint({id_b1, id_b2})
+
+    fills_a = await broker_a.fills()
+    fills_b = await broker_b.fills()
+    fill_ids_a = {f.fill_id for f in fills_a}
+    fill_ids_b = {f.fill_id for f in fills_b}
+    assert fill_ids_a.isdisjoint(fill_ids_b)
+
+
+async def test_id_token_deterministic() -> None:
+    """``id_token="t"`` -> first placement yields ``PAPER-t-1`` / ``PAPER-FILL-t-1``."""
+    broker = PaperBroker(starting_balances={"USD": money("1000000")}, id_token="t")
+
+    venue_order_id = await broker.place_order(
+        _limit_buy(qty="1", price="30000", cid="a")
+    )
+
+    assert venue_order_id == "PAPER-t-1"
+    fills = await broker.fills()
+    assert fills[0].fill_id == "PAPER-FILL-t-1"
+
+
+async def test_id_token_empty_rejected() -> None:
+    """An empty ``id_token`` is rejected — it would defeat lifetime-uniqueness."""
+    with pytest.raises(BrokerError):
+        PaperBroker(id_token="")
+
+
+async def test_lifetime_rebuild_does_not_swallow_second_fill(tmp_path) -> None:  # noqa: ANN001
+    """The bug this leaf fixes: a rebuilt engine's fill must not collide with the last.
+
+    Mirrors the real seam: one :class:`~trading_bot.storage.sqlite_store.SqliteStore`
+    survives across two engine lifetimes (as ``build_engine`` mints a *fresh*
+    ``PaperBroker`` per rebuild). Lifetime 1 fills an order and its fill is
+    persisted; the store's paper fills are then replayed into a fresh tracker
+    exactly as :meth:`~trading_bot.application.supervisor.Supervisor._replay_paper_book`
+    does; lifetime 2 (a brand new ``PaperBroker`` instance, fresh bus, SAME
+    store) fills a second order. With the old scheme both lifetimes minted the
+    same ``PAPER-FILL-1`` id, so the store's ``INSERT OR IGNORE`` silently
+    dropped the second fill and the tracker's fill-id dedup silently refused to
+    apply it — a real simulated fill vanished from the book. With per-instance
+    tokens the ids differ and the second fill lands in both.
+    """
+    from trading_bot.application import EventBus, PositionTracker
+    from trading_bot.storage import SqliteStore
+
+    db_path = tmp_path / "lifetime.db"
+    store = SqliteStore(db_path)
+    store.set_context(mode="paper", venue="paper")
+
+    # --- lifetime 1: place + persist one fill ------------------------------ #
+    bus1 = EventBus()
+    store.attach(bus1)
+    broker1 = PaperBroker(
+        prices={BTC_USD: money("30000")},
+        starting_balances={"USD": money("100000")},
+        event_bus=bus1,
+    )
+    await broker1.place_order(_limit_buy(qty="1", price="30000", cid="lifetime-1"))
+    store.flush()  # the store writes off-loop; drain before reading
+
+    fills_after_1 = store.stored_fills()
+    assert len(fills_after_1) == 1
+
+    # --- lifetime 2: a FRESH broker instance + bus, same store ------------- #
+    bus2 = EventBus()
+    store.attach(bus2)
+    tracker2 = PositionTracker(event_bus=bus2)
+    # Replay the store's paper fills into the fresh tracker (mirrors
+    # ``_replay_paper_book``) before the new lifetime places anything.
+    for record in store.stored_fills():
+        if record.mode == "paper":
+            tracker2.apply(record.fill)
+
+    broker2 = PaperBroker(
+        prices={BTC_USD: money("30000")},
+        starting_balances={"USD": money("100000")},
+        event_bus=bus2,
+    )
+    await broker2.place_order(_limit_buy(qty="1", price="30000", cid="lifetime-2"))
+    store.flush()
+
+    fills_after_2 = store.stored_fills()
+    assert len(fills_after_2) == 2, (
+        "the second lifetime's fill must not collide with the first's fill id"
+    )
+    fill_ids = {record.fill.fill_id for record in fills_after_2}
+    assert len(fill_ids) == 2  # distinct ids across lifetimes
+
+    position = tracker2.position(BTC_USD)
+    assert position is not None
+    assert position.net_qty == Decimal("2")  # both fills applied; none swallowed
+
+    store.close()
 
 
 async def test_fills_since_ms_filters() -> None:
