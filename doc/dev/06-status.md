@@ -120,6 +120,16 @@ and `CHANGELOG.md` for what shipped.
 - **E1–E11 + the multi-asset/portfolio unit** shipped; the pre-production safety
   hardening (audit) is wired in (see *Where things stand*). `CHANGELOG.md` + git log are
   authoritative for what shipped per release.
+- **`paper-integrity` (2026-07-11, PRs #190–#194)**: paper ids unique across
+  engine lifetimes, fills reach the tracked order + store row (`OrderFillSync`,
+  startup healing), reconcile persists orphan-closes, restart/replay E2E.
+  Verified on copies of the live books: 14 (Binance) + 13 (Kraken) frozen rows
+  heal `open → filled`, 14 + 13 resting rows persist `open → cancelled`; the
+  healing applies to the real books at the next daemon restart. Caveat: the
+  pre-fix soak (started 2026-07-10) silently dropped one simulated fill per
+  instrument on the first post-restart rebalance — unrecoverable (never
+  persisted); the book is self-consistent and the next rebalance self-corrects,
+  but KPIs measured before 2026-07-11 carry that drift.
 
 ## Pending
 
