@@ -97,6 +97,47 @@ order — none started yet, each is a `/pick-task` candidate:
    200-row tail + server timestamps on snapshot endpoints, then the public
    contract is declared stable — 0.x-style breaking removals end at 1.0.
 
+## UI consistency & accounting integrity (2026-07-11)
+
+A dashboard-driven audit (position ≠ Σ orders on `alloc1-binance`) uncovered two
+engine bugs and a set of API/UX gaps. **The `paper-integrity` epic is urgent: the
+paper broker's in-memory id counters reset on every engine rebuild, so a
+restarted unit re-mints `PAPER-FILL-1` and the fill-id idempotency layer
+(tracker, perf, store) silently swallows real simulated fills — the running
+paper soak's KPIs (Road to 1.0 #4) are corrupted evidence until it lands.**
+In dependency order:
+
+1. [ ] **`paper-integrity` — paper engine integrity.** Durable order/fill ids
+   across engine rebuilds (today `count(1)` in-memory, `paper.py`); order
+   lifecycle sync (nothing ever calls `Order.apply_fill` on the router's
+   tracked instance — every filled order stays `open`/`filled_qty=0` in store
+   and UI; wire a `FillEvent` subscriber that updates the order and re-emits
+   `OrderEvent`); reconcile persists its orphan-closes (today it emits no
+   `OrderEvent`, so even cancels never reach the store).
+2. [ ] **`accounting-guardrail` — accounting invariant checker.** Position ==
+   Σ signed store fills per instrument; `filled_qty` == Σ fills per order;
+   venue/fill id uniqueness. Hooks: end of `reconcile()` + a `FillEvent`
+   subscriber. Surfaces as a per-strategy health field (`StrategyStatus` →
+   API → UI chip) + `LogEvent` alerts on the existing SSE stream. Overlaps
+   road-to-1.0 #3 (kill-switch visibility) — share the health surface.
+3. [ ] **`venue-minimums` — venue minimums end-to-end.** Flip the dashboard
+   wiring to `PaperBroker(strict=True)`; add the order-prep policy in the
+   portfolio runner (round up to venue minimum when close, skip + log when far
+   below — never fail the whole rebalance; the next rebalance recomputes the
+   residual naturally).
+4. [ ] **`api-completeness` — API exposes what the app layer knows.** Per-
+   position mark price (v1 = last dccd bar close, always with its `asof` ts;
+   live ticker is post-1.0), value + unrealised PnL per position; display
+   currency (global default + per-exchange override, static conversion rates);
+   `/api/balances`; `fee_ccy`; `last_asof_ts` on every surface. Must land
+   before the API contract freeze (road-to-1.0 #5).
+5. [ ] **`dashboard-tables-ux` — tables redesign.** Positions keyed by asset
+   (not pair) with value/mark/unrealised as primary columns; expandable rows
+   for secondary detail (fills under their order, ids, fee breakdown —
+   expanded state survives the SSE re-render); fills demoted to order detail
+   (flat audit view stays on the Orders page); "last bar → next bar" timing
+   chip; timezone affordance.
+
 ## Not gating 1.0 (post-1.0 candidates)
 
 - [ ] **Binance USDT-M futures adapter** — *unless* chosen as the first live
