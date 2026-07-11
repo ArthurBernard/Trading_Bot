@@ -283,6 +283,8 @@ def _position_row_dict(row: PositionRow) -> dict[str, Any]:
     The per-instrument exposure of one running unit, tagged with its ``strategy``
     and ``exchange`` (the dashboard's group-by keys) and its ``base`` asset (the
     group-by-crypto key). Money fields are exact :class:`~decimal.Decimal` strings.
+    ``mark_asof_ts`` is already an integer epoch ms (or ``None``), like
+    ``last_asof_ts`` on ``/api/strategies`` — no stringification needed.
     """
     return {
         "strategy": row.strategy,
@@ -293,6 +295,12 @@ def _position_row_dict(row: PositionRow) -> dict[str, Any]:
         "avg_entry_price": _money_str(row.avg_entry_price),
         "realised_pnl": _money_str(row.realised_pnl),
         "fees_paid": _money_str(row.fees_paid),
+        "mark": _money_str(row.mark),
+        "mark_asof_ts": row.mark_asof_ts,
+        "mark_source": row.mark_source,
+        "value": _money_str(row.value),
+        "unrealised": _money_str(row.unrealised),
+        "fee_ccy": row.fee_ccy,
     }
 
 
