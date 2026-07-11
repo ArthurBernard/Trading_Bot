@@ -68,6 +68,35 @@ submissions — the halt is total, by the gate, without the runner needing to kn
 about it. (A caller that wants strict all-or-nothing can inspect
 :attr:`RebalanceResult.failures` and act.)
 
+Venue-minimum order preparation (carried into the ADR)
+-------------------------------------------------------
+When an :class:`~trading_bot.application.instrument_specs.InstrumentSpecResolver`
+is injected (with the unit's ``exchange``), every non-zero leg passes through the
+pure :func:`~trading_bot.application.order_prep.prepare_leg` policy before an
+order is built: the leg's ``|delta|`` is lot-quantized against the **resolved**
+venue spec and compared to the binding minimum (``min_qty`` /
+``min_notional / price``) — submitted when at/above it, rounded **up** to it when
+within ``min_order_ratio`` of it, **skipped** (no submit, one info
+:class:`~trading_bot.application.events.LogEvent`) when further below; a sell
+reducing a long is capped at the held quantity. A degraded resolver (a venue
+metadata fetch failed — leaf 01's seam) emits ONE warning ``LogEvent`` per runner
+lifetime and the legs fall back to today's permissive path. See
+:mod:`~trading_bot.application.order_prep` for the pinned policy (and for the
+note that the single-instrument :class:`StrategyRunner` is a follow-up seam).
+
+The resolved spec shapes the **order values only** — deliberately. The
+:class:`~trading_bot.application.position_tracker.PositionTracker` buckets
+positions by the full frozen :class:`~trading_bot.domain.instrument.Instrument`,
+and every fill population keys the **bare** ``Instrument(symbol)``: the store
+rebuilds instruments symbol-only on replay, the live adapters build
+``Instrument(symbol)`` on their fills, and the
+:class:`~trading_bot.application.risk.RiskManager` reads exposure by the
+*order's* instrument. Stamping the metadata-rich resolved instrument onto the
+:class:`~trading_bot.domain.order.Order` would therefore split a restored book
+into two tracker buckets (bare vs resolved) and blind the ``max_position`` gate —
+so the leg's order keeps the bare instrument, and the venue spec is applied
+upstream to its *quantity* here.
+
 Cooperative stop & cadence (carried into the ADR)
 -------------------------------------------------
 :meth:`run` mirrors :class:`StrategyRunner.run`: it iterates the feed, checks an
@@ -92,6 +121,7 @@ from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING
 
 from trading_bot.application.events import EventBus, LogEvent
+from trading_bot.application.order_prep import prepare_leg
 from trading_bot.application.portfolio import weights_to_signals
 from trading_bot.domain.errors import BrokerError, RiskLimitBreached
 from trading_bot.domain.instrument import Instrument, Symbol
@@ -102,6 +132,7 @@ from trading_bot.domain.position import Position
 if TYPE_CHECKING:
     import polars as pl
 
+    from trading_bot.application.instrument_specs import InstrumentSpecResolver
     from trading_bot.application.order_router import OrderRouter
     from trading_bot.application.portfolio import PortfolioStrategy
     from trading_bot.application.position_tracker import PositionTracker
@@ -247,6 +278,24 @@ class PortfolioRunner:
         a lock — is the concurrency guarantee** that every leg of a tick sizes
         against the same base even if a deposit lands mid-tick. ``None`` (default)
         keeps the legacy static ``strategy.capital``, byte-for-byte unchanged.
+    spec_resolver : InstrumentSpecResolver or None, optional
+        The per-unit venue-spec resolver (see
+        :class:`~trading_bot.application.instrument_specs.InstrumentSpecResolver`
+        — cached per ``(exchange, symbol)`` for the process lifetime). When
+        given, every non-zero leg is prepared through the venue-minimum policy
+        (:func:`~trading_bot.application.order_prep.prepare_leg`) before its
+        order is built — see the module docstring. ``None`` (default) keeps the
+        legacy unprepared path, byte-for-byte unchanged. Requires ``exchange``.
+    exchange : str or None, optional
+        The venue key the unit trades on (the portfolio config's ``venue`` —
+        the same string the supervisor tags the unit's store with), passed to
+        ``spec_resolver.resolve``. Required when ``spec_resolver`` is given;
+        ignored (and defaulted to ``None``) otherwise.
+    min_order_ratio : Decimal, optional
+        The round-up threshold of the venue-minimum policy as a fraction of
+        the binding minimum, in ``(0, 1]`` (see
+        :class:`~trading_bot.application.config.PortfolioStrategyConfig`).
+        Defaults to ``0.5``. Only consulted when ``spec_resolver`` is given.
 
     Examples
     --------
@@ -266,13 +315,34 @@ class PortfolioRunner:
         event_bus: EventBus | None = None,
         order_factory: PortfolioOrderFactory | None = None,
         capital_provider: Callable[[], Money] | None = None,
+        spec_resolver: InstrumentSpecResolver | None = None,
+        exchange: str | None = None,
+        min_order_ratio: Money = money("0.5"),
     ) -> None:
+        if spec_resolver is not None and (exchange is None or not exchange.strip()):
+            raise ValueError(
+                "PortfolioRunner needs the unit's exchange to resolve venue "
+                "specs: pass exchange= alongside spec_resolver="
+            )
+        if not (0 < min_order_ratio <= 1):
+            # Fail at construction, not mid-rebalance: a bad ratio inside the
+            # leg loop would abort the whole tick (it is outside the per-leg
+            # try/except by design — a config error is not a leg failure).
+            raise ValueError(
+                f"min_order_ratio must be in (0, 1], got {min_order_ratio}"
+            )
         self._strategy = strategy
         self._feed = feed
         self._router = router
         self._tracker = tracker
         self._bus = event_bus
         self._capital_provider = capital_provider
+        self._spec_resolver = spec_resolver
+        self._exchange = exchange
+        self._min_order_ratio = min_order_ratio
+        # One degraded-resolver warning per runner (= unit) lifetime — see the
+        # module docstring's venue-minimum section.
+        self._spec_degraded_warned = False
         self._order_factory = (
             order_factory
             if order_factory is not None
@@ -450,6 +520,20 @@ class PortfolioRunner:
                 # no leg.
                 continue
 
+            if self._spec_resolver is not None:
+                # Venue-minimum order preparation (see the module docstring):
+                # resolve the venue spec (cached after the first tick), run the
+                # pure policy, and act on its decision. The order below still
+                # carries the BARE instrument — the resolved spec shapes the
+                # quantity only, never the tracker/risk keying.
+                delta = await self._prepare_delta(
+                    symbol, delta, position.net_qty, prices[symbol], step
+                )
+                if delta == 0:
+                    # The policy skipped the leg (dust / capped below the
+                    # minimum / quantized to zero); already logged.
+                    continue
+
             order = self._build_order(symbol, instrument, delta, prices[symbol], step)
             try:
                 routed = await self._router.submit(order)
@@ -616,6 +700,88 @@ class PortfolioRunner:
             )
             return True
         return False
+
+    async def _prepare_delta(
+        self,
+        symbol: Symbol,
+        delta: Money,
+        position_qty: Money,
+        close: Money,
+        step: int,
+    ) -> Money:
+        """Run one leg through the venue-minimum policy; return the final delta.
+
+        Resolves the venue spec for ``(exchange, symbol)`` (cached by the
+        resolver after the first tick), applies
+        :func:`~trading_bot.application.order_prep.prepare_leg` to the signed
+        ``delta`` and acts on the decision:
+
+        * ``skip`` → emits one info :class:`LogEvent` with the policy's reason
+          and returns ``0`` (the caller routes nothing — the residual is
+          recomputed naturally on the next rebalance);
+        * ``round_up`` → emits one info :class:`LogEvent` and returns the
+          bumped quantity on the original delta's side;
+        * ``submit`` → returns the (lot-quantized, possibly sell-capped)
+          quantity on the original delta's side.
+
+        A degraded resolver (a venue metadata fetch failed and fell back to a
+        bare instrument) additionally emits ONE warning :class:`LogEvent` per
+        runner lifetime; the leg itself degrades to the permissive path via the
+        bare spec. Never raises on venue-metadata trouble — the resolver
+        swallows fetch failures by contract, so a leg can never abort the
+        rebalance from here.
+        """
+        assert self._spec_resolver is not None and self._exchange is not None
+        spec = await self._spec_resolver.resolve(self._exchange, symbol)
+        if (
+            not self._spec_degraded_warned
+            and self._exchange.lower() in self._spec_resolver.degraded
+        ):
+            self._spec_degraded_warned = True
+            if self._bus is not None:
+                self._bus.emit(
+                    LogEvent(
+                        message=(
+                            f"{self._strategy.name}: venue spec fetch for "
+                            f"{self._exchange} is degraded — orders are "
+                            f"prepared permissively (no venue minimums) until "
+                            f"the daemon restarts"
+                        ),
+                        level="warning",
+                    )
+                )
+        decision = prepare_leg(
+            delta,
+            spec,
+            position_qty=position_qty,
+            min_order_ratio=self._min_order_ratio,
+            price=close,
+        )
+        if decision.action == "skip":
+            if self._bus is not None:
+                self._bus.emit(
+                    LogEvent(
+                        message=(
+                            f"{self._strategy.name} step {step}: leg {symbol} "
+                            f"skipped — {decision.reason}"
+                        ),
+                        level="info",
+                    )
+                )
+            return _ZERO
+        if decision.action == "round_up" and self._bus is not None:
+            self._bus.emit(
+                LogEvent(
+                    message=(
+                        f"{self._strategy.name} step {step}: leg {symbol} "
+                        f"rounded up to the venue minimum — {decision.reason}"
+                    ),
+                    level="info",
+                )
+            )
+        # The policy returns the final ABSOLUTE quantity; it rides the original
+        # delta's side (the policy never flips a leg's direction).
+        return decision.qty if delta > 0 else -decision.qty
 
     def _build_order(
         self,

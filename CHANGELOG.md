@@ -16,6 +16,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   one-shot warn). Real values verified: Binance 5 USDT min-notional (DOGE:
   1 USDT), Kraken BTC `ordermin` 0.00005. Feeds the upcoming venue-minimums
   order-prep policy. (#203)
+- **Rebalance legs respect venue minimums upstream.** New pure
+  `application/order_prep.py` (`prepare_leg` → `LegDecision`): each portfolio
+  leg is lot-quantized, then compared to the binding minimum (`min_qty` /
+  `min_notional/price`) — **round up** to the minimum when the delta is ≥
+  `min_order_ratio` of it (new config field, default `0.5`), **skip** with an
+  info log otherwise (no submit, no reject noise; the next rebalance
+  recomputes the residual). Spot sells reducing a long are capped at the held
+  position (cap below the minimum → skip); short-extending sells uncapped.
+  The venue spec shapes quantities only — routed orders keep the bare
+  instrument (position identity; see the ADR). Verified on the live books'
+  copies with real venue specs: Binance 14/14 dust legs skip (incl. the
+  audit's 0.50-USDT case), Kraken real round-ups land exactly on `ordermin`. (#204)
 - **Accounting invariant checker** (`application/accounting.py`) — a pure,
   side-effect-free recomputation of the book's self-consistency: per-instrument
   `position_drift` (tracker vs Σ signed store fills, `error`), per-order
