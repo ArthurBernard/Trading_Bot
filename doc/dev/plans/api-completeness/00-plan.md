@@ -66,7 +66,7 @@ is epic E). Must land before the road-to-1.0 API contract freeze (#5).
 
 - [x] 01 mark-cache — feat/mark-cache — medium (#209)
 - [x] 02 position-row-marks — feat/position-row-marks — medium (#211)
-- [ ] 03 display-currency — feat/display-currency — medium
+- [x] 03 display-currency — feat/display-currency — medium (#212)
 - [ ] 04 balances-and-asof — feat/api-balances — medium
 
 ## Dependencies
