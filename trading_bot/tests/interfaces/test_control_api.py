@@ -173,6 +173,8 @@ def test_control_wrapper_health_is_the_dashboard_shape() -> None:
         "read_only": False,
         "next_tick_ts": None,
         "tick": None,
+        "worst": "ok",
+        "unhealthy": 0,
     }
 
 

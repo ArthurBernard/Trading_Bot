@@ -27,6 +27,7 @@ import pytest
 from fastapi.testclient import TestClient
 from typer.testing import CliRunner
 
+from trading_bot.application.accounting import Violation
 from trading_bot.application.config import AppConfig
 from trading_bot.application.events import FillEvent, LogEvent, OrderEvent
 from trading_bot.application.supervisor import StrategySupervisor
@@ -194,6 +195,8 @@ def test_health_shape_and_values() -> None:
         "read_only": False,
         "next_tick_ts": None,
         "tick": None,
+        "worst": "ok",
+        "unhealthy": 0,
     }
 
 
@@ -220,6 +223,80 @@ def test_health_schedule_info_hook_that_raises_degrades_to_nulls() -> None:
     body = resp.json()
     assert body["next_tick_ts"] is None
     assert body["tick"] is None
+
+
+async def test_api_health_worst_and_count() -> None:
+    """`worst` is the worst *running* unit's health; `unhealthy` counts every non-ok unit.
+
+    Two running units (``btc-kraken`` clean, ``eth-binance`` seeded warn) prove
+    the worst-of aggregation and the count; stopping the unhealthy unit then
+    proves `unhealthy` still counts it (a stopped unit keeps its last cached
+    report) while `worst` drops (it only looks at running units). Every
+    pre-existing `/api/health` field must still be present and correct — this
+    is a public-contract regression check, not just the two new fields.
+    """
+    import trading_bot.application.supervisor as sup_mod
+
+    # A frozen clock: the seeded `unit.accounting` below carries `computed_at_ms
+    # == 0`, so it must stay inside the 60s TTL window for every `/api/health`
+    # call below (a real wall clock would blow straight past it and recompute
+    # a fresh, and here always empty, report instead of serving what was seeded).
+    sup = StrategySupervisor(
+        _two_venue_config(), dccd_client=_two_venue_client(), clock=lambda: 0
+    )
+    await sup.start_all()
+
+    warn = Violation(
+        kind="duplicate_venue_ids",
+        severity="warn",
+        subject="VID-1",
+        detail="venue_order_id 'VID-1' is shared by 2 order rows.",
+        measured="2",
+        expected="1",
+    )
+    error = Violation(
+        kind="position_drift",
+        severity="error",
+        subject="ETH/USDT",
+        detail="ETH/USDT: tracked net qty disagrees with its fills.",
+        measured="5",
+        expected="3",
+    )
+    sup._units["btc-kraken"].accounting = sup_mod._AccountingState(  # noqa: SLF001
+        violations=[], computed_at_ms=0
+    )
+    sup._units["eth-binance"].accounting = sup_mod._AccountingState(  # noqa: SLF001
+        violations=[warn], computed_at_ms=0
+    )
+
+    client = TestClient(create_dashboard_app(sup))
+    body = client.get("/api/health").json()
+    # Every pre-existing field, unchanged.
+    assert body["status"] == "ok"
+    assert body["mode"] == "paper"
+    assert body["strategies"] == 2
+    assert body["read_only"] is False
+    assert body["next_tick_ts"] is None
+    assert body["tick"] is None
+    # Both units running: worst is the warn one; one unhealthy unit.
+    assert body["worst"] == "warn"
+    assert body["unhealthy"] == 1
+
+    # Escalate to error (still running) -> worst follows.
+    sup._units["eth-binance"].accounting = sup_mod._AccountingState(  # noqa: SLF001
+        violations=[error], computed_at_ms=0
+    )
+    escalated = client.get("/api/health").json()
+    assert escalated["worst"] == "error"
+    assert escalated["unhealthy"] == 1
+
+    # Stop the unhealthy unit: `worst` only looks at running units (drops to
+    # "ok", the one clean unit left running); `unhealthy` still counts it (its
+    # cached report survives stop).
+    await sup.stop("eth-binance")
+    stopped = client.get("/api/health").json()
+    assert stopped["worst"] == "ok"
+    assert stopped["unhealthy"] == 1
 
 
 def test_read_only_reflected_everywhere() -> None:
@@ -1371,6 +1448,36 @@ def test_strategies_endpoint_lists_units_with_exchange() -> None:
     assert s["running"] is False
     assert s["span"] == 60
     assert s["quote"] == "USD"
+
+
+def test_api_strategies_carries_health() -> None:
+    """`GET /api/strategies` row carries `health`/`health_detail`, JSON-safe.
+
+    A stopped unit with a cached warn-only accounting report (seeded directly
+    on ``unit.accounting`` — no live engine needed to exercise the JSON shape)
+    surfaces `health: "warn"` and its violation's `detail` sentence in a plain
+    JSON list of strings (never a raw ``Violation`` or a ``Decimal``).
+    """
+    import trading_bot.application.supervisor as sup_mod
+
+    sup = _supervisor()
+    warn = Violation(
+        kind="duplicate_venue_ids",
+        severity="warn",
+        subject="VID-1",
+        detail="venue_order_id 'VID-1' is shared by 2 order rows.",
+        measured="2",
+        expected="1",
+    )
+    sup._units["btc-ma"].accounting = sup_mod._AccountingState(  # noqa: SLF001
+        violations=[warn], computed_at_ms=0
+    )
+    client = TestClient(create_dashboard_app(sup))
+    [row] = client.get("/api/strategies").json()
+    assert row["health"] == "warn"
+    assert row["health_detail"] == [warn.detail]
+    assert isinstance(row["health_detail"], list)
+    assert all(isinstance(sentence, str) for sentence in row["health_detail"])
 
 
 async def test_strategies_endpoint_last_eval_and_asof_ts() -> None:
