@@ -8,6 +8,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Instrument-spec resolver** (`application/instrument_specs.py`) — venue
+  minimums and precisions fetched once per `(exchange, symbol)` from the
+  venues' PUBLIC endpoints via the adapters' existing keyless builders
+  (Kraken `AssetPairs`, Binance `exchangeInfo`), process-lifetime cache,
+  permissive fallback on fetch failure (`degraded` seam for the caller's
+  one-shot warn). Real values verified: Binance 5 USDT min-notional (DOGE:
+  1 USDT), Kraken BTC `ordermin` 0.00005. Feeds the upcoming venue-minimums
+  order-prep policy. (#203)
 - **Accounting invariant checker** (`application/accounting.py`) — a pure,
   side-effect-free recomputation of the book's self-consistency: per-instrument
   `position_drift` (tracker vs Σ signed store fills, `error`), per-order
