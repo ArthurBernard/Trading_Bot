@@ -54,7 +54,7 @@ soak. The checker never mutates anything — it only reports.
 
 ## Leaf checklist
 
-- [ ] 01 invariant-checker — feat/accounting-checker — medium
+- [x] 01 invariant-checker — feat/accounting-checker — medium (#197)
 - [ ] 02 engine-wiring — feat/accounting-wiring — medium
 - [ ] 03 health-surface — feat/health-surface — medium
 - [ ] 04 ui-health-pill — feat/health-pill — medium
