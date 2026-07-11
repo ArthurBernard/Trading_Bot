@@ -394,6 +394,16 @@ class PortfolioStrategyConfig(BaseModel):
 
         Single-instrument strategies need no equivalent: they read under the exact
         ``symbol`` string the config gives, so there is nothing to re-render.
+    min_order_ratio : Decimal, optional
+        The round-up threshold of the venue-minimum order policy (see
+        :func:`~trading_bot.application.order_prep.prepare_leg`), as a fraction
+        of the binding venue minimum, in ``(0, 1]``. A rebalance leg whose
+        lot-quantized quantity is at least ``min_order_ratio`` of the venue
+        minimum (but below it) is rounded **up** to the minimum; a smaller leg
+        is skipped (no submit, one log) and its residual recomputes next
+        rebalance. ``1`` disables rounding up entirely (sub-minimum legs are
+        always skipped). Parsed exactly from a YAML scalar (``str``/``int``)
+        without touching ``float``. Defaults to ``0.5``.
     db_path : str or None, optional
         Per-strategy SQLite store path; overrides the global ``storage.db_path``
         for this strategy so its book/PnL are isolated. ``None`` → use the global
@@ -412,6 +422,7 @@ class PortfolioStrategyConfig(BaseModel):
     capital_policy: Literal["fixed", "compound"] = "fixed"
     venue: str = "binance"
     store_key_format: Literal["venue", "hyphen", "slash"] = "venue"
+    min_order_ratio: Decimal = Field(default_factory=lambda: money("0.5"))
     db_path: str | None = None
 
     @field_validator("name", "venue")
@@ -420,6 +431,14 @@ class PortfolioStrategyConfig(BaseModel):
         """Reject blank portfolio ``name`` / ``venue`` (whitespace-only too)."""
         if not v or not v.strip():
             raise ValueError("must be a non-empty string")
+        return v
+
+    @field_validator("min_order_ratio")
+    @classmethod
+    def _ratio_in_unit_interval(cls, v: Decimal) -> Decimal:
+        """Reject a ``min_order_ratio`` outside ``(0, 1]``."""
+        if not (0 < v <= 1):
+            raise ValueError(f"min_order_ratio must be in (0, 1], got {v}")
         return v
 
     @field_validator("universe")

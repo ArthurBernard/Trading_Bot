@@ -52,11 +52,12 @@ from __future__ import annotations
 import os
 import pathlib
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Protocol, runtime_checkable
 
 from trading_bot.application.config import AppConfig, BrokerConfig
 from trading_bot.application.events import EventBus
+from trading_bot.application.instrument_specs import InstrumentSpecResolver
 from trading_bot.application.order_fill_sync import OrderFillSync
 from trading_bot.application.order_router import OrderRouter
 from trading_bot.application.performance_service import PerformanceService
@@ -142,6 +143,12 @@ class Engine:
     store : SqliteStore or None
         The append-only order/fill history, attached to the bus. ``None`` when
         no ``db_path`` was given to :func:`build_engine`.
+    spec_resolver : InstrumentSpecResolver
+        The engine's venue instrument-spec resolver — one per engine (so, under
+        the supervisor, one per unit), its ``(exchange, symbol)`` cache living
+        exactly as long as the engine does. Threaded into the portfolio runners
+        (:func:`~trading_bot.application.run_app.build_portfolio_runners`) so
+        every rebalance leg is prepared against the venue's real minimums.
 
     """
 
@@ -154,6 +161,11 @@ class Engine:
     perf: PerformanceService
     risk: RiskManager
     store: SqliteStore | None
+    # default_factory (rather than a required field) keeps direct Engine(...)
+    # constructions — tests wire engines by hand — working unchanged.
+    spec_resolver: InstrumentSpecResolver = field(
+        default_factory=InstrumentSpecResolver
+    )
 
 
 def build_engine(
@@ -248,6 +260,11 @@ def build_engine(
         perf=perf,
         risk=risk,
         store=store,
+        # One venue-spec resolver per engine (= per supervised unit): its
+        # (exchange, symbol) cache — and its keyless public adapters — live and
+        # die with the engine. Constructed here, the single wiring point, and
+        # threaded to the portfolio runners by build_portfolio_runners.
+        spec_resolver=InstrumentSpecResolver(),
     )
 
 

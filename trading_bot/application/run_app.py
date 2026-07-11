@@ -614,7 +614,11 @@ def build_portfolio_runners(
     declared ``universe`` from the portfolio's ``data`` source, assembles a
     :class:`~trading_bot.application.portfolio.PortfolioStrategy` (carrying the
     config's ``capital`` / ``gross_cap``), and wraps it in a runner over the
-    engine's **shared** router / tracker / event bus.
+    engine's **shared** router / tracker / event bus. The engine's
+    :class:`~trading_bot.application.instrument_specs.InstrumentSpecResolver`
+    is threaded in (with the portfolio's ``venue`` and ``min_order_ratio``) so
+    every rebalance leg is prepared against the venue's real minimums
+    (:func:`~trading_bot.application.order_prep.prepare_leg`).
 
     The dccd ``client`` is threaded into every :class:`PortfolioFeed` so the build
     is offline-testable. A daily portfolio reading a 1-minute store should inject
@@ -705,6 +709,13 @@ def build_portfolio_runners(
             engine.tracker,
             event_bus=engine.bus,
             capital_provider=_portfolio_capital_provider(portfolio_cfg, engine),
+            # Venue-minimum order preparation: the engine's per-unit spec
+            # resolver plus the unit's venue key (`portfolio_cfg.venue` — the
+            # same canonical exchange string the supervisor tags the unit's
+            # store with, and the broker the live/testnet modes select on).
+            spec_resolver=engine.spec_resolver,
+            exchange=portfolio_cfg.venue,
+            min_order_ratio=money(portfolio_cfg.min_order_ratio),
         )
         runners.append(runner)
     return runners

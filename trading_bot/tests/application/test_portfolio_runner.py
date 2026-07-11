@@ -947,3 +947,230 @@ async def test_deposit_grows_next_rebalance_no_rebuild(tmp_path) -> None:  # noq
     result = await runner.rebalance(_frames())
     assert result.submitted == 1
     assert tracker.position(Instrument(BTC)).net_qty == Decimal("4")  # type: ignore[union-attr]
+
+
+# --- venue-minimum order preparation (leaf 02: round-up-or-skip) ------------ #
+
+
+class _FakeResolver:
+    """A fake :class:`InstrumentSpecResolver`: canned specs, optional degraded set.
+
+    Mirrors the resolver's contract — ``resolve`` never raises, an unknown
+    symbol yields a bare instrument, ``degraded`` names exchanges whose fetch
+    failed — while recording every ``(exchange, symbol)`` call.
+    """
+
+    def __init__(
+        self,
+        specs: Mapping[Symbol, Instrument] | None = None,
+        *,
+        degraded: set[str] | None = None,
+    ) -> None:
+        self._specs = dict(specs or {})
+        self.degraded = degraded or set()
+        self.calls: list[tuple[str, Symbol]] = []
+
+    async def resolve(self, exchange: str, symbol: Symbol) -> Instrument:
+        self.calls.append((exchange, symbol))
+        return self._specs.get(symbol, Instrument(symbol))
+
+
+def _capture_logs(bus: EventBus) -> list:
+    """Subscribe to ``bus`` and collect every :class:`LogEvent` emitted."""
+    from trading_bot.application.events import LogEvent
+
+    events: list[LogEvent] = []
+
+    def _handler(event) -> None:  # type: ignore[no-untyped-def]
+        if isinstance(event, LogEvent):
+            events.append(event)
+
+    bus.subscribe(_handler)
+    return events
+
+
+#: Real-shaped venue specs: BTC on a 5-USDT notional minimum (Binance shape),
+#: ETH on a plain min_qty.
+_BTC_SPEC = Instrument(
+    BTC, qty_precision=5, min_qty=money("0.00001"), min_notional=money("5")
+)
+_ETH_SPEC = Instrument(ETH, qty_precision=4, min_qty=money("0.0001"))
+
+
+async def test_dust_leg_is_skipped_with_one_info_event() -> None:
+    """A dust leg routes nothing and logs exactly one info line with the reason.
+
+    BTC weight 0.00000002 sizes to 0.00000004 BTC (~0.002 USDT) — far below the
+    5-USDT notional minimum: skipped. ETH (20 ETH) is unaffected.
+    """
+    weights = {BTC: money("0.00000002"), ETH: money("0.5")}
+    router, tracker, bus, _broker = _engine()
+    logs = _capture_logs(bus)
+    resolver = _FakeResolver({BTC: _BTC_SPEC, ETH: _ETH_SPEC})
+    runner = PortfolioRunner(
+        _strategy(_weights_signal(weights)),
+        _ListFeed([], asof=1_700),
+        router,
+        tracker,
+        event_bus=bus,
+        spec_resolver=resolver,
+        exchange="binance",
+        min_order_ratio=money("0.5"),
+    )
+
+    result = await runner.rebalance(_frames())
+
+    assert result.submitted == 1
+    assert result.failed == 0
+    assert set(router.tracked_orders()) == {"book-ETH/USDT-0"}  # no BTC order
+    skips = [e for e in logs if "skipped" in e.message and "BTC/USDT" in e.message]
+    assert len(skips) == 1
+    assert skips[0].level == "info"
+    assert resolver.calls and resolver.calls[0][0] == "binance"
+
+
+async def test_close_to_min_leg_submits_bumped_qty() -> None:
+    """A leg within min_order_ratio of the minimum submits the bumped quantity.
+
+    BTC weight 0.00003 sizes to 0.00006 BTC at 50000 (3 USDT) — 60% of the
+    5-USDT notional minimum (0.0001 BTC): rounded UP to exactly 0.0001.
+    """
+    weights = {BTC: money("0.00003")}
+    router, tracker, bus, _broker = _engine()
+    logs = _capture_logs(bus)
+    resolver = _FakeResolver({BTC: _BTC_SPEC})
+    runner = PortfolioRunner(
+        _strategy(_weights_signal(weights)),
+        _ListFeed([], asof=1_700),
+        router,
+        tracker,
+        event_bus=bus,
+        spec_resolver=resolver,
+        exchange="binance",
+    )
+
+    result = await runner.rebalance(_frames())
+
+    assert result.submitted == 1
+    order = router.tracked_orders()["book-BTC/USDT-0"]
+    assert order.side is OrderSide.BUY
+    assert order.qty == Decimal("0.00010")  # 5 / 50000, on the 1e-5 lot grid
+    bumps = [e for e in logs if "rounded up" in e.message]
+    assert len(bumps) == 1 and bumps[0].level == "info"
+    # The broker-confirmed fill matches the bumped quantity (no sub-minimum
+    # order ever reached the venue).
+    assert tracker.position(Instrument(BTC)).net_qty == Decimal("0.00010")  # type: ignore[union-attr]
+
+
+async def test_degraded_resolver_warns_once_across_ticks() -> None:
+    """A degraded venue fetch produces ONE warning per runner lifetime, not per tick."""
+    weights = {BTC: money("0.5"), ETH: money("0.25")}
+    router, tracker, bus, _broker = _engine()
+    logs = _capture_logs(bus)
+    resolver = _FakeResolver(degraded={"binance"})  # bare specs: permissive
+    runner = PortfolioRunner(
+        _strategy(_weights_signal(weights)),
+        _ListFeed([], asof=1_700),
+        router,
+        tracker,
+        event_bus=bus,
+        spec_resolver=resolver,
+        exchange="binance",
+    )
+
+    await runner.rebalance(_frames())
+    await runner.rebalance(_frames())
+
+    warnings = [e for e in logs if e.level == "warning" and "degraded" in e.message]
+    assert len(warnings) == 1
+    # Permissive fallback: the legs themselves still routed (tick 1: 2 legs;
+    # tick 2: on target -> 0).
+    assert set(router.tracked_orders()) == {"book-BTC/USDT-0", "book-ETH/USDT-0"}
+
+
+async def test_normal_legs_are_regression_unchanged_under_resolver() -> None:
+    """Bare resolved specs leave a normal rebalance byte-identical to today.
+
+    Same weights as ``test_one_rebalance_from_flat_routes_n_sized_orders``:
+    with a resolver returning bare instruments (no minimums, no lot) the
+    submitted quantities are the exact unquantized Decimals of the legacy path.
+    """
+    weights = {BTC: money("0.5"), ETH: money("-0.25")}
+    router, tracker, bus, _broker = _engine()
+    runner = PortfolioRunner(
+        _strategy(_weights_signal(weights)),
+        _ListFeed([], asof=1_700),
+        router,
+        tracker,
+        event_bus=bus,
+        spec_resolver=_FakeResolver(),  # every symbol resolves bare
+        exchange="binance",
+    )
+
+    result = await runner.rebalance(_frames())
+
+    assert result.submitted == 2
+    orders = router.tracked_orders()
+    btc_order = orders["book-BTC/USDT-0"]
+    eth_order = orders["book-ETH/USDT-0"]
+    assert btc_order.side is OrderSide.BUY and btc_order.qty == Decimal("1")
+    assert eth_order.side is OrderSide.SELL and eth_order.qty == Decimal("10")
+    assert tracker.position(Instrument(BTC)).net_qty == Decimal("1")  # type: ignore[union-attr]
+    assert tracker.position(Instrument(ETH)).net_qty == Decimal("-10")  # type: ignore[union-attr]
+
+
+async def test_sell_leg_capped_at_held_position_via_runner() -> None:
+    """A long-reducing sell leg is capped at the held qty end to end.
+
+    Tick 0 opens +1 BTC. Tick 1 targets a large short (-2 weight → target -4):
+    the sell delta (-5) is capped at the held +1 — the venue-shaped spot cap —
+    and the routed order sells exactly 1.
+    """
+    router, tracker, bus, _broker = _engine()
+    resolver = _FakeResolver({BTC: _BTC_SPEC})
+    open_long = PortfolioRunner(
+        _strategy(_weights_signal({BTC: money("0.5")})),
+        _ListFeed([], asof=1_700),
+        router,
+        tracker,
+        event_bus=bus,
+        spec_resolver=resolver,
+        exchange="binance",
+    )
+    await open_long.rebalance(_frames())
+    assert tracker.position(Instrument(BTC)).net_qty == Decimal("1")  # type: ignore[union-attr]
+
+    flip_short = PortfolioRunner(
+        _strategy(_weights_signal({BTC: money("-2")}), name="book2"),
+        _ListFeed([], asof=1_701),
+        router,
+        tracker,
+        event_bus=bus,
+        spec_resolver=resolver,
+        exchange="binance",
+    )
+    result = await flip_short.rebalance(_frames())
+
+    assert result.submitted == 1
+    order = router.tracked_orders()["book2-BTC/USDT-0"]
+    assert order.side is OrderSide.SELL
+    assert order.qty == Decimal("1.00000")  # capped at the held +1, on the grid
+    assert tracker.position(Instrument(BTC)).net_qty == Decimal("0")  # type: ignore[union-attr]
+
+
+async def test_resolver_requires_exchange() -> None:
+    """Constructing a runner with a resolver but no exchange fails loudly."""
+    router, tracker, bus, _broker = _engine()
+    try:
+        PortfolioRunner(
+            _strategy(_weights_signal({BTC: money("0.5")})),
+            _ListFeed([], asof=1_700),
+            router,
+            tracker,
+            event_bus=bus,
+            spec_resolver=_FakeResolver(),
+        )
+    except ValueError as exc:
+        assert "exchange" in str(exc)
+    else:  # pragma: no cover - the guard must fire
+        raise AssertionError("expected ValueError for a resolver with no exchange")
