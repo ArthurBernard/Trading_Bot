@@ -3,6 +3,7 @@
 :func:`build_engine` is the one place the whole engine is assembled from a
 validated :class:`~trading_bot.application.config.AppConfig`. It constructs every
 use-case (the :class:`~trading_bot.application.order_router.OrderRouter`, the
+:class:`~trading_bot.application.order_fill_sync.OrderFillSync`, the
 :class:`~trading_bot.application.position_tracker.PositionTracker`, the
 :class:`~trading_bot.application.performance_service.PerformanceService`, the
 :class:`~trading_bot.application.risk.RiskManager`), the
@@ -56,6 +57,7 @@ from typing import Protocol, runtime_checkable
 
 from trading_bot.application.config import AppConfig, BrokerConfig
 from trading_bot.application.events import EventBus
+from trading_bot.application.order_fill_sync import OrderFillSync
 from trading_bot.application.order_router import OrderRouter
 from trading_bot.application.performance_service import PerformanceService
 from trading_bot.application.position_tracker import PositionTracker
@@ -125,6 +127,12 @@ class Engine:
         in live mode.
     router : OrderRouter
         The idempotent write path, gated by ``risk`` and routing to ``broker``.
+    fill_sync : OrderFillSync
+        The fill→order synchroniser: applies every venue-confirmed fill to the
+        router's *tracked* :class:`~trading_bot.domain.order.Order` and re-emits
+        the updated :class:`~trading_bot.application.events.OrderEvent` so the
+        store row follows the order to its terminal state; its ``replay`` heals
+        restored orders from persisted fills on startup.
     tracker : PositionTracker
         The live net-position view, subscribed to the bus's fills.
     perf : PerformanceService
@@ -141,6 +149,7 @@ class Engine:
     bus: EventBus
     broker: Broker
     router: OrderRouter
+    fill_sync: OrderFillSync
     tracker: PositionTracker
     perf: PerformanceService
     risk: RiskManager
@@ -217,6 +226,12 @@ def build_engine(
         daily_pnl_provider=perf.realised_pnl_since,
     )
     router = OrderRouter(broker, bus, risk_manager=risk)
+    # Close the fill loop: without this, no component ever applies a venue-
+    # confirmed fill to the router's *tracked* Order, so every filled order
+    # freezes at OPEN/0 in the store and UI. Constructed right after the router
+    # (it subscribes itself to the bus on construction), before the store
+    # attaches, so its re-emitted OrderEvent is what the store persists.
+    fill_sync = OrderFillSync(router, bus)
 
     store: SqliteStore | None = None
     if db_path is not None:
@@ -228,6 +243,7 @@ def build_engine(
         bus=bus,
         broker=broker,
         router=router,
+        fill_sync=fill_sync,
         tracker=tracker,
         perf=perf,
         risk=risk,

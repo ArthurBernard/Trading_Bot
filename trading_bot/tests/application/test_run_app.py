@@ -546,6 +546,7 @@ async def test_run_app_startup_reconcile_converges_to_venue(
 
     run_app_mod = importlib.import_module("trading_bot.application.run_app")
     from trading_bot.application.events import EventBus
+    from trading_bot.application.order_fill_sync import OrderFillSync
     from trading_bot.application.order_router import OrderRouter
     from trading_bot.application.performance_service import PerformanceService
     from trading_bot.application.position_tracker import PositionTracker
@@ -581,11 +582,13 @@ async def test_run_app_startup_reconcile_converges_to_venue(
     perf = PerformanceService(v0=config.starting_capital, event_bus=bus)
     risk = RiskManager(config.risk, position_tracker=tracker)
     router = OrderRouter(broker, bus, risk_manager=risk)
+    fill_sync = OrderFillSync(router, bus)
     engine = Engine(
         config=config,
         bus=bus,
         broker=broker,
         router=router,
+        fill_sync=fill_sync,
         tracker=tracker,
         perf=perf,
         risk=risk,
