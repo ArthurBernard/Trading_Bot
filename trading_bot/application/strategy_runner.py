@@ -68,6 +68,22 @@ guarantee lives in one place (the strategy), and the runner inherits it.
 This module lives in the application layer: it imports the pure domain and the
 sibling use-cases, holds money as :class:`~decimal.Decimal` end to end, and
 performs no I/O of its own (the router/broker do).
+
+Follow-up: no mark-cache publish yet (carried into the ADR)
+-------------------------------------------------------------
+The ``api-completeness`` epic's mark cache (see
+``doc/dev/plans/api-completeness/00-plan.md``,
+:mod:`~trading_bot.application.mark_cache`) is published by
+:meth:`~trading_bot.application.portfolio_runner.PortfolioRunner.rebalance`
+right where it already reads every coin's latest close. This runner has no
+equally direct seam: :meth:`step` only reads a bar's close conditionally (when
+a ``capital_provider`` is wired, inside :meth:`_reference_qty`) and never
+computes this step's as-of itself — that derivation happens afterwards, in
+:meth:`step_latest`, over the same ``bars`` :meth:`step` already consumed.
+Forcing a publish here would mean re-deriving both values redundantly on every
+call, including the plain backtest :meth:`run` path. Left as a follow-up
+(today's dashboard units are portfolio units, per the epic's plan) rather than
+threading a mismatched seam.
 """
 
 from __future__ import annotations
