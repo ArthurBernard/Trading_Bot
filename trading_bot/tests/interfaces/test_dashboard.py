@@ -961,6 +961,65 @@ def test_positions_unknown_group_by_is_422() -> None:
     assert _client().get("/api/positions?group_by=bogus").status_code == 422
 
 
+def test_api_positions_contract_regression(tmp_path) -> None:  # noqa: ANN001
+    """`/api/positions` carries every pre-existing field, byte-identical, plus the new ones.
+
+    A public-contract regression check (mirrors `test_api_health_worst_and_count`):
+    proves the ``mark``/``mark_asof_ts``/``mark_source``/``value``/``unrealised``/
+    ``fee_ccy`` additions (api-completeness leaf 02) never displaced or renamed any
+    of the eight fields the endpoint already shipped.
+    """
+    from trading_bot.storage.sqlite_store import SqliteStore
+
+    db = str(tmp_path / "book.sqlite")
+    inst = Instrument(Symbol("BTC", "USD"))
+    store = SqliteStore(db)
+    store.record_fill(
+        Fill("SF1", "sc1", inst, OrderSide.BUY, money("2"), money("100"), money("1"), 1)
+    )
+    config = AppConfig.model_validate(
+        {
+            "mode": "paper",
+            "storage": {"db_path": db},
+            "brokers": [{"name": "kraken", "exchange": "kraken"}],
+            "strategies": [
+                {
+                    "name": "btc-ma",
+                    "symbol": "BTC/USD",
+                    "data": {"exchange": "kraken", "span": 60},
+                    "signal": {"ref": "ma_crossover", "params": {"fast": 3, "slow": 6}},
+                    "reference_qty": "2",
+                    "lookback": 6,
+                }
+            ],
+        }
+    )
+    sup = StrategySupervisor(config, dccd_client=_FakeStartClient())
+    asyncio.run(sup.start("btc-ma"))
+    # Seed the mark cache directly (the bar_close path) so every new field populates.
+    sup._units["btc-ma"].engine.mark_cache.update(  # noqa: SLF001
+        Symbol("BTC", "USD"), money("110"), 9_000
+    )
+
+    [row] = TestClient(create_dashboard_app(sup)).get("/api/positions").json()
+    # Every pre-existing field, unchanged.
+    assert row["strategy"] == "btc-ma"
+    assert row["exchange"] == "kraken"
+    assert row["instrument"] == "BTC/USD"
+    assert row["base"] == "BTC"
+    assert row["net_qty"] == "2"
+    assert row["avg_entry_price"] == "100"
+    assert row["realised_pnl"] == "-1"  # the opening fill's fee reduces realised PnL
+    assert row["fees_paid"] == "1"
+    # The new fields.
+    assert row["mark"] == "110"
+    assert row["mark_asof_ts"] == 9_000
+    assert row["mark_source"] == "bar_close"
+    assert row["value"] == "220"
+    assert row["unrealised"] == "20"
+    assert row["fee_ccy"] == "USD"
+
+
 def test_orders_endpoint_present_and_empty() -> None:
     """`GET /api/orders` exists and is an empty list when nothing is open."""
     assert _client().get("/api/orders").json() == []

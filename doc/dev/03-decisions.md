@@ -6,6 +6,25 @@ rejected approaches as tombstones.
 
 ---
 
+### 2026-07-11 Marks are bar closes with a mandatory as-of, one policy at every altitude (PR #211)  [accepted]
+- **Choice**: v1 mark = the last dccd bar close the runner saw (published to
+  a per-engine cache at rebalance time), serialized ONLY together with
+  `mark_asof_ts` and `mark_source` (`bar_close` | `last_fill` fallback).
+  Both the per-position rows and the strategy aggregate (`_unrealised_of`)
+  read the same `_mark_of` helper — one mark policy at every altitude. The
+  API path does zero I/O; a live ticker is post-1.0.
+- **Why**: the bar close is the price the strategy actually evaluated on —
+  fresher and more honest than the previous last-own-fill mark for
+  daily-rebalance books (which only moved when the unit itself traded). A
+  mark without its timestamp invites mistaking a day-old close for a live
+  price — the UI can only render "as of", never bare. Splitting policies
+  between rows and aggregate would let the roster disagree with its own
+  detail rows.
+- **Rejected alternatives**: last-own-fill as primary (stale for days on
+  low-churn books); fetching a ticker on the API path (network I/O per
+  request, and a freshness the engine's own decisions don't have); marks
+  without `mark_source` (the fallback would masquerade as fresh data).
+
 ### 2026-07-11 Venue minimums shape quantities upstream; the Order keeps the bare Instrument (PR #204)  [accepted]
 - **Choice**: the round-up-or-skip policy (`order_prep.prepare_leg`) runs at
   leg preparation with the resolved venue spec — but the routed `Order`
