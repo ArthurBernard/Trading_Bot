@@ -8,6 +8,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+### Changed
+
+### Fixed
+
+### Deprecated
+
+### Removed
+
+## [0.13.0] - 2026-07-11
+
+### Added
+
 - **Venue-minimums E2E** (`tests/application/test_venue_minimums_e2e.py`,
   closes the `venue-minimums` epic) — two rebalance ticks over one strict
   engine exercising all four leg shapes (above-min, round-up, dust, capped
@@ -74,12 +86,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   keeps its permissive default. Verified: the audit's 0.0000079-BTC dust
   order is rejected on the real Binance lot step while the engine keeps
   trading. (#205)
-
-### Fixed
-
-### Deprecated
-
-### Removed
 
 ## [0.12.0] - 2026-07-11
 
