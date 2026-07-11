@@ -6,6 +6,21 @@ rejected approaches as tombstones.
 
 ---
 
+### 2026-07-11 Orphan-closes are persisted, even on a refused transition (PR #193)  [accepted]
+- **Choice**: `reconcile()` emits one `OrderEvent` per orphan-close (persisting
+  the `CANCELLED` terminal to the store), and emits it **even when the close
+  transition was refused** by the state machine.
+- **Why**: the in-memory correction was invisible to the store — order history
+  kept the stale pre-restart status forever. With the fill replay healing
+  running first (PR #191), only genuinely-unfilled resting orders reach the
+  orphan rule, so the persisted cancel is always truthful. On a refused
+  transition, the order's actual current state is still more truthful than
+  the stale row.
+- **Rejected alternatives**: persisting via a direct store write from
+  `reconcile` (bypasses the bus — every persistence path goes through
+  `OrderEvent`/`upsert_order`); emitting only on a successful cancel (leaves
+  refused-transition rows permanently stale).
+
 ### 2026-07-11 Fill ingestion is a dedicated bus consumer, healing before reconcile (PR #191)  [accepted]
 - **Choice**: a new `OrderFillSync` component (not a router method) subscribes
   to the bus and applies every `FillEvent` to the router's tracked `Order`,
