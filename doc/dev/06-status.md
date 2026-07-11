@@ -130,6 +130,13 @@ and `CHANGELOG.md` for what shipped.
   instrument on the first post-restart rebalance — unrecoverable (never
   persisted); the book is self-consistent and the next rebalance self-corrects,
   but KPIs measured before 2026-07-11 carry that drift.
+- **`accounting-guardrail` (2026-07-11, PRs #197–#201)**: the book proves
+  itself continuously — pure invariant checker (`application/accounting.py`),
+  run at unit startup + on a 60 s TTL behind dashboard reads, new violations
+  alert once on the SSE stream, per-strategy `health`/`health_detail` on the
+  API (folding the kill-switch, previously unreadable) down to a roster/detail
+  pill. The live books surface a *stable* `warn` for the 14+13 legacy
+  pre-v0.12.0 duplicate venue ids (disappears if the books are reset).
 
 ## Pending
 

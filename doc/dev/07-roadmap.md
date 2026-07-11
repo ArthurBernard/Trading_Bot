@@ -100,17 +100,14 @@ order — none started yet, each is a `/pick-task` candidate:
 ## UI consistency & accounting integrity (2026-07-11)
 
 A dashboard-driven audit (position ≠ Σ orders on `alloc1-binance`) uncovered two
-engine bugs and a set of API/UX gaps. The `paper-integrity` epic (durable paper
-ids, order↔fill lifecycle sync, persisted orphan-closes) **shipped 2026-07-11**
-(PRs #190–#194; plan tree archived) — restart the daemon to heal the live books.
-In dependency order:
+engine bugs and a set of API/UX gaps. Shipped 2026-07-11 (plan trees archived):
+the `paper-integrity` epic (durable paper ids, order↔fill lifecycle sync,
+persisted orphan-closes — PRs #190–#194, v0.12.0; restart the daemon to heal
+the live books) and the `accounting-guardrail` epic (pure invariant checker,
+startup + 60 s-TTL wiring with SSE alerts, per-strategy health surface incl.
+the kill-switch fold — the *status* half of road-to-1.0 #3 — and the dashboard
+health pill; PRs #197–#201). In dependency order:
 
-2. [ ] **`accounting-guardrail` — accounting invariant checker.** Position ==
-   Σ signed store fills per instrument; `filled_qty` == Σ fills per order;
-   venue/fill id uniqueness. Hooks: end of `reconcile()` + a `FillEvent`
-   subscriber. Surfaces as a per-strategy health field (`StrategyStatus` →
-   API → UI chip) + `LogEvent` alerts on the existing SSE stream. Overlaps
-   road-to-1.0 #3 (kill-switch visibility) — share the health surface.
 3. [ ] **`venue-minimums` — venue minimums end-to-end.** Flip the dashboard
    wiring to `PaperBroker(strict=True)`; add the order-prep policy in the
    portfolio runner (round up to venue minimum when close, skip + log when far

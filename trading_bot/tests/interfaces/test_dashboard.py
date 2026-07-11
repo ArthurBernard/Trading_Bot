@@ -155,6 +155,19 @@ def test_every_page_carries_the_status_badge_language(path: str) -> None:
 
 
 @pytest.mark.parametrize("path", _PAGES)
+def test_every_page_carries_the_health_pill_helper(path: str) -> None:
+    """Every page's shell (base.html) carries the shared health-pill helper.
+
+    Leaf 04 (accounting-guardrail): the per-strategy health pill (roster row +
+    detail header) is fed by `healthPillHtml()`, defined once in base.html and
+    reusing the existing `.badge-status-warn`/`.badge-status-err` CSS pair
+    (leaf 05's order-status badges) rather than inventing new pill classes.
+    """
+    html = _client().get(path).text
+    assert "healthPillHtml" in html, path
+
+
+@pytest.mark.parametrize("path", _PAGES)
 def test_nav_lists_four_tabs_and_no_pnl(path: str) -> None:
     """Every page's nav lists the four surviving tabs; the retired PnL tab is gone.
 
@@ -713,6 +726,18 @@ def test_strategy_detail_has_the_capital_card_and_ledger_expander() -> None:
     # It fetches the leaf-07 endpoints — no new backend.
     assert "/capital" in html
     assert "/policy" in html
+
+
+def test_strategy_detail_carries_the_health_pill_hook() -> None:
+    """The detail header wires the shared health pill next to the mode badge.
+
+    Leaf 04 (accounting-guardrail) — `#detail-health-pill` sits between
+    `#detail-mode-badge` and `#detail-run-pill` (the pinned "next to the mode
+    badge" placement); `renderHeader()` fills it from `healthPillHtml(s)`.
+    """
+    html = _client().get("/strategies/btc-ma").text
+    assert 'id="detail-health-pill"' in html
+    assert "healthPillHtml(s)" in html
 
 
 def test_strategy_detail_read_only_hides_capital_controls() -> None:
@@ -1606,6 +1631,16 @@ def test_strategies_page_is_a_linked_roster() -> None:
     # lives in base.html for every page, so the modal id is the clean marker).
     assert 'id="live-modal"' not in html
     assert "I UNDERSTAND" not in html
+
+
+def test_strategies_roster_carries_the_health_pill_hook() -> None:
+    """The roster's row renderer calls the shared health-pill helper (leaf 04).
+
+    Placed next to the existing run-pill status cell content, per the pinned
+    display rule ("ok" -> no pill; "warn"/"error" -> the badge-status-* pill).
+    """
+    html = _client().get("/strategies").text
+    assert "healthPillHtml(s)" in html
 
 
 def test_strategies_page_read_only_note_and_no_deploy_link() -> None:

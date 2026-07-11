@@ -31,6 +31,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `/api/health` gains `worst` (across running units) and `unhealthy` (count,
   all units). Existing fields untouched. Delivers the kill-switch *status*
   half of road-to-1.0 #3. (#200)
+- **Health pill in the dashboard (closes the `accounting-guardrail` epic).**
+  The Strategies roster and the strategy detail header show an amber `warn` /
+  red `error` pill (nothing when healthy — silence is the healthy state);
+  the hover tooltip lists the checker's exact violation sentences. Reuses the
+  existing badge styles and the SSE + 10 s-poll refresh; violation text is
+  HTML-escaped (sentences contain quotes). (#201)
 
 ### Changed
 
