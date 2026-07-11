@@ -17,6 +17,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   27 pre-v0.12.0 frozen rows and the legacy id duplicates, zero position
   drift, and comes back clean (legacy warns aside) post-healing. Wiring into
   the engine/API/UI follows in the next `accounting-guardrail` leaves. (#197)
+- **The accounting checker now runs by itself.** Each unit checks its book at
+  startup (right after the restart healing/replay) and lazily behind the
+  dashboard reads on a 60 s TTL — no new background task. Violations are
+  diffed against the previous report: only **new** ones alert (one `LogEvent`
+  per violation, `error`/`warning` level, on the existing SSE stream);
+  resolved ones log an info line; a stable set — e.g. the legacy duplicate
+  venue ids — stays silent. (#199)
 
 ### Changed
 
