@@ -6,6 +6,22 @@ rejected approaches as tombstones.
 
 ---
 
+### 2026-07-11 Paper ids get a lifetime token, not persisted counters (PR #190)  [accepted]
+- **Choice**: `PaperBroker` embeds a per-instance token in every synthetic id
+  (`PAPER-{token}-{n}` / `PAPER-FILL-{token}-{n}`), `uuid4().hex[:8]` by
+  default, injectable (`id_token=`) for exact-string test determinism.
+  Counters still restart at 1 within a lifetime.
+- **Why**: ids must be unique *across* engine lifetimes — a rebuilt engine
+  re-minting `PAPER-FILL-1` had its fills silently dropped by the fill-id
+  idempotency layer (tracker, perf, store all dedup by `fill_id`, and
+  `_replay_paper_book` pre-seeds the previous lifetime's ids at startup), so
+  the paper book lost real simulated fills after every restart.
+- **Rejected alternatives**: store-backed counters (a broker adapter must not
+  depend on `storage/` — hexagonal layering; threading a persisted counter
+  through the `Broker` port for a simulator buys nothing a random token
+  doesn't); wall-clock/lifetime-timestamp prefixes (collide under frozen test
+  clocks and add nothing over a random token).
+
 ### 2026-07-10 Genesis funding is stamped at seeding time; the ts=0 sentinel is retired (PR #184)  [accepted]
 - **Choice**: `CapitalService.ensure_genesis` stamps the genesis `FUNDING`
   event with the wall clock at **first** seeding (idempotency unchanged — a
