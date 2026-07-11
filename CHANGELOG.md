@@ -24,6 +24,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   per violation, `error`/`warning` level, on the existing SSE stream);
   resolved ones log an info line; a stable set — e.g. the legacy duplicate
   venue ids — stays silent. (#199)
+- **Per-strategy health on the API — the kill-switch is finally visible.**
+  `/api/strategies` rows carry `health` (`ok`/`warn`/`error`) and
+  `health_detail` (the exact violation sentences; a tripped kill-switch's
+  reason first — `RiskManager.tripped` previously had zero readers anywhere).
+  `/api/health` gains `worst` (across running units) and `unhealthy` (count,
+  all units). Existing fields untouched. Delivers the kill-switch *status*
+  half of road-to-1.0 #3. (#200)
 
 ### Changed
 
