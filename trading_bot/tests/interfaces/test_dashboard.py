@@ -198,6 +198,21 @@ def test_every_page_carries_the_order_execution_cell_builders(path: str) -> None
 
 
 @pytest.mark.parametrize("path", _PAGES)
+def test_every_page_carries_the_bar_timing_chip_helper(path: str) -> None:
+    """Every page's shell (base.html) carries the shared bar-timing chip helper.
+
+    Leaf 03 (dashboard-tables-ux): the "last bar X ago -> next in Y" chip is
+    fed by `barTimingChipHtml()`, defined once in base.html (mirroring
+    `healthPillHtml`'s shape) so both the roster and the detail header render
+    it identically, and so the epoch-aligned `nextBarCloseMs` guess it
+    replaces stays retired everywhere.
+    """
+    html = _client().get(path).text
+    assert "function barTimingChipHtml" in html, path
+    assert "nextBarCloseMs" not in html, path
+
+
+@pytest.mark.parametrize("path", _PAGES)
 def test_nav_lists_four_tabs_and_no_pnl(path: str) -> None:
     """Every page's nav lists the four surviving tabs; the retired PnL tab is gone.
 
@@ -770,6 +785,17 @@ def test_strategy_detail_carries_the_health_pill_hook() -> None:
     html = _client().get("/strategies/btc-ma").text
     assert 'id="detail-health-pill"' in html
     assert "healthPillHtml(s)" in html
+
+
+def test_strategy_detail_carries_the_bar_timing_chip_hook() -> None:
+    """The detail header wires the shared bar-timing chip next to the pills (leaf 03).
+
+    `#detail-bar-timing` sits alongside `#detail-run-pill`; `renderHeader()`
+    fills it from `barTimingChipHtml(s)` — the same helper the roster uses.
+    """
+    html = _client().get("/strategies/btc-ma").text
+    assert 'id="detail-bar-timing"' in html
+    assert "barTimingChipHtml(s)" in html
 
 
 def test_strategy_detail_positions_table_is_asset_first_with_expandable_rows() -> None:
@@ -2132,9 +2158,14 @@ def test_strategies_page_is_a_linked_roster() -> None:
     # Rows link to the per-strategy detail page (client-rendered in the roster JS).
     assert 'href="/strategies/' in html
     assert "strat-link" in html
-    # The kept roster columns (cadence / next-bar / last-eval), plus the stamp.
+    # The kept roster columns (cadence / bar-timing / last-eval), plus the stamp.
+    # "Next bar" retired (leaf 03, dashboard-tables-ux) — the epoch-aligned
+    # guess had no relation to the real cadence; "Bar timing" replaces it with
+    # the honest last_asof_ts-derived chip (see test_strategies_roster_...
+    # _bar_timing_chip_hook below).
     assert "<th>Cadence</th>" in html
-    assert "<th>Next bar</th>" in html
+    assert "<th>Bar timing</th>" in html
+    assert "<th>Next bar</th>" not in html
     assert "<th>Last eval</th>" in html
     # The condensed Total-value column (leaf 08) — replaces nothing; Realised
     # PnL stays alongside it so the same numbers read at every altitude.
@@ -2156,6 +2187,18 @@ def test_strategies_roster_carries_the_health_pill_hook() -> None:
     """
     html = _client().get("/strategies").text
     assert "healthPillHtml(s)" in html
+
+
+def test_strategies_roster_carries_the_bar_timing_chip_hook() -> None:
+    """The roster's row renderer calls the shared bar-timing chip helper (leaf 03).
+
+    Placed in the "Bar timing" column that replaced "Next bar" — the old
+    `nextBarCell()` / `tbTime.nextBarCloseMs()` hooks are gone from the page.
+    """
+    html = _client().get("/strategies").text
+    assert "barTimingChipHtml(s)" in html
+    assert "nextBarCell" not in html
+    assert "nextBarCloseMs" not in html
 
 
 def test_strategies_page_read_only_note_and_no_deploy_link() -> None:

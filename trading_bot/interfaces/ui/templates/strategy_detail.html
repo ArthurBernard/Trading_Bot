@@ -19,6 +19,7 @@
         <span id="detail-mode-badge"></span>
         <span id="detail-health-pill"></span>
         <span id="detail-run-pill"></span>
+        <span id="detail-bar-timing"></span>
       </div>
       <p class="muted" id="detail-sub" style="margin:.45rem 0 0;">Loading…</p>
       <p style="margin:.5rem 0 0;"><a href="/strategies" class="strat-link">← All strategies</a></p>
@@ -319,6 +320,9 @@
     document.getElementById('detail-run-pill').innerHTML = s.running
       ? '<span class="run-pill is-running"><span class="dot"></span>running</span>'
       : '<span class="run-pill is-stopped"><span class="dot"></span>stopped</span>';
+    // Bar-timing chip (leaf 03, dashboard-tables-ux) — "last bar X ago -> next
+    // in Y", the same honest last_asof_ts-derived chip as the roster.
+    document.getElementById('detail-bar-timing').innerHTML = barTimingChipHtml(s);
     // Sub-line: kind · exchange · cadence.
     const cadence = tbTime.humanSpan(s.span);
     const bits = [escapeHtml(s.kind), escapeHtml(s.exchange)];
