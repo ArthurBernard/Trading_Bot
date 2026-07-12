@@ -8,6 +8,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Timezone label + honest empty states (closes the `dashboard-tables-ux`
+  epic).** Every page footer says which timezone its times render in; the
+  Orders page's filtered-to-zero tables say "No orders/fills match the
+  filters." instead of masquerading as an empty book. (#218)
 - **Honest bar timing.** "last bar X ago → next in Y" chip on the strategies
   roster (replacing the "Next bar" column) and the strategy-detail header —
   both derived from `last_asof_ts` + span (server truth), never a fake
