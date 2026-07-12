@@ -1376,6 +1376,7 @@ async def test_api_completeness_contract_sweep(tmp_path) -> None:  # noqa: ANN00
         "status",
         "filled_qty",
         "avg_fill_price",
+        "reject_reason",
     }
 
     [kpi_row] = client.get("/api/kpi?level=strategy").json()

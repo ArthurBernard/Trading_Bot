@@ -206,6 +206,7 @@ def _order_dict(order: Order) -> dict[str, Any]:
         "status": order.status.value,
         "filled_qty": _money_str(order.filled_qty),
         "avg_fill_price": _money_str(order.avg_fill_price),
+        "reject_reason": order.reject_reason,
     }
 
 
