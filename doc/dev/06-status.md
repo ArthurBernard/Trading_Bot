@@ -161,8 +161,20 @@ and `CHANGELOG.md` for what shipped.
   value / unrealised, shared expandable rows (SSE-surviving), orders with
   Filled % / Avg fill / Value and click-to-expand fills (standalone fills
   table retired from the detail page), honest last→next bar chip, timezone
-  label, filtered-vs-empty states. Known follow-up: `reject_reason` is
-  rendered defensively but not yet serialized by `/api/orders`.
+  label, filtered-vs-empty states. The `reject_reason` follow-up shipped in
+  #219.
+- **`canary-roundtrip` (2026-07-12, PRs #221–#223)**: `trading-bot canary` —
+  the deterministic platform self-test. Probes first (real cancel = the
+  kill-switch path; duplicate client-order-id = the idempotency invariant),
+  then a sequential round-trip; paper oracle exact (PnL == −Σ fees, flat,
+  persisted terminals, balance deltas), venue oracle = the accounting
+  identity (fills/balances == venue-reported, fee-denomination-aware) +
+  bounded cost. **Proven on real Binance testnet: 16/16 PASS** (cost
+  0.00511 USDT). Two real findings hardened the domain: `Fill.fee_asset`
+  (Binance charges market-buy fees in BASE) and Binance HTTP-400 → domain
+  error mapping. `09-go-live.md` names the live canary as the road-to-1.0
+  #1 validation vehicle. Cadence: paper per release, testnet at will, live
+  once per venue at go-live.
 
 ## Pending
 

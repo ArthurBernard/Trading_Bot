@@ -533,24 +533,155 @@ def test_canary_seeded_failure_exits_nonzero_with_fail_line(
     assert "result: FAIL" in result.output
 
 
-def test_canary_mode_testnet_not_implemented(monkeypatch: pytest.MonkeyPatch) -> None:
-    """`--mode testnet` refuses with a clear error and a non-zero exit.
+def test_canary_testnet_kraken_refused_no_sandbox(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`--mode testnet --exchange kraken` refuses clearly: no public spot testnet.
 
-    Reserved for the next leaf (venue-oracle-and-testnet) — no sizing/engine
-    call happens: fail loudly if the CLI ever reaches ``_resolve_canary_sizing``
-    on this path.
+    The factory's ``_build_testnet_venue`` raises before any I/O (constructing
+    an adapter sends nothing), so this runs fully offline and places no order.
     """
+    result = runner.invoke(app, ["canary", "--mode", "testnet", "--exchange", "kraken"])
 
-    async def _must_not_be_called(exchange: str, symbol: str):
-        raise AssertionError("--mode testnet must refuse before any sizing call")
+    assert result.exit_code != 0
+    assert "refusing to run canary" in result.output
+    assert "no testnet" in result.output
 
-    monkeypatch.setattr(cli_main, "_resolve_canary_sizing", _must_not_be_called)
+
+def test_canary_testnet_without_credentials_refused(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`--mode testnet` without testnet credentials refuses before any order.
+
+    With every Binance key stripped from the environment, the factory's
+    credential gate raises (the adapter is built keyless, no request goes
+    out), and the CLI surfaces it as a clean non-zero exit — offline.
+    """
+    for var in (
+        "BINANCE_TESTNET_API_KEY",
+        "BINANCE_TESTNET_API_SECRET",
+        "BINANCE_API_KEY",
+        "BINANCE_API_SECRET",
+    ):
+        monkeypatch.delenv(var, raising=False)
 
     result = runner.invoke(app, ["canary", "--mode", "testnet"])
 
     assert result.exit_code != 0
-    assert "not implemented" in result.output
-    assert "venue-oracle-and-testnet" in result.output
+    assert "refusing to run canary" in result.output
+    assert "credentials" in result.output
+
+
+def test_canary_live_without_config_refused(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`--mode live` without --config refuses before any prompt or build."""
+
+    def _must_not_build(*args, **kwargs):
+        raise AssertionError("live canary must refuse before building an engine")
+
+    monkeypatch.setattr(cli_main, "build_engine", _must_not_build)
+
+    result = runner.invoke(app, ["canary", "--mode", "live"])
+
+    assert result.exit_code != 0
+    assert "--config" in result.output
+    assert "no order was placed" in result.output
+
+
+def test_canary_live_without_live_enabled_refused(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`--mode live` with a config missing live_enabled refuses, pre-prompt.
+
+    Mirrors the ``run --live`` gate: the off-by-default ``live_enabled`` opt-in
+    must come from the operator's config — the canary never sets it. Refused
+    before the typed confirmation is even asked and before any engine exists.
+    """
+
+    def _must_not_build(*args, **kwargs):
+        raise AssertionError("live canary must refuse before building an engine")
+
+    monkeypatch.setattr(cli_main, "build_engine", _must_not_build)
+    cfg = tmp_path / "live.yaml"
+    cfg.write_text("mode: live\nbrokers:\n  - {name: kraken, exchange: kraken}\n")
+
+    result = runner.invoke(app, ["canary", "--mode", "live", "--config", str(cfg)])
+
+    assert result.exit_code != 0
+    assert "live is off by default" in result.output
+    assert "live_enabled" in result.output
+    assert "no order was placed" in result.output
+
+
+def test_canary_live_confirmation_mismatch_refused(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`--mode live` with the gates open still refuses without the typed phrase.
+
+    The typed confirmation is the dashboard's go-live pattern: the exact
+    acknowledgement phrase, verbatim — anything else refuses with no engine
+    built and no order placed.
+    """
+
+    def _must_not_build(*args, **kwargs):
+        raise AssertionError("live canary must refuse before building an engine")
+
+    monkeypatch.setattr(cli_main, "build_engine", _must_not_build)
+    cfg = tmp_path / "live.yaml"
+    cfg.write_text(
+        "mode: live\nlive_enabled: true\n"
+        "brokers:\n  - {name: kraken, exchange: kraken}\n"
+    )
+
+    result = runner.invoke(
+        app, ["canary", "--mode", "live", "--config", str(cfg)], input="nope\n"
+    )
+
+    assert result.exit_code != 0
+    assert "typed acknowledgement" in result.output
+    assert "no order was placed" in result.output
+
+
+def test_canary_live_confirmed_reaches_existing_factory_gates(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A correctly-typed live confirmation proceeds — into the factory's gates.
+
+    With the opt-in set and the exact phrase typed, the CLI goes on to build
+    the engine, where the EXISTING factory gates take over: with every Kraken
+    key stripped, the credential gate raises and the run refuses cleanly —
+    still offline, still no order. (Proves the confirmation path is wired to
+    the same guarded factory, not around it.)
+    """
+    monkeypatch.delenv("KRAKEN_API_KEY", raising=False)
+    monkeypatch.delenv("KRAKEN_API_SECRET", raising=False)
+    cfg = tmp_path / "live.yaml"
+    cfg.write_text(
+        "mode: live\nlive_enabled: true\n"
+        "brokers:\n  - {name: kraken, exchange: kraken}\n"
+        "risk: {max_order: '0.01', max_position: '0.01', max_daily_loss: '10'}\n"
+    )
+
+    result = runner.invoke(
+        app,
+        ["canary", "--mode", "live", "--exchange", "kraken", "--config", str(cfg)],
+        input="I UNDERSTAND\n",
+    )
+
+    assert result.exit_code != 0
+    assert "refusing to run canary" in result.output
+    assert "credentials" in result.output
+
+
+def test_canary_live_ack_phrase_mirrors_dashboard() -> None:
+    """The CLI's typed phrase is the dashboard's go-live phrase, verbatim.
+
+    The CLI deliberately does not import the API module (FastAPI stays out of
+    the CLI's import graph), so this test is what keeps the two constants from
+    drifting apart.
+    """
+    from trading_bot.interfaces.api import app as api_app
+
+    assert cli_main._LIVE_ACK_PHRASE == api_app._LIVE_ACK_PHRASE
 
 
 def test_canary_max_cost_refuses_before_any_order(

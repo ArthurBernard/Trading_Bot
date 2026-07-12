@@ -31,12 +31,27 @@ Design (pinned in ``doc/dev/plans/canary-roundtrip/00-plan.md``)
     row. This is the invariant that makes a retry safe with real money.
 * **Two oracles.** The *paper* oracle (:func:`paper_oracle`, this module) is
   **EXACT** — Decimal equality, no tolerance — because the simulator is fully
-  deterministic. The *venue* oracle (leaf 03) can never precompute an absolute
-  PnL (spread and drift are not deterministic); it asserts the **accounting
-  identity** (our fills == venue-reported fills, our balance deltas ==
-  venue-reported deltas, flat) plus a **bounded total cost**. Keeping the two
-  oracles distinct is what lets paper be exact without pretending a live venue
-  is.
+  deterministic. The *venue* oracle (:func:`venue_oracle`, this module) can
+  never precompute an absolute PnL (spread and drift are not deterministic);
+  it asserts the **accounting identity** (our recorded fills == the
+  venue-reported fills re-fetched through ``broker.fills(...)``, the
+  venue-reported balance deltas == the deltas *our fills imply*, flat) plus a
+  **bounded total cost** (the quote balance delta, capped by ``max_cost``).
+  Keeping the two oracles distinct is what lets paper be exact without
+  pretending a live venue is.
+* **Venue legs settle by polling the broker port.** A real (REST) venue fills
+  a market order asynchronously and reports the execution only through
+  :meth:`~trading_bot.brokers.base.Broker.fills` — and it keys those fills by
+  its **own** order reference, not our client-order-id (Binance ``myTrades``
+  carries the venue ``orderId``). After submitting a market leg the canary
+  therefore polls ``broker.fills(...)``, attributes every **new** fill on the
+  leg's instrument and side to the leg (the canary engine is dedicated, and
+  the round-trip is sequential, so within the run's own fill-id window that
+  attribution is unambiguous), and re-emits each one on the engine bus with
+  the leg's client-order-id — so the ordinary fill plumbing (fill sync →
+  tracker/performance/store) applies venue truth exactly as it would a
+  simulator fill. On paper the broker fills synchronously and the settle loop
+  never runs. No adapter-specific code: only the broker port is read.
 * **Sizing / cost philosophy.** The canary trades the **smallest venue-legal
   size**: the caller sizes ``qty`` from the venue's real minimums
   (``min_qty`` / ``min_notional`` via the instrument-spec resolver) so the
@@ -68,12 +83,15 @@ oracle asserts identities and bounds instead.
 from __future__ import annotations
 
 # Built-in
+import asyncio
+import time
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from decimal import ROUND_UP, localcontext
 from typing import TYPE_CHECKING
 
 # Local
+from trading_bot.application.events import FillEvent
 from trading_bot.domain.errors import (
     BrokerError,
     MissingOrder,
@@ -87,6 +105,7 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
     from trading_bot.application.service_factory import Engine
+    from trading_bot.domain.fill import Fill
     from trading_bot.domain.instrument import Instrument
 
 __all__ = [
@@ -95,6 +114,7 @@ __all__ = [
     "paper_oracle",
     "run_canary",
     "size_for_minimums",
+    "venue_oracle",
 ]
 
 #: Percent denominator for ``probe_offset_pct``.
@@ -111,6 +131,21 @@ _PROBE_QTY_PRECISION: int = 34
 #: The errors a canary order operation may legitimately surface: they become a
 #: failed check (the canary reports, it does not crash), never an escape.
 _ORDER_ERRORS = (BrokerError, OrderError, MissingOrder, RiskLimitBreached)
+
+#: How long a market leg may take to settle on a real venue (seconds): the poll
+#: loop that re-fetches ``broker.fills(...)`` and pumps the leg's executions
+#: onto the bus gives up after this long — the leg's check then fails with
+#: exactly what was observed. Paper fills synchronously and never waits.
+_VENUE_SETTLE_TIMEOUT_S: float = 20.0
+
+#: Delay between two settle polls of ``broker.fills(...)`` (seconds).
+_VENUE_SETTLE_POLL_S: float = 0.5
+
+#: The order statuses a submitted market leg may still settle from (a venue
+#: fill can only apply to a live order — mirrors ``OrderFillSync``'s rule).
+_LEG_SETTLING: frozenset[OrderStatus] = frozenset(
+    {OrderStatus.OPEN, OrderStatus.PARTIALLY_FILLED}
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -155,7 +190,10 @@ class CanaryReport:
     exchange : str
         The broker's venue key (``"paper"``, ``"binance"``, ...).
     mode : str
-        The engine's configured execution mode (``"paper"`` / ``"live"``).
+        The run's execution mode label (``"paper"`` / ``"testnet"`` /
+        ``"live"``) — the engine's configured mode, or the caller's
+        ``mode_label`` override (a testnet engine is ``mode: live`` +
+        ``testnet: true`` config-side; the report says ``"testnet"``).
     instrument : Instrument
         The instrument the canary traded.
     qty : Decimal
@@ -171,6 +209,13 @@ class CanaryReport:
     initial_balances, final_balances : dict of str to Decimal
         The broker-reported balance snapshots taken before the first order and
         after the last (exact ``Decimal``, keyed by canonical asset code).
+    venue_fills : list of Fill
+        The **venue-reported** fills this run produced: the final
+        ``broker.fills(...)`` re-fetch, minus every fill id the venue already
+        reported before the first order. Exactly as the venue rendered them
+        (ids, quantities, prices — the venue's own order reference, not our
+        client-order-ids). :func:`venue_oracle` compares our recorded fills
+        against these; empty until the run's final snapshot.
 
     """
 
@@ -185,6 +230,7 @@ class CanaryReport:
     cost: Money | None = None
     initial_balances: dict[str, Money] = field(default_factory=dict)
     final_balances: dict[str, Money] = field(default_factory=dict)
+    venue_fills: list[Fill] = field(default_factory=list)
 
     @property
     def passed(self) -> bool:
@@ -492,6 +538,200 @@ def paper_oracle(
     return checks
 
 
+def _fmt_fill_lines(triples: list[tuple[str, Money, Money]]) -> str:
+    """Render sorted ``(fill_id, qty, price)`` triples as one exact, stable line."""
+    if not triples:
+        return "(none)"
+    return " ".join(
+        f"[id={fid} qty={qty} price={price}]" for fid, qty, price in triples
+    )
+
+
+def venue_oracle(
+    max_cost: Money,
+) -> Callable[[Engine, CanaryReport], list[CanaryCheck]]:
+    """Build the venue **identity** oracle for a real-venue (testnet/live) run.
+
+    A real venue's absolute PnL is not precomputable (spread and drift are not
+    deterministic), so — unlike :func:`paper_oracle` — this oracle asserts the
+    **accounting identity** plus a **bounded cost**, all on exact ``Decimal``
+    values (see the module docstring's "Two oracles"):
+
+    * ``oracle.fills_match_venue`` — OUR recorded fills (the store's persisted
+      fills for the two round-trip client-order-ids) == the **venue-reported**
+      fills (:attr:`CanaryReport.venue_fills`, the run's final
+      ``broker.fills(...)`` re-fetch minus the pre-run baseline), compared as
+      sorted ``(fill_id, qty, price)`` triples — ids, quantities and prices,
+      exact. Client-order-ids are deliberately **not** compared: a venue keys
+      its fill reports by its own order reference (Binance ``myTrades``
+      carries the venue ``orderId``), and the run's settle step is what
+      attributed each venue fill to its leg.
+    * ``oracle.position_flat`` — the tracker's net position is ``0``.
+    * ``oracle.base_delta_matches_fills`` / ``oracle.quote_delta_matches_fills``
+      — the venue-reported balance deltas (final − initial snapshots, per
+      asset) equal the deltas **our recorded fills imply** — the fills math,
+      never a hardcoded zero, **fee-denomination-aware** (each fill's fee is
+      charged against its :attr:`~trading_bot.domain.fill.Fill.fee_asset`;
+      ``None`` means quote). Base: ``Σ buy qty − Σ sell qty − Σ base-fees``
+      (Binance charges a market buy's commission in the base asset — observed
+      live on the testnet as exactly this base dust). Quote: ``Σ sell notional
+      − Σ buy notional − Σ quote-fees``. If the venue reports base dust after
+      the round trip, the check reports it exactly and compares it against the
+      fills math, not against zero — mirroring reconcile's rule that the
+      broker's fills are the truth balances must be explained by.
+    * ``oracle.fee_delta_matches_fills[ASSET]`` — one extra check per fee
+      denominated in an asset that is **neither** base nor quote (e.g. a BNB
+      fee discount): that asset's venue-reported delta must equal ``−Σ`` of
+      those fees. Emitted only when such fees exist, so the common runs keep
+      their fixed five checks.
+    * ``oracle.cost_bounded`` — the run's total cost, ``-(venue quote balance
+      delta)``, is at most ``max_cost``; reported exactly. Fees charged in
+      other assets are visible in their own identity lines above (converting
+      them to quote would need a price the run does not have — never
+      fabricated).
+
+    Parameters
+    ----------
+    max_cost : Decimal
+        The cost bound (quote units): the most the whole round-trip may cost
+        (fees + spread + drift), as measured by the venue's own quote balance
+        delta.
+
+    Returns
+    -------
+    callable
+        An ``oracle(engine, report) -> list[CanaryCheck]`` suitable for
+        :func:`run_canary`'s ``oracle`` parameter.
+
+    Raises
+    ------
+    ValueError
+        (From the returned oracle.) If ``engine`` has no store — our recorded
+        fills are read from the persisted rows, exactly like
+        :func:`paper_oracle`.
+
+    """
+    max_cost = money(max_cost)
+
+    def _venue_oracle(engine: Engine, report: CanaryReport) -> list[CanaryCheck]:
+        store = engine.store
+        if store is None:
+            raise ValueError(
+                "venue_oracle requires an engine with its own store: our "
+                "recorded fills are read from persisted rows, not memory"
+            )
+        store.flush()
+        checks: list[CanaryCheck] = []
+        zero = money("0")
+
+        # OUR recorded fills: the store's persisted rows for the two legs.
+        roundtrip_cids = {report.buy_cid, report.sell_cid}
+        ours = [
+            fill for fill in store.fills() if fill.client_order_id in roundtrip_cids
+        ]
+
+        # 1. Identity: our recorded fills == the venue-reported fills, compared
+        #    as sorted (fill_id, qty, price) triples — exact Decimal equality.
+        ours_triples = sorted((f.fill_id, f.qty, f.price) for f in ours)
+        venue_triples = sorted((f.fill_id, f.qty, f.price) for f in report.venue_fills)
+        checks.append(
+            CanaryCheck(
+                name="oracle.fills_match_venue",
+                expected=f"venue fills: {_fmt_fill_lines(venue_triples)}",
+                observed=f"our fills: {_fmt_fill_lines(ours_triples)}",
+                passed=ours_triples == venue_triples,
+            )
+        )
+
+        # 2. Flat position (a never-touched instrument counts as flat).
+        position = engine.tracker.position(report.instrument)
+        net_qty = position.net_qty if position is not None else zero
+        checks.append(
+            CanaryCheck(
+                name="oracle.position_flat",
+                expected="net_qty=0",
+                observed=f"net_qty={net_qty}",
+                passed=net_qty == 0,
+            )
+        )
+
+        # 3./4. Balance deltas: the venue's reported movement must equal what
+        #    our fills imply — the fills math, never a hardcoded zero. Each
+        #    fee is charged against the asset it is denominated in (a fill's
+        #    fee_asset; None means quote — Binance charges a market buy's
+        #    commission in the BASE asset, observed live on the testnet).
+        base = report.instrument.symbol.base
+        quote = report.instrument.symbol.quote
+        base_delta = report.final_balances.get(
+            base, zero
+        ) - report.initial_balances.get(base, zero)
+        quote_delta = report.final_balances.get(
+            quote, zero
+        ) - report.initial_balances.get(quote, zero)
+        bought = sum((f.qty for f in ours if f.side is OrderSide.BUY), zero)
+        sold = sum((f.qty for f in ours if f.side is OrderSide.SELL), zero)
+        buy_notional = sum(
+            (f.qty * f.price for f in ours if f.side is OrderSide.BUY), zero
+        )
+        sell_notional = sum(
+            (f.qty * f.price for f in ours if f.side is OrderSide.SELL), zero
+        )
+        fees_by_asset: dict[str, Money] = {}
+        for fill in ours:
+            asset = fill.fee_asset if fill.fee_asset is not None else quote
+            fees_by_asset[asset] = fees_by_asset.get(asset, zero) + fill.fee
+        expected_base = bought - sold - fees_by_asset.get(base, zero)
+        expected_quote = sell_notional - buy_notional - fees_by_asset.get(quote, zero)
+        checks.append(
+            CanaryCheck(
+                name="oracle.base_delta_matches_fills",
+                expected=f"base_delta={expected_base}",
+                observed=f"base_delta={base_delta}",
+                passed=base_delta == expected_base,
+            )
+        )
+        checks.append(
+            CanaryCheck(
+                name="oracle.quote_delta_matches_fills",
+                expected=f"quote_delta={expected_quote}",
+                observed=f"quote_delta={quote_delta}",
+                passed=quote_delta == expected_quote,
+            )
+        )
+        # One extra identity line per fee denominated in a third asset (e.g. a
+        # BNB fee discount): its venue delta must equal -(those fees) exactly.
+        for asset in sorted(fees_by_asset):
+            if asset in (base, quote):
+                continue
+            asset_fees = fees_by_asset[asset]
+            asset_delta = report.final_balances.get(
+                asset, zero
+            ) - report.initial_balances.get(asset, zero)
+            checks.append(
+                CanaryCheck(
+                    name=f"oracle.fee_delta_matches_fills[{asset}]",
+                    expected=f"{asset}_delta={-asset_fees}",
+                    observed=f"{asset}_delta={asset_delta}",
+                    passed=asset_delta == -asset_fees,
+                )
+            )
+
+        # 5. Bounded cost: what the round-trip actually cost, by the venue's
+        #    own quote balance delta — never a precomputed absolute PnL.
+        cost = -quote_delta
+        checks.append(
+            CanaryCheck(
+                name="oracle.cost_bounded",
+                expected=f"cost<={max_cost}",
+                observed=f"cost={cost}",
+                passed=cost <= max_cost,
+            )
+        )
+        return checks
+
+    return _venue_oracle
+
+
 async def run_canary(
     engine: Engine,
     instrument: Instrument,
@@ -500,6 +740,7 @@ async def run_canary(
     probe_offset_pct: Money = _DEFAULT_PROBE_OFFSET_PCT,
     run_id: str | None = None,
     oracle: Callable[[Engine, CanaryReport], list[CanaryCheck]] | None = paper_oracle,
+    mode_label: str | None = None,
 ) -> CanaryReport:
     """Run the canary scenario on a ready, dedicated ``engine``.
 
@@ -541,8 +782,13 @@ async def run_canary(
         The mode's oracle, called as ``oracle(engine, report)`` **only when
         every scenario check passed** (an aborted run's oracle expectations
         were never measured) and its checks appended to the report. Defaults
-        to :func:`paper_oracle`; leaf 03's venue oracle replaces it for
-        testnet/live runs. ``None`` skips the oracle.
+        to :func:`paper_oracle`; a real-venue (testnet/live) run passes
+        :func:`venue_oracle`'s built oracle instead. ``None`` skips the oracle.
+    mode_label : str, optional
+        The mode the report should carry (``report.mode``). Defaults to the
+        engine's ``config.mode`` — pass ``"testnet"`` for a testnet engine,
+        whose config is ``mode: live`` + a ``testnet: true`` broker (the
+        factory's sandbox path), so the evidence says what actually ran.
 
     Returns
     -------
@@ -582,7 +828,7 @@ async def run_canary(
     token = run_id if run_id is not None else uuid.uuid4().hex[:8]
     report = CanaryReport(
         exchange=broker.name,
-        mode=engine.config.mode,
+        mode=mode_label if mode_label is not None else engine.config.mode,
         instrument=instrument,
         qty=qty,
         probe_cid=f"canary-{token}-probe",
@@ -593,6 +839,13 @@ async def run_canary(
     # --- initial snapshot (before any order) --------------------------------- #
     mark = await broker.ticker(instrument)
     report.initial_balances = dict(await broker.balances())
+    # One venue-truth fill snapshot before any order. Its size baselines the
+    # cancel probe's no-fill check; its id set is the run's fill baseline —
+    # everything the venue reports beyond it is this run's doing (the market
+    # legs' settle attribution, and the final ``report.venue_fills`` re-fetch).
+    initial_fills = await broker.fills()
+    fill_ids_before: frozenset[str] = frozenset(f.fill_id for f in initial_fills)
+    attributed: set[str] = set(fill_ids_before)
     ok = True
 
     # --- cancel probe: the free kill-path rehearsal --------------------------- #
@@ -605,7 +858,7 @@ async def run_canary(
             f"offset {probe_offset_pct}%): not a placeable limit price"
         )
     probe_qty = _probe_qty(instrument, qty, probe_price)
-    fills_before = len(await broker.fills())
+    fills_before = len(initial_fills)
     tracked_probe: Order | None = None
     try:
         tracked_probe = await router.submit(
@@ -766,7 +1019,9 @@ async def run_canary(
 
     # --- round-trip: market buy qty, confirm; market sell qty, confirm; flat -- #
     if ok:
-        ok = await _market_leg(engine, report, report.buy_cid, OrderSide.BUY)
+        ok = await _market_leg(
+            engine, report, report.buy_cid, OrderSide.BUY, attributed
+        )
     if ok:
         position = engine.tracker.position(instrument)
         net_qty = position.net_qty if position is not None else money("0")
@@ -781,7 +1036,9 @@ async def run_canary(
         )
         ok = ok and in_tracker
     if ok:
-        ok = await _market_leg(engine, report, report.sell_cid, OrderSide.SELL)
+        ok = await _market_leg(
+            engine, report, report.sell_cid, OrderSide.SELL, attributed
+        )
     if ok:
         position = engine.tracker.position(instrument)
         net_qty = position.net_qty if position is not None else money("0")
@@ -809,10 +1066,80 @@ async def run_canary(
                     pass  # the report already fails; cleanup is best-effort
     store.flush()
     report.final_balances = dict(await broker.balances())
+    # Re-fetch the venue's fills one last time: everything beyond the pre-run
+    # baseline is this run's venue-reported truth (the venue oracle's side of
+    # the identity). On paper these are simply the round-trip's own two fills.
+    final_fills = await broker.fills()
+    report.venue_fills = [
+        fill for fill in final_fills if fill.fill_id not in fill_ids_before
+    ]
     report.cost = -engine.perf.realised_pnl()
     if ok and oracle is not None:
         report.checks.extend(oracle(engine, report))
     return report
+
+
+async def _settle_market_leg(
+    engine: Engine,
+    report: CanaryReport,
+    tracked: Order,
+    side: OrderSide,
+    attributed: set[str],
+) -> None:
+    """Wait for a real venue to report the leg's executions; pump them onto the bus.
+
+    A REST venue fills a market order asynchronously and reports the execution
+    only through :meth:`~trading_bot.brokers.base.Broker.fills` — keyed by its
+    **own** order reference, not our client-order-id (see the module
+    docstring). This loop polls the broker port, attributes every **new** fill
+    (id not in ``attributed``) on the leg's instrument and side to the leg,
+    and re-emits each one on the engine bus with the leg's client-order-id and
+    spec-carrying instrument — so the ordinary fill plumbing (fill sync →
+    tracker / performance / store) applies venue truth exactly as it would a
+    simulator fill. Returns once ``tracked`` leaves its live statuses (the
+    fill sync drove it to ``FILLED``) or after :data:`_VENUE_SETTLE_TIMEOUT_S`
+    — the caller's checks then record exactly what was (not) observed.
+
+    Parameters
+    ----------
+    engine : Engine
+        The canary engine (broker port + bus).
+    report : CanaryReport
+        The run's report — supplies the instrument the fills must match.
+    tracked : Order
+        The just-submitted, still-live tracked market order.
+    side : OrderSide
+        The leg's side; a venue fill on the other side is never attributed.
+    attributed : set of str
+        Every fill id already accounted for (the pre-run baseline plus fills
+        attributed by earlier legs). Mutated in place as fills are attributed.
+
+    """
+    deadline = time.monotonic() + _VENUE_SETTLE_TIMEOUT_S
+    while tracked.status in _LEG_SETTLING:
+        for fill in await engine.broker.fills():
+            if fill.fill_id in attributed:
+                continue
+            if fill.instrument.symbol != report.instrument.symbol:
+                continue
+            if fill.side is not side:
+                continue
+            attributed.add(fill.fill_id)
+            # Attribute the venue fill to the leg: same id/qty/price/fee/ts,
+            # our client-order-id and spec-carrying instrument — the exact
+            # correlation this sequential, dedicated run just established.
+            engine.bus.emit(
+                FillEvent(
+                    replace(
+                        fill,
+                        client_order_id=tracked.client_order_id,
+                        instrument=report.instrument,
+                    )
+                )
+            )
+        if tracked.status not in _LEG_SETTLING or time.monotonic() >= deadline:
+            break
+        await asyncio.sleep(_VENUE_SETTLE_POLL_S)
 
 
 async def _market_leg(
@@ -820,14 +1147,17 @@ async def _market_leg(
     report: CanaryReport,
     cid: str,
     side: OrderSide,
+    attributed: set[str],
 ) -> bool:
     """Place one market leg of the round-trip and confirm it filled + persisted.
 
-    Submits a MARKET order for ``report.qty`` on ``side`` under ``cid``, then
-    appends two checks: the tracked order is ``FILLED`` with
-    ``filled_qty == qty``, and the **store** row agrees. Returns whether both
-    held (the caller stops placing on ``False``). A submission error becomes a
-    failed check, never an exception out of the scenario.
+    Submits a MARKET order for ``report.qty`` on ``side`` under ``cid``, lets a
+    real venue's executions settle (:func:`_settle_market_leg` — a no-op on
+    paper, whose broker fills synchronously), then appends two checks: the
+    tracked order is ``FILLED`` with ``filled_qty == qty``, and the **store**
+    row agrees. Returns whether both held (the caller stops placing on
+    ``False``). A submission error becomes a failed check, never an exception
+    out of the scenario.
     """
     leg = "buy" if side is OrderSide.BUY else "sell"
     tracked: Order | None = None
@@ -851,6 +1181,10 @@ async def _market_leg(
             )
         )
         return False
+    if tracked.status in _LEG_SETTLING:
+        # A real venue reports the market execution asynchronously via
+        # broker.fills(); paper never gets here (it filled synchronously).
+        await _settle_market_leg(engine, report, tracked, side, attributed)
     filled = tracked.status is OrderStatus.FILLED and tracked.filled_qty == report.qty
     report.checks.append(
         CanaryCheck(

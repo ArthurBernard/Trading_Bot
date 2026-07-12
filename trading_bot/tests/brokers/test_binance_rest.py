@@ -762,6 +762,77 @@ async def test_binance_error_body_raises_broker_error(
         await broker.place_order(order)
 
 
+# --- HTTP-4xx rejections map to the same domain errors (real-venue shape) - #
+
+
+async def test_http_400_rejection_maps_to_specific_domain_error(
+    httpx_mock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A venue rejection sent as HTTP 400 + JSON body maps like an in-band error.
+
+    On the real venue Binance delivers its ``{"code","msg"}`` rejections with
+    a **4xx status** (observed live on the testnet: a filter failure arrives
+    as HTTP 400), which the transport surfaces as ``HTTPError`` — the adapter
+    must recover the body and raise the same specific domain error the 200
+    shape would have produced, never leak a transport exception.
+    """
+    httpx_mock.add_response(
+        status_code=400,
+        json={"code": -2010, "msg": "Account has insufficient balance."},
+    )
+    broker = _broker(monkeypatch)
+    order = Order(
+        client_order_id="strat-400",
+        instrument=BTC_USDT,
+        side=OrderSide.BUY,
+        qty=money("1"),
+        type=OrderType.MARKET,
+    )
+
+    with pytest.raises(InsufficientBalance, match="insufficient balance"):
+        await broker.place_order(order)
+
+
+async def test_http_400_filter_failure_maps_to_broker_error(
+    httpx_mock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The real testnet's -1013 filter rejection surfaces as a ``BrokerError``.
+
+    The exact shape the live canary hit: ``HTTP 400`` +
+    ``{"code":-1013,"msg":"Filter failure: PERCENT_PRICE_BY_SIDE"}`` on the
+    probe's far-below limit. It must arrive as a mapped ``BrokerError``
+    carrying the venue's diagnostic (so the canary records it as a failed
+    check instead of crashing out of the scenario).
+    """
+    httpx_mock.add_response(
+        status_code=400,
+        json={"code": -1013, "msg": "Filter failure: PERCENT_PRICE_BY_SIDE"},
+    )
+    broker = _broker(monkeypatch)
+    order = Order(
+        client_order_id="strat-1013",
+        instrument=BTC_USDT,
+        side=OrderSide.BUY,
+        qty=money("1"),
+        type=OrderType.LIMIT,
+        limit_price=money("30000"),
+    )
+
+    with pytest.raises(BrokerError, match="PERCENT_PRICE_BY_SIDE"):
+        await broker.place_order(order)
+
+
+async def test_http_400_non_binance_body_degrades_to_generic_broker_error(
+    httpx_mock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A 4xx whose body is not the Binance error shape still maps (generic)."""
+    httpx_mock.add_response(status_code=404, text="not found")
+    broker = _broker(monkeypatch)
+
+    with pytest.raises(BrokerError, match="account"):
+        await broker.balances()
+
+
 # --- B-7: array-wrapped Binance errors are detected & mapped -------------- #
 
 

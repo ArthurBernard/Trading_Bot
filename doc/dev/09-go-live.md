@@ -79,12 +79,12 @@ missing any one refuses with a non-zero exit / a raised
    ruff check trading_bot/
    mypy trading_bot/
    ```
-5. **Validate against a real-key sandbox.** This is the one remaining
-   prerequisite and is **not done in-repo**: before any real order, exercise the
-   private endpoints (AddOrder / OpenOrders / balances / fills) against a real
-   Kraken key (ideally a low-limit, throwaway key) and confirm the
-   venue-reported state matches what the engine requested — see *Proven vs
-   pending*. **Do not skip this.**
+5. **Validate against the real venue — run the canary.** Before any real order,
+   exercise the private endpoints (place / cancel / open orders / balances /
+   fills) and confirm the venue-reported state matches what the engine
+   requested. The **canary** (`trading-bot canary`) is the named in-repo
+   vehicle for exactly this — see *The canary — the validation vehicle* under
+   *Proven vs pending*. **Do not skip this.**
 
 Only after all five does a live `run` proceed to wire the live adapter.
 
@@ -132,6 +132,42 @@ Before the first live order, confirm every item:
 The left column is what the offline suite demonstrates today. The right column is
 the one remaining bridge to live — it requires a real key and is **out of scope
 for this repository's automated tests** (which never hit a real venue).
+
+### The canary — the validation vehicle
+
+The pending column is exactly what the **canary**
+([`application/canary.py`](../../trading_bot/application/canary.py), the
+`trading-bot canary` command) proves against a real venue, in one gated run — a
+minimum-size sequential round-trip plus two free probes, with an
+expectation-vs-observation evidence table and a non-zero exit on the first
+violation:
+
+```bash
+trading-bot canary --exchange binance --mode testnet          # sandbox: fake money, real API
+trading-bot canary --exchange <venue> --mode live -c cfg.yaml # the go-live act (all gates + typed ack)
+```
+
+- **Venue idempotency** — the probe re-submits the *same* client-order-id and
+  asserts, from **venue reads** (`open_orders` / `fills`), that no duplicate
+  order was created.
+- **Real cancel (the kill path)** — the probe places a far-below-market limit
+  and cancels it **on the venue**: a real cancel accepted, no fill, no balance
+  move, `CANCELLED` persisted.
+- **Balance reconciliation** — the venue **identity oracle**: our recorded
+  fills == the venue-reported fills (`fills()` re-fetch; ids/qtys/prices,
+  exact), the venue's per-asset balance deltas == what our fills imply (the
+  fills math), position flat, and the total cost (the venue's quote delta)
+  bounded by `--max-cost`. Never a precomputed absolute PnL — a real venue's
+  spread/drift are not deterministic.
+
+`--mode testnet` runs the factory's sandbox path (hard-pinned testnet URL,
+`BINANCE_TESTNET_*` keys, no `live_enabled` needed — Kraken has no spot testnet
+and is refused). `--mode live` is the operator's **go-live act** for road-to-1.0
+#1: it demands the full gate stack above (`--config` with `live_enabled: true`,
+credentials, all risk limits) **plus a typed confirmation** (the dashboard's
+go-live phrase), and only then trades the smallest venue-legal size. Cadence:
+paper per release, testnet at will, live once per venue at go-live and after
+any adapter change.
 
 ---
 
