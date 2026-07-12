@@ -8,6 +8,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`GET /api/balances` + `last_asof_ts` documentation + the epic contract
+  sweep (closes the `api-completeness` epic).** Per running unit, the
+  broker's balances as exact Decimal strings (stopped units absent; a broker
+  error degrades to an `error` row, HTTP 200 — poll-safe); the seam for the
+  future positions↔balances cross-check and the canary live oracle. One
+  consolidated additive-only contract test now pins the exact field sets of
+  all six frozen endpoints before the road-to-1.0 API freeze. (#214)
 - **Display currency** — `display_currency` (global default), per-exchange
   `display_currency_overrides` and static `conversion_rates` in `AppConfig`;
   server-side converted `*_display` money fields (pure

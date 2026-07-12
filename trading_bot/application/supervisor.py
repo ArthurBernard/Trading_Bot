@@ -55,6 +55,7 @@ from trading_bot.domain.capital import (
     contributed_capital,
 )
 from trading_bot.domain.errors import (
+    BrokerError,
     ConfigError,
     LiveCapitalOpsDeferred,
     LiveTradingNotEnabled,
@@ -87,6 +88,7 @@ if TYPE_CHECKING:
     from trading_bot.storage.sqlite_store import StoredFill
 
 __all__ = [
+    "BalanceRow",
     "FillRow",
     "KpiLevel",
     "KpiRow",
@@ -357,6 +359,48 @@ class FillRow:
     exchange: str
     base: str
     fill: Fill
+
+
+@dataclass(frozen=True, slots=True)
+class BalanceRow:
+    """One running unit's broker-reported free balances, tagged strategy + venue.
+
+    The supervisor-level view of :meth:`~trading_bot.brokers.base.Broker.balances`
+    for a single unit — the venue's *own* view of what it holds, as opposed to the
+    locally-tracked :class:`PositionRow` exposure. This is the prerequisite seam
+    for the positions<->balances cross-check (an accounting-guardrail extension:
+    comparing the tracker's net exposure against what the broker actually reports)
+    and the canary-roundtrip live oracle (roadmap #6, a deterministic round-trip
+    strategy that proves the whole chain against a real venue) — both need the
+    broker's own balances, not just what the engine believes it holds.
+
+    Attributes
+    ----------
+    strategy : str
+        The managed unit this balance snapshot belongs to.
+    exchange : str
+        The venue the unit runs on.
+    mode : StrategyMode
+        The unit's deployment mode (``"paper"``, ``"testnet"`` or ``"live"``) —
+        which broker instance ``balances`` came from.
+    balances : dict of str to Money
+        Free balance per canonical asset code (exact :class:`~decimal.Decimal`),
+        as reported by :meth:`~trading_bot.brokers.base.Broker.balances`. Empty
+        when ``error`` is set (the broker call failed).
+    error : str or None
+        ``None`` on a successful fetch. Set to the broker's error message when
+        :meth:`~trading_bot.brokers.base.Broker.balances` raised
+        :class:`~trading_bot.domain.errors.BrokerError` — the row still surfaces
+        (never a 500) so the dashboard can poll safely through a transient venue
+        outage.
+
+    """
+
+    strategy: str
+    exchange: str
+    mode: StrategyMode
+    balances: dict[str, Money]
+    error: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -1682,6 +1726,59 @@ class StrategySupervisor:
                         fee_ccy=position.instrument.symbol.quote,
                     )
                 )
+        return rows
+
+    async def balances(self) -> list[BalanceRow]:
+        """Every running unit's broker-reported free balances, tagged strategy + venue.
+
+        Across every **running** unit, awaits
+        :meth:`~trading_bot.brokers.base.Broker.balances` on its own engine's
+        broker (the paper simulator's seeded book, or the real venue adapter on
+        testnet/live) and wraps the result in a :class:`BalanceRow`. A stopped
+        unit contributes nothing (mirroring :meth:`positions`); a broker call that
+        raises :class:`~trading_bot.domain.errors.BrokerError` degrades that one
+        unit's row to an empty ``balances`` dict plus its ``error`` message rather
+        than propagating — a transient venue outage must never break the whole
+        collection, and the caller (the dashboard's poll loop) needs a row to show
+        per unit either way.
+
+        This is the prerequisite seam for the positions<->balances cross-check
+        (an accounting-guardrail extension comparing the tracker's net exposure
+        against what the venue itself reports) and the canary-roundtrip live
+        oracle (roadmap #6) — both read the broker's own view through this method,
+        never the locally-tracked positions.
+
+        Returns
+        -------
+        list of BalanceRow
+            One row per running unit, in unit order. Empty when no unit is
+            running.
+
+        """
+        rows: list[BalanceRow] = []
+        for unit in self._running_units():
+            assert unit.engine is not None
+            try:
+                balances = await unit.engine.broker.balances()
+            except BrokerError as exc:
+                rows.append(
+                    BalanceRow(
+                        strategy=unit.name,
+                        exchange=unit.exchange,
+                        mode=unit.mode,
+                        balances={},
+                        error=str(exc),
+                    )
+                )
+                continue
+            rows.append(
+                BalanceRow(
+                    strategy=unit.name,
+                    exchange=unit.exchange,
+                    mode=unit.mode,
+                    balances=balances,
+                )
+            )
         return rows
 
     def open_orders(self) -> list[OrderRow]:

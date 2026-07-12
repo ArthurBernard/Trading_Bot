@@ -146,6 +146,16 @@ and `CHANGELOG.md` for what shipped.
   simulator rejects like the venue. Verified on the live books' copies with
   real specs: the audit's whole dust rebalance (14 legs) skips; Kraken
   round-ups land exactly on `ordermin`; two-pass convergence proven.
+- **`api-completeness` (2026-07-12, PRs #209–#214)**: the API says what the
+  engine knows — per-engine mark cache (bar closes published at rebalance),
+  position rows with `mark`/`mark_asof_ts`/`mark_source`/`value`/
+  `unrealised`/`fee_ccy` under ONE mark policy (aggregate == Σ rows,
+  Decimal-exact on the real books), server-side display currency
+  (never-guess-a-rate), `GET /api/balances`, `last_asof_ts` documented, and
+  an additive-only contract sweep across the six frozen endpoints — ready
+  for the road-to-1.0 #5 freeze. Known seam: paper broker balances are empty
+  across restarts (the simulator's internal ledger is not persisted;
+  `/api/balances` relays it honestly) — the canary/guardrail funding hook.
 
 ## Pending
 
