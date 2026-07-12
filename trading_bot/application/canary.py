@@ -89,7 +89,13 @@ if TYPE_CHECKING:
     from trading_bot.application.service_factory import Engine
     from trading_bot.domain.instrument import Instrument
 
-__all__ = ["CanaryCheck", "CanaryReport", "paper_oracle", "run_canary"]
+__all__ = [
+    "CanaryCheck",
+    "CanaryReport",
+    "paper_oracle",
+    "run_canary",
+    "size_for_minimums",
+]
 
 #: Percent denominator for ``probe_offset_pct``.
 _HUNDRED: Money = money("100")
@@ -265,6 +271,78 @@ def _probe_qty(instrument: Instrument, qty: Money, probe_price: Money) -> Money:
             required = snapped
     if instrument.min_qty is not None and required < instrument.min_qty:
         required = instrument.min_qty
+    return required
+
+
+def size_for_minimums(instrument: Instrument, price: Money) -> Money:
+    """The smallest venue-legal round-trip quantity for ``instrument`` at ``price``.
+
+    Implements the canary's sizing philosophy (module docstring): trade the
+    smallest venue-legal size, sized **from scratch** against the venue's real
+    minimums (``min_qty`` / ``min_notional``, e.g. via the instrument-spec
+    resolver, ``application/instrument_specs.py``) rather than a caller-chosen
+    quantity. Unlike :func:`_probe_qty` — which *scales up* an already-legal
+    round-trip quantity for a *different* (probe) price — this computes the
+    minimum directly: the smallest lot-aligned quantity whose notional at
+    ``price`` clears ``min_notional``, raised to ``min_qty`` if that is higher.
+
+    Parameters
+    ----------
+    instrument : Instrument
+        The (spec-carrying) instrument to size. Must carry at least one of
+        ``min_qty`` / ``min_notional`` — see Raises.
+    price : Decimal
+        The reference price (the mark) the notional is computed against. Must
+        be strictly positive.
+
+    Returns
+    -------
+    Decimal
+        The smallest venue-legal quantity.
+
+    Raises
+    ------
+    ValueError
+        If ``instrument`` carries neither ``min_qty`` nor ``min_notional`` (an
+        unresolved / bare spec — e.g. a degraded resolver fetch, or an
+        exchange the resolver does not dispatch): sizing "the smallest legal
+        amount" with no real venue minimum to size against would be guessing,
+        which the caller must refuse instead of this function silently doing
+        so. Also raised if ``price`` is not strictly positive.
+
+    """
+    if instrument.min_qty is None and instrument.min_notional is None:
+        raise ValueError(
+            f"{instrument} carries no venue minimums (min_qty/min_notional): "
+            "refusing to guess a venue-legal quantity"
+        )
+    price = money(price)
+    if price <= 0:
+        raise ValueError(f"price must be strictly positive, got {price}")
+
+    min_notional = instrument.min_notional
+    min_qty = instrument.min_qty
+    if min_notional is None:
+        # min_qty is guaranteed set here (guarded above) — the lot minimum
+        # alone is the smallest legal size with no notional floor to clear.
+        assert min_qty is not None
+        return min_qty
+
+    # Divide under an explicit context rounding UP so the sized quantity's
+    # notional can never land a hair below the minimum (mirrors _probe_qty).
+    with localcontext() as ctx:
+        ctx.prec = _PROBE_QTY_PRECISION
+        ctx.rounding = ROUND_UP
+        required = +(min_notional / price)
+    step = instrument.qty_step
+    if step is not None:
+        # Lot-align upward: snap down, then add one lot if that undershot.
+        snapped = instrument.quantize_qty(required)
+        if snapped < required:
+            snapped += step
+        required = snapped
+    if min_qty is not None and required < min_qty:
+        required = min_qty
     return required
 
 

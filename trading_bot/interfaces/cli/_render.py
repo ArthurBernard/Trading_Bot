@@ -28,6 +28,7 @@ from typing import TYPE_CHECKING
 from rich.table import Table
 
 if TYPE_CHECKING:
+    from trading_bot.application.canary import CanaryCheck
     from trading_bot.application.performance_service import PerformanceService
     from trading_bot.domain.instrument import Instrument
     from trading_bot.domain.order import Order
@@ -39,6 +40,7 @@ __all__ = [
     "positions_table",
     "open_orders_table",
     "kpi_table",
+    "canary_table",
 ]
 
 
@@ -217,4 +219,38 @@ def kpi_table(perf: PerformanceService, *, title: str = "Performance (KPI)") -> 
     table.add_row("Sortino", fmt_ratio(perf.sortino()))
     table.add_row("Max drawdown", fmt_ratio(perf.max_drawdown()))
     table.add_row("Calmar", fmt_ratio(perf.calmar()))
+    return table
+
+
+def canary_table(checks: list[CanaryCheck], *, title: str = "Canary evidence") -> Table:
+    """Build a :class:`rich.table.Table` of the canary's evidence, one row per check.
+
+    Columns: status (``PASS``/``FAIL``, coloured), check name, expected,
+    observed — the same exact expected/observed strings
+    :meth:`~trading_bot.application.canary.CanaryReport.to_text` renders as one
+    flat line, tabulated instead. An empty list yields a header-only table.
+
+    Parameters
+    ----------
+    checks : list of CanaryCheck
+        The completed (or aborted) canary run's ordered checks
+        (:attr:`~trading_bot.application.canary.CanaryReport.checks`).
+    title : str, optional
+        The table title. Default ``"Canary evidence"``.
+
+    Returns
+    -------
+    rich.table.Table
+        The rendered evidence table.
+
+    """
+    table = Table(title=title)
+    table.add_column("Status")
+    table.add_column("Check")
+    table.add_column("Expected")
+    table.add_column("Observed")
+
+    for check in checks:
+        status = "[green]PASS[/green]" if check.passed else "[red]FAIL[/red]"
+        table.add_row(status, check.name, check.expected, check.observed)
     return table

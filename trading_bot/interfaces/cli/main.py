@@ -52,6 +52,7 @@ import os
 import pathlib
 import signal
 import sys
+import tempfile
 from collections.abc import Callable
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any
@@ -61,8 +62,10 @@ import typer
 from rich.console import Console
 
 from trading_bot import __version__
+from trading_bot.application.canary import CanaryReport, run_canary, size_for_minimums
 from trading_bot.application.config import AppConfig, StrategyConfig
 from trading_bot.application.data_feed import BARS_SCHEMA, InMemoryFeed
+from trading_bot.application.instrument_specs import InstrumentSpecResolver
 from trading_bot.application.performance_service import PerformanceService
 from trading_bot.application.run_app import run_app
 from trading_bot.application.service_factory import Engine, build_engine
@@ -72,7 +75,14 @@ from trading_bot.application.strategy import (
     ma_crossover_signal,
 )
 from trading_bot.application.strategy_runner import StrategyRunner
-from trading_bot.domain.instrument import Instrument, parse_kraken_pair
+from trading_bot.brokers.binance import BinanceBroker
+from trading_bot.brokers.kraken import KrakenBroker
+from trading_bot.brokers.paper import PaperBroker
+from trading_bot.domain.instrument import (
+    Instrument,
+    parse_binance_symbol,
+    parse_kraken_pair,
+)
 from trading_bot.domain.money import Money, from_float, money
 from trading_bot.domain.order import Order, OrderSide, OrderType
 from trading_bot.interfaces.cli import _render
@@ -579,6 +589,256 @@ def _resolve_kpi_capital(
     if config_path is not None:
         return AppConfig.from_yaml(config_path).starting_capital
     return money(str(Decimal(str(_KPI_DEFAULT_CAPITAL))))
+
+
+# --- canary ------------------------------------------------------------------ #
+
+#: The paper simulator's fee rate, in basis points — matches
+#: :class:`~trading_bot.brokers.paper.PaperBroker`'s own default
+#: (``fee_bps=money("10")``); ``build_engine`` never overrides it (no
+#: ``AppConfig`` knob exists for it), so this is exactly the rate a
+#: factory-built canary engine pays. Used only to state the pre-trade cost
+#: bound in ``--max-cost``'s help text and the refusal message — the run
+#: itself measures the real fee from the fills, never trusts this constant.
+_CANARY_PAPER_FEE_BPS: Money = money("10")
+
+#: Basis-point denominator (``fee = notional * fee_bps / 10000``), matching
+#: :mod:`trading_bot.brokers.paper`'s own fee formula.
+_CANARY_BPS_DENOMINATOR: Money = money("10000")
+
+#: Exchanges the resolver can fetch a real spec/price for (public
+#: ``instrument()`` + ``ticker()``, both keyless) — the same two the
+#: :class:`~trading_bot.application.instrument_specs.InstrumentSpecResolver`
+#: dispatches. Anything else has no real minimum to size against, so the
+#: canary refuses rather than guess one.
+_CANARY_EXCHANGES = ("kraken", "binance")
+
+
+def _canary_price_source(exchange: str) -> KrakenBroker | BinanceBroker:
+    """A fresh, keyless adapter for ``exchange``'s public endpoints only.
+
+    The same construction :class:`InstrumentSpecResolver` uses internally
+    (``KrakenBroker()`` / ``BinanceBroker()``, no credentials) — built here so
+    the CLI can also read the public last price (:meth:`~trading_bot.brokers.
+    base.Broker.ticker`) off the *same* adapter instance the resolver fetches
+    the venue minimums from: one HTTP client, two public reads.
+    """
+    if exchange == "kraken":
+        return KrakenBroker()
+    if exchange == "binance":
+        return BinanceBroker()
+    raise typer.BadParameter(
+        f"canary --exchange {exchange!r} has no public spec/price source "
+        f"(supported: {', '.join(_CANARY_EXCHANGES)}) — refusing to guess a "
+        "venue-legal size or a mark"
+    )
+
+
+async def _resolve_canary_sizing(
+    exchange: str, symbol: str
+) -> tuple[Instrument, Money, Money]:
+    """Resolve the real ``(instrument, mark, qty)`` a canary round-trip needs.
+
+    ``instrument`` carries the venue's real minimums (:class:`InstrumentSpecResolver`,
+    the public ``instrument()``/``exchangeInfo``-shaped endpoint); ``mark`` is
+    the venue's real last price (the public ``ticker()`` endpoint); ``qty`` is
+    the smallest venue-legal quantity at that mark
+    (:func:`~trading_bot.application.canary.size_for_minimums`). Both public
+    reads go through the *same* keyless adapter instance
+    (:func:`_canary_price_source`).
+
+    Raises
+    ------
+    ValueError
+        If the resolver's fetch degraded to a bare, unquantized instrument
+        (see :class:`InstrumentSpecResolver`'s ``degraded`` set) — the canary
+        never guesses a size from an unresolved spec.
+    """
+    exchange = exchange.lower()
+    source = _canary_price_source(exchange)
+    resolver = InstrumentSpecResolver(
+        kraken=source if exchange == "kraken" else None,
+        binance=source if exchange == "binance" else None,
+    )
+    parsed_symbol = (
+        parse_kraken_pair(symbol)
+        if exchange == "kraken"
+        else parse_binance_symbol(symbol)
+    )
+    instrument = await resolver.resolve(exchange, parsed_symbol)
+    if exchange in resolver.degraded:
+        raise ValueError(
+            f"the instrument-spec resolver could not fetch {exchange}'s real "
+            f"minimums for {parsed_symbol} (endpoint degraded); refusing to "
+            "guess a venue-legal size — retry, or check connectivity"
+        )
+    mark = await source.ticker(instrument)
+    qty = size_for_minimums(instrument, mark)
+    return instrument, mark, qty
+
+
+async def _run_paper_canary(
+    *,
+    exchange: str,
+    symbol: str,
+    budget: Money,
+    max_cost: Money,
+    probe_offset_pct: Money,
+    db_path: pathlib.Path | None,
+) -> CanaryReport:
+    """Build the canary's own dedicated paper engine and run the scenario.
+
+    Sizes ``qty`` from the real venue minimums (:func:`_resolve_canary_sizing`),
+    refuses **before building anything** if the implied round-trip cost exceeds
+    ``max_cost``, then builds a fresh, strict-paper :class:`Engine` funded with
+    ``budget`` quote units (:attr:`~trading_bot.application.config.AppConfig.
+    paper_starting_balances`) — always its **own** store (``--db``, or a scratch
+    temp store discarded when the run ends; ``run_canary`` refuses a store-less
+    engine, so a shared/absent store is impossible), injects the resolved mark
+    and hands the ready engine to :func:`~trading_bot.application.canary.run_canary`.
+    """
+    instrument, mark, qty = await _resolve_canary_sizing(exchange, symbol)
+
+    # The paper round-trip's cost is EXACT (both legs fill at the same
+    # injected mark, see canary.py's module docstring): 2 legs x qty x mark x
+    # fee_bps/10000. Refuse before any engine is even built if that would
+    # exceed the caller's bound.
+    implied_cost = 2 * qty * mark * _CANARY_PAPER_FEE_BPS / _CANARY_BPS_DENOMINATOR
+    if implied_cost > max_cost:
+        raise ValueError(
+            f"refusing to start: the round-trip's implied cost {implied_cost} "
+            f"(2 x qty x mark x fee_bps/10000 = 2 x {qty} x {mark} x "
+            f"{_CANARY_PAPER_FEE_BPS}/{_CANARY_BPS_DENOMINATOR}) exceeds "
+            f"--max-cost {max_cost}; raise --max-cost or pick a cheaper --symbol"
+        )
+
+    config = AppConfig(
+        paper_strict=True,
+        paper_starting_balances={instrument.symbol.quote: Decimal(str(budget))},
+    )
+
+    async def _build_and_run(store_path: pathlib.Path) -> CanaryReport:
+        engine = build_engine(config, db_path=store_path)
+        broker = engine.broker
+        assert isinstance(broker, PaperBroker)
+        broker.set_price(instrument, mark)
+        try:
+            return await run_canary(
+                engine, instrument, qty=qty, probe_offset_pct=probe_offset_pct
+            )
+        finally:
+            if engine.store is not None:
+                engine.store.close()
+
+    if db_path is not None:
+        return await _build_and_run(db_path)
+    # No --db: a scratch temp store (run_canary requires one — see the
+    # docstring above), removed with the directory once the run ends.
+    with tempfile.TemporaryDirectory(prefix="trading-bot-canary-") as tmp_dir:
+        return await _build_and_run(pathlib.Path(tmp_dir) / "canary.sqlite")
+
+
+@app.command()
+def canary(
+    exchange: str = typer.Option(
+        "binance",
+        "--exchange",
+        help="Venue to size the round-trip against (public endpoints only: "
+        "min_qty/min_notional via the instrument-spec resolver, last price "
+        "via the public ticker endpoint). Supported: kraken, binance.",
+    ),
+    symbol: str = typer.Option(
+        "BTC/USDT", "--symbol", help="Canonical pair to trade (BASE/QUOTE)."
+    ),
+    mode: str = typer.Option(
+        "paper",
+        "--mode",
+        help="paper (default, self-contained, no venue/no key) | testnet | "
+        "live — testnet/live arrive with the next leaf "
+        "(venue-oracle-and-testnet); the flag is accepted now so scripts "
+        "stay stable.",
+    ),
+    budget: float = typer.Option(
+        100.0,
+        "--budget",
+        help="Quote-currency balance to fund the canary's own dedicated "
+        "paper engine with (AppConfig.paper_starting_balances) — always a "
+        "fresh engine, never a shared book.",
+    ),
+    max_cost: float = typer.Option(
+        2.0,
+        "--max-cost",
+        help="Refuse to start (before any order) if the round-trip's cost "
+        "would exceed this many quote units. Paper cost is exact: "
+        "2 x qty x mark x fee_bps/10000 (two legs, at the paper "
+        "simulator's default 10bps fee).",
+    ),
+    probe_offset_pct: float = typer.Option(
+        50.0,
+        "--probe-offset-pct",
+        help="How far below the mark (percent) the free cancel probe is priced.",
+    ),
+    db_path: pathlib.Path | None = typer.Option(
+        None,
+        "--db",
+        help="Persist the canary's evidence trail to this SqliteStore path. "
+        "Defaults to a scratch temp store, discarded when the run ends.",
+    ),
+) -> None:
+    """Run the platform's deterministic self-test and print the evidence table.
+
+    A one-liner that makes the canary (:mod:`trading_bot.application.canary`)
+    runnable without wiring anything by hand: it builds the canary's own
+    **dedicated** paper engine (never a shared book), sizes the round-trip to
+    the venue's real smallest legal quantity, runs the sequential round-trip
+    plus the two free probes, and prints one line per check
+    (PASS/FAIL, name, expected, observed) followed by the total cost and the
+    verdict. Exits ``0`` when every check passed, ``1`` otherwise — so a CI job
+    or a release checklist can gate on it directly.
+
+    ``--mode testnet`` / ``--mode live`` are **not implemented in this leaf**
+    (arrive with ``venue-oracle-and-testnet``) — the flags are accepted (so a
+    script naming them today keeps working unchanged) but refuse immediately
+    with a clear, non-zero exit and place no order.
+    """
+    if mode not in ("paper", "testnet", "live"):
+        raise typer.BadParameter(
+            f"--mode must be one of paper, testnet, live; got {mode!r}"
+        )
+    if mode != "paper":
+        _console.print(
+            f"[red]canary --mode {mode}[/red] is not implemented yet; it "
+            "arrives with the venue-oracle-and-testnet leaf. Only "
+            "--mode paper runs today (no order was placed)."
+        )
+        raise typer.Exit(code=1)
+
+    try:
+        report = asyncio.run(
+            _run_paper_canary(
+                exchange=exchange,
+                symbol=symbol,
+                budget=money(str(Decimal(str(budget)))),
+                max_cost=money(str(Decimal(str(max_cost)))),
+                probe_offset_pct=money(str(Decimal(str(probe_offset_pct)))),
+                db_path=db_path,
+            )
+        )
+    except Exception as exc:  # noqa: BLE001 - surface any refusal/build failure cleanly
+        _console.print(f"[red]refusing to run canary:[/red] {exc}")
+        raise typer.Exit(code=1) from exc
+
+    _console.print(
+        f"canary — exchange={report.exchange} mode={report.mode} "
+        f"instrument={report.instrument} qty={_render.fmt_money(report.qty)}"
+    )
+    _console.print(_render.canary_table(report.checks))
+    _console.print(
+        f"cost: {'n/a' if report.cost is None else _render.fmt_money(report.cost)}"
+    )
+    verdict = "[green]PASS[/green]" if report.passed else "[red]FAIL[/red]"
+    _console.print(f"result: {verdict}")
+    raise typer.Exit(code=0 if report.passed else 1)
 
 
 # --- serve ----------------------------------------------------------------- #

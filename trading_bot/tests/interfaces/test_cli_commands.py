@@ -28,6 +28,7 @@ import polars as pl
 import pytest
 from typer.testing import CliRunner
 
+from trading_bot.application.canary import CanaryCheck, CanaryReport, size_for_minimums
 from trading_bot.application.performance_service import PerformanceService
 from trading_bot.domain.fill import Fill
 from trading_bot.domain.instrument import Instrument, Symbol
@@ -35,6 +36,7 @@ from trading_bot.domain.money import money
 from trading_bot.domain.order import Order, OrderSide, OrderType
 from trading_bot.domain.position import Position
 from trading_bot.interfaces.cli import _render
+from trading_bot.interfaces.cli import main as cli_main
 from trading_bot.interfaces.cli.main import _ensure_cwd_importable, app
 from trading_bot.storage.sqlite_store import SqliteStore
 
@@ -443,6 +445,137 @@ def test_kpi_capital_flag_beats_config_starting_capital(
     assert result.exit_code == 0, result.output
     assert "6000" in result.output  # 5000 flag wins
     assert "201000" not in result.output  # not the config anchor
+
+
+# --- canary ------------------------------------------------------------------ #
+
+#: A spec-carrying instrument shaped like the real Binance BTC/USDT venue spec
+#: (mirrors trading_bot/tests/application/test_canary.py's own fixture), so a
+#: monkeypatched, offline ``_resolve_canary_sizing`` still exercises the real
+#: sizing/quantization path the CLI would hit against the live resolver.
+_CANARY_INSTRUMENT = Instrument(
+    Symbol("BTC", "USDT"),
+    price_precision=2,
+    qty_precision=5,
+    min_qty=money("0.00001"),
+    min_notional=money("5"),
+)
+_CANARY_MARK = money("50000")
+_CANARY_QTY = size_for_minimums(_CANARY_INSTRUMENT, _CANARY_MARK)
+
+
+def _patch_offline_sizing(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Monkeypatch ``_resolve_canary_sizing`` so a canary test never hits the
+    network: same fixed ``(instrument, mark, qty)`` every time, computed
+    through the real :func:`~trading_bot.application.canary.size_for_minimums`.
+    """
+
+    async def _fake_resolve(exchange: str, symbol: str):
+        return _CANARY_INSTRUMENT, _CANARY_MARK, _CANARY_QTY
+
+    monkeypatch.setattr(cli_main, "_resolve_canary_sizing", _fake_resolve)
+
+
+def test_canary_paper_run_all_green(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`canary` (paper, offline sizing) exits 0 and prints the all-PASS evidence."""
+    _patch_offline_sizing(monkeypatch)
+    db = tmp_path / "canary.db"
+
+    result = runner.invoke(app, ["canary", "--db", str(db)])
+
+    assert result.exit_code == 0, result.output
+    assert "BTC/USDT" in result.output
+    assert "cancel_probe.resting" in result.output
+    assert "roundtrip.flat" in result.output
+    assert "oracle.fill_count" in result.output
+    assert "FAIL" not in result.output
+    assert "result: PASS" in result.output
+
+
+def test_canary_seeded_failure_exits_nonzero_with_fail_line(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A run whose scenario reports a failed check exits 1 with the FAIL line.
+
+    ``run_canary`` itself is exhaustively tested against the real engine in
+    ``tests/application/test_canary.py``; this only checks the CLI's own
+    responsibility — rendering a failed report and setting a non-zero exit —
+    so the scenario is replaced with a canned report carrying one seeded
+    failure, deterministically, offline.
+    """
+    _patch_offline_sizing(monkeypatch)
+
+    async def _fake_run_canary(engine, instrument, *, qty, probe_offset_pct):
+        report = CanaryReport(
+            exchange="paper", mode="paper", instrument=instrument, qty=qty
+        )
+        report.checks.append(
+            CanaryCheck(
+                name="seeded.failure",
+                expected="status=open",
+                observed="status=filled",
+                passed=False,
+            )
+        )
+        report.cost = money("0")
+        return report
+
+    monkeypatch.setattr(cli_main, "run_canary", _fake_run_canary)
+    db = tmp_path / "canary.db"
+
+    result = runner.invoke(app, ["canary", "--db", str(db)])
+
+    assert result.exit_code == 1, result.output
+    assert "seeded.failure" in result.output
+    assert "FAIL" in result.output
+    assert "result: FAIL" in result.output
+
+
+def test_canary_mode_testnet_not_implemented(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`--mode testnet` refuses with a clear error and a non-zero exit.
+
+    Reserved for the next leaf (venue-oracle-and-testnet) — no sizing/engine
+    call happens: fail loudly if the CLI ever reaches ``_resolve_canary_sizing``
+    on this path.
+    """
+
+    async def _must_not_be_called(exchange: str, symbol: str):
+        raise AssertionError("--mode testnet must refuse before any sizing call")
+
+    monkeypatch.setattr(cli_main, "_resolve_canary_sizing", _must_not_be_called)
+
+    result = runner.invoke(app, ["canary", "--mode", "testnet"])
+
+    assert result.exit_code != 0
+    assert "not implemented" in result.output
+    assert "venue-oracle-and-testnet" in result.output
+
+
+def test_canary_max_cost_refuses_before_any_order(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A ``--max-cost`` below the implied cost refuses before building anything.
+
+    The implied paper cost for the fixed fixture is exact: ``2 * qty * mark *
+    fee_bps / 10000 = 2 * 0.0001 * 50000 * 10 / 10000 = 0.01``. A bound of
+    ``0.001`` must refuse — and ``run_canary`` must never be called (no engine
+    built, no order placed).
+    """
+    _patch_offline_sizing(monkeypatch)
+
+    async def _must_not_be_called(engine, instrument, *, qty, probe_offset_pct):
+        raise AssertionError("--max-cost refusal must happen before any order")
+
+    monkeypatch.setattr(cli_main, "run_canary", _must_not_be_called)
+
+    result = runner.invoke(app, ["canary", "--max-cost", "0.001"])
+
+    assert result.exit_code == 1, result.output
+    assert "refusing to run canary" in result.output
+    assert "exceeds" in result.output
+    assert "--max-cost" in result.output
 
 
 # --- _render helpers (no CLI) ---------------------------------------------- #
