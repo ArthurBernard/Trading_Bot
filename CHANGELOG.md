@@ -8,6 +8,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`trading-bot canary`** — the platform self-test as a one-liner (paper by
+  default): self-contained factory engine funded with `--budget`, quantity
+  sized to the venue's REAL minimums (public-endpoint resolver + real last
+  price as the mark), refusal before any order when the exact implied cost
+  exceeds `--max-cost`, evidence table (PASS/FAIL, expected vs observed)
+  and exit code. `--mode testnet|live` reserved for the venue leaf. (#222)
 - **The canary scenario** (`application/canary.py`) — a deterministic
   platform self-test: cancel probe (far-off resting limit → real cancel,
   persisted), client-order-id idempotency probe, then a sequential market
