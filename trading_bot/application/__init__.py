@@ -102,6 +102,14 @@ It then layers the engine's use-cases:
   collected without aborting the other legs (a
   :class:`~trading_bot.application.portfolio_runner.RebalanceResult` reports
   submitted-vs-failed).
+* canary — :func:`~trading_bot.application.canary.run_canary` (with
+  :func:`~trading_bot.application.canary.paper_oracle` and the
+  :class:`~trading_bot.application.canary.CanaryReport` /
+  :class:`~trading_bot.application.canary.CanaryCheck` evidence types), the
+  deterministic self-test: a sequential round-trip plus free cancel/idempotency
+  probes over a **dedicated**, explicitly-funded engine, every expectation vs
+  observation recorded exactly — paper's oracle is exact Decimal equality
+  (realised PnL == −Σ fees, flat, balances moved by fees only).
 * run_app — :func:`~trading_bot.application.run_app.run_app` (and
   :func:`~trading_bot.application.run_app.build_runners`), the **triptych
   entrypoint**: one :class:`~trading_bot.application.config.AppConfig` →
@@ -117,6 +125,12 @@ It then layers the engine's use-cases:
 
 from __future__ import annotations
 
+from trading_bot.application.canary import (
+    CanaryCheck,
+    CanaryReport,
+    paper_oracle,
+    run_canary,
+)
 from trading_bot.application.capital_service import CapitalPolicy, CapitalService
 from trading_bot.application.config import (
     AppConfig,
@@ -244,6 +258,11 @@ __all__ = [
     # wiring
     "Engine",
     "build_engine",
+    # canary (deterministic self-test)
+    "run_canary",
+    "paper_oracle",
+    "CanaryReport",
+    "CanaryCheck",
     # entrypoint
     "run_app",
     "build_runners",

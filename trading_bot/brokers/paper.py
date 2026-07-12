@@ -60,6 +60,15 @@ Two fill models, selected at construction by ``fill_model``:
   ``limit_price`` (LIMIT, or a priced BEST_LIMIT) or, for a MARKET order, at the
   injected mark price for its instrument. Exactly one :class:`Fill` is produced
   and ``open_orders`` is left empty.
+
+  Exception (``strict`` mode only): a limit order priced on the **passive side
+  of a known mark** — a BUY strictly below, or a SELL strictly above, the
+  instrument's injected mark — **rests** on the book instead (no fill, no
+  balance move; it stays live in ``open_orders`` until cancelled), exactly as a
+  real venue would. With **no** mark injected for the instrument the historical
+  fill-at-limit shortcut is kept (the self-contained pattern the runners and
+  tests rely on), and the permissive (non-strict) model always fills at the
+  limit as before.
 * ``"partial"`` — the order is filled in ``partial_chunks`` equal slices (the
   last slice absorbs any rounding remainder so the slices sum **exactly** to the
   filled quantity). By default the whole quantity is consumed (the order closes
@@ -209,6 +218,13 @@ class PaperBroker(Broker):
           venue id without creating a second paper order, mirroring the venue-
           side dedup the idempotency invariant relies on (Binance ``-2010``). A
           retried client-order-id never duplicates a paper order.
+        * **Marketability** — a limit order priced on the passive side of a
+          *known* mark (a BUY strictly below it, a SELL strictly above it)
+          **rests** open with no fill and no balance move, exactly like a real
+          venue book, until cancelled. Only applies when a mark is injected for
+          the order's instrument: with no mark the historical fill-at-limit
+          shortcut is kept, so self-contained (mark-less) strict setups behave
+          exactly as before.
 
     id_token : str, optional
         The per-instance **lifetime token** embedded in every minted id (see the
@@ -448,6 +464,16 @@ class PaperBroker(Broker):
         armed = self._armed_ratio
         self._armed_ratio = None
 
+        # Strict marketability: a limit order on the passive side of a *known*
+        # mark rests on the book (no fill, no balance move) exactly like a real
+        # venue, staying live until cancelled. With no mark injected the
+        # historical fill-at-limit shortcut is kept (see the module docstring's
+        # Fill model), and the permissive model never rests.
+        if self._strict and self._rests_at_placement(record):
+            self._venue_id_by_cid[order.client_order_id] = venue_order_id
+            self._open[venue_order_id] = record
+            return venue_order_id
+
         price = self._execution_price_for(order, limit_price)
         fill_qty = self._placement_fill_qty(qty, armed)
         for slice_qty in self._slice(fill_qty):
@@ -463,6 +489,26 @@ class PaperBroker(Broker):
         if not self._is_terminal(record):
             self._open[venue_order_id] = record
         return venue_order_id
+
+    def _rests_at_placement(self, record: _OpenOrder) -> bool:
+        """Whether a strict-mode order rests (fills nothing) at placement.
+
+        True only for a limit-priced order whose price sits strictly on the
+        **passive** side of a *known* mark for its instrument: a BUY strictly
+        below the mark, or a SELL strictly above it — the book would not cross,
+        so a real venue would rest it. A market / unpriced order never rests
+        (it always crosses), and an instrument with **no injected mark** keeps
+        the historical fill-at-limit shortcut (returns ``False``), so
+        self-contained mark-less setups are unaffected.
+        """
+        if record.limit_price is None:
+            return False  # MARKET / unpriced BEST_LIMIT: always crosses.
+        mark = self._prices.get(record.instrument)
+        if mark is None:
+            return False  # No mark: keep the fill-at-limit shortcut.
+        if record.side is OrderSide.BUY:
+            return record.limit_price < mark
+        return record.limit_price > mark
 
     def _execution_price_for(self, order: Order, limit_price: Money | None) -> Money:
         """Resolve the price ``order`` fills at, given its resolved limit price.

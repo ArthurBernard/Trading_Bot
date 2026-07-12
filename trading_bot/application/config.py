@@ -693,6 +693,14 @@ class AppConfig(BaseModel):
         everything regardless of venue minimums). Ignored outside paper mode;
         direct :class:`~trading_bot.brokers.paper.PaperBroker` construction is
         unaffected — its constructor default stays ``strict=False``.
+    paper_starting_balances : dict of str to Decimal, optional
+        Initial free balances (canonical asset code -> amount) the factory-built
+        :class:`~trading_bot.brokers.paper.PaperBroker` starts from — the
+        explicit-funding seam (paper brokers start unfunded by default; the
+        simulator never gates on funding, balances may go negative). Parsed
+        exactly from a YAML scalar (``str``/``int``) without touching ``float``.
+        Ignored outside paper mode. Empty by default (unfunded, the historical
+        behaviour).
     display_currency : str, optional
         The single currency the API's ``*_display`` money fields are converted
         into (:mod:`trading_bot.application.display_ccy`) — the "one truth for
@@ -748,6 +756,7 @@ class AppConfig(BaseModel):
     mode: Literal["paper", "live"] = "paper"
     live_enabled: bool = False
     paper_strict: bool = True
+    paper_starting_balances: dict[str, Decimal] = Field(default_factory=dict)
     starting_capital: Decimal = Field(default_factory=lambda: money("100000"))
     display_currency: str = "USD"
     display_currency_overrides: dict[str, str] = Field(default_factory=dict)
