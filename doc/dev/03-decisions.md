@@ -6,6 +6,28 @@ rejected approaches as tombstones.
 
 ---
 
+### 2026-07-12 The venue oracle is an accounting identity; fees carry their asset (PR #223)  [accepted]
+- **Choice**: on a real venue the canary asserts the **identity** — our
+  fills == venue-reported fills, per-asset balance deltas == the fills math
+  — never a precomputed PnL. Supporting discoveries hardened the domain:
+  `Fill.fee_asset` (Binance charges market-buy commissions in BASE; `None`
+  keeps the historic quote meaning), Binance HTTP-400 rejections mapped to
+  domain errors, `BrokerConfig.symbols` for Binance's per-symbol
+  trade-history scope, and a 15 % venue probe offset (the venue's
+  `PERCENT_PRICE_BY_SIDE` band rejects 50 %). A settle loop attributes the
+  venue's async executions to our client-order-ids and re-emits them on the
+  bus — venue truth flows through the ordinary fill plumbing.
+- **Why**: spread and drift make absolute expectations flaky exactly where
+  correctness matters most; the identity is exact on any venue. The two
+  intermediate testnet failures WERE the canary working — each became a
+  domain fix with offline tests before the final green run. PnL folding
+  still values fees at face value when fee_asset ≠ quote (documented
+  approximation); the balance identity itself is exact.
+- **Rejected alternatives**: absolute-PnL venue oracle (nondeterministic);
+  ignoring sub-1e-7 balance dust (it was the fee-denomination bug, not
+  dust); adapter-specific oracle code (the broker port suffices — the
+  oracle stays venue-agnostic).
+
 ### 2026-07-12 The canary: two oracles, probes before money, resting limits in strict paper (PR #221)  [accepted]
 - **Choice**: the canary runs probes FIRST (cancel, idempotency — both free)
   and only then risks the round-trip; paper mode gets an EXACT oracle

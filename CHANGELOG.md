@@ -8,6 +8,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The canary runs against real venues (closes the `canary-roundtrip`
+  epic).** Venue identity oracle: our store-recorded fills == the
+  venue-reported fills (exact triples), per-asset balance deltas == the
+  fills math (fee-denomination-aware — never an assumed zero), position
+  flat, cost bounded. `--mode testnet` wired (Binance sandbox; Kraken
+  refused — no testnet); `--mode live` implemented behind the existing
+  `live_enabled` gate + typed confirmation. `doc/dev/09-go-live.md` names
+  the live canary as the road-to-1.0 #1 validation vehicle. **Proven on
+  real Binance testnet: 16/16 checks PASS** (real cancel accepted, venue
+  dedup on the duplicate client-order-id, cost 0.00511 USDT). (#223)
+- **`Fill.fee_asset`** — the venue may charge the fee in a non-quote asset
+  (Binance charges a market buy's commission in BASE; found by the canary's
+  identity oracle refusing an unexplained −8E-8 BTC). Additive domain field
+  (`None` = quote, the historic meaning), threaded through the Binance
+  adapter, the store (migration) and the oracle's fills math. Also:
+  Binance HTTP-400 `{code,msg}` rejections now map to the same domain
+  errors as in-band bodies (they escaped as transport errors);
+  `BrokerConfig.symbols` threads the per-symbol trade-history scope Binance
+  requires for `fills()`. (#223)
 - **`trading-bot canary`** — the platform self-test as a one-liner (paper by
   default): self-contained factory engine funded with `--budget`, quantity
   sized to the venue's REAL minimums (public-endpoint resolver + real last
