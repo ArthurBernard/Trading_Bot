@@ -8,9 +8,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The canary scenario** (`application/canary.py`) — a deterministic
+  platform self-test: cancel probe (far-off resting limit → real cancel,
+  persisted), client-order-id idempotency probe, then a sequential market
+  round-trip, every step recorded as expected-vs-observed evidence. The
+  **exact paper oracle** asserts realised PnL == −Σ fees, flat position,
+  store-persisted terminal orders and balance deltas, Decimal-exact.
+  Supporting seams: `paper_starting_balances` config (factory-funded
+  simulators) and a strict-paper marketability rule (a passive-side limit
+  with an injected mark now RESTS instead of filling at its price —
+  permissive/markless behaviour unchanged). (#221)
 - `/api/orders` rows carry `reject_reason` — the UI's expanded order detail
   rendered it defensively since #216; the API now serializes it (additive;
-  contract sweep updated). (#XX)
+  contract sweep updated). (#219)
 - **Timezone label + honest empty states (closes the `dashboard-tables-ux`
   epic).** Every page footer says which timezone its times render in; the
   Orders page's filtered-to-zero tables say "No orders/fills match the

@@ -375,6 +375,10 @@ def _build_broker(config: AppConfig, bus: EventBus) -> Broker:
             event_bus=bus,
             clock=lambda: int(time.time() * 1000),
             strict=config.paper_strict,
+            # Explicit funding seam (paper simulators start unfunded): thread
+            # `paper_starting_balances` so a factory-built paper engine — e.g.
+            # the canary's — can be funded declaratively. Empty by default.
+            starting_balances=config.paper_starting_balances,
         )
 
     # Testnet path: a venue's sandbox (paper money on the real testnet venue). The

@@ -6,6 +6,29 @@ rejected approaches as tombstones.
 
 ---
 
+### 2026-07-12 The canary: two oracles, probes before money, resting limits in strict paper (PR #221)  [accepted]
+- **Choice**: the canary runs probes FIRST (cancel, idempotency — both free)
+  and only then risks the round-trip; paper mode gets an EXACT oracle
+  (PnL == −Σ fees, flat, store-persisted terminals, balance deltas), venue
+  modes will get the identity oracle (leaf 03) — never a precomputed
+  absolute PnL. Sequential legs, never simultaneous (self-trade
+  prevention). To make the cancel probe implementable, strict paper gains a
+  marketability rule: a passive-side limit with an injected mark RESTS until
+  cancelled; permissive/markless behaviour is byte-identical (regression
+  tests pin it).
+- **Why**: probes cost nothing and validate the two scariest paths (real
+  cancel = the kill-switch; venue-side client-order-id dedup = the
+  idempotency invariant) before any money moves. Paper is deterministic so
+  exactness is free; venues are not, so correctness must be an accounting
+  identity, not a price prediction. The simulator's fill-everything-at-limit
+  model made "a resting order" inexpressible — a simulator that cannot rest
+  an order cannot rehearse a cancel.
+- **Rejected alternatives**: simultaneous buy+sell (STP nondeterminism);
+  skipping probes in paper (the paper canary is the per-release regression —
+  it must cover the same steps the live one will); relaxing the
+  marketability rule beyond strict+mark (would silently change every
+  existing permissive test and the daemon's mark-less maker legs).
+
 ### 2026-07-11 One display numeraire, converted server-side, never guessed (PR #212)  [accepted]
 - **Choice**: `convert()` always targets the single global
   `display_currency` (exact Decimal, identity when the source quote already

@@ -764,3 +764,110 @@ async def test_non_strict_default_still_permissive() -> None:
     id2 = await broker.place_order(_strict_limit_buy(qty="0.0002", cid="p"))
     assert id1 != id2  # a second order was created (no dedup)
     assert len(await broker.fills()) == 2
+
+
+# --- strict marketability: a passive limit rests when a mark is known ------- #
+
+
+async def test_strict_far_below_limit_buy_rests_with_a_mark() -> None:
+    """Strict + mark: a limit BUY strictly below the mark rests — no fill.
+
+    The real-venue behaviour the canary's cancel probe relies on: a far-below
+    limit buy sits on the book (open, zero fills, balances untouched) until
+    cancelled — it never crosses the mark.
+    """
+    broker = PaperBroker(
+        prices={BTC_USD: money("30000")},
+        starting_balances={"USD": money("100000")},
+        strict=True,
+    )
+
+    venue_id = await broker.place_order(_limit_buy(qty="1", price="15000"))
+
+    assert await broker.fills() == []
+    assert (await broker.balances())["USD"] == Decimal("100000")
+    open_orders = await broker.open_orders()
+    assert len(open_orders) == 1
+    assert open_orders[0].venue_order_id == venue_id
+    assert open_orders[0].filled_qty == Decimal("0")
+
+    # The resting order is cancellable — the kill path works on it.
+    await broker.cancel_order(venue_id)
+    assert await broker.open_orders() == []
+    assert await broker.fills() == []
+
+
+async def test_strict_far_above_limit_sell_rests_with_a_mark() -> None:
+    """Strict + mark: a limit SELL strictly above the mark rests symmetrically."""
+    broker = PaperBroker(
+        prices={BTC_USD: money("30000")},
+        starting_balances={"BTC": money("2")},
+        strict=True,
+    )
+
+    await broker.place_order(_limit_sell(qty="1", price="60000"))
+
+    assert await broker.fills() == []
+    assert (await broker.balances())["BTC"] == Decimal("2")
+    assert len(await broker.open_orders()) == 1
+
+
+async def test_strict_marketable_limit_still_fills_at_limit() -> None:
+    """Strict + mark: a limit BUY at/above the mark crosses and fills as before."""
+    broker = PaperBroker(
+        prices={BTC_USD: money("30000")},
+        starting_balances={"USD": money("100000")},
+        strict=True,
+    )
+
+    await broker.place_order(_limit_buy(qty="1", price="30000"))
+
+    fills = await broker.fills()
+    assert len(fills) == 1
+    assert fills[0].price == Decimal("30000")
+    assert await broker.open_orders() == []
+
+
+async def test_strict_limit_without_mark_keeps_fill_at_limit_shortcut() -> None:
+    """Strict but NO mark injected: the historical fill-at-limit shortcut holds.
+
+    Regression pin for the self-contained pattern the runners and most tests
+    rely on (a maker LIMIT priced at the close, no seeded mark): strict mode
+    must not change it — marketability only applies when a mark is known.
+    """
+    broker = PaperBroker(starting_balances={"USD": money("100000")}, strict=True)
+
+    await broker.place_order(_limit_buy(qty="1", price="15000"))
+
+    fills = await broker.fills()
+    assert len(fills) == 1
+    assert fills[0].price == Decimal("15000")
+
+
+async def test_permissive_far_below_limit_still_fills_with_a_mark() -> None:
+    """Non-strict + mark: the permissive model never rests (unchanged)."""
+    broker = PaperBroker(
+        prices={BTC_USD: money("30000")},
+        starting_balances={"USD": money("100000")},
+    )
+
+    await broker.place_order(_limit_buy(qty="1", price="15000"))
+
+    assert len(await broker.fills()) == 1
+    assert await broker.open_orders() == []
+
+
+async def test_strict_resting_order_dedups_repeated_client_order_id() -> None:
+    """A resting strict order's client-order-id is deduped on a retry too."""
+    broker = PaperBroker(
+        prices={BTC_USD: money("30000")},
+        starting_balances={"USD": money("100000")},
+        strict=True,
+    )
+
+    id1 = await broker.place_order(_limit_buy(qty="1", price="15000", cid="rest-dup"))
+    id2 = await broker.place_order(_limit_buy(qty="1", price="15000", cid="rest-dup"))
+
+    assert id2 == id1
+    assert len(await broker.open_orders()) == 1
+    assert await broker.fills() == []

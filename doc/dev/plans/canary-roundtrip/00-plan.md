@@ -62,7 +62,7 @@ canary is the validation vehicle for road-to-1.0 #1 (real-key enablement).
 
 ## Leaf checklist
 
-- [ ] 01 scenario-and-paper-oracle — feat/canary-scenario — high
+- [x] 01 scenario-and-paper-oracle — feat/canary-scenario — high (#221)
 - [ ] 02 canary-cli — feat/canary-cli — medium
 - [ ] 03 venue-oracle-and-testnet — feat/canary-venue — high
 
