@@ -109,14 +109,12 @@ the kill-switch fold — the *status* half of road-to-1.0 #3 — and the dashboa
 health pill; PRs #197–#201), and the `venue-minimums` epic (keyless cached
 spec resolver, round-up-or-skip order prep with the spot-sell cap, strict
 factory paper — PRs #203–#206; sub-minimum orders are structurally
-impossible on the portfolio path). In dependency order:
+impossible on the portfolio path), and the `api-completeness` epic (per-engine
+mark cache + bar-close marks with mandatory as-of on position rows, value /
+unrealised / `fee_ccy`, server-side display currency, `GET /api/balances`,
+`last_asof_ts` surfaced, additive-only contract sweep — PRs #209–#214; ready
+for the road-to-1.0 #5 freeze). In dependency order:
 
-4. [ ] **`api-completeness` — API exposes what the app layer knows.** Per-
-   position mark price (v1 = last dccd bar close, always with its `asof` ts;
-   live ticker is post-1.0), value + unrealised PnL per position; display
-   currency (global default + per-exchange override, static conversion rates);
-   `/api/balances`; `fee_ccy`; `last_asof_ts` on every surface. Must land
-   before the API contract freeze (road-to-1.0 #5).
 5. [ ] **`dashboard-tables-ux` — tables redesign.** Positions keyed by asset
    (not pair) with value/mark/unrealised as primary columns; expandable rows
    for secondary detail (fills under their order, ids, fee breakdown —
