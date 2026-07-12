@@ -375,6 +375,17 @@
       });
     }
 
+    // A bare "YYYY-MM-DD" local date (no time) — used for as-of DATA dates
+    // (the Last-eval column's "data through 2026-07-04", the bar-timing
+    // chip's tooltip below), distinct from fmtDate's evaluation-INSTANT
+    // timestamp (which carries a time-of-day). Shared here (leaf 03,
+    // dashboard-tables-ux) so every page can format a data-through date, not
+    // just strategies.html.
+    function fmtDateOnly(ms) {
+      if (ms == null) return '—';
+      return new Date(ms).toLocaleDateString('en-CA'); // en-CA -> YYYY-MM-DD
+    }
+
     // Order-status -> badge CSS suffix (the .badge-status-* rules above) — one
     // lowercase-status map shared by the Orders page and Overview's open-orders
     // table so both surfaces colour-code statuses identically. Covers every
@@ -417,6 +428,40 @@
       const titleAttr = detail ? ' title="' + escapeHtml(detail) + '"' : '';
       return '<span class="badge badge-status-' + cls + '"' + titleAttr + '>' +
         escapeHtml(s.health) + '</span>';
+    }
+
+    // barTimingChipHtml(s) -> the "last bar X ago -> next in Y" chip (leaf 03,
+    // dashboard-tables-ux), replacing the epoch-aligned "Next bar" guess (the
+    // now-retired epoch-aligned-boundary helper the roster used to call — it
+    // had no relation to the real cadence). "last" is `last_asof_ts` — server
+    // truth, the as-of of the last bar the runner actually evaluated; "next"
+    // is the honest derivation `last_asof_ts + span * 1000`, fed into the SAME
+    // `data-countdown-ts` / `tbTime.countdown()` live-refresh mechanism the
+    // health chip already uses — no new timer machinery. The tooltip carries
+    // both absolute instants plus "data through <date>" (the Last-eval
+    // column's wording, kept verbatim). `last_asof_ts == null` (never
+    // evaluated) -> a muted "—" with an explanatory tooltip, NEVER a fake
+    // countdown. A unit whose span is missing/zero shows "last" only — there
+    // is no honest "next" to derive without a cadence.
+    function barTimingChipHtml(s) {
+      if (!s || s.last_asof_ts == null) {
+        return '<span class="muted" title="no bar evaluated yet">—</span>';
+      }
+      const last = s.last_asof_ts;
+      const lastText = 'last bar ' + escapeHtml(fmtRelative(last));
+      if (!s.span || s.span <= 0) {
+        const title = 'last bar ' + fmtDate(last, { seconds: true }) +
+          ' — data through ' + fmtDateOnly(last);
+        return '<span title="' + escapeHtml(title) + '">' + lastText + '</span>';
+      }
+      const next = last + s.span * 1000;
+      const cadence = tbTime.humanSpan(s.span);
+      const title = 'last bar ' + fmtDate(last, { seconds: true }) +
+        ' · next bar ' + fmtDate(next, { seconds: true }) +
+        ' — data through ' + fmtDateOnly(last) + (cadence ? ' (' + cadence + ' bar close)' : '');
+      return '<span title="' + escapeHtml(title) + '">' + lastText + ' → next in ' +
+        '<span data-countdown-ts="' + next + '">' + escapeHtml(tbTime.countdown(next)) +
+        '</span></span>';
     }
 
     // --- Order-execution cell builders (leaf 02, dashboard-tables-ux) ------ //
@@ -632,10 +677,11 @@
       return { expanded: expanded, rowHtml: rowHtml };
     }
 
-    // tbTime — shared cadence helpers reused by base.html's health chip and by
-    // strategies.html's Cadence/Next-bar columns. Plain global (like TB_READ_ONLY
-    // above), not window-attached — every page's inline script runs in the same
-    // classic-script global scope as this one, after this block has executed.
+    // tbTime — shared cadence helpers reused by base.html's health chip and
+    // bar-timing chip, and by strategies.html's Cadence column. Plain global
+    // (like TB_READ_ONLY above), not window-attached — every page's inline
+    // script runs in the same classic-script global scope as this one, after
+    // this block has executed.
     const tbTime = {
       // countdown(tsMs) -> a compact, stable-width duration string counting down
       // to an epoch-ms timestamp: "42s", "12m05s", "1h05m", "1d02h". Clamps to
@@ -668,23 +714,15 @@
         if (seconds % 60 === 0) return (seconds / 60) + 'm';
         return seconds + 's';
       },
-      // nextBarCloseMs(spanSeconds) -> the next epoch-aligned bar boundary, in
-      // epoch ms (UTC): ceil(now_s / span) * span * 1000. Null for a missing/
-      // zero/negative span.
-      nextBarCloseMs: function (spanSeconds) {
-        if (spanSeconds == null || spanSeconds <= 0) return null;
-        const nowS = Date.now() / 1000;
-        return Math.ceil(nowS / spanSeconds) * spanSeconds * 1000;
-      },
     };
 
     // Re-read every element carrying a `data-countdown-ts` attribute and
     // re-render its text via tbTime.countdown() — one shared 1s interval driving
-    // every countdown on the page (health chip, Overview's next-tick chip,
-    // strategies.html's Next-bar column) instead of a timer per element. A
-    // table rebuild (e.g. strategies.html's 3s poll) simply re-stamps the
-    // attribute on the new elements; this loop just re-reads whatever is
-    // currently in the DOM.
+    // every countdown on the page (health chip, Overview's next-tick chip, the
+    // bar-timing chip's "next in Y") instead of a timer per element. A table
+    // rebuild (e.g. strategies.html's 3s poll) simply re-stamps the attribute
+    // on the new elements; this loop just re-reads whatever is currently in
+    // the DOM.
     function tickCountdowns() {
       document.querySelectorAll('[data-countdown-ts]').forEach(function (el) {
         const ts = Number(el.getAttribute('data-countdown-ts'));
@@ -783,7 +821,7 @@
       setInterval(refreshHealth, 10000);
       // The one shared 1s countdown tick for the whole page (health chip, and
       // any per-page data-countdown-ts element, e.g. the Overview summary
-      // strip's next-tick chip or strategies.html's Next-bar column).
+      // strip's next-tick chip or the bar-timing chip's "next in Y").
       tickCountdowns();
       setInterval(tickCountdowns, 1000);
     });

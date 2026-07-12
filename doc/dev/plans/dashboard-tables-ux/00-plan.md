@@ -82,7 +82,7 @@ in tooltips. No toggle in this epic.
 
 - [x] 01 positions-tables — feat/ui-positions-tables — medium (#215)
 - [x] 02 orders-fills-tables — feat/ui-orders-fills — high (#216)
-- [ ] 03 bar-timing-chip — feat/ui-bar-timing — medium
+- [x] 03 bar-timing-chip — feat/ui-bar-timing — medium (#217)
 - [ ] 04 timezone-and-empty-states — feat/ui-tz-empty-states — low
 
 ## Dependencies

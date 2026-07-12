@@ -8,6 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Honest bar timing.** "last bar X ago → next in Y" chip on the strategies
+  roster (replacing the "Next bar" column) and the strategy-detail header —
+  both derived from `last_asof_ts` + span (server truth), never a fake
+  countdown (`—` when nothing was evaluated). The epoch-aligned
+  `nextBarCloseMs` guess is retired. (#217)
 - **Orders tables show what executed; fills live under their order.** All
   three surfaces gain Filled % (exact fraction on hover), Avg fill and
   Value (filled × avg fill, else qty × limit — the tooltip says which);
