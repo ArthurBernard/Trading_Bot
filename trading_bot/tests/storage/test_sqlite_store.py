@@ -680,6 +680,69 @@ def test_migration_is_idempotent_and_preserves_new_schema(tmp_path) -> None:
     assert (rec.mode, rec.venue) == ("paper", "kraken")
 
 
+def test_fee_asset_round_trips_and_backfills_none(tmp_path) -> None:
+    """``Fill.fee_asset`` persists exactly; absent/legacy rows read back ``None``.
+
+    A venue may denominate a commission in the base asset (Binance charges a
+    market buy's fee in BTC on BTC/USDT) — the denomination must survive the
+    store round trip for venue-truth accounting (the canary's identity
+    oracle). A fill recorded without one (the historic quote assumption) and
+    a pre-migration row (the column backfills NULL) both read back ``None``.
+    """
+    db = tmp_path / "fees.db"
+    store = SqliteStore(db)
+    base_fee_fill = Fill(
+        fill_id="BF1",
+        client_order_id="cid-bf",
+        instrument=BTC_USD,
+        side=OrderSide.BUY,
+        qty=money("0.001"),
+        price=money("50000"),
+        fee=money("0.000001"),
+        ts=1_700_000_000_000,
+        fee_asset="BTC",
+    )
+    store.record_fill(base_fee_fill)
+    store.record_fill(_fill(fill_id="QF1"))  # no fee_asset: quote-denominated
+
+    by_id = {f.fill_id: f for f in store.fills()}
+    assert by_id["BF1"].fee_asset == "BTC"
+    assert by_id["BF1"].fee == money("0.000001")
+    assert by_id["QF1"].fee_asset is None
+
+    # A legacy (pre-fee_asset) database: the migration adds the column and the
+    # old row reads back fee_asset=None — exactly what it meant when written.
+    legacy_db = tmp_path / "legacy_fee.db"
+    legacy = sqlite3.connect(str(legacy_db))
+    try:
+        legacy.executescript(
+            """
+            CREATE TABLE fills (
+                fill_id         TEXT PRIMARY KEY,
+                client_order_id TEXT NOT NULL,
+                instrument      TEXT NOT NULL,
+                side            TEXT NOT NULL,
+                qty             TEXT NOT NULL,
+                price           TEXT NOT NULL,
+                fee             TEXT NOT NULL,
+                ts              INTEGER NOT NULL
+            );
+            """
+        )
+        legacy.execute(
+            "INSERT INTO fills VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            ("OLD-FA", "c1", "BTC/USD", "buy", "1", "30000", "3", 1_700),
+        )
+        legacy.commit()
+    finally:
+        legacy.close()
+    migrated = SqliteStore(legacy_db)
+    [old_fill] = migrated.fills()
+    assert old_fill.fill_id == "OLD-FA"
+    assert old_fill.fee_asset is None
+    assert old_fill.fee == money("3")
+
+
 # --- orders: schema migration (add ts/reject_reason/fill_tolerance) --------- #
 
 

@@ -103,13 +103,16 @@ It then layers the engine's use-cases:
   :class:`~trading_bot.application.portfolio_runner.RebalanceResult` reports
   submitted-vs-failed).
 * canary — :func:`~trading_bot.application.canary.run_canary` (with
-  :func:`~trading_bot.application.canary.paper_oracle` and the
+  :func:`~trading_bot.application.canary.paper_oracle`,
+  :func:`~trading_bot.application.canary.venue_oracle` and the
   :class:`~trading_bot.application.canary.CanaryReport` /
   :class:`~trading_bot.application.canary.CanaryCheck` evidence types), the
   deterministic self-test: a sequential round-trip plus free cancel/idempotency
   probes over a **dedicated**, explicitly-funded engine, every expectation vs
   observation recorded exactly — paper's oracle is exact Decimal equality
-  (realised PnL == −Σ fees, flat, balances moved by fees only).
+  (realised PnL == −Σ fees, flat, balances moved by fees only); the venue
+  oracle is the accounting identity (our fills/balances == venue-reported)
+  plus a bounded cost.
 * run_app — :func:`~trading_bot.application.run_app.run_app` (and
   :func:`~trading_bot.application.run_app.build_runners`), the **triptych
   entrypoint**: one :class:`~trading_bot.application.config.AppConfig` →
@@ -130,6 +133,7 @@ from trading_bot.application.canary import (
     CanaryReport,
     paper_oracle,
     run_canary,
+    venue_oracle,
 )
 from trading_bot.application.capital_service import CapitalPolicy, CapitalService
 from trading_bot.application.config import (
@@ -261,6 +265,7 @@ __all__ = [
     # canary (deterministic self-test)
     "run_canary",
     "paper_oracle",
+    "venue_oracle",
     "CanaryReport",
     "CanaryCheck",
     # entrypoint

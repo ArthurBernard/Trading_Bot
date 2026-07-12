@@ -100,12 +100,23 @@ class BrokerConfig(BaseModel):
         endpoint — it cannot reach mainnet — so it does **not** require the
         ``live_enabled`` opt-in (it still needs testnet credentials). Ignored in
         paper mode (the simulator). A venue with no testnet (``"kraken"``) raises.
+    symbols : list of str, optional
+        The pairs this venue's **per-symbol** private endpoints are queried
+        for. Binance has no account-wide trade history (``myTrades`` is
+        per-symbol), so its adapter serves
+        :meth:`~trading_bot.brokers.base.Broker.fills` only for an explicit
+        symbol set — without one, ``fills()`` (and so reconciliation and the
+        canary's venue oracle) raises. Entries are parsed by the factory with
+        the venue's own parser (``"BTC/USDT"``, ``"BTCUSDT"``, ...); an
+        unparseable entry refuses at build time. Ignored by venues with
+        account-wide fills (Kraken) and by paper mode. Empty by default.
 
     """
 
     name: str
     exchange: str
     testnet: bool = False
+    symbols: list[str] = Field(default_factory=list)
 
     @field_validator("name", "exchange")
     @classmethod
@@ -113,6 +124,15 @@ class BrokerConfig(BaseModel):
         """Reject blank broker ``name`` / ``exchange`` (whitespace-only too)."""
         if not v or not v.strip():
             raise ValueError("must be a non-empty string")
+        return v
+
+    @field_validator("symbols")
+    @classmethod
+    def _non_empty_symbols(cls, v: list[str]) -> list[str]:
+        """Reject blank ``symbols`` entries (whitespace-only too)."""
+        for entry in v:
+            if not entry or not entry.strip():
+                raise ValueError("symbols entries must be non-empty strings")
         return v
 
 
