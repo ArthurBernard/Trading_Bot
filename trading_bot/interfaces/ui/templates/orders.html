@@ -128,6 +128,11 @@
     return parts.length ? ('?' + parts.join('&')) : '';
   }
 
+  // Check if any filter is active (not at its "all" default).
+  function hasActiveFilters() {
+    return FILTERS.crypto !== '' || FILTERS.exchange !== '' || FILTERS.strategy !== '';
+  }
+
   // A signed-money cell class: green gain, red loss.
   function pnlClass(v) {
     if (v == null) return '';
@@ -223,7 +228,8 @@
     toggleCapCaption('orders-cap', rows);
     if (guard === 'skip-stamp') return rows;
     if (!rows.length) {
-      body.innerHTML = '<tr class="empty"><td colspan="11">No orders.</td></tr>';
+      var msg = hasActiveFilters() ? 'No orders match the filters.' : 'No orders.';
+      body.innerHTML = '<tr class="empty"><td colspan="11">' + msg + '</td></tr>';
       return rows;
     }
     // Most recent first (the API returns oldest-first, mirroring the Fills
@@ -281,7 +287,8 @@
     toggleCapCaption('fills-cap', rows);
     if (guard === 'skip-stamp') return rows;
     if (!rows.length) {
-      body.innerHTML = '<tr class="empty"><td colspan="10">No fills.</td></tr>';
+      var msg = hasActiveFilters() ? 'No fills match the filters.' : 'No fills.';
+      body.innerHTML = '<tr class="empty"><td colspan="10">' + msg + '</td></tr>';
       return rows;
     }
     // Most recent first (the API returns oldest-first execution order).

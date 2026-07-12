@@ -213,6 +213,33 @@ def test_every_page_carries_the_bar_timing_chip_helper(path: str) -> None:
 
 
 @pytest.mark.parametrize("path", _PAGES)
+def test_every_page_carries_the_timezone_label_helper(path: str) -> None:
+    """Every page's shell (base.html) carries the timezone affordance helper.
+
+    Leaf 04 (dashboard-tables-ux): the "times in <IANA zone>" label is
+    rendered once per page by `tzLabelHtml()`, defined once in base.html and
+    shown in the footer so it appears without cluttering the nav.
+    """
+    html = _client().get(path).text
+    assert "function tzLabelHtml" in html, path
+    assert "times in" in html, path
+
+
+def test_orders_page_shows_filtered_empty_states() -> None:
+    """Orders/fills empty states on the Orders page distinguish "filtered" from "empty".
+
+    Leaf 04 (dashboard-tables-ux): when filters are active (crypto/exchange/
+    strategy not at their "all" default) and a table has 0 rows, the empty
+    message reads "No orders match the filters." / "No fills match the filters."
+    (not the default "No orders." / "No fills.", which masks the filtering).
+    """
+    html = _client().get("/orders").text
+    # Hook: the wording for filtered-to-zero state must be present.
+    assert "No orders match the filters." in html, "orders table filtered-empty hook"
+    assert "No fills match the filters." in html, "fills table filtered-empty hook"
+
+
+@pytest.mark.parametrize("path", _PAGES)
 def test_nav_lists_four_tabs_and_no_pnl(path: str) -> None:
     """Every page's nav lists the four surviving tabs; the retired PnL tab is gone.
 

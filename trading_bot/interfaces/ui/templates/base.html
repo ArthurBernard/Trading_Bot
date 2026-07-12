@@ -309,6 +309,7 @@
   <footer>
     trading_bot v{{ version }} — unified dashboard{% if read_only %} (read-only){% endif %}.
     <a href="https://github.com/ArthurBernard/Trading_Bot">GitHub</a>
+    <br><span id="tz-label"></span>
   </footer>
   <div id="toast-root"></div>
   <script src="/static/format.js"></script>
@@ -462,6 +463,15 @@
       return '<span title="' + escapeHtml(title) + '">' + lastText + ' → next in ' +
         '<span data-countdown-ts="' + next + '">' + escapeHtml(tbTime.countdown(next)) +
         '</span></span>';
+    }
+
+    // tzLabelHtml() -> the timezone affordance label (leaf 04, dashboard-tables-ux),
+    // shown once per page: "times in <IANA zone>" where the zone comes from
+    // Intl.DateTimeFormat().resolvedOptions().timeZone. Rendered in the footer
+    // so it appears once per page without cluttering the nav.
+    function tzLabelHtml() {
+      const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+      return '<span class="muted">times in ' + escapeHtml(tz) + '</span>';
     }
 
     // --- Order-execution cell builders (leaf 02, dashboard-tables-ux) ------ //
@@ -824,6 +834,9 @@
       // strip's next-tick chip or the bar-timing chip's "next in Y").
       tickCountdowns();
       setInterval(tickCountdowns, 1000);
+      // Render the timezone label in the footer (leaf 04, dashboard-tables-ux).
+      const tzEl = document.getElementById('tz-label');
+      if (tzEl) tzEl.innerHTML = tzLabelHtml();
     });
   </script>
   {% block scripts %}{% endblock %}
