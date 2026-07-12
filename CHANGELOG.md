@@ -8,6 +8,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Orders tables show what executed; fills live under their order.** All
+  three surfaces gain Filled % (exact fraction on hover), Avg fill and
+  Value (filled × avg fill, else qty × limit — the tooltip says which);
+  clicking an order (detail + Orders pages) expands its fills, ids,
+  limit/stop, Σ fees and reject reason. The strategy detail's standalone
+  "Recent fills" table is **removed** (its data lives in the expansions);
+  the Orders page's audit fills view gains Order and Value columns. (#216)
 - **Positions tables read asset-first, with a value.** Overview + strategy
   detail: Asset | Qty | Avg entry | Price *(as-of)* | Value | Unrealised |
   Realised (net) — values prefer the configured display currency, marks
