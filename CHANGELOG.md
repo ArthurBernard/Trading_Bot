@@ -8,6 +8,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+### Changed
+
+### Fixed
+
+### Deprecated
+
+### Removed
+
+## [0.14.0] - 2026-07-12
+
+### Added
+
 - **The canary runs against real venues (closes the `canary-roundtrip`
   epic).** Venue identity oracle: our store-recorded fills == the
   venue-reported fills (exact triples), per-asset balance deltas == the
@@ -101,14 +113,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   timestamp without any I/O. Single-instrument `StrategyRunner` is a
   documented follow-up seam. Verified against the real dccd store: cache ==
   independently-read frame closes, exact price and asof. (#209)
-
-### Changed
-
-### Fixed
-
-### Deprecated
-
-### Removed
 
 ## [0.13.0] - 2026-07-11
 
