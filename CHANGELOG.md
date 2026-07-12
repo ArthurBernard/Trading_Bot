@@ -8,6 +8,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `/api/orders` rows carry `reject_reason` — the UI's expanded order detail
+  rendered it defensively since #216; the API now serializes it (additive;
+  contract sweep updated). (#XX)
 - **Timezone label + honest empty states (closes the `dashboard-tables-ux`
   epic).** Every page footer says which timezone its times render in; the
   Orders page's filtered-to-zero tables say "No orders/fills match the
