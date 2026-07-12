@@ -155,7 +155,9 @@
   </div>
 </section>
 
-<!-- Recent orders — this strategy's order history (open + recent, any status). -->
+<!-- Recent orders — this strategy's order history (open + recent, any status).
+     Click a row for that order's fills + ids/limit/stop/Σ fees (the page's
+     standalone fills table retired into these expansions — leaf 02). -->
 <section class="card" id="orders-card">
   <div class="row" style="justify-content:space-between;">
     <h2 style="margin:0;">Recent orders</h2>
@@ -170,38 +172,14 @@
           <th>Side</th>
           <th>Type</th>
           <th class="num">Qty</th>
-          <th class="num">Filled</th>
+          <th class="num">Filled %</th>
           <th class="num">Avg fill</th>
+          <th class="num">Value</th>
           <th>Status</th>
         </tr>
       </thead>
       <tbody id="orders-body">
-        <tr class="empty"><td colspan="8">Loading…</td></tr>
-      </tbody>
-    </table>
-  </div>
-</section>
-
-<!-- Recent fills — this strategy's confirmed executions (the PnL source of truth). -->
-<section class="card" id="fills-card">
-  <div class="row" style="justify-content:space-between;">
-    <h2 style="margin:0;">Recent fills</h2>
-    <span class="updated" id="fills-updated"></span>
-  </div>
-  <div class="table-wrap">
-    <table id="fills-table">
-      <thead>
-        <tr>
-          <th>Time</th>
-          <th>Instrument</th>
-          <th>Side</th>
-          <th class="num">Qty</th>
-          <th class="num">Price</th>
-          <th class="num">Fee</th>
-        </tr>
-      </thead>
-      <tbody id="fills-body">
-        <tr class="empty"><td colspan="6">Loading…</td></tr>
+        <tr class="empty"><td colspan="9">Loading…</td></tr>
       </tbody>
     </table>
   </div>
@@ -763,6 +741,42 @@
   }
 
   // --- Recent orders (this strategy's history) ----------------------------- //
+  // Blueprint (dashboard-tables-ux leaf 02): Time | Instrument | Side | Type |
+  // Qty | Filled % | Avg fill | Value | Status — the Filled %/Value cells come
+  // from base.html's shared builders. A row expands (the shared tbExpander)
+  // into that order's fills + ids/limit/stop/Σ fees, joined client-side by
+  // client_order_id from the fills payload loadFills() below already fetches.
+
+  // Latest fetched order rows, keyed by client_order_id — read fresh by the
+  // expander's detail lookup on every open/rebuild.
+  let _ordersByKey = Object.create(null);
+  // client_order_id -> that order's fills, oldest-first (execution order) —
+  // the client-side join feeding each expanded panel.
+  let _fillsByOrder = Object.create(null);
+
+  // The shared expandable-row helper (base.html) — one instance for this
+  // page's orders table; its expanded-keys Set survives every SSE/poll
+  // rebuild of #orders-body.
+  const orderExpander = tbExpander(document.getElementById('orders-body'), function (key) {
+    const o = _ordersByKey[key];
+    return o ? orderDetailHtml(o, _fillsByOrder[key] || []) : '';
+  });
+
+  function orderRowHtml(o) {
+    const sideCls = o.side === 'buy' ? 'side-buy' : 'side-sell';
+    const unit = tbFmt.splitInstrument(o.instrument);
+    const cells =
+      '<td class="num" title="' + escapeHtml(fmtRelative(o.ts)) + '">' + escapeHtml(fmtDate(o.ts, { seconds: true })) + '</td>' +
+      '<td>' + escapeHtml(o.instrument) + '</td>' +
+      '<td class="' + sideCls + '">' + escapeHtml(o.side) + '</td>' +
+      '<td>' + escapeHtml(o.type) + '</td>' +
+      '<td class="num">' + tbFmt.qtyCell(o.qty, { base: unit.base }) + '</td>' +
+      '<td class="num">' + orderFilledPctCell(o) + '</td>' +
+      '<td class="num">' + tbFmt.priceCell(o.avg_fill_price, { quote: unit.quote }) + '</td>' +
+      '<td class="num">' + orderValueCell(o) + '</td>' +
+      '<td>' + statusBadge(o.status) + '</td>';
+    return orderExpander.rowHtml(o.client_order_id, cells, 9);
+  }
 
   async function loadOrders() {
     let rows;
@@ -770,69 +784,45 @@
       rows = await api('GET', '/api/orders?history=true&strategy=' + encodeURIComponent(STRATEGY));
     } catch (e) {
       document.getElementById('orders-body').innerHTML =
-        '<tr class="empty"><td colspan="8">' + escapeHtml(e.message) + '</td></tr>';
+        '<tr class="empty"><td colspan="9">' + escapeHtml(e.message) + '</td></tr>';
       return;
     }
+    // Re-index the expander's lookup before rendering, so a click that fires
+    // mid-render always sees current data (the positions tables' pattern).
+    const byKey = Object.create(null);
+    rows.forEach(function (o) { byKey[o.client_order_id] = o; });
+    _ordersByKey = byKey;
     const body = document.getElementById('orders-body');
     const guard = tbRefreshGuard('detail-orders', body, rows);
     if (guard === 'skip-silent') return;
     stampUpdated('orders-updated');
     if (guard === 'skip-stamp') return;
     if (!rows.length) {
-      body.innerHTML = '<tr class="empty"><td colspan="8">No orders.</td></tr>';
+      body.innerHTML = '<tr class="empty"><td colspan="9">No orders.</td></tr>';
       return;
     }
     // Most recent first (the API returns oldest-first).
     const ordered = rows.slice().reverse();
-    body.innerHTML = ordered.map(function (o) {
-      const sideCls = o.side === 'buy' ? 'side-buy' : 'side-sell';
-      const unit = tbFmt.splitInstrument(o.instrument);
-      return '<tr>' +
-        '<td class="num" title="' + escapeHtml(fmtRelative(o.ts)) + '">' + escapeHtml(fmtDate(o.ts, { seconds: true })) + '</td>' +
-        '<td>' + escapeHtml(o.instrument) + '</td>' +
-        '<td class="' + sideCls + '">' + escapeHtml(o.side) + '</td>' +
-        '<td>' + escapeHtml(o.type) + '</td>' +
-        '<td class="num">' + tbFmt.qtyCell(o.qty, { base: unit.base }) + '</td>' +
-        '<td class="num">' + tbFmt.qtyCell(o.filled_qty, { base: unit.base }) + '</td>' +
-        '<td class="num">' + tbFmt.priceCell(o.avg_fill_price, { quote: unit.quote }) + '</td>' +
-        '<td>' + statusBadge(o.status) + '</td>' +
-        '</tr>';
-    }).join('');
+    body.innerHTML = ordered.map(orderRowHtml).join('');
   }
 
-  // --- Recent fills (this strategy's confirmed executions) ----------------- //
+  // --- Fills (the join source for the orders' expanded detail) ------------- //
+  // The page's standalone fills table retired in leaf 02 — fills now live
+  // under their order (the expansions above). The fetch itself stays: it is
+  // the client_order_id join source, refreshed on the same cadence.
 
   async function loadFills() {
     let rows;
     try {
       rows = await api('GET', '/api/fills?strategy=' + encodeURIComponent(STRATEGY));
     } catch (e) {
-      document.getElementById('fills-body').innerHTML =
-        '<tr class="empty"><td colspan="6">' + escapeHtml(e.message) + '</td></tr>';
-      return;
+      return;  // keep the last good join — the orders table reports its own errors
     }
-    const body = document.getElementById('fills-body');
-    const guard = tbRefreshGuard('detail-fills', body, rows);
-    if (guard === 'skip-silent') return;
-    stampUpdated('fills-updated');
-    if (guard === 'skip-stamp') return;
-    if (!rows.length) {
-      body.innerHTML = '<tr class="empty"><td colspan="6">No fills.</td></tr>';
-      return;
-    }
-    const ordered = rows.slice().reverse();
-    body.innerHTML = ordered.map(function (f) {
-      const sideCls = f.side === 'buy' ? 'side-buy' : 'side-sell';
-      const unit = tbFmt.splitInstrument(f.instrument);
-      return '<tr>' +
-        '<td class="num" title="' + escapeHtml(fmtRelative(f.ts)) + '">' + escapeHtml(fmtDate(f.ts, { seconds: true })) + '</td>' +
-        '<td>' + escapeHtml(f.instrument) + '</td>' +
-        '<td class="' + sideCls + '">' + escapeHtml(f.side) + '</td>' +
-        '<td class="num">' + tbFmt.qtyCell(f.qty, { base: unit.base }) + '</td>' +
-        '<td class="num">' + tbFmt.priceCell(f.price, { quote: unit.quote }) + '</td>' +
-        '<td class="num">' + tbFmt.moneyCell(f.fee, { quote: unit.quote }) + '</td>' +
-        '</tr>';
-    }).join('');
+    const byOrder = Object.create(null);
+    rows.forEach(function (f) {
+      (byOrder[f.client_order_id] = byOrder[f.client_order_id] || []).push(f);
+    });
+    _fillsByOrder = byOrder;
   }
 
   // --- Control actions (mode switch, start/stop, remove) ------------------- //
@@ -1024,8 +1014,9 @@
     // labels want it on first paint).
     loadStatus().then(function () { loadPnl(); loadCapital(); });
     loadPositions();
-    loadOrders();
-    loadFills();
+    // Fills before orders: the orders rebuild re-renders any open expanded
+    // detail from the fills join index, so the index must be current first.
+    loadFills().then(loadOrders);
   }
 
   document.addEventListener('DOMContentLoaded', function () {

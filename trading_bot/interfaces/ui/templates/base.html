@@ -141,6 +141,13 @@
     .detail-grid dt { color:var(--muted); font-size:.72rem; text-transform:uppercase;
             letter-spacing:.08em; margin:0; }
     .detail-grid dd { margin:.15rem 0 0; font-family:var(--font-mono); font-size:.86rem; }
+    /* An order's expanded detail (leaf 02) nests its fills as a small table —
+       scope out the detail-cell padding/background the descendant
+       `tr.detail-row td` rule above would otherwise stamp on the nested cells. */
+    tr.detail-row .order-fills { margin-top:.7rem; }
+    tr.detail-row .order-fills th, tr.detail-row .order-fills td {
+            background:none; padding:.3rem .5rem; }
+    tr.detail-row .order-fills-none { margin:.6rem 0 0; font-size:.85rem; }
     /* Strategy-name -> detail-page link, shared across the roster, Overview and
        Orders name cells so every place a strategy is named is deep-linkable. */
     a.strat-link { color:var(--accent); text-decoration:none; }
@@ -410,6 +417,107 @@
       const titleAttr = detail ? ' title="' + escapeHtml(detail) + '"' : '';
       return '<span class="badge badge-status-' + cls + '"' + titleAttr + '>' +
         escapeHtml(s.health) + '</span>';
+    }
+
+    // --- Order-execution cell builders (leaf 02, dashboard-tables-ux) ------ //
+    // Shared by the three order surfaces (Overview open-orders, Orders page,
+    // strategy detail "Recent orders") so all render execution identically.
+    // Money/qty arrive as EXACT Decimal strings; the arithmetic here (a
+    // ratio, a product, a fee sum) is Number()-based and DISPLAY ONLY — the
+    // exact operand strings ride the title tooltip, never a rounded result.
+
+    // orderFilledPctCell(o) -> the "Filled %" cell: filled_qty / qty as a
+    // percentage, the exact fraction in the tooltip. "—" when qty is missing,
+    // zero or unparseable (a percentage of nothing is a lie, not a zero).
+    function orderFilledPctCell(o) {
+      const qtyN = Number(o.qty);
+      const filledN = Number(o.filled_qty);
+      if (o.qty == null || o.filled_qty == null ||
+          !isFinite(qtyN) || qtyN === 0 || !isFinite(filledN)) {
+        return '<span class="muted">—</span>';
+      }
+      return tbFmt.pctCell(filledN / qtyN, { title: o.filled_qty + ' / ' + o.qty });
+    }
+
+    // orderValueCell(o) -> the "Value" cell: what the order is actually worth
+    // — filled_qty × avg_fill_price once anything filled, else
+    // qty × limit_price while the order is priced but unfilled, else "—" (an
+    // unfilled market order has no honest value yet). The tooltip names WHICH
+    // product is shown, with the exact Decimal factors.
+    function orderValueCell(o) {
+      const unit = tbFmt.splitInstrument(o.instrument);
+      const filledN = Number(o.filled_qty);
+      const avgN = Number(o.avg_fill_price);
+      if (o.filled_qty != null && o.avg_fill_price != null &&
+          isFinite(filledN) && filledN > 0 && isFinite(avgN)) {
+        return tbFmt.moneyCell(filledN * avgN, { quote: unit.quote,
+          title: 'filled × avg fill: ' + o.filled_qty + ' × ' + o.avg_fill_price });
+      }
+      const qtyN = Number(o.qty);
+      const limitN = Number(o.limit_price);
+      if (o.qty != null && o.limit_price != null && isFinite(qtyN) && isFinite(limitN)) {
+        return tbFmt.moneyCell(qtyN * limitN, { quote: unit.quote,
+          title: 'qty × limit price (nothing filled): ' + o.qty + ' × ' + o.limit_price });
+      }
+      return '<span class="muted">—</span>';
+    }
+
+    // orderDetailHtml(o, fills) -> the expanded detail panel for one order
+    // (the tbExpander pattern below): client/venue ids, limit/stop prices,
+    // the fill count + Σ fees, reject_reason when the payload carries one,
+    // then THAT order's fills — client-joined by client_order_id from the
+    // fills payload the page already fetched (never a per-expansion request),
+    // oldest-first (execution order, unlike the most-recent-first flat
+    // tables). Used by the Orders page + the strategy detail; the Overview's
+    // open-orders table shows the execution columns without the expansion
+    // (it does not fetch /api/fills — see overview.html).
+    function orderDetailHtml(o, fills) {
+      const unit = tbFmt.splitInstrument(o.instrument);
+      fills = fills || [];
+      // Σ fees across this order's fills — display-only Number arithmetic;
+      // each fill's exact fee string stays one hover away per row below.
+      let feeSum = 0;
+      let haveFee = false;
+      fills.forEach(function (f) {
+        const n = Number(f.fee);
+        if (isFinite(n)) { feeSum += n; haveFee = true; }
+      });
+      let html = '<dl class="detail-grid">' +
+        '<div class="detail-item"><dt>Client order id</dt><dd>' +
+          escapeHtml(o.client_order_id) + '</dd></div>' +
+        '<div class="detail-item"><dt>Venue order id</dt><dd>' +
+          (o.venue_order_id ? escapeHtml(o.venue_order_id) : '<span class="muted">—</span>') +
+          '</dd></div>' +
+        '<div class="detail-item"><dt>Limit price</dt><dd>' +
+          tbFmt.priceCell(o.limit_price, { quote: unit.quote }) + '</dd></div>' +
+        '<div class="detail-item"><dt>Stop price</dt><dd>' +
+          tbFmt.priceCell(o.stop_price, { quote: unit.quote }) + '</dd></div>' +
+        '<div class="detail-item"><dt>Fills</dt><dd>' + fills.length + '</dd></div>' +
+        '<div class="detail-item"><dt>Σ fees</dt><dd>' +
+          (haveFee ? tbFmt.moneyCell(feeSum, { quote: unit.quote }) : '<span class="muted">—</span>') +
+          '</dd></div>' +
+        (o.reject_reason
+          ? '<div class="detail-item"><dt>Reject reason</dt><dd class="err">' +
+            escapeHtml(o.reject_reason) + '</dd></div>'
+          : '') +
+        '</dl>';
+      if (!fills.length) {
+        html += '<p class="muted order-fills-none">No fills for this order.</p>';
+      } else {
+        html += '<table class="order-fills">' +
+          '<thead><tr><th>Time</th><th class="num">Qty</th>' +
+          '<th class="num">Price</th><th class="num">Fee</th></tr></thead>' +
+          '<tbody>' + fills.map(function (f) {
+            return '<tr>' +
+              '<td class="num" title="' + escapeHtml(fmtRelative(f.ts)) + '">' +
+                escapeHtml(fmtDate(f.ts, { seconds: true })) + '</td>' +
+              '<td class="num">' + tbFmt.qtyCell(f.qty, { base: unit.base }) + '</td>' +
+              '<td class="num">' + tbFmt.priceCell(f.price, { quote: unit.quote }) + '</td>' +
+              '<td class="num">' + tbFmt.moneyCell(f.fee, { quote: unit.quote }) + '</td>' +
+              '</tr>';
+          }).join('') + '</tbody></table>';
+      }
+      return html;
     }
 
     // tbRefreshGuard(key, tableEl, payload) -> 'render' | 'skip-stamp' | 'skip-silent'

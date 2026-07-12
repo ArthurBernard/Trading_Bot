@@ -105,12 +105,14 @@
           <th>Side</th>
           <th>Type</th>
           <th class="num">Qty</th>
-          <th class="num">Filled</th>
+          <th class="num">Filled %</th>
+          <th class="num">Avg fill</th>
+          <th class="num">Value</th>
           <th>Status</th>
         </tr>
       </thead>
       <tbody id="orders-body">
-        <tr class="empty"><td colspan="9">Loading…</td></tr>
+        <tr class="empty"><td colspan="11">Loading…</td></tr>
       </tbody>
     </table>
   </div>
@@ -429,13 +431,21 @@
   }
 
   // --- Open orders ------------------------------------------------------- //
+  // Blueprint (dashboard-tables-ux leaf 02): the execution columns — Filled %
+  // | Avg fill | Value — via base.html's shared cell builders, so this table
+  // reads execution exactly like the Orders page / strategy detail. NO row
+  // expansion here (unlike those two): the expanded panel's content is the
+  // order's fills, and this page does not fetch /api/fills — adding that
+  // fetch to every 10s poll + SSE refresh solely for an optional affordance
+  // is disproportionate, and a fills-less panel would fork the shared
+  // orderDetailHtml builder. The Orders page (one click away) expands fully.
   async function loadOrders() {
     let rows;
     try {
       rows = await api('GET', '/api/orders');
     } catch (e) {
       document.getElementById('orders-body').innerHTML =
-        '<tr class="empty"><td colspan="9">' + escapeHtml(e.message) + '</td></tr>';
+        '<tr class="empty"><td colspan="11">' + escapeHtml(e.message) + '</td></tr>';
       document.getElementById('sum-open-orders').textContent = '—';
       return;
     }
@@ -448,7 +458,7 @@
     stampUpdated('overview-orders-updated');
     if (guard === 'skip-stamp') return;
     if (!rows.length) {
-      body.innerHTML = '<tr class="empty"><td colspan="9">No open orders.</td></tr>';
+      body.innerHTML = '<tr class="empty"><td colspan="11">No open orders.</td></tr>';
       return;
     }
     body.innerHTML = rows.map(function (o) {
@@ -464,7 +474,9 @@
         '<td class="' + sideCls + '">' + escapeHtml(o.side) + '</td>' +
         '<td>' + escapeHtml(o.type) + '</td>' +
         '<td class="num">' + tbFmt.qtyCell(o.qty, { base: unit.base }) + '</td>' +
-        '<td class="num">' + tbFmt.qtyCell(o.filled_qty, { base: unit.base }) + '</td>' +
+        '<td class="num">' + orderFilledPctCell(o) + '</td>' +
+        '<td class="num">' + tbFmt.priceCell(o.avg_fill_price, { quote: unit.quote }) + '</td>' +
+        '<td class="num">' + orderValueCell(o) + '</td>' +
         '<td>' + statusBadge(o.status) + '</td>' +
         '</tr>';
     }).join('');
