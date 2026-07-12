@@ -72,15 +72,17 @@
       <thead id="positions-thead">
         <tr>
           <th>Exchange</th>
-          <th>Instrument</th>
-          <th class="num">Net qty</th>
+          <th>Asset</th>
+          <th class="num">Qty</th>
           <th class="num">Avg entry</th>
-          <th class="num">Realised PnL</th>
-          <th class="num">Fees</th>
+          <th class="num">Price <span class="unit">(as-of)</span></th>
+          <th class="num">Value</th>
+          <th class="num">Unrealised</th>
+          <th class="num">Realised (net)</th>
         </tr>
       </thead>
       <tbody id="positions-body">
-        <tr class="empty"><td colspan="6">Loading…</td></tr>
+        <tr class="empty"><td colspan="8">Loading…</td></tr>
       </tbody>
     </table>
   </div>
@@ -103,12 +105,14 @@
           <th>Side</th>
           <th>Type</th>
           <th class="num">Qty</th>
-          <th class="num">Filled</th>
+          <th class="num">Filled %</th>
+          <th class="num">Avg fill</th>
+          <th class="num">Value</th>
           <th>Status</th>
         </tr>
       </thead>
       <tbody id="orders-body">
-        <tr class="empty"><td colspan="9">Loading…</td></tr>
+        <tr class="empty"><td colspan="11">Loading…</td></tr>
       </tbody>
     </table>
   </div>
@@ -276,29 +280,100 @@
   // The Strategy column is redundant when grouping by strategy (the group
   // header already names it) — dropped from both the header and the row cells,
   // with the <thead> rebuilt per grouping mode so colspans stay consistent.
+  // Blueprint (dashboard-tables-ux leaf 01): positions read asset-first — Asset
+  // (the base, not the pair) | Qty | Avg entry | Price (as-of, the mark) |
+  // Value | Unrealised | Realised (net) — plus Strategy/Exchange here on the
+  // overview variant. A row expands (the shared tbExpander in base.html) into
+  // the native pair, cumulative fees and the realised gross/fees breakdown.
   function positionsTheadHtml(includeStrategy) {
     return '<tr>' +
       (includeStrategy ? '<th>Strategy</th>' : '') +
       '<th>Exchange</th>' +
-      '<th>Instrument</th>' +
-      '<th class="num">Net qty</th>' +
+      '<th>Asset</th>' +
+      '<th class="num">Qty</th>' +
       '<th class="num">Avg entry</th>' +
-      '<th class="num">Realised PnL</th>' +
-      '<th class="num">Fees</th>' +
+      '<th class="num">Price <span class="unit">(as-of)</span></th>' +
+      '<th class="num">Value</th>' +
+      '<th class="num">Unrealised</th>' +
+      '<th class="num">Realised (net)</th>' +
       '</tr>';
   }
+
+  // The Price cell: the mark + a small relative "as of" stamp beside it
+  // (tooltip: absolute time + mark_source, the freshness-never-lies rule); '—'
+  // when there is no mark to show (a silent, not-null-columns miss).
+  function positionMarkCell(r) {
+    const unit = tbFmt.splitInstrument(r.instrument);
+    if (r.mark == null) return tbFmt.priceCell(null);
+    const priceHtml = tbFmt.priceCell(r.mark, { quote: unit.quote });
+    if (r.mark_asof_ts == null) return priceHtml;
+    const title = fmtDate(r.mark_asof_ts, { seconds: true }) +
+      (r.mark_source ? ' · ' + r.mark_source : '');
+    return priceHtml + ' <span class="muted" title="' + escapeHtml(title) + '">(' +
+      escapeHtml(fmtRelative(r.mark_asof_ts)) + ')</span>';
+  }
+
+  // Value/Unrealised: prefer value_display/unrealised_display + display_currency
+  // when non-null, else the native amount + the row's fee_ccy (the native
+  // quote); '—' when both are null — moneyCell already renders that.
+  function positionMoneyCell(r, nativeKey, displayKey) {
+    if (r[displayKey] != null && r.display_currency) {
+      return tbFmt.moneyCell(r[displayKey], { quote: r.display_currency });
+    }
+    return tbFmt.moneyCell(r[nativeKey], { quote: r.fee_ccy });
+  }
+
+  // A stable key for one position row — strategy + exchange + instrument,
+  // since the same instrument can appear once per strategy (positions are
+  // never merged across strategies/exchanges).
+  function positionKey(r) {
+    return r.strategy + '|' + r.exchange + '|' + r.instrument;
+  }
+
+  // Expanded detail: the native instrument pair, cumulative fees, the realised
+  // gross-vs-fees breakdown (gross = realised_pnl + fees_paid, computed
+  // client-side — display only, never fed back into a computation), and the
+  // mark's source + absolute as-of.
+  function positionDetailHtml(r) {
+    const gross = Number(r.realised_pnl) + Number(r.fees_paid);
+    const asofAbs = r.mark_asof_ts != null ? fmtDate(r.mark_asof_ts, { seconds: true }) : null;
+    return '<dl class="detail-grid">' +
+      '<div class="detail-item"><dt>Native pair</dt><dd>' + escapeHtml(r.instrument) + '</dd></div>' +
+      '<div class="detail-item"><dt>Fees paid</dt><dd>' + tbFmt.moneyCell(r.fees_paid, { quote: r.fee_ccy }) + '</dd></div>' +
+      '<div class="detail-item"><dt>Realised gross</dt><dd>' + tbFmt.moneyCell(gross, { quote: r.fee_ccy }) + '</dd></div>' +
+      '<div class="detail-item"><dt>Realised net (gross − fees)</dt><dd>' + tbFmt.moneyCell(r.realised_pnl, { quote: r.fee_ccy }) + '</dd></div>' +
+      '<div class="detail-item"><dt>Mark source</dt><dd>' + (r.mark_source ? escapeHtml(r.mark_source) : '<span class="muted">—</span>') + '</dd></div>' +
+      '<div class="detail-item"><dt>Mark as of</dt><dd>' + (asofAbs ? escapeHtml(asofAbs) : '<span class="muted">—</span>') + '</dd></div>' +
+      '</dl>';
+  }
+
+  // Latest fetched rows, keyed by positionKey() — the expander's detail lookup
+  // reads this fresh on every open/rebuild rather than closing over a stale
+  // row, so a re-render never shows yesterday's fees_paid under today's key.
+  let _positionsByKey = Object.create(null);
+
+  // The shared expandable-row helper (base.html) — one instance for this
+  // page's positions table, created once so its expanded-keys Set survives
+  // every SSE/poll rebuild of #positions-body.
+  const posExpander = tbExpander(document.getElementById('positions-body'), function (key) {
+    const r = _positionsByKey[key];
+    return r ? positionDetailHtml(r) : '';
+  });
+
   function positionRowHtml(r, includeStrategy) {
     const unit = tbFmt.splitInstrument(r.instrument);  // {base, quote}
-    return '<tr>' +
+    const cells =
       (includeStrategy ? '<td>' + stratLink(r.strategy) + '</td>' : '') +
       '<td>' + escapeHtml(r.exchange) + '</td>' +
-      '<td>' + escapeHtml(r.instrument) + '</td>' +
+      '<td>' + escapeHtml(r.base) + '</td>' +
       '<td class="num">' + tbFmt.qtyCell(r.net_qty, { base: unit.base }) + '</td>' +
       '<td class="num">' + tbFmt.priceCell(r.avg_entry_price, { quote: unit.quote }) + '</td>' +
-      '<td class="num ' + pnlClass(r.realised_pnl) + '">' +
-        tbFmt.moneyCell(r.realised_pnl, { quote: unit.quote }) + '</td>' +
-      '<td class="num">' + tbFmt.moneyCell(r.fees_paid, { quote: unit.quote }) + '</td>' +
-      '</tr>';
+      '<td class="num">' + positionMarkCell(r) + '</td>' +
+      '<td class="num">' + positionMoneyCell(r, 'value', 'value_display') + '</td>' +
+      '<td class="num ' + pnlClass(r.unrealised) + '">' + positionMoneyCell(r, 'unrealised', 'unrealised_display') + '</td>' +
+      '<td class="num ' + pnlClass(r.realised_pnl) + '">' + tbFmt.moneyCell(r.realised_pnl, { quote: r.fee_ccy }) + '</td>';
+    const colspan = includeStrategy ? 9 : 8;
+    return posExpander.rowHtml(positionKey(r), cells, colspan);
   }
   function groupHeaderHtml(name, count, colspan) {
     return '<tr class="group"><td colspan="' + colspan + '">' +
@@ -307,7 +382,7 @@
   }
   async function loadPositions() {
     const includeStrategy = POS_GROUP !== 'strategy';
-    const colspan = includeStrategy ? 7 : 6;
+    const colspan = includeStrategy ? 9 : 8;
     document.getElementById('positions-thead').innerHTML = positionsTheadHtml(includeStrategy);
     let data;
     const url = POS_GROUP
@@ -320,6 +395,12 @@
         '<tr class="empty"><td colspan="' + colspan + '">' + escapeHtml(e.message) + '</td></tr>';
       return;
     }
+    // Re-index the lookup the expander's detail-panel builder reads — before
+    // any rendering, so a click that fires mid-render always sees current data.
+    const flatRows = POS_GROUP ? data.flatMap(function (g) { return g.rows; }) : data;
+    const byKey = Object.create(null);
+    flatRows.forEach(function (r) { byKey[positionKey(r)] = r; });
+    _positionsByKey = byKey;
     const body = document.getElementById('positions-body');
     // No-flicker refresh — keyed by grouping, since switching POS_GROUP always
     // renders (a different shape) while an unchanged poll at the same grouping
@@ -350,13 +431,21 @@
   }
 
   // --- Open orders ------------------------------------------------------- //
+  // Blueprint (dashboard-tables-ux leaf 02): the execution columns — Filled %
+  // | Avg fill | Value — via base.html's shared cell builders, so this table
+  // reads execution exactly like the Orders page / strategy detail. NO row
+  // expansion here (unlike those two): the expanded panel's content is the
+  // order's fills, and this page does not fetch /api/fills — adding that
+  // fetch to every 10s poll + SSE refresh solely for an optional affordance
+  // is disproportionate, and a fills-less panel would fork the shared
+  // orderDetailHtml builder. The Orders page (one click away) expands fully.
   async function loadOrders() {
     let rows;
     try {
       rows = await api('GET', '/api/orders');
     } catch (e) {
       document.getElementById('orders-body').innerHTML =
-        '<tr class="empty"><td colspan="9">' + escapeHtml(e.message) + '</td></tr>';
+        '<tr class="empty"><td colspan="11">' + escapeHtml(e.message) + '</td></tr>';
       document.getElementById('sum-open-orders').textContent = '—';
       return;
     }
@@ -369,7 +458,7 @@
     stampUpdated('overview-orders-updated');
     if (guard === 'skip-stamp') return;
     if (!rows.length) {
-      body.innerHTML = '<tr class="empty"><td colspan="9">No open orders.</td></tr>';
+      body.innerHTML = '<tr class="empty"><td colspan="11">No open orders.</td></tr>';
       return;
     }
     body.innerHTML = rows.map(function (o) {
@@ -385,7 +474,9 @@
         '<td class="' + sideCls + '">' + escapeHtml(o.side) + '</td>' +
         '<td>' + escapeHtml(o.type) + '</td>' +
         '<td class="num">' + tbFmt.qtyCell(o.qty, { base: unit.base }) + '</td>' +
-        '<td class="num">' + tbFmt.qtyCell(o.filled_qty, { base: unit.base }) + '</td>' +
+        '<td class="num">' + orderFilledPctCell(o) + '</td>' +
+        '<td class="num">' + tbFmt.priceCell(o.avg_fill_price, { quote: unit.quote }) + '</td>' +
+        '<td class="num">' + orderValueCell(o) + '</td>' +
         '<td>' + statusBadge(o.status) + '</td>' +
         '</tr>';
     }).join('');

@@ -28,6 +28,7 @@ import polars as pl
 import pytest
 from typer.testing import CliRunner
 
+from trading_bot.application.canary import CanaryCheck, CanaryReport, size_for_minimums
 from trading_bot.application.performance_service import PerformanceService
 from trading_bot.domain.fill import Fill
 from trading_bot.domain.instrument import Instrument, Symbol
@@ -35,6 +36,7 @@ from trading_bot.domain.money import money
 from trading_bot.domain.order import Order, OrderSide, OrderType
 from trading_bot.domain.position import Position
 from trading_bot.interfaces.cli import _render
+from trading_bot.interfaces.cli import main as cli_main
 from trading_bot.interfaces.cli.main import _ensure_cwd_importable, app
 from trading_bot.storage.sqlite_store import SqliteStore
 
@@ -443,6 +445,268 @@ def test_kpi_capital_flag_beats_config_starting_capital(
     assert result.exit_code == 0, result.output
     assert "6000" in result.output  # 5000 flag wins
     assert "201000" not in result.output  # not the config anchor
+
+
+# --- canary ------------------------------------------------------------------ #
+
+#: A spec-carrying instrument shaped like the real Binance BTC/USDT venue spec
+#: (mirrors trading_bot/tests/application/test_canary.py's own fixture), so a
+#: monkeypatched, offline ``_resolve_canary_sizing`` still exercises the real
+#: sizing/quantization path the CLI would hit against the live resolver.
+_CANARY_INSTRUMENT = Instrument(
+    Symbol("BTC", "USDT"),
+    price_precision=2,
+    qty_precision=5,
+    min_qty=money("0.00001"),
+    min_notional=money("5"),
+)
+_CANARY_MARK = money("50000")
+_CANARY_QTY = size_for_minimums(_CANARY_INSTRUMENT, _CANARY_MARK)
+
+
+def _patch_offline_sizing(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Monkeypatch ``_resolve_canary_sizing`` so a canary test never hits the
+    network: same fixed ``(instrument, mark, qty)`` every time, computed
+    through the real :func:`~trading_bot.application.canary.size_for_minimums`.
+    """
+
+    async def _fake_resolve(exchange: str, symbol: str):
+        return _CANARY_INSTRUMENT, _CANARY_MARK, _CANARY_QTY
+
+    monkeypatch.setattr(cli_main, "_resolve_canary_sizing", _fake_resolve)
+
+
+def test_canary_paper_run_all_green(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`canary` (paper, offline sizing) exits 0 and prints the all-PASS evidence."""
+    _patch_offline_sizing(monkeypatch)
+    db = tmp_path / "canary.db"
+
+    result = runner.invoke(app, ["canary", "--db", str(db)])
+
+    assert result.exit_code == 0, result.output
+    assert "BTC/USDT" in result.output
+    assert "cancel_probe.resting" in result.output
+    assert "roundtrip.flat" in result.output
+    assert "oracle.fill_count" in result.output
+    assert "FAIL" not in result.output
+    assert "result: PASS" in result.output
+
+
+def test_canary_seeded_failure_exits_nonzero_with_fail_line(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A run whose scenario reports a failed check exits 1 with the FAIL line.
+
+    ``run_canary`` itself is exhaustively tested against the real engine in
+    ``tests/application/test_canary.py``; this only checks the CLI's own
+    responsibility — rendering a failed report and setting a non-zero exit —
+    so the scenario is replaced with a canned report carrying one seeded
+    failure, deterministically, offline.
+    """
+    _patch_offline_sizing(monkeypatch)
+
+    async def _fake_run_canary(engine, instrument, *, qty, probe_offset_pct):
+        report = CanaryReport(
+            exchange="paper", mode="paper", instrument=instrument, qty=qty
+        )
+        report.checks.append(
+            CanaryCheck(
+                name="seeded.failure",
+                expected="status=open",
+                observed="status=filled",
+                passed=False,
+            )
+        )
+        report.cost = money("0")
+        return report
+
+    monkeypatch.setattr(cli_main, "run_canary", _fake_run_canary)
+    db = tmp_path / "canary.db"
+
+    result = runner.invoke(app, ["canary", "--db", str(db)])
+
+    assert result.exit_code == 1, result.output
+    assert "seeded.failure" in result.output
+    assert "FAIL" in result.output
+    assert "result: FAIL" in result.output
+
+
+def test_canary_testnet_kraken_refused_no_sandbox(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`--mode testnet --exchange kraken` refuses clearly: no public spot testnet.
+
+    The factory's ``_build_testnet_venue`` raises before any I/O (constructing
+    an adapter sends nothing), so this runs fully offline and places no order.
+    """
+    result = runner.invoke(app, ["canary", "--mode", "testnet", "--exchange", "kraken"])
+
+    assert result.exit_code != 0
+    assert "refusing to run canary" in result.output
+    assert "no testnet" in result.output
+
+
+def test_canary_testnet_without_credentials_refused(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`--mode testnet` without testnet credentials refuses before any order.
+
+    With every Binance key stripped from the environment, the factory's
+    credential gate raises (the adapter is built keyless, no request goes
+    out), and the CLI surfaces it as a clean non-zero exit — offline.
+    """
+    for var in (
+        "BINANCE_TESTNET_API_KEY",
+        "BINANCE_TESTNET_API_SECRET",
+        "BINANCE_API_KEY",
+        "BINANCE_API_SECRET",
+    ):
+        monkeypatch.delenv(var, raising=False)
+
+    result = runner.invoke(app, ["canary", "--mode", "testnet"])
+
+    assert result.exit_code != 0
+    assert "refusing to run canary" in result.output
+    assert "credentials" in result.output
+
+
+def test_canary_live_without_config_refused(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`--mode live` without --config refuses before any prompt or build."""
+
+    def _must_not_build(*args, **kwargs):
+        raise AssertionError("live canary must refuse before building an engine")
+
+    monkeypatch.setattr(cli_main, "build_engine", _must_not_build)
+
+    result = runner.invoke(app, ["canary", "--mode", "live"])
+
+    assert result.exit_code != 0
+    assert "--config" in result.output
+    assert "no order was placed" in result.output
+
+
+def test_canary_live_without_live_enabled_refused(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`--mode live` with a config missing live_enabled refuses, pre-prompt.
+
+    Mirrors the ``run --live`` gate: the off-by-default ``live_enabled`` opt-in
+    must come from the operator's config — the canary never sets it. Refused
+    before the typed confirmation is even asked and before any engine exists.
+    """
+
+    def _must_not_build(*args, **kwargs):
+        raise AssertionError("live canary must refuse before building an engine")
+
+    monkeypatch.setattr(cli_main, "build_engine", _must_not_build)
+    cfg = tmp_path / "live.yaml"
+    cfg.write_text("mode: live\nbrokers:\n  - {name: kraken, exchange: kraken}\n")
+
+    result = runner.invoke(app, ["canary", "--mode", "live", "--config", str(cfg)])
+
+    assert result.exit_code != 0
+    assert "live is off by default" in result.output
+    assert "live_enabled" in result.output
+    assert "no order was placed" in result.output
+
+
+def test_canary_live_confirmation_mismatch_refused(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`--mode live` with the gates open still refuses without the typed phrase.
+
+    The typed confirmation is the dashboard's go-live pattern: the exact
+    acknowledgement phrase, verbatim — anything else refuses with no engine
+    built and no order placed.
+    """
+
+    def _must_not_build(*args, **kwargs):
+        raise AssertionError("live canary must refuse before building an engine")
+
+    monkeypatch.setattr(cli_main, "build_engine", _must_not_build)
+    cfg = tmp_path / "live.yaml"
+    cfg.write_text(
+        "mode: live\nlive_enabled: true\n"
+        "brokers:\n  - {name: kraken, exchange: kraken}\n"
+    )
+
+    result = runner.invoke(
+        app, ["canary", "--mode", "live", "--config", str(cfg)], input="nope\n"
+    )
+
+    assert result.exit_code != 0
+    assert "typed acknowledgement" in result.output
+    assert "no order was placed" in result.output
+
+
+def test_canary_live_confirmed_reaches_existing_factory_gates(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A correctly-typed live confirmation proceeds — into the factory's gates.
+
+    With the opt-in set and the exact phrase typed, the CLI goes on to build
+    the engine, where the EXISTING factory gates take over: with every Kraken
+    key stripped, the credential gate raises and the run refuses cleanly —
+    still offline, still no order. (Proves the confirmation path is wired to
+    the same guarded factory, not around it.)
+    """
+    monkeypatch.delenv("KRAKEN_API_KEY", raising=False)
+    monkeypatch.delenv("KRAKEN_API_SECRET", raising=False)
+    cfg = tmp_path / "live.yaml"
+    cfg.write_text(
+        "mode: live\nlive_enabled: true\n"
+        "brokers:\n  - {name: kraken, exchange: kraken}\n"
+        "risk: {max_order: '0.01', max_position: '0.01', max_daily_loss: '10'}\n"
+    )
+
+    result = runner.invoke(
+        app,
+        ["canary", "--mode", "live", "--exchange", "kraken", "--config", str(cfg)],
+        input="I UNDERSTAND\n",
+    )
+
+    assert result.exit_code != 0
+    assert "refusing to run canary" in result.output
+    assert "credentials" in result.output
+
+
+def test_canary_live_ack_phrase_mirrors_dashboard() -> None:
+    """The CLI's typed phrase is the dashboard's go-live phrase, verbatim.
+
+    The CLI deliberately does not import the API module (FastAPI stays out of
+    the CLI's import graph), so this test is what keeps the two constants from
+    drifting apart.
+    """
+    from trading_bot.interfaces.api import app as api_app
+
+    assert cli_main._LIVE_ACK_PHRASE == api_app._LIVE_ACK_PHRASE
+
+
+def test_canary_max_cost_refuses_before_any_order(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A ``--max-cost`` below the implied cost refuses before building anything.
+
+    The implied paper cost for the fixed fixture is exact: ``2 * qty * mark *
+    fee_bps / 10000 = 2 * 0.0001 * 50000 * 10 / 10000 = 0.01``. A bound of
+    ``0.001`` must refuse — and ``run_canary`` must never be called (no engine
+    built, no order placed).
+    """
+    _patch_offline_sizing(monkeypatch)
+
+    async def _must_not_be_called(engine, instrument, *, qty, probe_offset_pct):
+        raise AssertionError("--max-cost refusal must happen before any order")
+
+    monkeypatch.setattr(cli_main, "run_canary", _must_not_be_called)
+
+    result = runner.invoke(app, ["canary", "--max-cost", "0.001"])
+
+    assert result.exit_code == 1, result.output
+    assert "refusing to run canary" in result.output
+    assert "exceeds" in result.output
+    assert "--max-cost" in result.output
 
 
 # --- _render helpers (no CLI) ---------------------------------------------- #

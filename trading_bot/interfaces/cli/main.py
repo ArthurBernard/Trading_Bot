@@ -52,6 +52,7 @@ import os
 import pathlib
 import signal
 import sys
+import tempfile
 from collections.abc import Callable
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any
@@ -61,8 +62,15 @@ import typer
 from rich.console import Console
 
 from trading_bot import __version__
-from trading_bot.application.config import AppConfig, StrategyConfig
+from trading_bot.application.canary import (
+    CanaryReport,
+    run_canary,
+    size_for_minimums,
+    venue_oracle,
+)
+from trading_bot.application.config import AppConfig, BrokerConfig, StrategyConfig
 from trading_bot.application.data_feed import BARS_SCHEMA, InMemoryFeed
+from trading_bot.application.instrument_specs import InstrumentSpecResolver
 from trading_bot.application.performance_service import PerformanceService
 from trading_bot.application.run_app import run_app
 from trading_bot.application.service_factory import Engine, build_engine
@@ -72,7 +80,14 @@ from trading_bot.application.strategy import (
     ma_crossover_signal,
 )
 from trading_bot.application.strategy_runner import StrategyRunner
-from trading_bot.domain.instrument import Instrument, parse_kraken_pair
+from trading_bot.brokers.binance import BinanceBroker
+from trading_bot.brokers.kraken import KrakenBroker
+from trading_bot.brokers.paper import PaperBroker
+from trading_bot.domain.instrument import (
+    Instrument,
+    parse_binance_symbol,
+    parse_kraken_pair,
+)
 from trading_bot.domain.money import Money, from_float, money
 from trading_bot.domain.order import Order, OrderSide, OrderType
 from trading_bot.interfaces.cli import _render
@@ -96,6 +111,12 @@ _SYNTHETIC_BARS = 80
 
 #: The go-live runbook the ``--live`` refusals point the user at.
 _RUNBOOK = "doc/dev/09-go-live.md"
+
+#: The exact phrase the operator must type to run a **live** (real-money) canary
+#: — the CLI's typed confirmation, mirroring the dashboard's server-side go-live
+#: acknowledgement (:data:`trading_bot.interfaces.api.app._LIVE_ACK_PHRASE`,
+#: kept equal by a test; not imported here so the CLI never pulls FastAPI in).
+_LIVE_ACK_PHRASE = "I UNDERSTAND"
 
 #: The host values treated as loopback (local-only). Binding any *other* host makes
 #: the dashboard reachable off the box, so the serve paths that expose the control
@@ -579,6 +600,530 @@ def _resolve_kpi_capital(
     if config_path is not None:
         return AppConfig.from_yaml(config_path).starting_capital
     return money(str(Decimal(str(_KPI_DEFAULT_CAPITAL))))
+
+
+# --- canary ------------------------------------------------------------------ #
+
+#: The paper simulator's fee rate, in basis points — matches
+#: :class:`~trading_bot.brokers.paper.PaperBroker`'s own default
+#: (``fee_bps=money("10")``); ``build_engine`` never overrides it (no
+#: ``AppConfig`` knob exists for it), so this is exactly the rate a
+#: factory-built canary engine pays. Used only to state the pre-trade cost
+#: bound in ``--max-cost``'s help text and the refusal message — the run
+#: itself measures the real fee from the fills, never trusts this constant.
+_CANARY_PAPER_FEE_BPS: Money = money("10")
+
+#: Basis-point denominator (``fee = notional * fee_bps / 10000``), matching
+#: :mod:`trading_bot.brokers.paper`'s own fee formula.
+_CANARY_BPS_DENOMINATOR: Money = money("10000")
+
+#: Exchanges the resolver can fetch a real spec/price for (public
+#: ``instrument()`` + ``ticker()``, both keyless) — the same two the
+#: :class:`~trading_bot.application.instrument_specs.InstrumentSpecResolver`
+#: dispatches. Anything else has no real minimum to size against, so the
+#: canary refuses rather than guess one.
+_CANARY_EXCHANGES = ("kraken", "binance")
+
+#: Default cancel-probe offset on **paper** (percent below the mark): maximally
+#: far-off, exactly reproducible — the simulator has no price band.
+_PAPER_PROBE_OFFSET_PCT: Money = money("50")
+
+#: Default cancel-probe offset on a **real venue** (testnet/live). Real venues
+#: reject a resting limit too far from the mark — Binance spot's
+#: PERCENT_PRICE_BY_SIDE filter bounds a buy limit to roughly 20% below the
+#: 5-minute weighted average (a 50%-below probe is rejected with ``-1013``,
+#: observed on the real testnet). 15% below sits inside the band with margin
+#: and still never fills within a seconds-long canary run.
+_VENUE_PROBE_OFFSET_PCT: Money = money("15")
+
+
+def _canary_price_source(exchange: str) -> KrakenBroker | BinanceBroker:
+    """A fresh, keyless adapter for ``exchange``'s public endpoints only.
+
+    The same construction :class:`InstrumentSpecResolver` uses internally
+    (``KrakenBroker()`` / ``BinanceBroker()``, no credentials) — built here so
+    the CLI can also read the public last price (:meth:`~trading_bot.brokers.
+    base.Broker.ticker`) off the *same* adapter instance the resolver fetches
+    the venue minimums from: one HTTP client, two public reads.
+    """
+    if exchange == "kraken":
+        return KrakenBroker()
+    if exchange == "binance":
+        return BinanceBroker()
+    raise typer.BadParameter(
+        f"canary --exchange {exchange!r} has no public spec/price source "
+        f"(supported: {', '.join(_CANARY_EXCHANGES)}) — refusing to guess a "
+        "venue-legal size or a mark"
+    )
+
+
+async def _resolve_canary_sizing(
+    exchange: str, symbol: str
+) -> tuple[Instrument, Money, Money]:
+    """Resolve the real ``(instrument, mark, qty)`` a canary round-trip needs.
+
+    ``instrument`` carries the venue's real minimums (:class:`InstrumentSpecResolver`,
+    the public ``instrument()``/``exchangeInfo``-shaped endpoint); ``mark`` is
+    the venue's real last price (the public ``ticker()`` endpoint); ``qty`` is
+    the smallest venue-legal quantity at that mark
+    (:func:`~trading_bot.application.canary.size_for_minimums`). Both public
+    reads go through the *same* keyless adapter instance
+    (:func:`_canary_price_source`).
+
+    Raises
+    ------
+    ValueError
+        If the resolver's fetch degraded to a bare, unquantized instrument
+        (see :class:`InstrumentSpecResolver`'s ``degraded`` set) — the canary
+        never guesses a size from an unresolved spec.
+    """
+    exchange = exchange.lower()
+    source = _canary_price_source(exchange)
+    resolver = InstrumentSpecResolver(
+        kraken=source if exchange == "kraken" else None,
+        binance=source if exchange == "binance" else None,
+    )
+    parsed_symbol = (
+        parse_kraken_pair(symbol)
+        if exchange == "kraken"
+        else parse_binance_symbol(symbol)
+    )
+    instrument = await resolver.resolve(exchange, parsed_symbol)
+    if exchange in resolver.degraded:
+        raise ValueError(
+            f"the instrument-spec resolver could not fetch {exchange}'s real "
+            f"minimums for {parsed_symbol} (endpoint degraded); refusing to "
+            "guess a venue-legal size — retry, or check connectivity"
+        )
+    mark = await source.ticker(instrument)
+    qty = size_for_minimums(instrument, mark)
+    return instrument, mark, qty
+
+
+async def _run_paper_canary(
+    *,
+    exchange: str,
+    symbol: str,
+    budget: Money,
+    max_cost: Money,
+    probe_offset_pct: Money,
+    db_path: pathlib.Path | None,
+) -> CanaryReport:
+    """Build the canary's own dedicated paper engine and run the scenario.
+
+    Sizes ``qty`` from the real venue minimums (:func:`_resolve_canary_sizing`),
+    refuses **before building anything** if the implied round-trip cost exceeds
+    ``max_cost``, then builds a fresh, strict-paper :class:`Engine` funded with
+    ``budget`` quote units (:attr:`~trading_bot.application.config.AppConfig.
+    paper_starting_balances`) — always its **own** store (``--db``, or a scratch
+    temp store discarded when the run ends; ``run_canary`` refuses a store-less
+    engine, so a shared/absent store is impossible), injects the resolved mark
+    and hands the ready engine to :func:`~trading_bot.application.canary.run_canary`.
+    """
+    instrument, mark, qty = await _resolve_canary_sizing(exchange, symbol)
+
+    # The paper round-trip's cost is EXACT (both legs fill at the same
+    # injected mark, see canary.py's module docstring): 2 legs x qty x mark x
+    # fee_bps/10000. Refuse before any engine is even built if that would
+    # exceed the caller's bound.
+    implied_cost = 2 * qty * mark * _CANARY_PAPER_FEE_BPS / _CANARY_BPS_DENOMINATOR
+    if implied_cost > max_cost:
+        raise ValueError(
+            f"refusing to start: the round-trip's implied cost {implied_cost} "
+            f"(2 x qty x mark x fee_bps/10000 = 2 x {qty} x {mark} x "
+            f"{_CANARY_PAPER_FEE_BPS}/{_CANARY_BPS_DENOMINATOR}) exceeds "
+            f"--max-cost {max_cost}; raise --max-cost or pick a cheaper --symbol"
+        )
+
+    config = AppConfig(
+        paper_strict=True,
+        paper_starting_balances={instrument.symbol.quote: Decimal(str(budget))},
+    )
+
+    async def _build_and_run(store_path: pathlib.Path) -> CanaryReport:
+        engine = build_engine(config, db_path=store_path)
+        broker = engine.broker
+        assert isinstance(broker, PaperBroker)
+        broker.set_price(instrument, mark)
+        try:
+            return await run_canary(
+                engine, instrument, qty=qty, probe_offset_pct=probe_offset_pct
+            )
+        finally:
+            if engine.store is not None:
+                engine.store.close()
+
+    if db_path is not None:
+        return await _build_and_run(db_path)
+    # No --db: a scratch temp store (run_canary requires one — see the
+    # docstring above), removed with the directory once the run ends.
+    with tempfile.TemporaryDirectory(prefix="trading-bot-canary-") as tmp_dir:
+        return await _build_and_run(pathlib.Path(tmp_dir) / "canary.sqlite")
+
+
+def _confirm_live_canary(config_path: pathlib.Path | None) -> AppConfig:
+    """Gate ``canary --mode live``: config opt-in first, then a typed confirmation.
+
+    Live is real money, so the canary re-uses the EXISTING gates rather than
+    minting its own: the operator's ``--config`` must carry the off-by-default
+    ``live_enabled: true`` opt-in (the same gate ``run --live`` and the factory
+    enforce — the canary never sets it itself), and the operator must then
+    **type** the exact acknowledgement phrase (:data:`_LIVE_ACK_PHRASE` — the
+    dashboard's go-live confirmation pattern, enforced verbatim). Credentials
+    and the mandatory risk limits are re-checked one layer down by
+    :func:`~trading_bot.application.service_factory.build_engine`. Any missing
+    gate refuses with a non-zero exit **before an engine is ever built** — no
+    order placed.
+
+    Returns
+    -------
+    AppConfig
+        The operator's loaded config (the venue canary derives its engine
+        config from it — see :func:`_canary_venue_config`).
+
+    """
+    if config_path is None:
+        _console.print(
+            "[red]refusing to run canary --mode live[/red] without --config: "
+            "the live gates (live_enabled, risk limits, the venue's broker "
+            f"entry) live in the operator's config. See {_RUNBOOK}. "
+            "(no order was placed)"
+        )
+        raise typer.Exit(code=1)
+    config = AppConfig.from_yaml(config_path)
+    if not config.live_enabled:
+        _console.print(
+            "[red]refusing to run canary --mode live[/red]: live is off by "
+            f"default. Set live_enabled: true in the config and read {_RUNBOOK} "
+            "first (no order was placed)."
+        )
+        raise typer.Exit(code=1)
+    ack = typer.prompt(
+        "The LIVE canary trades REAL money on the real venue (a minimum-size "
+        f'round-trip + a real cancel). Type "{_LIVE_ACK_PHRASE}" to proceed',
+        default="",
+        show_default=False,
+    )
+    if ack != _LIVE_ACK_PHRASE:
+        _console.print(
+            "[red]refusing to run canary --mode live[/red] without the exact "
+            f"typed acknowledgement {_LIVE_ACK_PHRASE!r} (no order was placed). "
+            f"See {_RUNBOOK}."
+        )
+        raise typer.Exit(code=1)
+    return config
+
+
+def _canary_venue_config(
+    exchange: str, symbol: str, mode: str, live_base: AppConfig | None
+) -> AppConfig:
+    """Build the engine config for a **venue** (testnet/live) canary run.
+
+    * ``testnet`` — a self-contained config: ``mode: live`` plus one broker
+      with ``testnet: true``, exactly the factory's sandbox path (hard-pinned
+      testnet URL, ``BINANCE_TESTNET_*`` credentials, **no** ``live_enabled``
+      needed — the adapter structurally cannot reach mainnet). A venue with no
+      testnet (Kraken) is refused by the factory with a clear error.
+    * ``live`` — derived from the operator's own config (``live_base``, loaded
+      by :func:`_confirm_live_canary`): only the venue's matching broker
+      entries are kept (forced off testnet), strategies/portfolios are cleared
+      (the canary trades nothing but its own round-trip), and ``live_enabled``
+      / ``risk`` are carried **unchanged** so the factory's existing gates do
+      their job — the canary never weakens a gate.
+
+    In both cases the canary's ``symbol`` is added to the broker's ``symbols``
+    so per-symbol fill endpoints (Binance ``myTrades``) serve
+    ``broker.fills(...)`` — the venue oracle's re-fetch channel.
+    """
+    if mode == "testnet":
+        return AppConfig(
+            mode="live",
+            brokers=[
+                BrokerConfig(
+                    name=f"canary-{exchange}-testnet",
+                    exchange=exchange,
+                    testnet=True,
+                    symbols=[symbol],
+                )
+            ],
+        )
+    assert live_base is not None  # gated by _confirm_live_canary
+    matching = [
+        broker for broker in live_base.brokers if broker.exchange.lower() == exchange
+    ]
+    if not matching:
+        raise ValueError(
+            f"canary --mode live: no broker for exchange {exchange!r} in the "
+            f"config (have {[b.exchange for b in live_base.brokers]!r}); add a "
+            "brokers entry for that venue"
+        )
+    brokers = [
+        broker.model_copy(
+            update={
+                "testnet": False,
+                "symbols": sorted({*broker.symbols, symbol}),
+            }
+        )
+        for broker in matching
+    ]
+    return live_base.model_copy(
+        update={
+            "mode": "live",
+            "brokers": brokers,
+            "strategies": [],
+            "portfolios": [],
+        }
+    )
+
+
+async def _resolve_venue_sizing(
+    engine: Engine, exchange: str, symbol: str
+) -> tuple[Instrument, Money, Money]:
+    """Resolve ``(instrument, mark, qty)`` against the venue the engine trades.
+
+    The venue-run twin of :func:`_resolve_canary_sizing`, with one crucial
+    difference: the spec and the mark are read off the **engine's own broker**
+    (the testnet-pinned or live adapter), not a fresh mainnet public adapter —
+    a sandbox's filters and prices can differ from production, and the sizing
+    must be legal on the venue that will actually see the orders.
+
+    Raises
+    ------
+    ValueError
+        If the resolver's fetch degraded to a bare, unquantized instrument —
+        the canary never guesses a size from an unresolved spec.
+    """
+    broker = engine.broker
+    resolver = InstrumentSpecResolver(
+        kraken=broker if isinstance(broker, KrakenBroker) else None,
+        binance=broker if isinstance(broker, BinanceBroker) else None,
+    )
+    parsed_symbol = (
+        parse_kraken_pair(symbol)
+        if exchange == "kraken"
+        else parse_binance_symbol(symbol)
+    )
+    instrument = await resolver.resolve(exchange, parsed_symbol)
+    if exchange in resolver.degraded:
+        raise ValueError(
+            f"the instrument-spec resolver could not fetch {exchange}'s real "
+            f"minimums for {parsed_symbol} (endpoint degraded); refusing to "
+            "guess a venue-legal size — retry, or check connectivity"
+        )
+    mark = await broker.ticker(instrument)
+    qty = size_for_minimums(instrument, mark)
+    return instrument, mark, qty
+
+
+async def _run_venue_canary(
+    *,
+    exchange: str,
+    symbol: str,
+    mode: str,
+    max_cost: Money,
+    probe_offset_pct: Money,
+    db_path: pathlib.Path | None,
+    live_base: AppConfig | None = None,
+) -> CanaryReport:
+    """Build a dedicated **venue** (testnet/live) engine and run the canary on it.
+
+    Builds the engine through the factory (:func:`build_engine` — the single
+    wiring point, whose testnet/live gates all apply: sandbox availability,
+    credentials, ``live_enabled``, mandatory live risk limits), sizes the
+    round-trip against the venue's **own** spec and last price
+    (:func:`_resolve_venue_sizing`), and runs the scenario with the venue
+    **identity** oracle (:func:`~trading_bot.application.canary.venue_oracle`,
+    bounded by ``max_cost``) instead of the exact paper oracle. Always the
+    canary's own store (``--db``, or a scratch temp store) — never a shared
+    book. The account's real balances fund the run; ``--budget`` plays no role
+    here.
+    """
+    exchange = exchange.lower()
+    if exchange not in _CANARY_EXCHANGES:
+        raise ValueError(
+            f"canary --exchange {exchange!r} has no venue adapter "
+            f"(supported: {', '.join(_CANARY_EXCHANGES)})"
+        )
+    config = _canary_venue_config(exchange, symbol, mode, live_base)
+
+    async def _build_and_run(store_path: pathlib.Path) -> CanaryReport:
+        # The factory raises before any I/O when a gate is missing (no testnet
+        # for the venue, no credentials, live not enabled, risk limits unset).
+        engine = build_engine(config, db_path=store_path)
+        try:
+            if engine.store is not None:
+                # Tag the evidence trail with the real deployment context so a
+                # persisted (--db) canary store reads truthfully — testnet and
+                # live are different money and must never commingle with paper.
+                engine.store.set_context(mode=mode, venue=exchange)
+            instrument, _mark, qty = await _resolve_venue_sizing(
+                engine, exchange, symbol
+            )
+            return await run_canary(
+                engine,
+                instrument,
+                qty=qty,
+                probe_offset_pct=probe_offset_pct,
+                oracle=venue_oracle(max_cost),
+                mode_label=mode,
+            )
+        finally:
+            if engine.store is not None:
+                engine.store.close()
+
+    if db_path is not None:
+        return await _build_and_run(db_path)
+    with tempfile.TemporaryDirectory(prefix="trading-bot-canary-") as tmp_dir:
+        return await _build_and_run(pathlib.Path(tmp_dir) / "canary.sqlite")
+
+
+@app.command()
+def canary(
+    exchange: str = typer.Option(
+        "binance",
+        "--exchange",
+        help="Venue to size the round-trip against (public endpoints only: "
+        "min_qty/min_notional via the instrument-spec resolver, last price "
+        "via the public ticker endpoint). Supported: kraken, binance.",
+    ),
+    symbol: str = typer.Option(
+        "BTC/USDT", "--symbol", help="Canonical pair to trade (BASE/QUOTE)."
+    ),
+    mode: str = typer.Option(
+        "paper",
+        "--mode",
+        help="paper (default, self-contained, no venue/no key) | testnet "
+        "(the venue's sandbox — fake money, real API; needs the venue's "
+        "testnet credentials, e.g. BINANCE_TESTNET_API_KEY/_SECRET; no "
+        "live_enabled needed — the adapter is hard-pinned to the sandbox) | "
+        "live (REAL money — requires --config with live_enabled: true, "
+        "credentials, all risk limits set, and a typed confirmation).",
+    ),
+    budget: float = typer.Option(
+        100.0,
+        "--budget",
+        help="Quote-currency balance to fund the canary's own dedicated "
+        "paper engine with (AppConfig.paper_starting_balances) — always a "
+        "fresh engine, never a shared book. Paper only: on testnet/live the "
+        "account's real balances fund the run.",
+    ),
+    max_cost: float = typer.Option(
+        2.0,
+        "--max-cost",
+        help="The round-trip's cost bound, in quote units. Paper: refuse to "
+        "start (before any order) if the exact implied cost "
+        "(2 x qty x mark x fee_bps/10000, at the simulator's default 10bps "
+        "fee) exceeds it. Testnet/live: the venue oracle's bounded-cost "
+        "check — the venue-reported quote balance delta must not cost more "
+        "than this.",
+    ),
+    probe_offset_pct: float | None = typer.Option(
+        None,
+        "--probe-offset-pct",
+        help="How far below the mark (percent) the free cancel probe is "
+        "priced. Default: 50 on paper; 15 on testnet/live — real venues "
+        "reject a limit too far off the mark (Binance's "
+        "PERCENT_PRICE_BY_SIDE band is roughly +/-20%), and 15% below still "
+        "never fills within a seconds-long run.",
+    ),
+    db_path: pathlib.Path | None = typer.Option(
+        None,
+        "--db",
+        help="Persist the canary's evidence trail to this SqliteStore path. "
+        "Defaults to a scratch temp store, discarded when the run ends.",
+    ),
+    config_path: pathlib.Path | None = typer.Option(
+        None,
+        "--config",
+        "-c",
+        help="Operator AppConfig YAML — required for --mode live (its "
+        "live_enabled opt-in, risk limits and the venue's brokers entry gate "
+        "the run; the canary never sets live_enabled itself). Unused by "
+        "paper/testnet.",
+    ),
+) -> None:
+    """Run the platform's deterministic self-test and print the evidence table.
+
+    A one-liner that makes the canary (:mod:`trading_bot.application.canary`)
+    runnable without wiring anything by hand: it builds the canary's own
+    **dedicated** engine (never a shared book), sizes the round-trip to the
+    venue's real smallest legal quantity, runs the sequential round-trip plus
+    the two free probes, and prints one line per check (PASS/FAIL, name,
+    expected, observed) followed by the total cost and the verdict. Exits
+    ``0`` when every check passed, ``1`` otherwise — so a CI job or a release
+    checklist can gate on it directly.
+
+    Three modes share the one scenario, with the mode's oracle:
+
+    * ``--mode paper`` (default) — a fresh strict-paper engine funded with
+      ``--budget``; the **exact** paper oracle. No venue, no key.
+    * ``--mode testnet`` — the venue's sandbox (fake money, real API): the
+      factory's testnet path (hard-pinned sandbox URL, testnet credentials),
+      the venue **identity** oracle (our fills/balances == venue-reported,
+      cost bounded by ``--max-cost``). Kraken has no public spot testnet and
+      is refused with a clear error.
+    * ``--mode live`` — REAL money, the operator's go-live act: gated by the
+      existing ``live_enabled`` config opt-in (``--config``), venue
+      credentials, the mandatory live risk limits, **and** a typed
+      confirmation (the dashboard's go-live pattern). Same identity oracle.
+    """
+    if mode not in ("paper", "testnet", "live"):
+        raise typer.BadParameter(
+            f"--mode must be one of paper, testnet, live; got {mode!r}"
+        )
+    live_base: AppConfig | None = None
+    if mode == "live":
+        # Every gate is checked (and the confirmation typed) BEFORE anything
+        # is built or sized — a refused live canary never touches the venue.
+        live_base = _confirm_live_canary(config_path)
+
+    # The probe offset's default is per-mode: 50% below on paper (maximally
+    # far-off, exactly reproducible), 15% below on a real venue — inside the
+    # venue's limit-price band (see the option help), still never filling.
+    if probe_offset_pct is not None:
+        offset = money(str(Decimal(str(probe_offset_pct))))
+    else:
+        offset = _PAPER_PROBE_OFFSET_PCT if mode == "paper" else _VENUE_PROBE_OFFSET_PCT
+
+    try:
+        if mode == "paper":
+            report = asyncio.run(
+                _run_paper_canary(
+                    exchange=exchange,
+                    symbol=symbol,
+                    budget=money(str(Decimal(str(budget)))),
+                    max_cost=money(str(Decimal(str(max_cost)))),
+                    probe_offset_pct=offset,
+                    db_path=db_path,
+                )
+            )
+        else:
+            report = asyncio.run(
+                _run_venue_canary(
+                    exchange=exchange,
+                    symbol=symbol,
+                    mode=mode,
+                    max_cost=money(str(Decimal(str(max_cost)))),
+                    probe_offset_pct=offset,
+                    db_path=db_path,
+                    live_base=live_base,
+                )
+            )
+    except Exception as exc:  # noqa: BLE001 - surface any refusal/build failure cleanly
+        _console.print(f"[red]refusing to run canary:[/red] {exc}")
+        raise typer.Exit(code=1) from exc
+
+    _console.print(
+        f"canary — exchange={report.exchange} mode={report.mode} "
+        f"instrument={report.instrument} qty={_render.fmt_money(report.qty)}"
+    )
+    _console.print(_render.canary_table(report.checks))
+    _console.print(
+        f"cost: {'n/a' if report.cost is None else _render.fmt_money(report.cost)}"
+    )
+    verdict = "[green]PASS[/green]" if report.passed else "[red]FAIL[/red]"
+    _console.print(f"result: {verdict}")
+    raise typer.Exit(code=0 if report.passed else 1)
 
 
 # --- serve ----------------------------------------------------------------- #

@@ -123,6 +123,10 @@ CREATE TABLE IF NOT EXISTS fills (
     qty             TEXT NOT NULL,
     price           TEXT NOT NULL,
     fee             TEXT NOT NULL,
+    -- The asset ``fee`` is denominated in; NULL means the quote currency (the
+    -- historic assumption — pre-migration rows backfill to NULL and read back
+    -- unchanged). Binance charges a market buy's commission in the BASE asset.
+    fee_asset       TEXT,
     ts              INTEGER NOT NULL,
     mode            TEXT NOT NULL DEFAULT 'paper',
     venue           TEXT NOT NULL DEFAULT '',
@@ -447,8 +451,8 @@ class SqliteStore:
                 """
                 INSERT OR IGNORE INTO fills (
                     fill_id, client_order_id, instrument, side, qty, price,
-                    fee, ts, mode, venue
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    fee, fee_asset, ts, mode, venue
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     fill.fill_id,
@@ -458,6 +462,7 @@ class SqliteStore:
                     str(fill.qty),
                     str(fill.price),
                     str(fill.fee),
+                    fill.fee_asset,
                     fill.ts,
                     mode,
                     venue,
@@ -899,7 +904,13 @@ def _row_to_order(row: sqlite3.Row) -> Order:
 
 
 def _row_to_fill(row: sqlite3.Row) -> Fill:
-    """Rebuild a :class:`Fill` from a stored ``fills`` row (exact Decimal)."""
+    """Rebuild a :class:`Fill` from a stored ``fills`` row (exact Decimal).
+
+    ``fee_asset`` reads back ``None`` for a pre-migration (backfilled-NULL)
+    row — the quote-denominated historic assumption, exactly what those rows
+    meant when written.
+    """
+    fee_asset = row["fee_asset"] if "fee_asset" in row.keys() else None
     return Fill(
         fill_id=str(row["fill_id"]),
         client_order_id=str(row["client_order_id"]),
@@ -909,6 +920,7 @@ def _row_to_fill(row: sqlite3.Row) -> Fill:
         price=money(str(row["price"])),
         fee=money(str(row["fee"])),
         ts=int(row["ts"]),
+        fee_asset=None if fee_asset is None else str(fee_asset),
     )
 
 
@@ -941,16 +953,17 @@ def _row_to_capital_event(row: sqlite3.Row) -> CapitalEvent:
 
 
 def _migrate_fills_tags(conn: sqlite3.Connection) -> None:
-    """Add the ``mode`` / ``venue`` columns to a pre-existing ``fills`` table.
+    """Add the ``mode`` / ``venue`` / ``fee_asset`` columns to an old ``fills`` table.
 
     A lightweight, idempotent forward migration: ``CREATE TABLE IF NOT EXISTS``
     (in :data:`_SCHEMA`) already gives a *fresh* database the tagged columns, but
     a database created before this leaf has the old ``fills`` shape. This inspects
     the live columns and ``ALTER TABLE ... ADD COLUMN`` for whichever tag is
     missing — SQLite backfills every existing row with the column ``DEFAULT``
-    (``mode="paper"`` / ``venue=""``), so no row is lost or corrupted and the
-    money columns are untouched. A no-op once both columns exist (a fresh DB, or a
-    second open of a migrated one).
+    (``mode="paper"`` / ``venue=""``; ``fee_asset`` is nullable and backfills to
+    ``NULL`` — the quote-denominated historic meaning of those rows), so no row is
+    lost or corrupted and the money columns are untouched. A no-op once every
+    column exists (a fresh DB, or a second open of a migrated one).
     """
     columns = {row["name"] for row in conn.execute("PRAGMA table_info(fills)")}
     if "mode" not in columns:
@@ -959,6 +972,8 @@ def _migrate_fills_tags(conn: sqlite3.Connection) -> None:
         )
     if "venue" not in columns:
         conn.execute("ALTER TABLE fills ADD COLUMN venue TEXT NOT NULL DEFAULT ''")
+    if "fee_asset" not in columns:
+        conn.execute("ALTER TABLE fills ADD COLUMN fee_asset TEXT")
 
 
 #: The composite primary key the current ``fills`` table carries — a fill's
@@ -1006,6 +1021,7 @@ def _migrate_fills_pk(conn: sqlite3.Connection) -> None:
             qty             TEXT NOT NULL,
             price           TEXT NOT NULL,
             fee             TEXT NOT NULL,
+            fee_asset       TEXT,
             ts              INTEGER NOT NULL,
             mode            TEXT NOT NULL DEFAULT 'paper',
             venue           TEXT NOT NULL DEFAULT '',
@@ -1013,10 +1029,10 @@ def _migrate_fills_pk(conn: sqlite3.Connection) -> None:
         );
         INSERT OR IGNORE INTO fills_new (
             fill_id, client_order_id, instrument, side, qty, price,
-            fee, ts, mode, venue
+            fee, fee_asset, ts, mode, venue
         )
         SELECT fill_id, client_order_id, instrument, side, qty, price,
-               fee, ts, mode, venue
+               fee, fee_asset, ts, mode, venue
         FROM fills
         ORDER BY rowid;
         DROP TABLE fills;

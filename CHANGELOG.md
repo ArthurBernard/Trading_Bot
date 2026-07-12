@@ -16,6 +16,104 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 
+## [0.14.0] - 2026-07-12
+
+### Added
+
+- **The canary runs against real venues (closes the `canary-roundtrip`
+  epic).** Venue identity oracle: our store-recorded fills == the
+  venue-reported fills (exact triples), per-asset balance deltas == the
+  fills math (fee-denomination-aware — never an assumed zero), position
+  flat, cost bounded. `--mode testnet` wired (Binance sandbox; Kraken
+  refused — no testnet); `--mode live` implemented behind the existing
+  `live_enabled` gate + typed confirmation. `doc/dev/09-go-live.md` names
+  the live canary as the road-to-1.0 #1 validation vehicle. **Proven on
+  real Binance testnet: 16/16 checks PASS** (real cancel accepted, venue
+  dedup on the duplicate client-order-id, cost 0.00511 USDT). (#223)
+- **`Fill.fee_asset`** — the venue may charge the fee in a non-quote asset
+  (Binance charges a market buy's commission in BASE; found by the canary's
+  identity oracle refusing an unexplained −8E-8 BTC). Additive domain field
+  (`None` = quote, the historic meaning), threaded through the Binance
+  adapter, the store (migration) and the oracle's fills math. Also:
+  Binance HTTP-400 `{code,msg}` rejections now map to the same domain
+  errors as in-band bodies (they escaped as transport errors);
+  `BrokerConfig.symbols` threads the per-symbol trade-history scope Binance
+  requires for `fills()`. (#223)
+- **`trading-bot canary`** — the platform self-test as a one-liner (paper by
+  default): self-contained factory engine funded with `--budget`, quantity
+  sized to the venue's REAL minimums (public-endpoint resolver + real last
+  price as the mark), refusal before any order when the exact implied cost
+  exceeds `--max-cost`, evidence table (PASS/FAIL, expected vs observed)
+  and exit code. `--mode testnet|live` reserved for the venue leaf. (#222)
+- **The canary scenario** (`application/canary.py`) — a deterministic
+  platform self-test: cancel probe (far-off resting limit → real cancel,
+  persisted), client-order-id idempotency probe, then a sequential market
+  round-trip, every step recorded as expected-vs-observed evidence. The
+  **exact paper oracle** asserts realised PnL == −Σ fees, flat position,
+  store-persisted terminal orders and balance deltas, Decimal-exact.
+  Supporting seams: `paper_starting_balances` config (factory-funded
+  simulators) and a strict-paper marketability rule (a passive-side limit
+  with an injected mark now RESTS instead of filling at its price —
+  permissive/markless behaviour unchanged). (#221)
+- `/api/orders` rows carry `reject_reason` — the UI's expanded order detail
+  rendered it defensively since #216; the API now serializes it (additive;
+  contract sweep updated). (#219)
+- **Timezone label + honest empty states (closes the `dashboard-tables-ux`
+  epic).** Every page footer says which timezone its times render in; the
+  Orders page's filtered-to-zero tables say "No orders/fills match the
+  filters." instead of masquerading as an empty book. (#218)
+- **Honest bar timing.** "last bar X ago → next in Y" chip on the strategies
+  roster (replacing the "Next bar" column) and the strategy-detail header —
+  both derived from `last_asof_ts` + span (server truth), never a fake
+  countdown (`—` when nothing was evaluated). The epoch-aligned
+  `nextBarCloseMs` guess is retired. (#217)
+- **Orders tables show what executed; fills live under their order.** All
+  three surfaces gain Filled % (exact fraction on hover), Avg fill and
+  Value (filled × avg fill, else qty × limit — the tooltip says which);
+  clicking an order (detail + Orders pages) expands its fills, ids,
+  limit/stop, Σ fees and reject reason. The strategy detail's standalone
+  "Recent fills" table is **removed** (its data lives in the expansions);
+  the Orders page's audit fills view gains Order and Value columns. (#216)
+- **Positions tables read asset-first, with a value.** Overview + strategy
+  detail: Asset | Qty | Avg entry | Price *(as-of)* | Value | Unrealised |
+  Realised (net) — values prefer the configured display currency, marks
+  always show their freshness (relative as-of, absolute + source in the
+  tooltip). Click a row for the native pair, cumulative fees, the
+  gross-vs-fees realised breakdown and the mark provenance: the shared
+  **expandable-row helper** lands in `base.html` (keyboard-accessible,
+  expanded state survives the SSE/poll rebuilds). (#215)
+- **`GET /api/balances` + `last_asof_ts` documentation + the epic contract
+  sweep (closes the `api-completeness` epic).** Per running unit, the
+  broker's balances as exact Decimal strings (stopped units absent; a broker
+  error degrades to an `error` row, HTTP 200 — poll-safe); the seam for the
+  future positions↔balances cross-check and the canary live oracle. One
+  consolidated additive-only contract test now pins the exact field sets of
+  all six frozen endpoints before the road-to-1.0 API freeze. (#214)
+- **Display currency** — `display_currency` (global default), per-exchange
+  `display_currency_overrides` and static `conversion_rates` in `AppConfig`;
+  server-side converted `*_display` money fields (pure
+  `application/display_ccy.py`) on position rows
+  (`value_display`/`unrealised_display`), strategy rows
+  (`total_value_display`/`unrealised_display`) and KPI rows
+  (`realised_pnl_display`/`fees_paid_display`), each tagged with the resolved
+  `display_currency`. Missing rate → `null`, never a guessed conversion;
+  native-quote fields untouched. (#212)
+- **Position rows carry mark, value, unrealised and fee currency.**
+  `/api/positions` rows gain `mark` / `mark_asof_ts` / `mark_source`
+  (`bar_close` from the mark cache, `last_fill` fallback, never untagged),
+  `value` (mark × |qty|), `unrealised` (sign-correct for shorts) and
+  `fee_ccy` — and the strategy aggregate now uses the SAME mark policy, so
+  the roster total equals the row sum (verified Decimal-exact on both live
+  books' copies against real dccd frames). All additive; existing fields
+  contract-regression-tested. (#211)
+- **Per-engine mark cache** (`application/mark_cache.py`) — the portfolio
+  runner publishes each rebalance's last dccd bar closes per symbol
+  (`Mark(price, asof_ms, source="bar_close")`, exact Decimal) into
+  `Engine.mark_cache`, so the API layer can serve marks with their as-of
+  timestamp without any I/O. Single-instrument `StrategyRunner` is a
+  documented follow-up seam. Verified against the real dccd store: cache ==
+  independently-read frame closes, exact price and asof. (#209)
+
 ## [0.13.0] - 2026-07-11
 
 ### Added

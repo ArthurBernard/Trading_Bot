@@ -33,7 +33,7 @@
           <th>Mode</th>
           <th>Status</th>
           <th>Cadence</th>
-          <th>Next bar</th>
+          <th>Bar timing</th>
           <th>Last eval</th>
           <th class="num">Realised PnL</th>
           <th class="num">Total value</th>
@@ -85,26 +85,6 @@
     return label == null ? '<span class="muted">—</span>' : escapeHtml(label) + ' bars';
   }
 
-  // Next bar — a live countdown (hooked into base.html's shared
-  // tickCountdowns()) to the next epoch-aligned bar boundary, with the
-  // absolute local datetime in `title`. Muted "—" for a stopped unit or a
-  // missing/zero span — there is nothing to count down to.
-  function nextBarCell(s) {
-    if (!s.running) return '<span class="muted">—</span>';
-    const ts = tbTime.nextBarCloseMs(s.span);
-    if (ts == null) return '<span class="muted">—</span>';
-    return '<span data-countdown-ts="' + ts + '" title="' + escapeHtml(fmtDate(ts)) + '">' +
-      escapeHtml(tbTime.countdown(ts)) + '</span>';
-  }
-
-  // A bare "YYYY-MM-DD" local date (no time) — for the as-of DATA date in the
-  // Last-eval tooltip ("data through 2026-07-04"), distinct from fmtDate's
-  // evaluation-INSTANT timestamp (which does carry a time-of-day).
-  function fmtDateOnly(ms) {
-    if (ms == null) return '—';
-    return new Date(ms).toLocaleDateString('en-CA'); // en-CA -> YYYY-MM-DD
-  }
-
   // Last eval — a compact relative time since the runner's last tick attempt
   // (`last_eval_ts`, e.g. "3m ago"), with BOTH the absolute evaluation instant
   // and the as-of DATA date (`last_asof_ts` — the latest bar the runner
@@ -148,7 +128,7 @@
       '<td><span class="badge badge-' + escapeHtml(s.mode) + '">' + escapeHtml(s.mode) + '</span></td>' +
       '<td>' + status + (health ? ' ' + health : '') + '</td>' +
       '<td>' + cadenceCell(s) + '</td>' +
-      '<td>' + nextBarCell(s) + '</td>' +
+      '<td>' + barTimingChipHtml(s) + '</td>' +
       '<td>' + lastEvalCell(s) + '</td>' +
       '<td class="num ' + pnlClass(s.realised_pnl) + '">' + pnl + '</td>' +
       '<td class="num">' + totalValue + '</td>' +

@@ -84,6 +84,7 @@ from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, Field
 
 import trading_bot
+from trading_bot.application.display_ccy import convert, resolve_currency
 from trading_bot.application.events import (
     Event,
     FillEvent,
@@ -94,10 +95,12 @@ from trading_bot.interfaces.ui import STATIC_DIR, TEMPLATES_DIR
 
 if TYPE_CHECKING:
     from trading_bot.application.config import (
+        AppConfig,
         PortfolioStrategyConfig,
         StrategyConfig,
     )
     from trading_bot.application.supervisor import (
+        BalanceRow,
         FillRow,
         KpiRow,
         OrderRow,
@@ -203,6 +206,7 @@ def _order_dict(order: Order) -> dict[str, Any]:
         "status": order.status.value,
         "filled_qty": _money_str(order.filled_qty),
         "avg_fill_price": _money_str(order.avg_fill_price),
+        "reject_reason": order.reject_reason,
     }
 
 
@@ -277,12 +281,20 @@ def _epoch_ms() -> int:
 # ---------------------------------------------------------------------------
 
 
-def _position_row_dict(row: PositionRow) -> dict[str, Any]:
+def _position_row_dict(row: PositionRow, config: AppConfig) -> dict[str, Any]:
     """Render a supervisor :class:`PositionRow` as a JSON-ready dict.
 
     The per-instrument exposure of one running unit, tagged with its ``strategy``
     and ``exchange`` (the dashboard's group-by keys) and its ``base`` asset (the
     group-by-crypto key). Money fields are exact :class:`~decimal.Decimal` strings.
+    ``mark_asof_ts`` is already an integer epoch ms (or ``None``), like
+    ``last_asof_ts`` on ``/api/strategies`` — no stringification needed.
+
+    ``display_currency`` (:func:`~trading_bot.application.display_ccy.
+    resolve_currency`, resolved for the row's ``exchange``) + ``value_display``
+    / ``unrealised_display`` (:func:`~trading_bot.application.display_ccy.convert`,
+    from the row's ``fee_ccy`` quote) are additive — ``None`` (JSON ``null``)
+    when no rate is declared for that quote, never a guessed conversion.
     """
     return {
         "strategy": row.strategy,
@@ -293,6 +305,15 @@ def _position_row_dict(row: PositionRow) -> dict[str, Any]:
         "avg_entry_price": _money_str(row.avg_entry_price),
         "realised_pnl": _money_str(row.realised_pnl),
         "fees_paid": _money_str(row.fees_paid),
+        "mark": _money_str(row.mark),
+        "mark_asof_ts": row.mark_asof_ts,
+        "mark_source": row.mark_source,
+        "value": _money_str(row.value),
+        "unrealised": _money_str(row.unrealised),
+        "fee_ccy": row.fee_ccy,
+        "display_currency": resolve_currency(row.exchange, config),
+        "value_display": _money_str(convert(row.value, row.fee_ccy, config)),
+        "unrealised_display": _money_str(convert(row.unrealised, row.fee_ccy, config)),
     }
 
 
@@ -324,7 +345,27 @@ def _fill_row_dict(row: FillRow) -> dict[str, Any]:
     }
 
 
-def _kpi_row_dict(row: KpiRow) -> dict[str, Any]:
+def _balance_row_dict(row: BalanceRow) -> dict[str, Any]:
+    """Render a supervisor :class:`BalanceRow` as a JSON-ready dict.
+
+    ``balances`` is a per-asset mapping to exact Decimal strings (never a plain
+    ``str(dict)`` — each amount is stringified individually so no value ever
+    round-trips through ``float``). ``error`` is ``None`` (JSON ``null``) on a
+    successful fetch, or the broker's error message when its ``balances()`` call
+    raised — the row still renders (an empty ``balances`` dict), never a 500.
+    """
+    return {
+        "strategy": row.strategy,
+        "exchange": row.exchange,
+        "mode": row.mode,
+        "balances": {
+            asset: _money_str(amount) for asset, amount in row.balances.items()
+        },
+        "error": row.error,
+    }
+
+
+def _kpi_row_dict(row: KpiRow, config: AppConfig) -> dict[str, Any]:
     """Render a supervisor :class:`KpiRow` as a JSON-ready dict.
 
     Money (``realised_pnl`` / ``fees_paid``) as exact Decimal strings; the ratios
@@ -332,6 +373,13 @@ def _kpi_row_dict(row: KpiRow) -> dict[str, Any]:
     ``level="strategy"`` and JSON ``null`` at the aggregate levels (no combined
     curve yet); ``quote`` is the row's quote currency, or ``null`` when the row
     folds units that mix quote currencies (the UI renders "mixed").
+
+    ``display_currency`` (resolved for the row's ``exchange``, ``None`` at
+    ``level="total"``) + ``realised_pnl_display`` / ``fees_paid_display``
+    (converted from ``quote`` — the row's only money aggregates, mirroring
+    :func:`_position_row_dict`'s pair) are additive — ``None`` (JSON ``null``)
+    when no rate is declared, or ``quote`` itself is ``None`` (mixed), never a
+    guessed conversion.
     """
     return {
         "level": row.level,
@@ -345,6 +393,11 @@ def _kpi_row_dict(row: KpiRow) -> dict[str, Any]:
         "sortino": _finite_or_none(row.sortino),
         "calmar": _finite_or_none(row.calmar),
         "max_drawdown": _finite_or_none(row.max_drawdown),
+        "display_currency": resolve_currency(row.exchange, config),
+        "realised_pnl_display": _money_str(
+            convert(row.realised_pnl, row.quote, config)
+        ),
+        "fees_paid_display": _money_str(convert(row.fees_paid, row.quote, config)),
     }
 
 
@@ -1105,12 +1158,19 @@ def _worst_health(healths: Iterable[str]) -> str:
     return worst
 
 
-def _status_dict(status: StrategyStatus) -> dict[str, Any]:
+def _status_dict(status: StrategyStatus, config: AppConfig) -> dict[str, Any]:
     """Render a :class:`StrategyStatus` for JSON (money as exact Decimal string).
 
     ``last_eval_ts`` / ``last_asof_ts`` are already integer epoch ms (or
     ``None``) on the domain side — no stringification needed, unlike the money
     fields.
+
+    ``display_currency`` (resolved for the unit's ``exchange``) +
+    ``total_value_display`` / ``unrealised_display`` (converted from the
+    unit's ``quote``, mirroring :func:`_position_row_dict`'s pair) are
+    additive — ``None`` (JSON ``null``) when no rate is declared for that
+    quote (or the quote is ``None`` — a mixed-quote portfolio), never a
+    guessed conversion.
     """
     return {
         "name": status.name,
@@ -1133,6 +1193,13 @@ def _status_dict(status: StrategyStatus) -> dict[str, Any]:
         "capital_policy": status.capital_policy,
         "health": status.health,
         "health_detail": list(status.health_detail),
+        "display_currency": resolve_currency(status.exchange, config),
+        "total_value_display": _money_str(
+            convert(status.total_value, status.quote, config)
+        ),
+        "unrealised_display": _money_str(
+            convert(status.unrealised, status.quote, config)
+        ),
     }
 
 
@@ -1183,28 +1250,40 @@ def _register_strategy_control(app: FastAPI, *, read_only: bool = False) -> None
 
     @app.get("/api/strategies")
     async def strategies(request: Request) -> list[dict[str, Any]]:
-        """List every managed strategy with its exchange / mode / running / PnL."""
-        return [_status_dict(s) for s in _sup(request).status()]
+        """List every managed strategy with its exchange / mode / running / PnL.
+
+        ``last_asof_ts`` is the as-of (epoch ms) of the last **completed**
+        evaluation — the latest bar time the strategy actually computed on, as
+        opposed to ``last_eval_ts`` (the wall-clock of the last *attempted*
+        tick). ``None`` before the first completed evaluation. This is the field
+        the future "last bar → next bar" timing chip (dashboard-tables-ux) reads;
+        it needs no further server change.
+        """
+        sup = _sup(request)
+        config = sup.manifest()
+        return [_status_dict(s, config) for s in sup.status()]
 
     @app.post("/api/strategies/{name}/start")
     async def start_strategy(name: str, request: Request) -> dict[str, Any]:
         _guard_write()
+        sup = _sup(request)
         try:
-            await _sup(request).start(name)
+            await sup.start(name)
         except ConfigError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         except (BrokerError, LiveTradingNotEnabled) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        return {"ok": True, "status": _status_dict(_sup(request).status(name)[0])}
+        return {"ok": True, "status": _status_dict(sup.status(name)[0], sup.manifest())}
 
     @app.post("/api/strategies/{name}/stop")
     async def stop_strategy(name: str, request: Request) -> dict[str, Any]:
         _guard_write()
+        sup = _sup(request)
         try:
-            await _sup(request).stop(name)
+            await sup.stop(name)
         except ConfigError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
-        return {"ok": True, "status": _status_dict(_sup(request).status(name)[0])}
+        return {"ok": True, "status": _status_dict(sup.status(name)[0], sup.manifest())}
 
     @app.post("/api/strategies/{name}/mode")
     async def set_strategy_mode(
@@ -1231,8 +1310,9 @@ def _register_strategy_control(app: FastAPI, *, read_only: bool = False) -> None
                         f"{_LIVE_ACK_PHRASE!r} in the request body's 'ack' field"
                     ),
                 )
+        sup = _sup(request)
         try:
-            await _sup(request).set_mode(
+            await sup.set_mode(
                 name,
                 body.mode,  # type: ignore[arg-type]
                 confirm_live=body.confirm,
@@ -1244,7 +1324,7 @@ def _register_strategy_control(app: FastAPI, *, read_only: bool = False) -> None
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         except (BrokerError, LiveTradingNotEnabled) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        return {"ok": True, "status": _status_dict(_sup(request).status(name)[0])}
+        return {"ok": True, "status": _status_dict(sup.status(name)[0], sup.manifest())}
 
 
 def create_control_app(
@@ -1819,8 +1899,37 @@ def create_dashboard_app(
                 status_code=422,
                 detail=f"unknown group_by {group_by!r}; expected one of {_GROUP_BY_KEYS}",
             )
-        rows = [_position_row_dict(row) for row in _sup(request).positions()]
+        sup = _sup(request)
+        config = sup.manifest()
+        rows = [_position_row_dict(row, config) for row in sup.positions()]
         return _grouped(rows, group_by)
+
+    # -- Balances (broker-reported free balances, one row per running unit) -- #
+
+    @app.get("/api/balances")
+    async def balances(
+        request: Request, strategy: str | None = None
+    ) -> list[dict[str, Any]]:
+        """Broker-reported free balances, one row per running unit.
+
+        A read (safe under ``read_only``). Each row is ``{strategy, exchange,
+        mode, balances: {asset: "exact-decimal"}, error}`` — the venue's own view
+        of what it holds (see :meth:`~trading_bot.application.supervisor.
+        StrategySupervisor.balances`), as opposed to the locally-tracked
+        exposure ``/api/positions`` reports. A stopped unit contributes nothing.
+        A broker error degrades that unit's row to an empty ``balances`` dict
+        plus a non-``null`` ``error`` string — **HTTP 200**, never a 500, so the
+        dashboard can poll this endpoint safely through a transient venue outage.
+        ``?strategy=`` filters to one unit (mirroring ``/api/orders``'s /
+        ``/api/fills``'s filter). Money is rendered as exact Decimal strings.
+
+        This is the prerequisite seam for the positions<->balances cross-check
+        (an accounting-guardrail extension) and the canary-roundtrip live oracle
+        (roadmap #6): both need the venue's own reported balances, not just the
+        engine's locally-tracked positions.
+        """
+        rows = [_balance_row_dict(row) for row in await _sup(request).balances()]
+        return _filtered(rows, crypto=None, exchange=None, strategy=strategy)
 
     # -- Orders (open + history, aggregated, groupable + filterable) --------- #
 
@@ -1909,9 +2018,11 @@ def create_dashboard_app(
                 status_code=422,
                 detail=f"unknown level {level!r}; expected one of {_KPI_LEVELS}",
             )
+        sup = _sup(request)
+        config = sup.manifest()
         return [
-            _kpi_row_dict(row)
-            for row in _sup(request).kpi(level)  # type: ignore[arg-type]
+            _kpi_row_dict(row, config)
+            for row in sup.kpi(level)  # type: ignore[arg-type]
         ]
 
     # -- PnL series (per-mode realised-PnL / equity curve over time) --------- #
@@ -1928,6 +2039,10 @@ def create_dashboard_app(
         (default ``all``) filters to a single mode. Money as exact Decimal
         strings; ``ts_ms`` integer. An unknown ``strategy`` is a 404; a strategy
         with no fills is an empty series (200, not an error).
+
+        Carries no ``last_asof_ts`` of its own — each series point already
+        carries its own ``ts_ms``, so there is no separate "as of" to surface
+        (unlike ``/api/strategies``, a single evaluation-cadence snapshot).
         """
         from trading_bot.domain.errors import ConfigError
 
@@ -2118,7 +2233,7 @@ def create_dashboard_app(
                 ),
             )
         _persist(request)
-        return {"ok": True, "status": _status_dict(sup.status(name)[0])}
+        return {"ok": True, "status": _status_dict(sup.status(name)[0], sup.manifest())}
 
     @app.delete("/api/strategies/{name}")
     async def delete_strategy(name: str, request: Request) -> dict[str, Any]:
@@ -2147,6 +2262,11 @@ def create_dashboard_app(
         ``{allocation, contributed, realised, unrealised, total_value,
         withdrawable, policy, events}`` — money as exact Decimal strings; an
         unknown unit is a 404.
+
+        Carries no ``last_asof_ts``: each ledger ``event`` already carries its
+        own ``ts`` (when the deposit/withdrawal happened), and this breakdown is
+        not tied to a strategy evaluation cadence the way ``/api/strategies``' /
+        ``/api/positions``' marks are.
         """
         from trading_bot.domain.errors import ConfigError
 

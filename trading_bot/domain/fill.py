@@ -63,12 +63,26 @@ class Fill:
         The execution price (in quote units per base unit). Must be strictly
         positive.
     fee : Decimal
-        The fee charged for this execution, in quote units. Must be
-        non-negative (zero is allowed for rebated / fee-free fills).
+        The fee charged for this execution, denominated in ``fee_asset``
+        (the quote currency when ``fee_asset`` is ``None`` — the historic
+        assumption). Must be non-negative (zero is allowed for rebated /
+        fee-free fills).
     ts : int
         Execution timestamp as **milliseconds since the Unix epoch (UTC)**. Must
         be non-negative. Fills are folded in caller-supplied order; ``ts`` is
         carried for record-keeping and tie-breaking, not used to re-sort.
+    fee_asset : str or None, optional
+        The canonical asset code the ``fee`` is denominated in. ``None``
+        (default) means the instrument's **quote** currency — the historic
+        assumption, and what the simulator and Kraken report. Binance charges
+        a market *buy*'s commission in the **base** asset (``commissionAsset``)
+        — carrying the denomination is what lets venue-truth accounting (the
+        canary's identity oracle) explain the venue's per-asset balance
+        movement exactly. NOTE: the PnL fold (:class:`~trading_bot.domain.
+        position.Position`) still treats ``fee`` as quote units at face value —
+        a documented approximation for non-quote fees (an exact conversion
+        needs a fee-asset price), acceptable because such fees are commission
+        dust; the balance identity above is exact regardless.
 
     Examples
     --------
@@ -96,6 +110,7 @@ class Fill:
     price: Money
     fee: Money
     ts: int
+    fee_asset: str | None = None
 
     def __post_init__(self) -> None:
         """Validate construction invariants (ids non-empty, amounts in range).
@@ -136,6 +151,12 @@ class Fill:
         if self.ts < 0:
             raise OrderError(
                 self.client_order_id, f"fill ts must be non-negative, got {self.ts}"
+            )
+        if self.fee_asset is not None and not self.fee_asset.strip():
+            raise OrderError(
+                self.client_order_id,
+                "fill fee_asset must be a non-empty asset code when given "
+                "(None means the quote currency)",
             )
 
     @property

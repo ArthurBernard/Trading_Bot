@@ -118,6 +118,36 @@
     .num { text-align:right; font-family:var(--font-mono); }
     .empty td { color:var(--muted); text-align:center; padding:1rem; }
     .side-buy { color:var(--ok); } .side-sell { color:var(--err); }
+    /* Expandable table rows (leaf 01, dashboard-tables-ux) — the shared
+       click-a-row-for-detail pattern (positions here; orders/fills reuse it in
+       leaf 02). A disclosure chevron on the first cell rotates open; the row
+       itself is the click/keyboard target, so no dedicated toggle control eats
+       column width. */
+    tr.expandable { cursor:pointer; }
+    tr.expandable:hover td { background:var(--panel-hi); }
+    tr.expandable:focus-visible { outline:2px solid var(--accent); outline-offset:-2px; }
+    tr.expandable td:first-child { position:relative; padding-left:1.3rem; }
+    tr.expandable td:first-child::before {
+            content:'\25b8'; position:absolute; left:.3rem; top:.5rem; color:var(--muted);
+            font-size:.7em; transition:transform .12s; }
+    tr.expandable.is-expanded td:first-child::before { transform:rotate(90deg); }
+    /* The detail panel itself — one full-width <td> under the owner row, laid
+       out as a responsive grid of label/value pairs (a <dl>), reusing the
+       card's muted-label language rather than inventing new tokens. */
+    tr.detail-row td { background:var(--panel-hi); padding:.8rem 1.1rem; }
+    .detail-grid { display:grid; grid-template-columns:repeat(auto-fit, minmax(160px, 1fr));
+            gap:.5rem 1.4rem; margin:0; }
+    .detail-grid .detail-item { margin:0; }
+    .detail-grid dt { color:var(--muted); font-size:.72rem; text-transform:uppercase;
+            letter-spacing:.08em; margin:0; }
+    .detail-grid dd { margin:.15rem 0 0; font-family:var(--font-mono); font-size:.86rem; }
+    /* An order's expanded detail (leaf 02) nests its fills as a small table —
+       scope out the detail-cell padding/background the descendant
+       `tr.detail-row td` rule above would otherwise stamp on the nested cells. */
+    tr.detail-row .order-fills { margin-top:.7rem; }
+    tr.detail-row .order-fills th, tr.detail-row .order-fills td {
+            background:none; padding:.3rem .5rem; }
+    tr.detail-row .order-fills-none { margin:.6rem 0 0; font-size:.85rem; }
     /* Strategy-name -> detail-page link, shared across the roster, Overview and
        Orders name cells so every place a strategy is named is deep-linkable. */
     a.strat-link { color:var(--accent); text-decoration:none; }
@@ -345,6 +375,17 @@
       });
     }
 
+    // A bare "YYYY-MM-DD" local date (no time) — used for as-of DATA dates
+    // (the Last-eval column's "data through 2026-07-04", the bar-timing
+    // chip's tooltip below), distinct from fmtDate's evaluation-INSTANT
+    // timestamp (which carries a time-of-day). Shared here (leaf 03,
+    // dashboard-tables-ux) so every page can format a data-through date, not
+    // just strategies.html.
+    function fmtDateOnly(ms) {
+      if (ms == null) return '—';
+      return new Date(ms).toLocaleDateString('en-CA'); // en-CA -> YYYY-MM-DD
+    }
+
     // Order-status -> badge CSS suffix (the .badge-status-* rules above) — one
     // lowercase-status map shared by the Orders page and Overview's open-orders
     // table so both surfaces colour-code statuses identically. Covers every
@@ -389,6 +430,141 @@
         escapeHtml(s.health) + '</span>';
     }
 
+    // barTimingChipHtml(s) -> the "last bar X ago -> next in Y" chip (leaf 03,
+    // dashboard-tables-ux), replacing the epoch-aligned "Next bar" guess (the
+    // now-retired epoch-aligned-boundary helper the roster used to call — it
+    // had no relation to the real cadence). "last" is `last_asof_ts` — server
+    // truth, the as-of of the last bar the runner actually evaluated; "next"
+    // is the honest derivation `last_asof_ts + span * 1000`, fed into the SAME
+    // `data-countdown-ts` / `tbTime.countdown()` live-refresh mechanism the
+    // health chip already uses — no new timer machinery. The tooltip carries
+    // both absolute instants plus "data through <date>" (the Last-eval
+    // column's wording, kept verbatim). `last_asof_ts == null` (never
+    // evaluated) -> a muted "—" with an explanatory tooltip, NEVER a fake
+    // countdown. A unit whose span is missing/zero shows "last" only — there
+    // is no honest "next" to derive without a cadence.
+    function barTimingChipHtml(s) {
+      if (!s || s.last_asof_ts == null) {
+        return '<span class="muted" title="no bar evaluated yet">—</span>';
+      }
+      const last = s.last_asof_ts;
+      const lastText = 'last bar ' + escapeHtml(fmtRelative(last));
+      if (!s.span || s.span <= 0) {
+        const title = 'last bar ' + fmtDate(last, { seconds: true }) +
+          ' — data through ' + fmtDateOnly(last);
+        return '<span title="' + escapeHtml(title) + '">' + lastText + '</span>';
+      }
+      const next = last + s.span * 1000;
+      const cadence = tbTime.humanSpan(s.span);
+      const title = 'last bar ' + fmtDate(last, { seconds: true }) +
+        ' · next bar ' + fmtDate(next, { seconds: true }) +
+        ' — data through ' + fmtDateOnly(last) + (cadence ? ' (' + cadence + ' bar close)' : '');
+      return '<span title="' + escapeHtml(title) + '">' + lastText + ' → next in ' +
+        '<span data-countdown-ts="' + next + '">' + escapeHtml(tbTime.countdown(next)) +
+        '</span></span>';
+    }
+
+    // --- Order-execution cell builders (leaf 02, dashboard-tables-ux) ------ //
+    // Shared by the three order surfaces (Overview open-orders, Orders page,
+    // strategy detail "Recent orders") so all render execution identically.
+    // Money/qty arrive as EXACT Decimal strings; the arithmetic here (a
+    // ratio, a product, a fee sum) is Number()-based and DISPLAY ONLY — the
+    // exact operand strings ride the title tooltip, never a rounded result.
+
+    // orderFilledPctCell(o) -> the "Filled %" cell: filled_qty / qty as a
+    // percentage, the exact fraction in the tooltip. "—" when qty is missing,
+    // zero or unparseable (a percentage of nothing is a lie, not a zero).
+    function orderFilledPctCell(o) {
+      const qtyN = Number(o.qty);
+      const filledN = Number(o.filled_qty);
+      if (o.qty == null || o.filled_qty == null ||
+          !isFinite(qtyN) || qtyN === 0 || !isFinite(filledN)) {
+        return '<span class="muted">—</span>';
+      }
+      return tbFmt.pctCell(filledN / qtyN, { title: o.filled_qty + ' / ' + o.qty });
+    }
+
+    // orderValueCell(o) -> the "Value" cell: what the order is actually worth
+    // — filled_qty × avg_fill_price once anything filled, else
+    // qty × limit_price while the order is priced but unfilled, else "—" (an
+    // unfilled market order has no honest value yet). The tooltip names WHICH
+    // product is shown, with the exact Decimal factors.
+    function orderValueCell(o) {
+      const unit = tbFmt.splitInstrument(o.instrument);
+      const filledN = Number(o.filled_qty);
+      const avgN = Number(o.avg_fill_price);
+      if (o.filled_qty != null && o.avg_fill_price != null &&
+          isFinite(filledN) && filledN > 0 && isFinite(avgN)) {
+        return tbFmt.moneyCell(filledN * avgN, { quote: unit.quote,
+          title: 'filled × avg fill: ' + o.filled_qty + ' × ' + o.avg_fill_price });
+      }
+      const qtyN = Number(o.qty);
+      const limitN = Number(o.limit_price);
+      if (o.qty != null && o.limit_price != null && isFinite(qtyN) && isFinite(limitN)) {
+        return tbFmt.moneyCell(qtyN * limitN, { quote: unit.quote,
+          title: 'qty × limit price (nothing filled): ' + o.qty + ' × ' + o.limit_price });
+      }
+      return '<span class="muted">—</span>';
+    }
+
+    // orderDetailHtml(o, fills) -> the expanded detail panel for one order
+    // (the tbExpander pattern below): client/venue ids, limit/stop prices,
+    // the fill count + Σ fees, reject_reason when the payload carries one,
+    // then THAT order's fills — client-joined by client_order_id from the
+    // fills payload the page already fetched (never a per-expansion request),
+    // oldest-first (execution order, unlike the most-recent-first flat
+    // tables). Used by the Orders page + the strategy detail; the Overview's
+    // open-orders table shows the execution columns without the expansion
+    // (it does not fetch /api/fills — see overview.html).
+    function orderDetailHtml(o, fills) {
+      const unit = tbFmt.splitInstrument(o.instrument);
+      fills = fills || [];
+      // Σ fees across this order's fills — display-only Number arithmetic;
+      // each fill's exact fee string stays one hover away per row below.
+      let feeSum = 0;
+      let haveFee = false;
+      fills.forEach(function (f) {
+        const n = Number(f.fee);
+        if (isFinite(n)) { feeSum += n; haveFee = true; }
+      });
+      let html = '<dl class="detail-grid">' +
+        '<div class="detail-item"><dt>Client order id</dt><dd>' +
+          escapeHtml(o.client_order_id) + '</dd></div>' +
+        '<div class="detail-item"><dt>Venue order id</dt><dd>' +
+          (o.venue_order_id ? escapeHtml(o.venue_order_id) : '<span class="muted">—</span>') +
+          '</dd></div>' +
+        '<div class="detail-item"><dt>Limit price</dt><dd>' +
+          tbFmt.priceCell(o.limit_price, { quote: unit.quote }) + '</dd></div>' +
+        '<div class="detail-item"><dt>Stop price</dt><dd>' +
+          tbFmt.priceCell(o.stop_price, { quote: unit.quote }) + '</dd></div>' +
+        '<div class="detail-item"><dt>Fills</dt><dd>' + fills.length + '</dd></div>' +
+        '<div class="detail-item"><dt>Σ fees</dt><dd>' +
+          (haveFee ? tbFmt.moneyCell(feeSum, { quote: unit.quote }) : '<span class="muted">—</span>') +
+          '</dd></div>' +
+        (o.reject_reason
+          ? '<div class="detail-item"><dt>Reject reason</dt><dd class="err">' +
+            escapeHtml(o.reject_reason) + '</dd></div>'
+          : '') +
+        '</dl>';
+      if (!fills.length) {
+        html += '<p class="muted order-fills-none">No fills for this order.</p>';
+      } else {
+        html += '<table class="order-fills">' +
+          '<thead><tr><th>Time</th><th class="num">Qty</th>' +
+          '<th class="num">Price</th><th class="num">Fee</th></tr></thead>' +
+          '<tbody>' + fills.map(function (f) {
+            return '<tr>' +
+              '<td class="num" title="' + escapeHtml(fmtRelative(f.ts)) + '">' +
+                escapeHtml(fmtDate(f.ts, { seconds: true })) + '</td>' +
+              '<td class="num">' + tbFmt.qtyCell(f.qty, { base: unit.base }) + '</td>' +
+              '<td class="num">' + tbFmt.priceCell(f.price, { quote: unit.quote }) + '</td>' +
+              '<td class="num">' + tbFmt.moneyCell(f.fee, { quote: unit.quote }) + '</td>' +
+              '</tr>';
+          }).join('') + '</tbody></table>';
+      }
+      return html;
+    }
+
     // tbRefreshGuard(key, tableEl, payload) -> 'render' | 'skip-stamp' | 'skip-silent'
     // Shared by the Strategies/Overview/Orders polling refreshes so a table
     // never visibly rebuilds when nothing changed, and never rebuilds out from
@@ -413,10 +589,99 @@
       return unchanged ? 'skip-stamp' : 'render';
     }
 
-    // tbTime — shared cadence helpers reused by base.html's health chip and by
-    // strategies.html's Cadence/Next-bar columns. Plain global (like TB_READ_ONLY
-    // above), not window-attached — every page's inline script runs in the same
-    // classic-script global scope as this one, after this block has executed.
+    // tbExpander(tbodyEl, lookup) -> { expanded, rowHtml(key, cellsHtml, colspan) }
+    // The shared expandable-row helper (leaf 01, dashboard-tables-ux; positions
+    // here, orders/fills reuse it in leaf 02) — the pinned UX pattern is "click a
+    // row -> a detail panel opens beneath it" (not a hover popin, not a separate
+    // page). Every table this touches is FULLY REBUILT on each SSE/poll refresh
+    // (a page's `refreshAll()` replaces `tableEl.innerHTML` wholesale), so "is
+    // this row open" cannot live on the DOM node between refreshes — it lives in
+    // `expanded`, a `Set` of row keys created once per table and never reset;
+    // `rowHtml()` re-checks it on every rebuild so an open row re-appears
+    // expanded immediately (no flash of collapsed-then-reopened), and the
+    // click/keyboard handlers below toggle it in place without waiting for the
+    // next rebuild.
+    //
+    //   tbodyEl — the persistent <tbody> element itself (only its innerHTML
+    //             changes on refresh; the listeners wired here on the element
+    //             survive that, since delegation reads `event.target` fresh).
+    //   lookup  — (key) -> the detail panel's inner HTML for that key (a
+    //             pre-escaped string), or a falsy value when there is nothing to
+    //             show (e.g. the row disappeared from the latest payload).
+    //             Called fresh on every open/rebuild, never cached, so the
+    //             detail always reflects the last fetched data.
+    //
+    // `rowHtml(key, cellsHtml, colspan)` builds one owner `<tr>` (focusable,
+    // `role="button"`, `aria-expanded`) wrapping the caller's `<td>...` cells,
+    // followed by the detail `<tr><td colspan>` when `key` is already expanded.
+    // `colspan` must equal the number of visible columns in `cellsHtml` (the
+    // detail panel spans the full row).
+    function tbExpander(tbodyEl, lookup) {
+      const expanded = new Set();
+
+      function detailRowHtml(key, colspan) {
+        const inner = lookup(key);
+        if (!inner) return '';
+        return '<tr class="detail-row" data-detail-for="' + escapeHtml(key) + '">' +
+          '<td colspan="' + colspan + '">' + inner + '</td></tr>';
+      }
+
+      function rowHtml(key, cellsHtml, colspan) {
+        const isOpen = expanded.has(key);
+        return '<tr class="expandable' + (isOpen ? ' is-expanded' : '') + '"' +
+          ' data-key="' + escapeHtml(key) + '" data-colspan="' + colspan + '"' +
+          ' tabindex="0" role="button" aria-expanded="' + (isOpen ? 'true' : 'false') + '">' +
+          cellsHtml + '</tr>' + (isOpen ? detailRowHtml(key, colspan) : '');
+      }
+
+      // Toggle one row in place — no table rebuild needed for a click/Enter.
+      function toggle(row) {
+        const key = row.dataset.key;
+        const colspan = row.dataset.colspan;
+        if (expanded.has(key)) {
+          expanded.delete(key);
+          row.classList.remove('is-expanded');
+          row.setAttribute('aria-expanded', 'false');
+          const next = row.nextElementSibling;
+          if (next && next.classList.contains('detail-row')) next.remove();
+        } else {
+          expanded.add(key);
+          row.classList.add('is-expanded');
+          row.setAttribute('aria-expanded', 'true');
+          const html = detailRowHtml(key, colspan) ||
+            '<tr class="detail-row"><td colspan="' + colspan + '"></td></tr>';
+          row.insertAdjacentHTML('afterend', html);
+        }
+      }
+
+      // Event delegation on the (persistent) tbody — wired once, keeps working
+      // after innerHTML rebuilds. Never hijacks a click/keypress on a link,
+      // button or form control nested in the row (e.g. a strategy-link cell).
+      function isInnerControl(target) {
+        return !!target.closest('a, button, input, select, textarea, label');
+      }
+      tbodyEl.addEventListener('click', function (ev) {
+        if (isInnerControl(ev.target)) return;
+        const row = ev.target.closest('tr.expandable');
+        if (row && tbodyEl.contains(row)) toggle(row);
+      });
+      tbodyEl.addEventListener('keydown', function (ev) {
+        if (ev.key !== 'Enter' && ev.key !== ' ') return;
+        if (isInnerControl(ev.target)) return;
+        const row = ev.target.closest('tr.expandable');
+        if (!row || !tbodyEl.contains(row)) return;
+        ev.preventDefault();  // Space must not also scroll the page
+        toggle(row);
+      });
+
+      return { expanded: expanded, rowHtml: rowHtml };
+    }
+
+    // tbTime — shared cadence helpers reused by base.html's health chip and
+    // bar-timing chip, and by strategies.html's Cadence column. Plain global
+    // (like TB_READ_ONLY above), not window-attached — every page's inline
+    // script runs in the same classic-script global scope as this one, after
+    // this block has executed.
     const tbTime = {
       // countdown(tsMs) -> a compact, stable-width duration string counting down
       // to an epoch-ms timestamp: "42s", "12m05s", "1h05m", "1d02h". Clamps to
@@ -449,23 +714,15 @@
         if (seconds % 60 === 0) return (seconds / 60) + 'm';
         return seconds + 's';
       },
-      // nextBarCloseMs(spanSeconds) -> the next epoch-aligned bar boundary, in
-      // epoch ms (UTC): ceil(now_s / span) * span * 1000. Null for a missing/
-      // zero/negative span.
-      nextBarCloseMs: function (spanSeconds) {
-        if (spanSeconds == null || spanSeconds <= 0) return null;
-        const nowS = Date.now() / 1000;
-        return Math.ceil(nowS / spanSeconds) * spanSeconds * 1000;
-      },
     };
 
     // Re-read every element carrying a `data-countdown-ts` attribute and
     // re-render its text via tbTime.countdown() — one shared 1s interval driving
-    // every countdown on the page (health chip, Overview's next-tick chip,
-    // strategies.html's Next-bar column) instead of a timer per element. A
-    // table rebuild (e.g. strategies.html's 3s poll) simply re-stamps the
-    // attribute on the new elements; this loop just re-reads whatever is
-    // currently in the DOM.
+    // every countdown on the page (health chip, Overview's next-tick chip, the
+    // bar-timing chip's "next in Y") instead of a timer per element. A table
+    // rebuild (e.g. strategies.html's 3s poll) simply re-stamps the attribute
+    // on the new elements; this loop just re-reads whatever is currently in
+    // the DOM.
     function tickCountdowns() {
       document.querySelectorAll('[data-countdown-ts]').forEach(function (el) {
         const ts = Number(el.getAttribute('data-countdown-ts'));
@@ -564,7 +821,7 @@
       setInterval(refreshHealth, 10000);
       // The one shared 1s countdown tick for the whole page (health chip, and
       // any per-page data-countdown-ts element, e.g. the Overview summary
-      // strip's next-tick chip or strategies.html's Next-bar column).
+      // strip's next-tick chip or the bar-timing chip's "next in Y").
       tickCountdowns();
       setInterval(tickCountdowns, 1000);
     });

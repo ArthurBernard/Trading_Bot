@@ -75,6 +75,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import json
 import os
 import re
 import time
@@ -98,7 +99,7 @@ from trading_bot.domain.instrument import (
 )
 from trading_bot.domain.money import Money, money
 from trading_bot.domain.order import Order, OrderSide, OrderType
-from trading_bot.transport.http import AsyncHTTPClient
+from trading_bot.transport.http import AsyncHTTPClient, HTTPError
 from trading_bot.transport.ratelimit import RateLimiter
 
 if TYPE_CHECKING:
@@ -214,6 +215,51 @@ def _map_binance_error(code: int, msg: str, *, context: str) -> BrokerError:
     if any(marker in upper for marker in _BINANCE_INSUFFICIENT_MARKERS):
         return InsufficientBalance(detail)
     return BrokerError(detail)
+
+
+def _map_http_error(exc: HTTPError, *, context: str) -> BrokerError:
+    """Map a **definitive** venue rejection carried by a transport error.
+
+    Binance delivers request rejections as an HTTP **4xx** whose JSON body
+    carries the same ``{"code", "msg"}`` shape as its in-band (200) errors —
+    so on the real venue a rejection (a filter failure, a duplicate id, an
+    insufficient balance) surfaces from the transport as
+    :class:`~trading_bot.transport.http.HTTPError`, never as a parsed payload
+    reaching :meth:`BinanceBroker._raise_on_error`. This helper recovers the
+    body and reuses :func:`_map_binance_error`, so venue rejections become the
+    same specific domain errors either way; a body that is not the Binance
+    error shape degrades to a generic :class:`BrokerError` carrying the
+    transport's (secret-redacted) message.
+
+    Only **definitive** failures reach here: the transport raises the distinct
+    :class:`~trading_bot.transport.http.AmbiguousRequestError` for
+    unknown-outcome failures (a 5xx / drop on a non-retryable POST), and that
+    type propagates unchanged — the reconcile-don't-retry discipline is
+    untouched.
+
+    Parameters
+    ----------
+    exc : HTTPError
+        The transport error (carries ``status`` and the raw response body).
+    context : str
+        The endpoint name, for the error message.
+
+    Returns
+    -------
+    BrokerError
+        The most specific mapped domain error.
+
+    """
+    error: tuple[int, str] | None = None
+    if exc.body:
+        try:
+            error = BinanceBroker._find_error(json.loads(exc.body))
+        except ValueError:
+            error = None
+    if error is not None:
+        code, msg = error
+        return _map_binance_error(code, msg, context=context)
+    return BrokerError(f"Binance {context}: {exc}")
 
 
 def _sign(query: str, secret: str) -> str:
@@ -390,6 +436,15 @@ class BinanceBroker(Broker):
         """Whether this adapter is pinned to Binance's spot **testnet**."""
         return self._base_url == TESTNET_API_BASE
 
+    @property
+    def symbols(self) -> tuple[Symbol, ...]:
+        """The symbol set :meth:`fills` queries (``myTrades`` is per-symbol).
+
+        Read-only introspection — empty means :meth:`fills` refuses (Binance
+        has no account-wide trade history to fall back to).
+        """
+        return self._symbols
+
     def _require_credentials(self) -> None:
         """Raise :class:`BrokerError` if a private call lacks credentials."""
         if not self.has_credentials:
@@ -466,12 +521,20 @@ class BinanceBroker(Broker):
         return _ENDPOINT_WEIGHTS.get(endpoint, _DEFAULT_ENDPOINT_WEIGHT)
 
     async def _public_get(self, endpoint: str, params: Mapping[str, Any]) -> Any:
-        """GET a public endpoint and return its parsed JSON (or raise)."""
+        """GET a public endpoint and return its parsed JSON (or raise).
+
+        A definitive HTTP-level rejection (Binance sends its ``{"code","msg"}``
+        errors with a 4xx status) is mapped to the same specific domain errors
+        as an in-band error body — see :func:`_map_http_error`.
+        """
         url = f"{self._base_url}{_API_PREFIX}/{endpoint}"
         async with self._http as client:
-            payload = await client.get(
-                url, params=dict(params), weight=self._weight_for(endpoint)
-            )
+            try:
+                payload = await client.get(
+                    url, params=dict(params), weight=self._weight_for(endpoint)
+                )
+            except HTTPError as exc:
+                raise _map_http_error(exc, context=endpoint) from exc
         return self._raise_on_error(payload, context=endpoint)
 
     async def _signed_request(
@@ -518,13 +581,21 @@ class BinanceBroker(Broker):
         headers = {"X-MBX-APIKEY": self._api_key}
 
         async with self._http as client:
-            payload = await client.request(
-                method,
-                url,
-                headers=headers,
-                retry=retry,
-                weight=self._weight_for(endpoint),
-            )
+            try:
+                payload = await client.request(
+                    method,
+                    url,
+                    headers=headers,
+                    retry=retry,
+                    weight=self._weight_for(endpoint),
+                )
+            except HTTPError as exc:
+                # A definitive venue rejection (Binance sends its
+                # ``{"code","msg"}`` errors with a 4xx status): map it to the
+                # same specific domain errors as an in-band error body. The
+                # ambiguous-failure path (AmbiguousRequestError) is a distinct
+                # type and propagates unchanged — never blind-retried here.
+                raise _map_http_error(exc, context=endpoint) from exc
         return self._raise_on_error(payload, context=endpoint)
 
     # --- public endpoints -------------------------------------------------- #
@@ -927,8 +998,19 @@ class BinanceBroker(Broker):
 
     @staticmethod
     def _build_fill(symbol: Symbol, info: Mapping[str, Any]) -> Fill:
-        """Build a domain :class:`Fill` from a Binance ``myTrades`` entry."""
+        """Build a domain :class:`Fill` from a Binance ``myTrades`` entry.
+
+        Binance denominates the commission in ``commissionAsset`` — the
+        **base** asset on a market buy (observed live: a BTC/USDT buy is
+        charged in BTC), the quote on a sell, or BNB under the fee discount —
+        so the asset is carried onto :attr:`~trading_bot.domain.fill.Fill.
+        fee_asset` (normalised; ``None`` when Binance omits it) rather than
+        silently re-labelled as quote. Venue-truth accounting (reconciliation,
+        the canary's identity oracle) needs the real denomination to explain
+        the venue's per-asset balance movement exactly.
+        """
         side = OrderSide.BUY if info.get("isBuyer") else OrderSide.SELL
+        commission_asset = info.get("commissionAsset")
         return Fill(
             fill_id=str(info.get("id")),
             client_order_id=str(info.get("orderId")),
@@ -938,6 +1020,7 @@ class BinanceBroker(Broker):
             price=money(str(info.get("price", "0"))),
             fee=money(str(info.get("commission", "0"))),
             ts=int(info.get("time", 0)),
+            fee_asset=(normalise(str(commission_asset)) if commission_asset else None),
         )
 
     # --- composite venue id ------------------------------------------------- #

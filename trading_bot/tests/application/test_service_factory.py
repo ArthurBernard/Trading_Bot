@@ -19,8 +19,9 @@ import math
 
 import pytest
 
-from trading_bot.application.config import AppConfig, BrokerConfig
+from trading_bot.application.config import AppConfig, BrokerConfig, RiskConfig
 from trading_bot.application.events import EventBus, FillEvent
+from trading_bot.application.mark_cache import MarkCache
 from trading_bot.application.order_router import OrderRouter
 from trading_bot.application.performance_service import PerformanceService
 from trading_bot.application.position_tracker import PositionTracker
@@ -81,6 +82,23 @@ def test_default_config_builds_paper_engine() -> None:
     assert isinstance(engine.risk, RiskManager)
     # No db_path → no store.
     assert engine.store is None
+
+
+def test_engine_carries_mark_cache() -> None:
+    """Every built engine gets a fresh, empty :class:`MarkCache` by default.
+
+    Mirrors ``spec_resolver`` — a default-factory field, so direct
+    ``Engine(...)`` constructions (tests wire engines by hand) keep working
+    unchanged, and every ``build_engine`` call gets its own cache (never
+    shared across units).
+    """
+    engine_a = build_engine(AppConfig())
+    engine_b = build_engine(AppConfig())
+
+    assert isinstance(engine_a.mark_cache, MarkCache)
+    assert engine_a.mark_cache.all() == {}
+    # Two engines never share the same cache instance.
+    assert engine_a.mark_cache is not engine_b.mark_cache
 
 
 async def test_paper_engine_fills_carry_the_wall_clock() -> None:
@@ -600,6 +618,67 @@ def test_paper_mode_ignores_testnet() -> None:
 def test_brokerconfig_testnet_defaults_false() -> None:
     """``testnet`` defaults to False (a plain broker is mainnet/live)."""
     assert BrokerConfig(name="bn", exchange="binance").testnet is False
+
+
+# --- BrokerConfig.symbols → the adapter's per-symbol fill endpoints ---------- #
+
+
+def test_testnet_threads_symbols_to_binance_adapter(monkeypatch) -> None:
+    """``BrokerConfig.symbols`` reaches the testnet adapter, parsed canonically.
+
+    Binance has no account-wide trade history (``myTrades`` is per-symbol), so
+    ``broker.fills()`` — reconciliation's and the canary venue oracle's
+    re-fetch channel — needs the symbol set threaded from the config.
+    """
+    monkeypatch.setenv("BINANCE_API_KEY", "tk")
+    monkeypatch.setenv("BINANCE_API_SECRET", "ts")
+    cfg = AppConfig(
+        mode="live",
+        brokers=[
+            BrokerConfig(
+                name="bn",
+                exchange="binance",
+                testnet=True,
+                symbols=["BTC/USDT", "ETHUSDT"],
+            )
+        ],
+    )
+    engine = build_engine(cfg)
+    assert isinstance(engine.broker, BinanceBroker)
+    assert engine.broker.symbols == (Symbol("BTC", "USDT"), Symbol("ETH", "USDT"))
+
+
+def test_live_threads_symbols_to_binance_adapter(monkeypatch) -> None:
+    """The live path threads ``symbols`` too (same seam as testnet)."""
+    monkeypatch.setenv("BINANCE_API_KEY", "tk")
+    monkeypatch.setenv("BINANCE_API_SECRET", "ts")
+    cfg = AppConfig(
+        mode="live",
+        live_enabled=True,
+        risk=RiskConfig(
+            max_order=money("0.01"),
+            max_position=money("0.01"),
+            max_daily_loss=money("10"),
+        ),
+        brokers=[BrokerConfig(name="bn", exchange="binance", symbols=["BTC/USDT"])],
+    )
+    engine = build_engine(cfg)
+    assert isinstance(engine.broker, BinanceBroker)
+    assert engine.broker.symbols == (Symbol("BTC", "USDT"),)
+
+
+def test_unparseable_symbols_entry_refuses_at_build(monkeypatch) -> None:
+    """An unparseable ``symbols`` entry refuses with a clear ``BrokerError``."""
+    monkeypatch.setenv("BINANCE_API_KEY", "tk")
+    monkeypatch.setenv("BINANCE_API_SECRET", "ts")
+    cfg = AppConfig(
+        mode="live",
+        brokers=[
+            BrokerConfig(name="bn", exchange="binance", testnet=True, symbols=["???"])
+        ],
+    )
+    with pytest.raises(BrokerError, match="cannot parse symbols entry"):
+        build_engine(cfg)
 
 
 # --- the daily-loss circuit breaker is wired to live PnL ------------------- #

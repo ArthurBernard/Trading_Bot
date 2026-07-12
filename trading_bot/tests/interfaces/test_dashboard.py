@@ -168,6 +168,51 @@ def test_every_page_carries_the_health_pill_helper(path: str) -> None:
 
 
 @pytest.mark.parametrize("path", _PAGES)
+def test_every_page_carries_the_expandable_row_helper(path: str) -> None:
+    """Every page's shell (base.html) carries the shared expandable-row helper.
+
+    Leaf 01 (dashboard-tables-ux): clicking a table row opens a detail panel
+    beneath it (the pinned UX pattern — not a hover popin, not a per-order
+    page); `tbExpander()` is defined once in base.html so every page carries
+    it, including the ones this leaf doesn't wire yet (leaf 02 reuses it for
+    orders/fills tables).
+    """
+    html = _client().get(path).text
+    assert "function tbExpander" in html, path
+
+
+@pytest.mark.parametrize("path", _PAGES)
+def test_every_page_carries_the_order_execution_cell_builders(path: str) -> None:
+    """Every page's shell (base.html) carries the shared order-execution cells.
+
+    Leaf 02 (dashboard-tables-ux): the Filled % / Value cells and the expanded
+    per-order detail panel (ids, limit/stop, Σ fees, the fills join) are built
+    by `orderFilledPctCell()` / `orderValueCell()` / `orderDetailHtml()`,
+    defined once in base.html so the three order surfaces (Overview
+    open-orders, Orders page, strategy detail) render execution identically.
+    """
+    html = _client().get(path).text
+    assert "function orderFilledPctCell" in html, path
+    assert "function orderValueCell" in html, path
+    assert "function orderDetailHtml" in html, path
+
+
+@pytest.mark.parametrize("path", _PAGES)
+def test_every_page_carries_the_bar_timing_chip_helper(path: str) -> None:
+    """Every page's shell (base.html) carries the shared bar-timing chip helper.
+
+    Leaf 03 (dashboard-tables-ux): the "last bar X ago -> next in Y" chip is
+    fed by `barTimingChipHtml()`, defined once in base.html (mirroring
+    `healthPillHtml`'s shape) so both the roster and the detail header render
+    it identically, and so the epoch-aligned `nextBarCloseMs` guess it
+    replaces stays retired everywhere.
+    """
+    html = _client().get(path).text
+    assert "function barTimingChipHtml" in html, path
+    assert "nextBarCloseMs" not in html, path
+
+
+@pytest.mark.parametrize("path", _PAGES)
 def test_nav_lists_four_tabs_and_no_pnl(path: str) -> None:
     """Every page's nav lists the four surviving tabs; the retired PnL tab is gone.
 
@@ -672,10 +717,12 @@ def test_strategy_detail_serves_the_shell_with_name_and_sections() -> None:
     # The stats table's Return column + the muted starting-capital note.
     assert '<th class="num">Return</th>' in html
     assert 'id="pnl-v0-note"' in html
-    # This strategy's positions / orders / fills tables.
+    # This strategy's positions / orders tables. No standalone fills table —
+    # leaf 02 (dashboard-tables-ux) demoted fills into the orders' expanded
+    # detail (see test_strategy_detail_standalone_fills_table_is_gone).
     assert 'id="positions-table"' in html
     assert 'id="orders-table"' in html
-    assert 'id="fills-table"' in html
+    assert 'id="fills-table"' not in html
     # The control surface + go-live modal moved here from the roster row.
     assert "mode-select" in html
     assert 'id="live-modal"' in html
@@ -738,6 +785,85 @@ def test_strategy_detail_carries_the_health_pill_hook() -> None:
     html = _client().get("/strategies/btc-ma").text
     assert 'id="detail-health-pill"' in html
     assert "healthPillHtml(s)" in html
+
+
+def test_strategy_detail_carries_the_bar_timing_chip_hook() -> None:
+    """The detail header wires the shared bar-timing chip next to the pills (leaf 03).
+
+    `#detail-bar-timing` sits alongside `#detail-run-pill`; `renderHeader()`
+    fills it from `barTimingChipHtml(s)` — the same helper the roster uses.
+    """
+    html = _client().get("/strategies/btc-ma").text
+    assert 'id="detail-bar-timing"' in html
+    assert "barTimingChipHtml(s)" in html
+
+
+def test_strategy_detail_positions_table_is_asset_first_with_expandable_rows() -> None:
+    """The detail page's positions table reads asset-first with expandable rows.
+
+    Leaf 01 (dashboard-tables-ux): Asset | Qty | Avg entry | Price (as-of) |
+    Value | Unrealised | Realised (net) — Instrument and Fees are no longer
+    their own columns (the native pair and cumulative fees move into the
+    expanded detail); this page is already scoped to one strategy/exchange so
+    (unlike the overview variant) it carries no Strategy/Exchange column.
+    """
+    html = _client().get("/strategies/btc-ma").text
+    assert "<th>Asset</th>" in html
+    assert '<th class="num">Qty</th>' in html
+    assert '<th class="num">Avg entry</th>' in html
+    assert "Price <span" in html and "(as-of)" in html
+    assert '<th class="num">Value</th>' in html
+    assert '<th class="num">Unrealised</th>' in html
+    assert '<th class="num">Realised (net)</th>' in html
+    assert "Net qty" not in html  # the old column header is gone
+    # The shared expandable-row helper, wired for this table (keyed by
+    # instrument — one row per instrument within this strategy).
+    assert "tbExpander(document.getElementById('positions-body')" in html
+    assert "posExpander.rowHtml(r.instrument" in html
+    # Expanded detail: native pair, cumulative fees, gross/fees breakdown, mark
+    # provenance (gross = realised_pnl + fees_paid, computed client-side).
+    assert "function positionDetailHtml" in html
+    assert "Native pair" in html
+    assert "Realised gross" in html
+    assert "Mark source" in html
+
+
+def test_strategy_detail_orders_table_shows_execution_with_expandable_fills() -> None:
+    """The detail page's orders table reads the execution blueprint, rows expandable.
+
+    Leaf 02 (dashboard-tables-ux): Time | Instrument | Side | Type | Qty |
+    Filled % | Avg fill | Value | Status; a row expands (the shared tbExpander)
+    into that order's fills + client/venue ids, limit/stop, Σ fees — joined
+    client-side by client_order_id from the fills payload the page already
+    fetches (no new endpoint, no per-expansion request).
+    """
+    html = _client().get("/strategies/btc-ma").text
+    assert '<th class="num">Filled %</th>' in html
+    assert '<th class="num">Avg fill</th>' in html
+    assert '<th class="num">Value</th>' in html
+    assert '<th class="num">Filled</th>' not in html  # the bare-qty column is gone
+    # The shared expandable-row helper, wired for the orders table (keyed by
+    # client_order_id — the idempotency key is the natural row identity).
+    assert "tbExpander(document.getElementById('orders-body')" in html
+    assert "orderExpander.rowHtml(o.client_order_id" in html
+    # The client-side fills join feeding the shared detail builder (base.html).
+    assert "_fillsByOrder" in html
+    assert "function orderDetailHtml" in html
+    assert "/api/fills" in html  # the join source is still fetched
+
+
+def test_strategy_detail_standalone_fills_table_is_gone() -> None:
+    """The detail page's standalone "Recent fills" table is retired (leaf 02).
+
+    Fills now live under their order (the expanded detail); the underlying
+    /api/fills fetch survives as the client_order_id join source.
+    """
+    html = _client().get("/strategies/btc-ma").text
+    assert 'id="fills-card"' not in html
+    assert 'id="fills-table"' not in html
+    assert 'id="fills-body"' not in html
+    assert "Recent fills" not in html
+    assert "/api/fills" in html  # the fetch survives — it feeds the join
 
 
 def test_strategy_detail_read_only_hides_capital_controls() -> None:
@@ -959,6 +1085,329 @@ def test_positions_ungrouped_is_a_flat_list() -> None:
 def test_positions_unknown_group_by_is_422() -> None:
     """An unknown ``group_by`` is rejected (422)."""
     assert _client().get("/api/positions?group_by=bogus").status_code == 422
+
+
+def test_api_positions_contract_regression(tmp_path) -> None:  # noqa: ANN001
+    """`/api/positions` carries every pre-existing field, byte-identical, plus the new ones.
+
+    A public-contract regression check (mirrors `test_api_health_worst_and_count`):
+    proves the ``mark``/``mark_asof_ts``/``mark_source``/``value``/``unrealised``/
+    ``fee_ccy`` additions (api-completeness leaf 02) never displaced or renamed any
+    of the eight fields the endpoint already shipped.
+    """
+    from trading_bot.storage.sqlite_store import SqliteStore
+
+    db = str(tmp_path / "book.sqlite")
+    inst = Instrument(Symbol("BTC", "USD"))
+    store = SqliteStore(db)
+    store.record_fill(
+        Fill("SF1", "sc1", inst, OrderSide.BUY, money("2"), money("100"), money("1"), 1)
+    )
+    config = AppConfig.model_validate(
+        {
+            "mode": "paper",
+            "storage": {"db_path": db},
+            "brokers": [{"name": "kraken", "exchange": "kraken"}],
+            "strategies": [
+                {
+                    "name": "btc-ma",
+                    "symbol": "BTC/USD",
+                    "data": {"exchange": "kraken", "span": 60},
+                    "signal": {"ref": "ma_crossover", "params": {"fast": 3, "slow": 6}},
+                    "reference_qty": "2",
+                    "lookback": 6,
+                }
+            ],
+        }
+    )
+    sup = StrategySupervisor(config, dccd_client=_FakeStartClient())
+    asyncio.run(sup.start("btc-ma"))
+    # Seed the mark cache directly (the bar_close path) so every new field populates.
+    sup._units["btc-ma"].engine.mark_cache.update(  # noqa: SLF001
+        Symbol("BTC", "USD"), money("110"), 9_000
+    )
+
+    [row] = TestClient(create_dashboard_app(sup)).get("/api/positions").json()
+    # Every pre-existing field, unchanged.
+    assert row["strategy"] == "btc-ma"
+    assert row["exchange"] == "kraken"
+    assert row["instrument"] == "BTC/USD"
+    assert row["base"] == "BTC"
+    assert row["net_qty"] == "2"
+    assert row["avg_entry_price"] == "100"
+    assert row["realised_pnl"] == "-1"  # the opening fill's fee reduces realised PnL
+    assert row["fees_paid"] == "1"
+    # The new fields.
+    assert row["mark"] == "110"
+    assert row["mark_asof_ts"] == 9_000
+    assert row["mark_source"] == "bar_close"
+    assert row["value"] == "220"
+    assert row["unrealised"] == "20"
+    assert row["fee_ccy"] == "USD"
+
+
+# --- Balances (broker-reported free balances, one row per running unit) --- #
+
+
+async def test_api_balances_running_unit_reports_broker_balances() -> None:
+    """`/api/balances` relays the running unit's own broker-reported balances.
+
+    Seeds the paper simulator's ledger directly (mirroring the leaf-02
+    mark-cache seeding technique) so the row is proven to come from
+    `Broker.balances()` itself, not the locally-tracked position — the whole
+    point of this endpoint (the positions<->balances cross-check seam).
+    """
+    sup = StrategySupervisor(_two_venue_config(), dccd_client=_two_venue_client())
+    await sup.start("btc-kraken")
+    unit = sup._units["btc-kraken"]  # noqa: SLF001 — direct broker seed, test-only
+    unit.engine.broker._balances.update(  # noqa: SLF001
+        {"USD": money("998"), "BTC": money("2")}
+    )
+
+    [row] = TestClient(create_dashboard_app(sup)).get("/api/balances").json()
+    assert row["strategy"] == "btc-kraken"
+    assert row["exchange"] == "kraken"
+    assert row["mode"] == "paper"
+    assert row["balances"] == {"USD": "998", "BTC": "2"}
+    assert row["error"] is None
+
+
+async def test_api_balances_stopped_unit_absent() -> None:
+    """A stopped unit contributes no row; empty list before anything starts."""
+    sup = StrategySupervisor(_two_venue_config(), dccd_client=_two_venue_client())
+    client = TestClient(create_dashboard_app(sup))
+    assert client.get("/api/balances").json() == []
+
+    await sup.start("btc-kraken")
+    sup._units["btc-kraken"].engine.broker._balances.update(  # noqa: SLF001
+        {"USD": money("100")}
+    )
+    rows = client.get("/api/balances").json()
+    assert {r["strategy"] for r in rows} == {"btc-kraken"}
+
+
+async def test_api_balances_strategy_filter() -> None:
+    """`?strategy=` narrows the balances rows to one unit, mirroring orders/fills."""
+    sup = StrategySupervisor(_two_venue_config(), dccd_client=_two_venue_client())
+    await sup.start("btc-kraken")
+    await sup.start("eth-binance")
+    sup._units["btc-kraken"].engine.broker._balances.update(  # noqa: SLF001
+        {"USD": money("100")}
+    )
+    sup._units["eth-binance"].engine.broker._balances.update(  # noqa: SLF001
+        {"USDT": money("200")}
+    )
+    client = TestClient(create_dashboard_app(sup))
+    rows = client.get("/api/balances?strategy=btc-kraken").json()
+    assert [r["strategy"] for r in rows] == ["btc-kraken"]
+
+
+async def test_api_balances_broker_error_degrades_to_error_row() -> None:
+    """A broker error is never a 500 — it degrades to an ``error`` row (poll-safe)."""
+    from trading_bot.domain.errors import BrokerError
+
+    sup = StrategySupervisor(_two_venue_config(), dccd_client=_two_venue_client())
+    await sup.start("btc-kraken")
+    unit = sup._units["btc-kraken"]  # noqa: SLF001 — direct broker patch, test-only
+
+    async def _boom() -> dict[str, object]:
+        raise BrokerError("kraken: rate limited")
+
+    unit.engine.broker.balances = _boom  # type: ignore[method-assign]
+
+    resp = TestClient(create_dashboard_app(sup)).get("/api/balances")
+    assert resp.status_code == 200
+    [row] = resp.json()
+    assert row["strategy"] == "btc-kraken"
+    assert row["balances"] == {}
+    assert row["error"] == "kraken: rate limited"
+
+
+# --- Epic-wide contract sweep (api-completeness leaf 04) ------------------- #
+
+
+async def test_api_completeness_contract_sweep(tmp_path) -> None:  # noqa: ANN001
+    """Every pre-existing field on the six read endpoints still holds, in one pass.
+
+    The additive-only proof for the whole `api-completeness` epic, right before
+    the API contract freeze (road-to-1.0 #5): `/api/strategies`, `/api/positions`
+    and `/api/kpi` each already have a dedicated, per-field contract-regression
+    test proving the leaf-02/03 additions never displaced a pre-existing field
+    (`test_api_positions_contract_regression`,
+    `test_api_strategies_display_fields_and_contract_regression`,
+    `test_api_kpi_display_fields_and_contract_regression` — test_display_ccy.py)
+    and `/api/health`'s shape is pinned by `test_health_shape_and_values` (above).
+    This sweep extends that established pattern to `/api/fills` and
+    `/api/orders` (untouched by any leaf, but still part of the frozen contract)
+    and exercises all six together against one running unit, so the whole
+    epic's additive-only guarantee is proven in a single place.
+    """
+    from trading_bot.domain.order import Order, OrderType
+    from trading_bot.storage.sqlite_store import SqliteStore
+
+    db = str(tmp_path / "book.sqlite")
+    inst = Instrument(Symbol("BTC", "USD"))
+    store = SqliteStore(db)
+    store.record_fill(
+        Fill(
+            "SWEEP-F1",
+            "sweep-c1",
+            inst,
+            OrderSide.BUY,
+            money("2"),
+            money("100"),
+            money("1"),
+            1,
+        )
+    )
+    store.close()
+    config = AppConfig.model_validate(
+        {
+            "mode": "paper",
+            "storage": {"db_path": db},
+            "brokers": [{"name": "kraken", "exchange": "kraken"}],
+            "strategies": [
+                {
+                    "name": "btc-ma",
+                    "symbol": "BTC/USD",
+                    "data": {"exchange": "kraken", "span": 60},
+                    "signal": {"ref": "ma_crossover", "params": {"fast": 3, "slow": 6}},
+                    "reference_qty": "2",
+                    "lookback": 6,
+                }
+            ],
+        }
+    )
+    sup = StrategySupervisor(config, dccd_client=_FakeStartClient())
+    await sup.start("btc-ma")
+    unit = sup._units["btc-ma"]  # noqa: SLF001 — direct seed, test-only
+    unit.engine.mark_cache.update(Symbol("BTC", "USD"), money("110"), 9_000)
+    # An open (non-terminal) order so `/api/orders` (default: open only) has a row.
+    unit.engine.router.restore(
+        [
+            Order(
+                "sweep-open-1",
+                inst,
+                OrderSide.BUY,
+                money("1"),
+                OrderType.LIMIT,
+                limit_price=money("90"),
+            )
+        ]
+    )
+
+    client = TestClient(create_dashboard_app(sup))
+
+    [strategy_row] = client.get("/api/strategies").json()
+    assert set(strategy_row) == {
+        "name",
+        "kind",
+        "exchange",
+        "span",
+        "quote",
+        "mode",
+        "running",
+        "realised_pnl",
+        "open_orders",
+        "last_eval_ts",
+        "last_asof_ts",
+        "allocation",
+        "contributed",
+        "unrealised",
+        "total_value",
+        "capital_policy",
+        "health",
+        "health_detail",
+        "display_currency",
+        "total_value_display",
+        "unrealised_display",
+    }
+
+    [position_row] = client.get("/api/positions").json()
+    assert set(position_row) == {
+        "strategy",
+        "exchange",
+        "instrument",
+        "base",
+        "net_qty",
+        "avg_entry_price",
+        "realised_pnl",
+        "fees_paid",
+        "mark",
+        "mark_asof_ts",
+        "mark_source",
+        "value",
+        "unrealised",
+        "fee_ccy",
+        "display_currency",
+        "value_display",
+        "unrealised_display",
+    }
+
+    [fill_row] = client.get("/api/fills").json()
+    assert set(fill_row) == {
+        "strategy",
+        "exchange",
+        "base",
+        "fill_id",
+        "client_order_id",
+        "instrument",
+        "side",
+        "qty",
+        "price",
+        "fee",
+        "ts",
+    }
+
+    [order_row] = client.get("/api/orders").json()
+    assert set(order_row) == {
+        "strategy",
+        "exchange",
+        "base",
+        "ts",
+        "client_order_id",
+        "venue_order_id",
+        "instrument",
+        "side",
+        "type",
+        "qty",
+        "limit_price",
+        "stop_price",
+        "status",
+        "filled_qty",
+        "avg_fill_price",
+        "reject_reason",
+    }
+
+    [kpi_row] = client.get("/api/kpi?level=strategy").json()
+    assert set(kpi_row) == {
+        "level",
+        "key",
+        "strategy",
+        "exchange",
+        "quote",
+        "realised_pnl",
+        "fees_paid",
+        "sharpe",
+        "sortino",
+        "calmar",
+        "max_drawdown",
+        "display_currency",
+        "realised_pnl_display",
+        "fees_paid_display",
+    }
+
+    health_body = client.get("/api/health").json()
+    assert set(health_body) == {
+        "status",
+        "mode",
+        "strategies",
+        "read_only",
+        "next_tick_ts",
+        "tick",
+        "worst",
+        "unhealthy",
+    }
 
 
 def test_orders_endpoint_present_and_empty() -> None:
@@ -1256,9 +1705,51 @@ def test_orders_page_has_tables_and_filters() -> None:
     # history read comes back at exactly the server's default ?limit= cap.
     assert 'id="orders-cap"' in html and "showing the most recent 200" in html
     assert 'id="fills-cap"' in html
-    # The Orders table's Time column (order date/time, this leaf) — mirrors the
-    # Fills table's own Time column.
-    assert html.count("<th>Time</th>") == 2  # one in Orders, one in Fills
+    # The Orders table's Time column (order date/time) — mirrors the Fills
+    # table's own Time column. Three occurrences since dashboard-tables-ux
+    # leaf 02: the Orders + Fills table headers, plus base.html's shared
+    # orderDetailHtml builder whose nested per-order fills table carries its
+    # own Time header inside the inline script.
+    assert html.count("<th>Time</th>") == 3
+
+
+def test_orders_page_orders_table_shows_execution_with_expandable_fills() -> None:
+    """The Orders page's orders table reads the execution blueprint, rows expandable.
+
+    Leaf 02 (dashboard-tables-ux): Qty | Filled % | Avg fill | Value replace the
+    bare Filled column; a row expands (the shared tbExpander) into that order's
+    fills joined by client_order_id from the fills payload the page already
+    fetches. The Strategy/Exchange tag columns stay — this is the cross-strategy
+    audit view (like the flat Fills table below it).
+    """
+    html = _client().get("/orders").text
+    assert '<th class="num">Filled %</th>' in html
+    assert '<th class="num">Avg fill</th>' in html
+    assert '<th class="num">Value</th>' in html
+    assert '<th class="num">Filled</th>' not in html  # the bare-qty column is gone
+    assert "<th>Strategy</th>" in html and "<th>Exchange</th>" in html
+    # The shared expandable-row helper, wired for the orders table (keyed by
+    # client_order_id) + the client-side fills join.
+    assert "tbExpander(document.getElementById('orders-body')" in html
+    assert "orderExpander.rowHtml(o.client_order_id" in html
+    assert "_fillsByOrder" in html
+
+
+def test_orders_page_fills_table_gains_order_and_value() -> None:
+    """The Orders page's flat fills view (audit) gains Order + Value columns.
+
+    Leaf 02 (dashboard-tables-ux): Order = the owning client_order_id truncated
+    to ~12 chars (the full id in the tooltip — the tie back to the order the
+    expansions key on); Value = qty × price (display-only arithmetic, exact
+    factors in the tooltip).
+    """
+    html = _client().get("/orders").text
+    assert "<th>Order</th>" in html
+    # Value appears twice: once in the orders table, once in the fills table.
+    assert html.count('<th class="num">Value</th>') == 2
+    assert "function orderIdCell" in html  # truncation, full id in tooltip
+    assert "slice(0, 12)" in html
+    assert "function fillValueCell" in html  # qty × price
 
 
 def test_logs_page_has_feed_and_subscribes_to_sse() -> None:
@@ -1311,6 +1802,57 @@ def test_overview_page_has_kpi_strip_and_tables() -> None:
     assert "/api/events" in html
     assert "/api/positions" in html
     assert "/api/kpi" in html
+
+
+def test_overview_positions_table_is_asset_first_with_expandable_rows() -> None:
+    """The overview positions table reads asset-first with expandable rows.
+
+    Leaf 01 (dashboard-tables-ux): Asset | Qty | Avg entry | Price (as-of) |
+    Value | Unrealised | Realised (net) — plus Strategy/Exchange on this
+    (overview) variant, matching the existing grouping behaviour (Strategy
+    dropped when grouped by strategy; Exchange always shown).
+    """
+    html = _client().get("/").text
+    assert "<th>Asset</th>" in html
+    assert '<th class="num">Qty</th>' in html
+    assert '<th class="num">Avg entry</th>' in html
+    assert "Price <span" in html and "(as-of)" in html
+    assert '<th class="num">Value</th>' in html
+    assert '<th class="num">Unrealised</th>' in html
+    assert '<th class="num">Realised (net)</th>' in html
+    assert "Net qty" not in html  # the old column header is gone
+    # The shared expandable-row helper, wired for this table (keyed by
+    # strategy+exchange+instrument — positions are never merged across units).
+    assert "tbExpander(document.getElementById('positions-body')" in html
+    assert "posExpander.rowHtml(positionKey(r)" in html
+    assert "function positionDetailHtml" in html
+    # Value/Unrealised prefer the display-currency conversion when present.
+    assert "value_display" in html
+    assert "unrealised_display" in html
+    assert "display_currency" in html
+
+
+def test_overview_open_orders_shows_execution_columns_without_expansion() -> None:
+    """The overview's open-orders table gains the execution columns, rows plain.
+
+    Leaf 02 (dashboard-tables-ux): Filled % | Avg fill | Value via base.html's
+    shared cell builders, keeping the Strategy/Exchange tags. No row expansion
+    on THIS surface: the expanded panel's content is the order's fills and the
+    overview does not fetch /api/fills — a per-refresh fills fetch solely for
+    an optional affordance is disproportionate, and a fills-less panel would
+    fork the shared detail builder. The Orders page carries the full expansion.
+    """
+    html = _client().get("/").text
+    assert '<th class="num">Filled %</th>' in html
+    assert '<th class="num">Avg fill</th>' in html
+    assert '<th class="num">Filled</th>' not in html  # the bare-qty column is gone
+    # The shared execution cells are used by the row renderer (the call sites,
+    # not just base.html's `function ...` definitions)...
+    assert "+ orderFilledPctCell(o) +" in html
+    assert "+ orderValueCell(o) +" in html
+    # ...but the orders tbody is NOT wired to the expander (positions still is).
+    assert "tbExpander(document.getElementById('orders-body')" not in html
+    assert "tbExpander(document.getElementById('positions-body')" in html
 
 
 async def _never_disconnect() -> dict[str, object]:
@@ -1617,9 +2159,14 @@ def test_strategies_page_is_a_linked_roster() -> None:
     # Rows link to the per-strategy detail page (client-rendered in the roster JS).
     assert 'href="/strategies/' in html
     assert "strat-link" in html
-    # The kept roster columns (cadence / next-bar / last-eval), plus the stamp.
+    # The kept roster columns (cadence / bar-timing / last-eval), plus the stamp.
+    # "Next bar" retired (leaf 03, dashboard-tables-ux) — the epoch-aligned
+    # guess had no relation to the real cadence; "Bar timing" replaces it with
+    # the honest last_asof_ts-derived chip (see test_strategies_roster_...
+    # _bar_timing_chip_hook below).
     assert "<th>Cadence</th>" in html
-    assert "<th>Next bar</th>" in html
+    assert "<th>Bar timing</th>" in html
+    assert "<th>Next bar</th>" not in html
     assert "<th>Last eval</th>" in html
     # The condensed Total-value column (leaf 08) — replaces nothing; Realised
     # PnL stays alongside it so the same numbers read at every altitude.
@@ -1641,6 +2188,18 @@ def test_strategies_roster_carries_the_health_pill_hook() -> None:
     """
     html = _client().get("/strategies").text
     assert "healthPillHtml(s)" in html
+
+
+def test_strategies_roster_carries_the_bar_timing_chip_hook() -> None:
+    """The roster's row renderer calls the shared bar-timing chip helper (leaf 03).
+
+    Placed in the "Bar timing" column that replaced "Next bar" — the old
+    `nextBarCell()` / `tbTime.nextBarCloseMs()` hooks are gone from the page.
+    """
+    html = _client().get("/strategies").text
+    assert "barTimingChipHtml(s)" in html
+    assert "nextBarCell" not in html
+    assert "nextBarCloseMs" not in html
 
 
 def test_strategies_page_read_only_note_and_no_deploy_link() -> None:

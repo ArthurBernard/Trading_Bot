@@ -394,6 +394,190 @@ async def test_positions_carry_strategy_and_exchange_tags() -> None:
     assert row.net_qty == money("3")
 
 
+# --- position rows: mark / value / unrealised / fee_ccy (api-completeness 02) -- #
+
+
+async def test_position_row_mark_from_cache() -> None:
+    """A cached bar-close mark prices the row: ``value``/``unrealised`` exact, short-safe.
+
+    A SHORT (a SELL when flat) with the mark cache above the entry loses money —
+    the arithmetic must mirror :meth:`StrategySupervisor._unrealised_of` exactly
+    (never the naive long-only sign).
+    """
+    pytest.importorskip("fynance")
+    sup = _supervisor()
+    await sup.start("btc-ma")
+    unit = sup._units["btc-ma"]  # noqa: SLF001
+    inst = Instrument(Symbol("BTC", "USD"))
+    unit.engine.bus.emit(  # noqa: SLF001 — seed a short directly on the engine bus
+        FillEvent(
+            Fill(
+                "F1",
+                "c1",
+                inst,
+                OrderSide.SELL,
+                money("3"),
+                money("100"),
+                money("0"),
+                1,
+            )
+        )
+    )
+    unit.engine.mark_cache.update(Symbol("BTC", "USD"), money("90"), 5_000)
+
+    [row] = sup.positions()
+    assert row.mark == money("90")
+    assert row.mark_asof_ts == 5_000
+    assert row.mark_source == "bar_close"
+    assert row.value == money("270")  # 90 * |−3|
+    # Short entered at 100, marked at 90 (price dropped) → the short profits.
+    assert row.unrealised == money("30")  # (90 − 100) * −3
+
+
+async def test_position_row_falls_back_to_last_fill(tmp_path) -> None:  # noqa: ANN001
+    """No mark-cache entry for the symbol → the row falls back to the last own fill."""
+    pytest.importorskip("fynance")
+    db = str(tmp_path / "book.sqlite")
+    sup = await _started_alloc_unit(db, allocation="1000")
+    unit = sup._units["btc-ma"]  # noqa: SLF001
+    inst = Instrument(Symbol("BTC", "USD"))
+    unit.engine.bus.emit(  # noqa: SLF001
+        FillEvent(
+            Fill(
+                "F1",
+                "c1",
+                inst,
+                OrderSide.BUY,
+                money("2"),
+                money("100"),
+                money("1"),
+                42,
+            )
+        )
+    )
+    # No mark_cache.update() call — the cache holds nothing for BTC/USD.
+
+    [row] = sup.positions()
+    assert row.mark == money("100")
+    assert row.mark_asof_ts == 42
+    assert row.mark_source == "last_fill"
+    assert row.value == money("200")
+    assert row.unrealised == money("0")  # mark == avg_entry_price
+
+
+async def test_position_row_no_mark_is_null() -> None:
+    """No cache entry and no reachable fill history → mark/value/unrealised null, no crash."""
+    pytest.importorskip("fynance")
+    sup = _supervisor()  # no storage db_path configured
+    await sup.start("btc-ma")
+    unit = sup._units["btc-ma"]  # noqa: SLF001
+    inst = Instrument(Symbol("BTC", "USD"))
+    unit.engine.bus.emit(  # noqa: SLF001
+        FillEvent(
+            Fill(
+                "F1", "c1", inst, OrderSide.BUY, money("2"), money("100"), money("1"), 1
+            )
+        )
+    )
+    # The bus-emitted fill lands in the tracker but the unit has no store, so it is
+    # unreachable via `_stored_fills_of` — and the mark cache was never populated.
+
+    [row] = sup.positions()
+    assert row.mark is None
+    assert row.mark_asof_ts is None
+    assert row.mark_source is None
+    assert row.value is None
+    assert row.unrealised is None
+    # The position itself is unaffected — only the mark-derived fields go null.
+    assert row.net_qty == money("2")
+    assert row.avg_entry_price == money("100")
+
+
+async def test_fee_ccy_is_quote() -> None:
+    """``fee_ccy`` is the instrument's quote asset (fees are charged in quote terms)."""
+    pytest.importorskip("fynance")
+    cfg = AppConfig.model_validate(
+        {
+            "mode": "paper",
+            "brokers": [{"name": "kraken", "exchange": "kraken"}],
+            "strategies": [
+                {
+                    "name": "eth-btc",
+                    "symbol": "ETH/BTC",
+                    "data": {"exchange": "kraken", "span": 60},
+                    "signal": {"ref": "ma_crossover", "params": {"fast": 3, "slow": 6}},
+                    "reference_qty": "2",
+                    "lookback": 6,
+                }
+            ],
+        }
+    )
+    sup = StrategySupervisor(
+        cfg, dccd_client=_FakeDccdClient({"ETH/BTC": _dccd_ohlc(_trend())})
+    )
+    await sup.start("eth-btc")
+    inst = Instrument(Symbol("ETH", "BTC"))
+    sup._units["eth-btc"].engine.bus.emit(  # noqa: SLF001
+        FillEvent(
+            Fill(
+                "F1",
+                "c1",
+                inst,
+                OrderSide.BUY,
+                money("1"),
+                money("0.05"),
+                money("0"),
+                1,
+            )
+        )
+    )
+    [row] = sup.positions()
+    assert row.base == "ETH"
+    assert row.fee_ccy == "BTC"
+
+
+async def test_aggregate_and_row_agree() -> None:
+    """The strategy-aggregate ``unrealised`` equals Σ row ``unrealised`` — one mark policy.
+
+    Two instruments (a long and a short) on the same unit, both marked from the
+    cache: :meth:`StrategySupervisor._unrealised_of` (the roster aggregate) and
+    :meth:`StrategySupervisor.positions` (the per-row figures) must never diverge.
+    """
+    pytest.importorskip("fynance")
+    sup = _supervisor()
+    await sup.start("btc-ma")
+    unit = sup._units["btc-ma"]  # noqa: SLF001
+    btc = Instrument(Symbol("BTC", "USD"))
+    eth = Instrument(Symbol("ETH", "USD"))
+    unit.engine.bus.emit(  # noqa: SLF001
+        FillEvent(
+            Fill(
+                "F1", "c1", btc, OrderSide.BUY, money("2"), money("100"), money("0"), 1
+            )
+        )
+    )
+    unit.engine.bus.emit(  # noqa: SLF001
+        FillEvent(
+            Fill(
+                "F2", "c2", eth, OrderSide.SELL, money("1"), money("50"), money("0"), 1
+            )
+        )
+    )
+    unit.engine.mark_cache.update(Symbol("BTC", "USD"), money("110"), 1_000)
+    unit.engine.mark_cache.update(Symbol("ETH", "USD"), money("55"), 1_000)
+
+    rows = sup.positions()
+    by_base = {row.base: row for row in rows}
+    assert by_base["BTC"].unrealised == money("20")  # (110 − 100) * 2
+    assert by_base["ETH"].unrealised == money("-5")  # (55 − 50) * −1
+
+    row_total = sum(
+        (row.unrealised for row in rows if row.unrealised is not None), money("0")
+    )
+    status = sup.status("btc-ma")[0]
+    assert status.unrealised == row_total == money("15")
+
+
 async def test_open_orders_carry_strategy_and_exchange_tags() -> None:
     """`open_orders()` rows are tagged with strategy + exchange across the units."""
     pytest.importorskip("fynance")

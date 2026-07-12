@@ -97,48 +97,33 @@ order — none started yet, each is a `/pick-task` candidate:
    200-row tail + server timestamps on snapshot endpoints, then the public
    contract is declared stable — 0.x-style breaking removals end at 1.0.
 
-## UI consistency & accounting integrity (2026-07-11)
+## UI consistency & accounting integrity (2026-07-11) — SHIPPED
 
 A dashboard-driven audit (position ≠ Σ orders on `alloc1-binance`) uncovered two
-engine bugs and a set of API/UX gaps. Shipped 2026-07-11 (plan trees archived):
-the `paper-integrity` epic (durable paper ids, order↔fill lifecycle sync,
-persisted orphan-closes — PRs #190–#194, v0.12.0; restart the daemon to heal
-the live books), the `accounting-guardrail` epic (pure invariant checker,
-startup + 60 s-TTL wiring with SSE alerts, per-strategy health surface incl.
-the kill-switch fold — the *status* half of road-to-1.0 #3 — and the dashboard
-health pill; PRs #197–#201), and the `venue-minimums` epic (keyless cached
-spec resolver, round-up-or-skip order prep with the spot-sell cap, strict
-factory paper — PRs #203–#206; sub-minimum orders are structurally
-impossible on the portfolio path). In dependency order:
+engine bugs and a set of API/UX gaps. **All six epics shipped 2026-07-11/12**
+(plan trees archived; details in `06-status.md`, decisions in `03-decisions.md`):
 
-4. [ ] **`api-completeness` — API exposes what the app layer knows.** Per-
-   position mark price (v1 = last dccd bar close, always with its `asof` ts;
-   live ticker is post-1.0), value + unrealised PnL per position; display
-   currency (global default + per-exchange override, static conversion rates);
-   `/api/balances`; `fee_ccy`; `last_asof_ts` on every surface. Must land
-   before the API contract freeze (road-to-1.0 #5).
-5. [ ] **`dashboard-tables-ux` — tables redesign.** Positions keyed by asset
-   (not pair) with value/mark/unrealised as primary columns; expandable rows
-   for secondary detail (fills under their order, ids, fee breakdown —
-   expanded state survives the SSE re-render); fills demoted to order detail
-   (flat audit view stays on the Orders page); "last bar → next bar" timing
-   chip; timezone affordance.
-6. [ ] **`canary-roundtrip` — deterministic self-test strategy.** A minimal
-   round-trip canary run as its own strategy unit with its own tiny ledger
-   (~10 USDT): **sequential** market buy *x* then sell *x* (never simultaneous
-   — self-trade prevention would make it non-deterministic), plus two free
-   probes: a far-off-limit **cancel** (the real kill-switch path) and a
-   client-order-id **idempotency** re-submit. Two oracles: **paper** = exact
-   Decimal equality against the precomputed expectation (PnL = −2·fees, flat
-   position, terminal orders — CI-runnable, per release); **live** = exact
-   *accounting identity* (our fills/balances == venue-reported) + **bounded**
-   total cost (≤ 1–2 EUR) — never a precomputed absolute PnL (spread/drift are
-   not deterministic). Cadence: paper per release; testnet at will; live once
-   per venue at go-live + after any broker-adapter change. Depends on #1
-   (order lifecycle) + #2 (health surface for the pass/fail report) + #3
-   (venue minimums; Binance BNB-fee discount must be off or modeled). The live
-   canary is the validation vehicle for **Road to v1.0.0 #1** (real-key
-   enablement: venue idempotency, real cancel, balance reconciliation).
+1. `paper-integrity` — durable paper ids, order↔fill lifecycle sync, persisted
+   orphan-closes (PRs #190–#194, **v0.12.0**).
+2. `accounting-guardrail` — pure invariant checker, startup + 60 s-TTL wiring
+   with SSE alerts, per-strategy health surface incl. the kill-switch fold
+   (the *status* half of road-to-1.0 #3), dashboard health pill
+   (PRs #197–#201, **v0.13.0**).
+3. `venue-minimums` — keyless cached spec resolver, round-up-or-skip order
+   prep with the spot-sell cap, strict factory paper (PRs #203–#206,
+   **v0.13.0**).
+4. `api-completeness` — mark cache + bar-close marks with mandatory as-of,
+   value/unrealised/`fee_ccy` per position, server-side display currency,
+   `GET /api/balances`, additive-only contract sweep — ready for the
+   road-to-1.0 #5 freeze (PRs #209–#214).
+5. `dashboard-tables-ux` — asset-first positions, shared expandable rows,
+   orders with Filled %/Value + fills as expanded detail, honest bar-timing
+   chip, timezone + filtered empty states (PRs #215–#219).
+6. `canary-roundtrip` — deterministic self-test (`trading-bot canary`):
+   probes + round-trip, exact paper oracle, venue identity oracle **proven
+   16/16 on real Binance testnet**; the live canary is the named validation
+   vehicle for road-to-1.0 #1 (PRs #221–#223; found `Fill.fee_asset` and the
+   Binance HTTP-400 mapping along the way).
 
 ## Not gating 1.0 (post-1.0 candidates)
 

@@ -44,6 +44,7 @@ from typing import TYPE_CHECKING, Literal, cast
 from trading_bot.application.accounting import Violation, check_book
 from trading_bot.application.capital_service import CapitalService
 from trading_bot.application.events import EventBus, LogEvent
+from trading_bot.application.mark_cache import Mark
 from trading_bot.application.pnl_series import by_mode, equity_series
 from trading_bot.application.reconcile import reconcile
 from trading_bot.application.run_app import build_portfolio_runners, build_runners
@@ -54,6 +55,7 @@ from trading_bot.domain.capital import (
     contributed_capital,
 )
 from trading_bot.domain.errors import (
+    BrokerError,
     ConfigError,
     LiveCapitalOpsDeferred,
     LiveTradingNotEnabled,
@@ -86,6 +88,7 @@ if TYPE_CHECKING:
     from trading_bot.storage.sqlite_store import StoredFill
 
 __all__ = [
+    "BalanceRow",
     "FillRow",
     "KpiLevel",
     "KpiRow",
@@ -251,6 +254,28 @@ class PositionRow:
         The position's realised PnL, net of fees (exact).
     fees_paid : Money
         The position's cumulative fees (exact).
+    mark : Money or None
+        The instrument's current mark under the pinned policy (see
+        :meth:`StrategySupervisor._mark_of`): the engine's
+        :class:`~trading_bot.application.mark_cache.MarkCache` bar close when one
+        exists, else the last-known own-fill price (``mark_source`` says which).
+        ``None`` when neither exists.
+    mark_asof_ts : int or None
+        Epoch ms the mark's data is *of* — the dccd bar's asof for a
+        ``"bar_close"`` mark, the fill's ``ts`` for a ``"last_fill"`` one. Always
+        carried alongside a non-``None`` ``mark`` (never a stale price with no
+        timestamp); ``None`` iff ``mark`` is ``None``.
+    mark_source : {"bar_close", "last_fill"} or None
+        How ``mark`` was derived; ``None`` iff ``mark`` is ``None``.
+    value : Money or None
+        ``mark * |net_qty|`` — the exposure's current worth in quote terms.
+        ``None`` when ``mark`` is ``None``.
+    unrealised : Money or None
+        ``(mark - avg_entry_price) * net_qty`` — sign-correct for a short (mirrors
+        :meth:`StrategySupervisor._unrealised_of`'s arithmetic). ``None`` when
+        ``mark`` or ``avg_entry_price`` is ``None``.
+    fee_ccy : str
+        The instrument's quote asset (fees are charged in quote terms).
 
     """
 
@@ -262,6 +287,12 @@ class PositionRow:
     avg_entry_price: Money | None
     realised_pnl: Money
     fees_paid: Money
+    mark: Money | None = None
+    mark_asof_ts: int | None = None
+    mark_source: Literal["bar_close", "last_fill"] | None = None
+    value: Money | None = None
+    unrealised: Money | None = None
+    fee_ccy: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -328,6 +359,48 @@ class FillRow:
     exchange: str
     base: str
     fill: Fill
+
+
+@dataclass(frozen=True, slots=True)
+class BalanceRow:
+    """One running unit's broker-reported free balances, tagged strategy + venue.
+
+    The supervisor-level view of :meth:`~trading_bot.brokers.base.Broker.balances`
+    for a single unit — the venue's *own* view of what it holds, as opposed to the
+    locally-tracked :class:`PositionRow` exposure. This is the prerequisite seam
+    for the positions<->balances cross-check (an accounting-guardrail extension:
+    comparing the tracker's net exposure against what the broker actually reports)
+    and the canary-roundtrip live oracle (roadmap #6, a deterministic round-trip
+    strategy that proves the whole chain against a real venue) — both need the
+    broker's own balances, not just what the engine believes it holds.
+
+    Attributes
+    ----------
+    strategy : str
+        The managed unit this balance snapshot belongs to.
+    exchange : str
+        The venue the unit runs on.
+    mode : StrategyMode
+        The unit's deployment mode (``"paper"``, ``"testnet"`` or ``"live"``) —
+        which broker instance ``balances`` came from.
+    balances : dict of str to Money
+        Free balance per canonical asset code (exact :class:`~decimal.Decimal`),
+        as reported by :meth:`~trading_bot.brokers.base.Broker.balances`. Empty
+        when ``error`` is set (the broker call failed).
+    error : str or None
+        ``None`` on a successful fetch. Set to the broker's error message when
+        :meth:`~trading_bot.brokers.base.Broker.balances` raised
+        :class:`~trading_bot.domain.errors.BrokerError` — the row still surfaces
+        (never a 500) so the dashboard can poll safely through a transient venue
+        outage.
+
+    """
+
+    strategy: str
+    exchange: str
+    mode: StrategyMode
+    balances: dict[str, Money]
+    error: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -1340,6 +1413,33 @@ class StrategySupervisor:
         return marks
 
     @staticmethod
+    def _mark_of(unit: _Unit, instrument: Instrument, fills: list[Fill]) -> Mark | None:
+        """``instrument``'s current mark, under the pinned policy (api-completeness).
+
+        Prefers the running unit's :class:`~trading_bot.application.mark_cache.
+        MarkCache` (the last dccd bar close the strategy evaluated on — see
+        ``doc/dev/plans/api-completeness/00-plan.md``); when the cache holds
+        nothing for the instrument's :class:`~trading_bot.domain.instrument.Symbol`
+        (e.g. a symbol the runner has not ticked since restart), falls back to the
+        instrument's last-known price in ``fills`` (``mark_source="last_fill"``,
+        timestamped with that fill's ``ts``). ``None`` when neither exists. This is
+        the one mark policy shared by :meth:`positions` (the per-row mark) and
+        :meth:`_unrealised_of` (the strategy-aggregate mark) so the two always
+        agree.
+        """
+        if unit.running and unit.engine is not None:
+            cached = unit.engine.mark_cache.get(instrument.symbol)
+            if cached is not None:
+                return cached
+        last_fill: Fill | None = None
+        for fill in fills:
+            if fill.instrument == instrument:
+                last_fill = fill
+        if last_fill is None:
+            return None
+        return Mark(price=last_fill.price, asof_ms=last_fill.ts, source="last_fill")
+
+    @staticmethod
     def _committed_value(unit: _Unit, marks: dict[Instrument, Money]) -> Money:
         """Capital committed to the running unit's open positions (``Σ |net_qty| × mark``).
 
@@ -1580,6 +1680,13 @@ class StrategySupervisor:
         in-memory read (money exact :class:`~decimal.Decimal`); stopped units and
         flat books contribute nothing. Empty when no unit is running.
 
+        Each row is also marked (:meth:`_mark_of`'s pinned policy: the engine's
+        bar-close :class:`~trading_bot.application.mark_cache.MarkCache`, else the
+        last own-fill price), carrying its ``value`` (``mark * |net_qty|``) and
+        ``unrealised`` (``(mark - avg_entry_price) * net_qty``) — both ``None``
+        when unmarked, mirroring :meth:`_unrealised_of`'s arithmetic so the
+        strategy aggregate always equals the row sum.
+
         Returns
         -------
         list of PositionRow
@@ -1590,8 +1697,17 @@ class StrategySupervisor:
         rows: list[PositionRow] = []
         for unit in self._running_units():
             assert unit.engine is not None
+            stored = self._stored_fills_of(unit)
+            mode_fills = by_mode(stored).get(unit.mode, [])
             positions = unit.engine.tracker.all_positions()
             for position in positions.values():
+                mark = self._mark_of(unit, position.instrument, mode_fills)
+                value = mark.price * abs(position.net_qty) if mark is not None else None
+                unrealised = (
+                    (mark.price - position.avg_entry_price) * position.net_qty
+                    if mark is not None and position.avg_entry_price is not None
+                    else None
+                )
                 rows.append(
                     PositionRow(
                         strategy=unit.name,
@@ -1602,8 +1718,67 @@ class StrategySupervisor:
                         avg_entry_price=position.avg_entry_price,
                         realised_pnl=position.realised_pnl,
                         fees_paid=position.fees_paid,
+                        mark=mark.price if mark is not None else None,
+                        mark_asof_ts=mark.asof_ms if mark is not None else None,
+                        mark_source=mark.source if mark is not None else None,
+                        value=value,
+                        unrealised=unrealised,
+                        fee_ccy=position.instrument.symbol.quote,
                     )
                 )
+        return rows
+
+    async def balances(self) -> list[BalanceRow]:
+        """Every running unit's broker-reported free balances, tagged strategy + venue.
+
+        Across every **running** unit, awaits
+        :meth:`~trading_bot.brokers.base.Broker.balances` on its own engine's
+        broker (the paper simulator's seeded book, or the real venue adapter on
+        testnet/live) and wraps the result in a :class:`BalanceRow`. A stopped
+        unit contributes nothing (mirroring :meth:`positions`); a broker call that
+        raises :class:`~trading_bot.domain.errors.BrokerError` degrades that one
+        unit's row to an empty ``balances`` dict plus its ``error`` message rather
+        than propagating — a transient venue outage must never break the whole
+        collection, and the caller (the dashboard's poll loop) needs a row to show
+        per unit either way.
+
+        This is the prerequisite seam for the positions<->balances cross-check
+        (an accounting-guardrail extension comparing the tracker's net exposure
+        against what the venue itself reports) and the canary-roundtrip live
+        oracle (roadmap #6) — both read the broker's own view through this method,
+        never the locally-tracked positions.
+
+        Returns
+        -------
+        list of BalanceRow
+            One row per running unit, in unit order. Empty when no unit is
+            running.
+
+        """
+        rows: list[BalanceRow] = []
+        for unit in self._running_units():
+            assert unit.engine is not None
+            try:
+                balances = await unit.engine.broker.balances()
+            except BrokerError as exc:
+                rows.append(
+                    BalanceRow(
+                        strategy=unit.name,
+                        exchange=unit.exchange,
+                        mode=unit.mode,
+                        balances={},
+                        error=str(exc),
+                    )
+                )
+                continue
+            rows.append(
+                BalanceRow(
+                    strategy=unit.name,
+                    exchange=unit.exchange,
+                    mode=unit.mode,
+                    balances=balances,
+                )
+            )
         return rows
 
     def open_orders(self) -> list[OrderRow]:
@@ -2169,25 +2344,26 @@ class StrategySupervisor:
         """Best-effort mark-to-market of the running unit's open book, in ``mode``.
 
         The running engine's tracker holds the net open positions; each is marked
-        against the **last-known fill price** for its instrument in ``mode``'s
-        stream (``(mark - avg_entry) * net_qty``) — a fully in-memory,
-        non-network last-known mark (continuous MTM history is out of scope). The
-        book is meaningful only for the unit's **current** mode (the tracker was
-        built for it), so a non-current mode marks to ``None``. ``None`` too when
-        the unit is stopped, flat, or has no priced instrument.
+        via :meth:`_mark_of` — the engine's bar-close
+        :class:`~trading_bot.application.mark_cache.MarkCache` preferred, else the
+        **last-known fill price** for its instrument in ``mode``'s stream
+        (``(mark - avg_entry) * net_qty``) — the same one mark policy
+        :meth:`positions` rows use, so the roster's aggregate always equals the
+        row sum. The book is meaningful only for the unit's **current** mode (the
+        tracker was built for it), so a non-current mode marks to ``None``.
+        ``None`` too when the unit is stopped, flat, or has no priced instrument.
         """
-        if not unit.running or unit.engine is None or mode != unit.mode or not fills:
+        if not unit.running or unit.engine is None or mode != unit.mode:
             return None
-        last_price = StrategySupervisor._mark_map(fills)
         unrealised: Money = _ZERO
         marked = False
         for position in unit.engine.tracker.all_positions().values():
             if position.is_flat or position.avg_entry_price is None:
                 continue
-            mark = last_price.get(position.instrument)
+            mark = StrategySupervisor._mark_of(unit, position.instrument, fills)
             if mark is None:
                 continue
-            unrealised += (mark - position.avg_entry_price) * position.net_qty
+            unrealised += (mark.price - position.avg_entry_price) * position.net_qty
             marked = True
         return unrealised if marked else None
 

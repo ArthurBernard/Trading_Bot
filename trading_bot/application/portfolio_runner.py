@@ -133,6 +133,7 @@ if TYPE_CHECKING:
     import polars as pl
 
     from trading_bot.application.instrument_specs import InstrumentSpecResolver
+    from trading_bot.application.mark_cache import MarkCache
     from trading_bot.application.order_router import OrderRouter
     from trading_bot.application.portfolio import PortfolioStrategy
     from trading_bot.application.position_tracker import PositionTracker
@@ -296,6 +297,16 @@ class PortfolioRunner:
         the binding minimum, in ``(0, 1]`` (see
         :class:`~trading_bot.application.config.PortfolioStrategyConfig`).
         Defaults to ``0.5``. Only consulted when ``spec_resolver`` is given.
+    mark_cache : MarkCache or None, optional
+        The engine's per-symbol mark cache (see
+        :class:`~trading_bot.application.mark_cache.MarkCache`,
+        :attr:`~trading_bot.application.service_factory.Engine.mark_cache`).
+        When given, every rebalance publishes each traded symbol's latest
+        close and this tick's as-of into it — the same values the tick sizes
+        against and stamps on its signals — so the API layer can read a
+        strategy's current mark without any I/O of its own (see
+        ``doc/dev/plans/api-completeness/00-plan.md``). ``None`` (default)
+        publishes nothing (the legacy path, byte-for-byte unchanged).
 
     Examples
     --------
@@ -318,6 +329,7 @@ class PortfolioRunner:
         spec_resolver: InstrumentSpecResolver | None = None,
         exchange: str | None = None,
         min_order_ratio: Money = money("0.5"),
+        mark_cache: MarkCache | None = None,
     ) -> None:
         if spec_resolver is not None and (exchange is None or not exchange.strip()):
             raise ValueError(
@@ -340,6 +352,7 @@ class PortfolioRunner:
         self._spec_resolver = spec_resolver
         self._exchange = exchange
         self._min_order_ratio = min_order_ratio
+        self._mark_cache = mark_cache
         # One degraded-resolver warning per runner (= unit) lifetime — see the
         # module docstring's venue-minimum section.
         self._spec_degraded_warned = False
@@ -479,6 +492,13 @@ class PortfolioRunner:
 
         asof = self._derive_asof_ms(frames)
         prices = self._latest_closes(frames)
+        if self._mark_cache is not None:
+            # Publish this tick's marks before anything else touches ``prices``:
+            # the same closes the sizing below reads and the same ``asof`` this
+            # tick's signals are stamped with (see MarkCache's module docstring
+            # for the sharing discipline — a plain dict, latest-write-wins).
+            for symbol, close in prices.items():
+                self._mark_cache.update(symbol, close, asof)
         weights = self._strategy.signal_fn(asof, frames)
 
         # Universe-complete: cover every coin, defaulting an omitted one to a

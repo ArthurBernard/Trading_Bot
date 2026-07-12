@@ -58,6 +58,7 @@ from typing import Protocol, runtime_checkable
 from trading_bot.application.config import AppConfig, BrokerConfig
 from trading_bot.application.events import EventBus
 from trading_bot.application.instrument_specs import InstrumentSpecResolver
+from trading_bot.application.mark_cache import MarkCache
 from trading_bot.application.order_fill_sync import OrderFillSync
 from trading_bot.application.order_router import OrderRouter
 from trading_bot.application.performance_service import PerformanceService
@@ -68,6 +69,11 @@ from trading_bot.brokers.binance import TESTNET_API_BASE, BinanceBroker
 from trading_bot.brokers.kraken import KrakenBroker
 from trading_bot.brokers.paper import PaperBroker
 from trading_bot.domain.errors import BrokerError, LiveTradingNotEnabled
+from trading_bot.domain.instrument import (
+    Symbol,
+    parse_binance_symbol,
+    parse_kraken_pair,
+)
 from trading_bot.domain.money import Money
 from trading_bot.storage.sqlite_store import SqliteStore
 
@@ -149,6 +155,13 @@ class Engine:
         exactly as long as the engine does. Threaded into the portfolio runners
         (:func:`~trading_bot.application.run_app.build_portfolio_runners`) so
         every rebalance leg is prepared against the venue's real minimums.
+    mark_cache : MarkCache
+        The engine's per-symbol mark cache — one per engine (so, under the
+        supervisor, one per unit), living exactly as long as the engine does.
+        The portfolio runner publishes every rebalance's per-symbol closes here
+        (:func:`~trading_bot.application.run_app.build_portfolio_runners`); the
+        API layer will read it (leaf 02) without any I/O of its own — see
+        :mod:`~trading_bot.application.mark_cache`.
 
     """
 
@@ -166,6 +179,7 @@ class Engine:
     spec_resolver: InstrumentSpecResolver = field(
         default_factory=InstrumentSpecResolver
     )
+    mark_cache: MarkCache = field(default_factory=MarkCache)
 
 
 def build_engine(
@@ -265,6 +279,11 @@ def build_engine(
         # die with the engine. Constructed here, the single wiring point, and
         # threaded to the portfolio runners by build_portfolio_runners.
         spec_resolver=InstrumentSpecResolver(),
+        # One mark cache per engine (= per supervised unit), same lifetime
+        # discipline as spec_resolver above: constructed here and threaded to
+        # the portfolio runners by build_portfolio_runners, which publish every
+        # rebalance's per-symbol closes into it.
+        mark_cache=MarkCache(),
     )
 
 
@@ -361,6 +380,10 @@ def _build_broker(config: AppConfig, bus: EventBus) -> Broker:
             event_bus=bus,
             clock=lambda: int(time.time() * 1000),
             strict=config.paper_strict,
+            # Explicit funding seam (paper simulators start unfunded): thread
+            # `paper_starting_balances` so a factory-built paper engine — e.g.
+            # the canary's — can be funded declaratively. Empty by default.
+            starting_balances=config.paper_starting_balances,
         )
 
     # Testnet path: a venue's sandbox (paper money on the real testnet venue). The
@@ -370,7 +393,7 @@ def _build_broker(config: AppConfig, bus: EventBus) -> Broker:
     # broker is what opts in; a venue with no testnet raises.
     first: BrokerConfig | None = config.brokers[0] if config.brokers else None
     if first is not None and first.testnet:
-        broker = _build_testnet_venue(venue)
+        broker = _build_testnet_venue(venue, symbols=_broker_symbols(first, venue))
         if not broker.has_credentials:
             raise BrokerError(
                 f"testnet for venue {venue!r} requires credentials; set the "
@@ -394,7 +417,7 @@ def _build_broker(config: AppConfig, bus: EventBus) -> Broker:
     # Opt-in is set: build the real adapter, but only if it can actually trade.
     # Never silently downgrade to paper.
     if venue in _LIVE_VENUES:
-        broker = _build_live_venue(venue)
+        broker = _build_live_venue(venue, symbols=_broker_symbols(first, venue))
         if not broker.has_credentials:
             raise BrokerError(
                 f"live mode requires credentials for venue {venue!r}; "
@@ -462,8 +485,39 @@ def _selected_venue(config: AppConfig) -> str:
     return first.exchange.lower()
 
 
-def _build_live_venue(venue: str) -> _LiveBroker:
-    """Construct the live adapter for ``venue`` (reads credentials from env)."""
+def _broker_symbols(first: BrokerConfig | None, venue: str) -> tuple[Symbol, ...]:
+    """Parse the selected broker's declared ``symbols`` into canonical pairs.
+
+    ``BrokerConfig.symbols`` entries are free-form venue pair strings
+    (``"BTC/USDT"``, ``"BTCUSDT"``, a Kraken legacy pair, ...); each is parsed
+    with the venue's own parser so the adapter receives canonical
+    :class:`~trading_bot.domain.instrument.Symbol` objects. An unparseable
+    entry refuses at build time with a clear :class:`BrokerError` — a broker
+    whose per-symbol endpoints would silently query nothing must not build.
+    """
+    if first is None or not first.symbols:
+        return ()
+    parse = parse_kraken_pair if venue == "kraken" else parse_binance_symbol
+    parsed: list[Symbol] = []
+    for raw in first.symbols:
+        try:
+            parsed.append(parse(raw))
+        except ValueError as exc:
+            raise BrokerError(
+                f"broker {first.name!r}: cannot parse symbols entry {raw!r} "
+                f"for venue {venue!r}: {exc}"
+            ) from exc
+    return tuple(parsed)
+
+
+def _build_live_venue(venue: str, *, symbols: tuple[Symbol, ...] = ()) -> _LiveBroker:
+    """Construct the live adapter for ``venue`` (reads credentials from env).
+
+    ``symbols`` (from ``BrokerConfig.symbols``, parsed by
+    :func:`_broker_symbols`) is threaded to venues whose fills are
+    **per-symbol** (Binance ``myTrades``); Kraken's trade history is
+    account-wide, so its adapter takes none.
+    """
     if venue == "kraken":
         # KrakenBroker reads KRAKEN_API_KEY / KRAKEN_API_SECRET from the
         # environment; ``has_credentials`` reports whether both are present.
@@ -472,7 +526,7 @@ def _build_live_venue(venue: str) -> _LiveBroker:
         # BinanceBroker reads BINANCE_API_KEY / BINANCE_API_SECRET (and the
         # optional BINANCE_API_BASE testnet toggle) from the environment;
         # ``has_credentials`` reports whether both key + secret are present.
-        return BinanceBroker()
+        return BinanceBroker(symbols=symbols)
     # Unreachable: callers gate on ``_LIVE_VENUES`` first. Defensive only.
     raise BrokerError(f"no live adapter for venue {venue!r}")
 
@@ -496,7 +550,9 @@ def _binance_testnet_credentials() -> tuple[str, str]:
     return key, secret
 
 
-def _build_testnet_venue(venue: str) -> _LiveBroker:
+def _build_testnet_venue(
+    venue: str, *, symbols: tuple[Symbol, ...] = ()
+) -> _LiveBroker:
     """Construct a venue's **testnet** adapter, hard-pinned to its sandbox URL.
 
     Only venues in :data:`_TESTNET_VENUES` have a testnet. The base URL is forced
@@ -504,8 +560,9 @@ def _build_testnet_venue(venue: str) -> _LiveBroker:
     env value is overridden) — the adapter can therefore never reach mainnet, which
     is why the caller skips the ``live_enabled`` opt-in for it. Credentials are the
     venue's **testnet** keys (``BINANCE_TESTNET_*``, falling back to ``BINANCE_*``);
-    see :func:`_binance_testnet_credentials`. A venue with no testnet (e.g. Kraken,
-    which has no public spot sandbox) raises.
+    see :func:`_binance_testnet_credentials`. ``symbols`` is threaded exactly as in
+    :func:`_build_live_venue` (Binance fills are per-symbol). A venue with no
+    testnet (e.g. Kraken, which has no public spot sandbox) raises.
     """
     if venue == "binance":
         # Hard-pin the testnet base URL (explicit arg overrides the env default),
@@ -513,7 +570,12 @@ def _build_testnet_venue(venue: str) -> _LiveBroker:
         # feed it the *testnet* credentials (not the mainnet key, which testnet
         # rejects with -2015).
         key, secret = _binance_testnet_credentials()
-        return BinanceBroker(api_key=key, api_secret=secret, base_url=TESTNET_API_BASE)
+        return BinanceBroker(
+            api_key=key,
+            api_secret=secret,
+            base_url=TESTNET_API_BASE,
+            symbols=symbols,
+        )
     raise BrokerError(
         f"venue {venue!r} has no testnet/sandbox; testnet is available for "
         f"{sorted(_TESTNET_VENUES)!r} only (Kraken has no public spot testnet — "

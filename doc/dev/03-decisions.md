@@ -6,6 +6,88 @@ rejected approaches as tombstones.
 
 ---
 
+### 2026-07-12 The venue oracle is an accounting identity; fees carry their asset (PR #223)  [accepted]
+- **Choice**: on a real venue the canary asserts the **identity** — our
+  fills == venue-reported fills, per-asset balance deltas == the fills math
+  — never a precomputed PnL. Supporting discoveries hardened the domain:
+  `Fill.fee_asset` (Binance charges market-buy commissions in BASE; `None`
+  keeps the historic quote meaning), Binance HTTP-400 rejections mapped to
+  domain errors, `BrokerConfig.symbols` for Binance's per-symbol
+  trade-history scope, and a 15 % venue probe offset (the venue's
+  `PERCENT_PRICE_BY_SIDE` band rejects 50 %). A settle loop attributes the
+  venue's async executions to our client-order-ids and re-emits them on the
+  bus — venue truth flows through the ordinary fill plumbing.
+- **Why**: spread and drift make absolute expectations flaky exactly where
+  correctness matters most; the identity is exact on any venue. The two
+  intermediate testnet failures WERE the canary working — each became a
+  domain fix with offline tests before the final green run. PnL folding
+  still values fees at face value when fee_asset ≠ quote (documented
+  approximation); the balance identity itself is exact.
+- **Rejected alternatives**: absolute-PnL venue oracle (nondeterministic);
+  ignoring sub-1e-7 balance dust (it was the fee-denomination bug, not
+  dust); adapter-specific oracle code (the broker port suffices — the
+  oracle stays venue-agnostic).
+
+### 2026-07-12 The canary: two oracles, probes before money, resting limits in strict paper (PR #221)  [accepted]
+- **Choice**: the canary runs probes FIRST (cancel, idempotency — both free)
+  and only then risks the round-trip; paper mode gets an EXACT oracle
+  (PnL == −Σ fees, flat, store-persisted terminals, balance deltas), venue
+  modes will get the identity oracle (leaf 03) — never a precomputed
+  absolute PnL. Sequential legs, never simultaneous (self-trade
+  prevention). To make the cancel probe implementable, strict paper gains a
+  marketability rule: a passive-side limit with an injected mark RESTS until
+  cancelled; permissive/markless behaviour is byte-identical (regression
+  tests pin it).
+- **Why**: probes cost nothing and validate the two scariest paths (real
+  cancel = the kill-switch; venue-side client-order-id dedup = the
+  idempotency invariant) before any money moves. Paper is deterministic so
+  exactness is free; venues are not, so correctness must be an accounting
+  identity, not a price prediction. The simulator's fill-everything-at-limit
+  model made "a resting order" inexpressible — a simulator that cannot rest
+  an order cannot rehearse a cancel.
+- **Rejected alternatives**: simultaneous buy+sell (STP nondeterminism);
+  skipping probes in paper (the paper canary is the per-release regression —
+  it must cover the same steps the live one will); relaxing the
+  marketability rule beyond strict+mark (would silently change every
+  existing permissive test and the daemon's mark-less maker legs).
+
+### 2026-07-11 One display numeraire, converted server-side, never guessed (PR #212)  [accepted]
+- **Choice**: `convert()` always targets the single global
+  `display_currency` (exact Decimal, identity when the source quote already
+  matches, `conversion_rates` lookup otherwise, `None` on a missing rate —
+  never guessed). The per-exchange override is a display **label** on the
+  row (`resolve_currency`), numerically truthful only when paired with an
+  identity-equivalent rate — exactly the stablecoin case it exists for
+  (binance→USDT with `USDT: 1`).
+- **Why**: server-side conversion gives every consumer the same figures (no
+  per-client drift); a single numeraire keeps cross-exchange aggregation
+  meaningful; refusing to guess a rate keeps a missing `EUR` declaration
+  visibly `null` instead of silently wrong — money display errors are worse
+  than money display gaps.
+- **Rejected alternatives**: client-side conversion from an exposed rates
+  config (N consumers, N roundings, N bugs); per-exchange numeraires
+  (aggregates across exchanges become meaningless); defaulting unknown
+  rates to 1 (silently wrong for anything non-stable).
+
+### 2026-07-11 Marks are bar closes with a mandatory as-of, one policy at every altitude (PR #211)  [accepted]
+- **Choice**: v1 mark = the last dccd bar close the runner saw (published to
+  a per-engine cache at rebalance time), serialized ONLY together with
+  `mark_asof_ts` and `mark_source` (`bar_close` | `last_fill` fallback).
+  Both the per-position rows and the strategy aggregate (`_unrealised_of`)
+  read the same `_mark_of` helper — one mark policy at every altitude. The
+  API path does zero I/O; a live ticker is post-1.0.
+- **Why**: the bar close is the price the strategy actually evaluated on —
+  fresher and more honest than the previous last-own-fill mark for
+  daily-rebalance books (which only moved when the unit itself traded). A
+  mark without its timestamp invites mistaking a day-old close for a live
+  price — the UI can only render "as of", never bare. Splitting policies
+  between rows and aggregate would let the roster disagree with its own
+  detail rows.
+- **Rejected alternatives**: last-own-fill as primary (stale for days on
+  low-churn books); fetching a ticker on the API path (network I/O per
+  request, and a freshness the engine's own decisions don't have); marks
+  without `mark_source` (the fallback would masquerade as fresh data).
+
 ### 2026-07-11 Venue minimums shape quantities upstream; the Order keeps the bare Instrument (PR #204)  [accepted]
 - **Choice**: the round-up-or-skip policy (`order_prep.prepare_leg`) runs at
   leg preparation with the resolved venue spec — but the routed `Order`

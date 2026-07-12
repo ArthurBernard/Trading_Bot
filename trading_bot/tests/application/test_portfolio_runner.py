@@ -43,6 +43,7 @@ from trading_bot.application import (
     RiskManager,
 )
 from trading_bot.application.config import RiskConfig
+from trading_bot.application.mark_cache import MarkCache
 from trading_bot.brokers import PaperBroker
 from trading_bot.domain import (
     CapitalEvent,
@@ -1174,3 +1175,92 @@ async def test_resolver_requires_exchange() -> None:
         assert "exchange" in str(exc)
     else:  # pragma: no cover - the guard must fire
         raise AssertionError("expected ValueError for a resolver with no exchange")
+
+
+# --- mark cache publish ------------------------------------------------------ #
+
+
+async def test_rebalance_publishes_marks_with_the_ticks_asof() -> None:
+    """A rebalance publishes every traded symbol's close + this tick's asof.
+
+    The engine's :class:`~trading_bot.application.mark_cache.MarkCache`, when
+    threaded in, ends up holding exactly the ``prices`` the tick sized against
+    (read via :meth:`PortfolioRunner._latest_closes`) keyed by symbol, each
+    stamped with the same ``asof_ms`` :meth:`PortfolioRunner._derive_asof_ms`
+    derives for the tick's signals — and ``source == "bar_close"`` (this
+    runner never publishes a fill-derived mark).
+    """
+    weights = {BTC: money("0.5"), ETH: money("-0.25")}
+    router, tracker, bus, _broker = _engine()
+    mark_cache = MarkCache()
+    runner = PortfolioRunner(
+        _strategy(_weights_signal(weights)),
+        _ListFeed([_frames()], asof=1_700),
+        router,
+        tracker,
+        event_bus=bus,
+        mark_cache=mark_cache,
+    )
+
+    await runner.rebalance(_frames())
+
+    expected_asof = 1_700_000_000_000_000_000 // 1_000_000
+    btc_mark = mark_cache.get(BTC)
+    eth_mark = mark_cache.get(ETH)
+    assert btc_mark is not None
+    assert btc_mark.price == BTC_PRICE
+    assert btc_mark.asof_ms == expected_asof
+    assert btc_mark.source == "bar_close"
+    assert eth_mark is not None
+    assert eth_mark.price == ETH_PRICE
+    assert eth_mark.asof_ms == expected_asof
+
+
+async def test_second_rebalance_updates_marks_in_place() -> None:
+    """A later rebalance's closes and asof overwrite the prior tick's marks."""
+    weights = {BTC: money("0.5"), ETH: money("-0.25")}
+    router, tracker, bus, _broker = _engine()
+    mark_cache = MarkCache()
+    runner = PortfolioRunner(
+        _strategy(_weights_signal(weights)),
+        _ListFeed([_frames()], asof=1_700),
+        router,
+        tracker,
+        event_bus=bus,
+        mark_cache=mark_cache,
+    )
+    await runner.rebalance(_frames())
+
+    second_time_ns = 1_700_000_060_000_000_000
+    second_frames = {
+        BTC: _frame(51000.0, time_ns=second_time_ns),
+        ETH: _frame(2600.0, time_ns=second_time_ns),
+    }
+    await runner.rebalance(second_frames)
+
+    btc_mark = mark_cache.get(BTC)
+    eth_mark = mark_cache.get(ETH)
+    assert btc_mark is not None
+    assert btc_mark.price == money("51000")
+    assert btc_mark.asof_ms == second_time_ns // 1_000_000
+    assert eth_mark is not None
+    assert eth_mark.price == money("2600")
+    assert eth_mark.asof_ms == second_time_ns // 1_000_000
+
+
+async def test_no_mark_cache_is_a_legacy_noop() -> None:
+    """Omitting ``mark_cache`` (the default) rebalances exactly as before."""
+    weights = {BTC: money("0.5"), ETH: money("-0.25")}
+    router, tracker, bus, _broker = _engine()
+    runner = PortfolioRunner(
+        _strategy(_weights_signal(weights)),
+        _ListFeed([_frames()], asof=1_700),
+        router,
+        tracker,
+        event_bus=bus,
+    )
+
+    result = await runner.rebalance(_frames())
+
+    assert result.submitted == 2
+    assert result.failed == 0
