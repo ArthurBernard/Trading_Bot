@@ -25,7 +25,8 @@
   </div>
 </section>
 
-<!-- Orders — open + recent history (any status) across the units. -->
+<!-- Orders — open + recent history (any status) across the units. Click a row
+     for that order's fills + ids/limit/stop/Σ fees (leaf 02). -->
 <section class="card" id="orders-card">
   <div class="row" style="justify-content:space-between;">
     <h2 style="margin:0;">Orders (open + recent)</h2>
@@ -42,13 +43,14 @@
           <th>Side</th>
           <th>Type</th>
           <th class="num">Qty</th>
-          <th class="num">Filled</th>
+          <th class="num">Filled %</th>
           <th class="num">Avg fill</th>
+          <th class="num">Value</th>
           <th>Status</th>
         </tr>
       </thead>
       <tbody id="orders-body">
-        <tr class="empty"><td colspan="10">Loading…</td></tr>
+        <tr class="empty"><td colspan="11">Loading…</td></tr>
       </tbody>
     </table>
   </div>
@@ -58,7 +60,10 @@
   <p class="muted" id="orders-cap" style="display:none;">showing the most recent 200 — older rows are not displayed</p>
 </section>
 
-<!-- Fills — the confirmed execution history (the PnL source of truth). -->
+<!-- Fills — the confirmed execution history (the PnL source of truth). Kept
+     flat here as the audit view (leaf 02: the detail page's standalone fills
+     table retired into the order expansions); Order ties each fill back to
+     its order, Value = qty × price. -->
 <section class="card" id="fills-card">
   <div class="row" style="justify-content:space-between;">
     <h2 style="margin:0;">Fills (history)</h2>
@@ -72,14 +77,16 @@
           <th>Strategy</th>
           <th>Exchange</th>
           <th>Instrument</th>
+          <th>Order</th>
           <th>Side</th>
           <th class="num">Qty</th>
           <th class="num">Price</th>
+          <th class="num">Value</th>
           <th class="num">Fee</th>
         </tr>
       </thead>
       <tbody id="fills-body">
-        <tr class="empty"><td colspan="8">Loading…</td></tr>
+        <tr class="empty"><td colspan="10">Loading…</td></tr>
       </tbody>
     </table>
   </div>
@@ -152,15 +159,62 @@
   }
 
   // --- Orders (open + recent history) ------------------------------------ //
+  // Blueprint (dashboard-tables-ux leaf 02): Time | Strategy | Exchange |
+  // Instrument | Side | Type | Qty | Filled % | Avg fill | Value | Status —
+  // the Strategy/Exchange tags stay (this is the cross-strategy audit view,
+  // like the Fills table below); the Filled %/Value cells come from
+  // base.html's shared builders. A row expands (the shared tbExpander) into
+  // that order's fills + ids/limit/stop/Σ fees, joined client-side by
+  // client_order_id from the fills payload loadFills() below already fetches
+  // (the same filtered/capped window the Fills table shows).
+
+  // Latest fetched order rows, keyed by client_order_id — read fresh by the
+  // expander's detail lookup on every open/rebuild.
+  var _ordersByKey = Object.create(null);
+  // client_order_id -> that order's fills, oldest-first (execution order).
+  var _fillsByOrder = Object.create(null);
+
+  // The shared expandable-row helper (base.html) — one instance for the
+  // orders table; its expanded-keys Set survives every SSE/poll rebuild.
+  var orderExpander = tbExpander(document.getElementById('orders-body'), function (key) {
+    var o = _ordersByKey[key];
+    return o ? orderDetailHtml(o, _fillsByOrder[key] || []) : '';
+  });
+
+  function orderRowHtml(o) {
+    var sideCls = o.side === 'buy' ? 'side-buy' : 'side-sell';
+    var unit = tbFmt.splitInstrument(o.instrument);
+    // Absolute time with seconds, visible; relative ("3m ago") on hover —
+    // mirrors the Fills table's Time column exactly.
+    var cells =
+      '<td class="num" title="' + escapeHtml(fmtRelative(o.ts)) + '">' + escapeHtml(fmtDate(o.ts, { seconds: true })) + '</td>' +
+      '<td>' + stratLink(o.strategy) + '</td>' +
+      '<td>' + escapeHtml(o.exchange) + '</td>' +
+      '<td>' + escapeHtml(o.instrument) + '</td>' +
+      '<td class="' + sideCls + '">' + escapeHtml(o.side) + '</td>' +
+      '<td>' + escapeHtml(o.type) + '</td>' +
+      '<td class="num">' + tbFmt.qtyCell(o.qty, { base: unit.base }) + '</td>' +
+      '<td class="num">' + orderFilledPctCell(o) + '</td>' +
+      '<td class="num">' + tbFmt.priceCell(o.avg_fill_price, { quote: unit.quote }) + '</td>' +
+      '<td class="num">' + orderValueCell(o) + '</td>' +
+      '<td>' + statusBadge(o.status) + '</td>';
+    return orderExpander.rowHtml(o.client_order_id, cells, 11);
+  }
+
   async function loadOrders() {
     var rows;
     try {
       rows = await api('GET', '/api/orders' + filterQuery('history=true'));
     } catch (e) {
       document.getElementById('orders-body').innerHTML =
-        '<tr class="empty"><td colspan="10">' + escapeHtml(e.message) + '</td></tr>';
+        '<tr class="empty"><td colspan="11">' + escapeHtml(e.message) + '</td></tr>';
       return [];
     }
+    // Re-index the expander's lookup before rendering, so a click that fires
+    // mid-render always sees current data (the positions tables' pattern).
+    var byKey = Object.create(null);
+    rows.forEach(function (o) { byKey[o.client_order_id] = o; });
+    _ordersByKey = byKey;
     var body = document.getElementById('orders-body');
     // No-flicker refresh — see tbRefreshGuard's doc in base.html.
     var guard = tbRefreshGuard('orders', body, rows);
@@ -169,43 +223,56 @@
     toggleCapCaption('orders-cap', rows);
     if (guard === 'skip-stamp') return rows;
     if (!rows.length) {
-      body.innerHTML = '<tr class="empty"><td colspan="10">No orders.</td></tr>';
+      body.innerHTML = '<tr class="empty"><td colspan="11">No orders.</td></tr>';
       return rows;
     }
     // Most recent first (the API returns oldest-first, mirroring the Fills
     // table below).
     var ordered = rows.slice().reverse();
-    body.innerHTML = ordered.map(function (o) {
-      var sideCls = o.side === 'buy' ? 'side-buy' : 'side-sell';
-      var unit = tbFmt.splitInstrument(o.instrument);
-      // Absolute time with seconds, visible; relative ("3m ago") on hover —
-      // mirrors the Fills table's Time column exactly.
-      return '<tr>' +
-        '<td class="num" title="' + escapeHtml(fmtRelative(o.ts)) + '">' + escapeHtml(fmtDate(o.ts, { seconds: true })) + '</td>' +
-        '<td>' + stratLink(o.strategy) + '</td>' +
-        '<td>' + escapeHtml(o.exchange) + '</td>' +
-        '<td>' + escapeHtml(o.instrument) + '</td>' +
-        '<td class="' + sideCls + '">' + escapeHtml(o.side) + '</td>' +
-        '<td>' + escapeHtml(o.type) + '</td>' +
-        '<td class="num">' + tbFmt.qtyCell(o.qty, { base: unit.base }) + '</td>' +
-        '<td class="num">' + tbFmt.qtyCell(o.filled_qty, { base: unit.base }) + '</td>' +
-        '<td class="num">' + tbFmt.priceCell(o.avg_fill_price, { quote: unit.quote }) + '</td>' +
-        '<td>' + statusBadge(o.status) + '</td>' +
-        '</tr>';
-    }).join('');
+    body.innerHTML = ordered.map(orderRowHtml).join('');
     return rows;
   }
 
-  // --- Fills (confirmed execution history) ------------------------------- //
+  // --- Fills (confirmed execution history — the flat audit view) ---------- //
+
+  // orderIdCell(id) -> a fill's owning client_order_id, truncated to ~12
+  // chars for the column width; the full id rides the title tooltip (leaf 02
+  // — the tie back to the order the expansions above key on).
+  function orderIdCell(id) {
+    if (!id) return '<span class="muted">—</span>';
+    var s = String(id);
+    var short = s.length > 12 ? s.slice(0, 12) + '…' : s;
+    return '<span class="order-id" title="' + escapeHtml(s) + '">' + escapeHtml(short) + '</span>';
+  }
+
+  // fillValueCell(f) -> Value = qty × price (display-only Number arithmetic;
+  // the exact Decimal factors ride the tooltip). "—" when either is missing.
+  function fillValueCell(f, unit) {
+    var qtyN = Number(f.qty);
+    var priceN = Number(f.price);
+    if (f.qty == null || f.price == null || !isFinite(qtyN) || !isFinite(priceN)) {
+      return '<span class="muted">—</span>';
+    }
+    return tbFmt.moneyCell(qtyN * priceN, { quote: unit.quote,
+      title: 'qty × price: ' + f.qty + ' × ' + f.price });
+  }
+
   async function loadFills() {
     var rows;
     try {
       rows = await api('GET', '/api/fills' + filterQuery());
     } catch (e) {
       document.getElementById('fills-body').innerHTML =
-        '<tr class="empty"><td colspan="8">' + escapeHtml(e.message) + '</td></tr>';
+        '<tr class="empty"><td colspan="10">' + escapeHtml(e.message) + '</td></tr>';
       return [];
     }
+    // Re-index the orders expansions' join source before rendering — the same
+    // filtered/capped window this table shows.
+    var byOrder = Object.create(null);
+    rows.forEach(function (f) {
+      (byOrder[f.client_order_id] = byOrder[f.client_order_id] || []).push(f);
+    });
+    _fillsByOrder = byOrder;
     var body = document.getElementById('fills-body');
     // No-flicker refresh — see tbRefreshGuard's doc in base.html.
     var guard = tbRefreshGuard('fills', body, rows);
@@ -214,7 +281,7 @@
     toggleCapCaption('fills-cap', rows);
     if (guard === 'skip-stamp') return rows;
     if (!rows.length) {
-      body.innerHTML = '<tr class="empty"><td colspan="8">No fills.</td></tr>';
+      body.innerHTML = '<tr class="empty"><td colspan="10">No fills.</td></tr>';
       return rows;
     }
     // Most recent first (the API returns oldest-first execution order).
@@ -228,9 +295,11 @@
         '<td>' + stratLink(f.strategy) + '</td>' +
         '<td>' + escapeHtml(f.exchange) + '</td>' +
         '<td>' + escapeHtml(f.instrument) + '</td>' +
+        '<td>' + orderIdCell(f.client_order_id) + '</td>' +
         '<td class="' + sideCls + '">' + escapeHtml(f.side) + '</td>' +
         '<td class="num">' + tbFmt.qtyCell(f.qty, { base: unit.base }) + '</td>' +
         '<td class="num">' + tbFmt.priceCell(f.price, { quote: unit.quote }) + '</td>' +
+        '<td class="num">' + fillValueCell(f, unit) + '</td>' +
         '<td class="num">' + tbFmt.moneyCell(f.fee, { quote: unit.quote }) + '</td>' +
         '</tr>';
     }).join('');
@@ -249,9 +318,11 @@
   // Load both tables, then refresh the filter option lists from what came back.
   // The option lists are always rebuilt from the UNFILTERED universe so narrowing
   // one dimension never drops the others' choices — fetch a bare pass for options.
+  // Fills load BEFORE orders: the orders rebuild re-renders any open expanded
+  // detail from the fills join index, so the index must be current first.
   async function refreshAll() {
-    var orders = await loadOrders();
     var fills = await loadFills();
+    var orders = await loadOrders();
     // Fetch the unfiltered universe (a light extra read) purely to populate the
     // selects with every value, not just the currently-filtered subset.
     try {
@@ -290,5 +361,7 @@
   .filter { display:flex; flex-direction:column; gap:.3rem; }
   .ctl-label { font-size:.78rem; color:var(--muted);
           text-transform:uppercase; letter-spacing:.09em; }
+  /* A fill's truncated owning-order id (full id in the tooltip). */
+  .order-id { font-family:var(--font-mono); font-size:.82em; }
 </style>
 {% endblock %}

@@ -182,6 +182,22 @@ def test_every_page_carries_the_expandable_row_helper(path: str) -> None:
 
 
 @pytest.mark.parametrize("path", _PAGES)
+def test_every_page_carries_the_order_execution_cell_builders(path: str) -> None:
+    """Every page's shell (base.html) carries the shared order-execution cells.
+
+    Leaf 02 (dashboard-tables-ux): the Filled % / Value cells and the expanded
+    per-order detail panel (ids, limit/stop, Σ fees, the fills join) are built
+    by `orderFilledPctCell()` / `orderValueCell()` / `orderDetailHtml()`,
+    defined once in base.html so the three order surfaces (Overview
+    open-orders, Orders page, strategy detail) render execution identically.
+    """
+    html = _client().get(path).text
+    assert "function orderFilledPctCell" in html, path
+    assert "function orderValueCell" in html, path
+    assert "function orderDetailHtml" in html, path
+
+
+@pytest.mark.parametrize("path", _PAGES)
 def test_nav_lists_four_tabs_and_no_pnl(path: str) -> None:
     """Every page's nav lists the four surviving tabs; the retired PnL tab is gone.
 
@@ -686,10 +702,12 @@ def test_strategy_detail_serves_the_shell_with_name_and_sections() -> None:
     # The stats table's Return column + the muted starting-capital note.
     assert '<th class="num">Return</th>' in html
     assert 'id="pnl-v0-note"' in html
-    # This strategy's positions / orders / fills tables.
+    # This strategy's positions / orders tables. No standalone fills table —
+    # leaf 02 (dashboard-tables-ux) demoted fills into the orders' expanded
+    # detail (see test_strategy_detail_standalone_fills_table_is_gone).
     assert 'id="positions-table"' in html
     assert 'id="orders-table"' in html
-    assert 'id="fills-table"' in html
+    assert 'id="fills-table"' not in html
     # The control surface + go-live modal moved here from the roster row.
     assert "mode-select" in html
     assert 'id="live-modal"' in html
@@ -782,6 +800,44 @@ def test_strategy_detail_positions_table_is_asset_first_with_expandable_rows() -
     assert "Native pair" in html
     assert "Realised gross" in html
     assert "Mark source" in html
+
+
+def test_strategy_detail_orders_table_shows_execution_with_expandable_fills() -> None:
+    """The detail page's orders table reads the execution blueprint, rows expandable.
+
+    Leaf 02 (dashboard-tables-ux): Time | Instrument | Side | Type | Qty |
+    Filled % | Avg fill | Value | Status; a row expands (the shared tbExpander)
+    into that order's fills + client/venue ids, limit/stop, Σ fees — joined
+    client-side by client_order_id from the fills payload the page already
+    fetches (no new endpoint, no per-expansion request).
+    """
+    html = _client().get("/strategies/btc-ma").text
+    assert '<th class="num">Filled %</th>' in html
+    assert '<th class="num">Avg fill</th>' in html
+    assert '<th class="num">Value</th>' in html
+    assert '<th class="num">Filled</th>' not in html  # the bare-qty column is gone
+    # The shared expandable-row helper, wired for the orders table (keyed by
+    # client_order_id — the idempotency key is the natural row identity).
+    assert "tbExpander(document.getElementById('orders-body')" in html
+    assert "orderExpander.rowHtml(o.client_order_id" in html
+    # The client-side fills join feeding the shared detail builder (base.html).
+    assert "_fillsByOrder" in html
+    assert "function orderDetailHtml" in html
+    assert "/api/fills" in html  # the join source is still fetched
+
+
+def test_strategy_detail_standalone_fills_table_is_gone() -> None:
+    """The detail page's standalone "Recent fills" table is retired (leaf 02).
+
+    Fills now live under their order (the expanded detail); the underlying
+    /api/fills fetch survives as the client_order_id join source.
+    """
+    html = _client().get("/strategies/btc-ma").text
+    assert 'id="fills-card"' not in html
+    assert 'id="fills-table"' not in html
+    assert 'id="fills-body"' not in html
+    assert "Recent fills" not in html
+    assert "/api/fills" in html  # the fetch survives — it feeds the join
 
 
 def test_strategy_detail_read_only_hides_capital_controls() -> None:
@@ -1622,9 +1678,51 @@ def test_orders_page_has_tables_and_filters() -> None:
     # history read comes back at exactly the server's default ?limit= cap.
     assert 'id="orders-cap"' in html and "showing the most recent 200" in html
     assert 'id="fills-cap"' in html
-    # The Orders table's Time column (order date/time, this leaf) — mirrors the
-    # Fills table's own Time column.
-    assert html.count("<th>Time</th>") == 2  # one in Orders, one in Fills
+    # The Orders table's Time column (order date/time) — mirrors the Fills
+    # table's own Time column. Three occurrences since dashboard-tables-ux
+    # leaf 02: the Orders + Fills table headers, plus base.html's shared
+    # orderDetailHtml builder whose nested per-order fills table carries its
+    # own Time header inside the inline script.
+    assert html.count("<th>Time</th>") == 3
+
+
+def test_orders_page_orders_table_shows_execution_with_expandable_fills() -> None:
+    """The Orders page's orders table reads the execution blueprint, rows expandable.
+
+    Leaf 02 (dashboard-tables-ux): Qty | Filled % | Avg fill | Value replace the
+    bare Filled column; a row expands (the shared tbExpander) into that order's
+    fills joined by client_order_id from the fills payload the page already
+    fetches. The Strategy/Exchange tag columns stay — this is the cross-strategy
+    audit view (like the flat Fills table below it).
+    """
+    html = _client().get("/orders").text
+    assert '<th class="num">Filled %</th>' in html
+    assert '<th class="num">Avg fill</th>' in html
+    assert '<th class="num">Value</th>' in html
+    assert '<th class="num">Filled</th>' not in html  # the bare-qty column is gone
+    assert "<th>Strategy</th>" in html and "<th>Exchange</th>" in html
+    # The shared expandable-row helper, wired for the orders table (keyed by
+    # client_order_id) + the client-side fills join.
+    assert "tbExpander(document.getElementById('orders-body')" in html
+    assert "orderExpander.rowHtml(o.client_order_id" in html
+    assert "_fillsByOrder" in html
+
+
+def test_orders_page_fills_table_gains_order_and_value() -> None:
+    """The Orders page's flat fills view (audit) gains Order + Value columns.
+
+    Leaf 02 (dashboard-tables-ux): Order = the owning client_order_id truncated
+    to ~12 chars (the full id in the tooltip — the tie back to the order the
+    expansions key on); Value = qty × price (display-only arithmetic, exact
+    factors in the tooltip).
+    """
+    html = _client().get("/orders").text
+    assert "<th>Order</th>" in html
+    # Value appears twice: once in the orders table, once in the fills table.
+    assert html.count('<th class="num">Value</th>') == 2
+    assert "function orderIdCell" in html  # truncation, full id in tooltip
+    assert "slice(0, 12)" in html
+    assert "function fillValueCell" in html  # qty × price
 
 
 def test_logs_page_has_feed_and_subscribes_to_sse() -> None:
@@ -1705,6 +1803,29 @@ def test_overview_positions_table_is_asset_first_with_expandable_rows() -> None:
     assert "value_display" in html
     assert "unrealised_display" in html
     assert "display_currency" in html
+
+
+def test_overview_open_orders_shows_execution_columns_without_expansion() -> None:
+    """The overview's open-orders table gains the execution columns, rows plain.
+
+    Leaf 02 (dashboard-tables-ux): Filled % | Avg fill | Value via base.html's
+    shared cell builders, keeping the Strategy/Exchange tags. No row expansion
+    on THIS surface: the expanded panel's content is the order's fills and the
+    overview does not fetch /api/fills — a per-refresh fills fetch solely for
+    an optional affordance is disproportionate, and a fills-less panel would
+    fork the shared detail builder. The Orders page carries the full expansion.
+    """
+    html = _client().get("/").text
+    assert '<th class="num">Filled %</th>' in html
+    assert '<th class="num">Avg fill</th>' in html
+    assert '<th class="num">Filled</th>' not in html  # the bare-qty column is gone
+    # The shared execution cells are used by the row renderer (the call sites,
+    # not just base.html's `function ...` definitions)...
+    assert "+ orderFilledPctCell(o) +" in html
+    assert "+ orderValueCell(o) +" in html
+    # ...but the orders tbody is NOT wired to the expander (positions still is).
+    assert "tbExpander(document.getElementById('orders-body')" not in html
+    assert "tbExpander(document.getElementById('positions-body')" in html
 
 
 async def _never_disconnect() -> dict[str, object]:
