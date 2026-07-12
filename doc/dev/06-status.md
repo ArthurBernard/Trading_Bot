@@ -156,6 +156,13 @@ and `CHANGELOG.md` for what shipped.
   for the road-to-1.0 #5 freeze. Known seam: paper broker balances are empty
   across restarts (the simulator's internal ledger is not persisted;
   `/api/balances` relays it honestly) — the canary/guardrail funding hook.
+- **`dashboard-tables-ux` (2026-07-12, PRs #215–#218)**: the dashboard renders
+  the full 2026-07-11 UX design — asset-first positions with price (as-of) /
+  value / unrealised, shared expandable rows (SSE-surviving), orders with
+  Filled % / Avg fill / Value and click-to-expand fills (standalone fills
+  table retired from the detail page), honest last→next bar chip, timezone
+  label, filtered-vs-empty states. Known follow-up: `reject_reason` is
+  rendered defensively but not yet serialized by `/api/orders`.
 
 ## Pending
 

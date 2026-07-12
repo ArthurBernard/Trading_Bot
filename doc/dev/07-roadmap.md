@@ -113,14 +113,11 @@ impossible on the portfolio path), and the `api-completeness` epic (per-engine
 mark cache + bar-close marks with mandatory as-of on position rows, value /
 unrealised / `fee_ccy`, server-side display currency, `GET /api/balances`,
 `last_asof_ts` surfaced, additive-only contract sweep — PRs #209–#214; ready
-for the road-to-1.0 #5 freeze). In dependency order:
+for the road-to-1.0 #5 freeze), and the `dashboard-tables-ux` epic
+(asset-first positions with as-of marks + shared expandable rows, orders with
+Filled %/Value + fills as expanded detail, the honest last→next bar chip,
+timezone label + filtered empty states — PRs #215–#218). In dependency order:
 
-5. [ ] **`dashboard-tables-ux` — tables redesign.** Positions keyed by asset
-   (not pair) with value/mark/unrealised as primary columns; expandable rows
-   for secondary detail (fills under their order, ids, fee breakdown —
-   expanded state survives the SSE re-render); fills demoted to order detail
-   (flat audit view stays on the Orders page); "last bar → next bar" timing
-   chip; timezone affordance.
 6. [ ] **`canary-roundtrip` — deterministic self-test strategy.** A minimal
    round-trip canary run as its own strategy unit with its own tiny ledger
    (~10 USDT): **sequential** market buy *x* then sell *x* (never simultaneous
