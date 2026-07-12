@@ -168,6 +168,20 @@ def test_every_page_carries_the_health_pill_helper(path: str) -> None:
 
 
 @pytest.mark.parametrize("path", _PAGES)
+def test_every_page_carries_the_expandable_row_helper(path: str) -> None:
+    """Every page's shell (base.html) carries the shared expandable-row helper.
+
+    Leaf 01 (dashboard-tables-ux): clicking a table row opens a detail panel
+    beneath it (the pinned UX pattern — not a hover popin, not a per-order
+    page); `tbExpander()` is defined once in base.html so every page carries
+    it, including the ones this leaf doesn't wire yet (leaf 02 reuses it for
+    orders/fills tables).
+    """
+    html = _client().get(path).text
+    assert "function tbExpander" in html, path
+
+
+@pytest.mark.parametrize("path", _PAGES)
 def test_nav_lists_four_tabs_and_no_pnl(path: str) -> None:
     """Every page's nav lists the four surviving tabs; the retired PnL tab is gone.
 
@@ -738,6 +752,36 @@ def test_strategy_detail_carries_the_health_pill_hook() -> None:
     html = _client().get("/strategies/btc-ma").text
     assert 'id="detail-health-pill"' in html
     assert "healthPillHtml(s)" in html
+
+
+def test_strategy_detail_positions_table_is_asset_first_with_expandable_rows() -> None:
+    """The detail page's positions table reads asset-first with expandable rows.
+
+    Leaf 01 (dashboard-tables-ux): Asset | Qty | Avg entry | Price (as-of) |
+    Value | Unrealised | Realised (net) — Instrument and Fees are no longer
+    their own columns (the native pair and cumulative fees move into the
+    expanded detail); this page is already scoped to one strategy/exchange so
+    (unlike the overview variant) it carries no Strategy/Exchange column.
+    """
+    html = _client().get("/strategies/btc-ma").text
+    assert "<th>Asset</th>" in html
+    assert '<th class="num">Qty</th>' in html
+    assert '<th class="num">Avg entry</th>' in html
+    assert "Price <span" in html and "(as-of)" in html
+    assert '<th class="num">Value</th>' in html
+    assert '<th class="num">Unrealised</th>' in html
+    assert '<th class="num">Realised (net)</th>' in html
+    assert "Net qty" not in html  # the old column header is gone
+    # The shared expandable-row helper, wired for this table (keyed by
+    # instrument — one row per instrument within this strategy).
+    assert "tbExpander(document.getElementById('positions-body')" in html
+    assert "posExpander.rowHtml(r.instrument" in html
+    # Expanded detail: native pair, cumulative fees, gross/fees breakdown, mark
+    # provenance (gross = realised_pnl + fees_paid, computed client-side).
+    assert "function positionDetailHtml" in html
+    assert "Native pair" in html
+    assert "Realised gross" in html
+    assert "Mark source" in html
 
 
 def test_strategy_detail_read_only_hides_capital_controls() -> None:
@@ -1633,6 +1677,34 @@ def test_overview_page_has_kpi_strip_and_tables() -> None:
     assert "/api/events" in html
     assert "/api/positions" in html
     assert "/api/kpi" in html
+
+
+def test_overview_positions_table_is_asset_first_with_expandable_rows() -> None:
+    """The overview positions table reads asset-first with expandable rows.
+
+    Leaf 01 (dashboard-tables-ux): Asset | Qty | Avg entry | Price (as-of) |
+    Value | Unrealised | Realised (net) — plus Strategy/Exchange on this
+    (overview) variant, matching the existing grouping behaviour (Strategy
+    dropped when grouped by strategy; Exchange always shown).
+    """
+    html = _client().get("/").text
+    assert "<th>Asset</th>" in html
+    assert '<th class="num">Qty</th>' in html
+    assert '<th class="num">Avg entry</th>' in html
+    assert "Price <span" in html and "(as-of)" in html
+    assert '<th class="num">Value</th>' in html
+    assert '<th class="num">Unrealised</th>' in html
+    assert '<th class="num">Realised (net)</th>' in html
+    assert "Net qty" not in html  # the old column header is gone
+    # The shared expandable-row helper, wired for this table (keyed by
+    # strategy+exchange+instrument — positions are never merged across units).
+    assert "tbExpander(document.getElementById('positions-body')" in html
+    assert "posExpander.rowHtml(positionKey(r)" in html
+    assert "function positionDetailHtml" in html
+    # Value/Unrealised prefer the display-currency conversion when present.
+    assert "value_display" in html
+    assert "unrealised_display" in html
+    assert "display_currency" in html
 
 
 async def _never_disconnect() -> dict[str, object]:

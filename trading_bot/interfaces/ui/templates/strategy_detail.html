@@ -139,16 +139,17 @@
     <table id="positions-table">
       <thead>
         <tr>
-          <th>Exchange</th>
-          <th>Instrument</th>
-          <th class="num">Net qty</th>
+          <th>Asset</th>
+          <th class="num">Qty</th>
           <th class="num">Avg entry</th>
-          <th class="num">Realised PnL</th>
-          <th class="num">Fees</th>
+          <th class="num">Price <span class="unit">(as-of)</span></th>
+          <th class="num">Value</th>
+          <th class="num">Unrealised</th>
+          <th class="num">Realised (net)</th>
         </tr>
       </thead>
       <tbody id="positions-body">
-        <tr class="empty"><td colspan="6">Loading…</td></tr>
+        <tr class="empty"><td colspan="7">Loading…</td></tr>
       </tbody>
     </table>
   </div>
@@ -664,18 +665,74 @@
   }
 
   // --- Positions (this strategy's bucket of ?group_by=strategy) ------------ //
+  // Blueprint (dashboard-tables-ux leaf 01): asset-first — Asset (the base, not
+  // the pair) | Qty | Avg entry | Price (as-of, the mark) | Value | Unrealised
+  // | Realised (net); this page is already scoped to one strategy/exchange, so
+  // (unlike the overview variant) no Strategy/Exchange column here. A row
+  // expands (the shared tbExpander in base.html) into the native pair,
+  // cumulative fees and the realised gross/fees breakdown.
+
+  // The Price cell: the mark + a small relative "as of" stamp beside it
+  // (tooltip: absolute time + mark_source); '—' when there is no mark.
+  function positionMarkCell(r) {
+    const unit = tbFmt.splitInstrument(r.instrument);
+    if (r.mark == null) return tbFmt.priceCell(null);
+    const priceHtml = tbFmt.priceCell(r.mark, { quote: unit.quote });
+    if (r.mark_asof_ts == null) return priceHtml;
+    const title = fmtDate(r.mark_asof_ts, { seconds: true }) +
+      (r.mark_source ? ' · ' + r.mark_source : '');
+    return priceHtml + ' <span class="muted" title="' + escapeHtml(title) + '">(' +
+      escapeHtml(fmtRelative(r.mark_asof_ts)) + ')</span>';
+  }
+
+  // Value/Unrealised: prefer value_display/unrealised_display + display_currency
+  // when non-null, else the native amount + the row's fee_ccy; '—' when null.
+  function positionMoneyCell(r, nativeKey, displayKey) {
+    if (r[displayKey] != null && r.display_currency) {
+      return tbFmt.moneyCell(r[displayKey], { quote: r.display_currency });
+    }
+    return tbFmt.moneyCell(r[nativeKey], { quote: r.fee_ccy });
+  }
+
+  // Expanded detail: native instrument pair, cumulative fees, the realised
+  // gross-vs-fees breakdown (gross = realised_pnl + fees_paid, computed
+  // client-side — display only), mark source + absolute as-of.
+  function positionDetailHtml(r) {
+    const gross = Number(r.realised_pnl) + Number(r.fees_paid);
+    const asofAbs = r.mark_asof_ts != null ? fmtDate(r.mark_asof_ts, { seconds: true }) : null;
+    return '<dl class="detail-grid">' +
+      '<div class="detail-item"><dt>Native pair</dt><dd>' + escapeHtml(r.instrument) + '</dd></div>' +
+      '<div class="detail-item"><dt>Fees paid</dt><dd>' + tbFmt.moneyCell(r.fees_paid, { quote: r.fee_ccy }) + '</dd></div>' +
+      '<div class="detail-item"><dt>Realised gross</dt><dd>' + tbFmt.moneyCell(gross, { quote: r.fee_ccy }) + '</dd></div>' +
+      '<div class="detail-item"><dt>Realised net (gross − fees)</dt><dd>' + tbFmt.moneyCell(r.realised_pnl, { quote: r.fee_ccy }) + '</dd></div>' +
+      '<div class="detail-item"><dt>Mark source</dt><dd>' + (r.mark_source ? escapeHtml(r.mark_source) : '<span class="muted">—</span>') + '</dd></div>' +
+      '<div class="detail-item"><dt>Mark as of</dt><dd>' + (asofAbs ? escapeHtml(asofAbs) : '<span class="muted">—</span>') + '</dd></div>' +
+      '</dl>';
+  }
+
+  // Latest fetched rows, keyed by instrument (one-per-instrument within a
+  // strategy) — read fresh by the expander's detail lookup on every open.
+  let _positionsByInstrument = Object.create(null);
+
+  // The shared expandable-row helper (base.html) — one instance for this
+  // page's positions table; its expanded-keys Set survives every SSE/poll
+  // rebuild of #positions-body.
+  const posExpander = tbExpander(document.getElementById('positions-body'), function (key) {
+    const r = _positionsByInstrument[key];
+    return r ? positionDetailHtml(r) : '';
+  });
 
   function positionRowHtml(r) {
     const unit = tbFmt.splitInstrument(r.instrument);
-    return '<tr>' +
-      '<td>' + escapeHtml(r.exchange) + '</td>' +
-      '<td>' + escapeHtml(r.instrument) + '</td>' +
+    const cells =
+      '<td>' + escapeHtml(r.base) + '</td>' +
       '<td class="num">' + tbFmt.qtyCell(r.net_qty, { base: unit.base }) + '</td>' +
       '<td class="num">' + tbFmt.priceCell(r.avg_entry_price, { quote: unit.quote }) + '</td>' +
-      '<td class="num ' + pnlClass(r.realised_pnl) + '">' +
-        tbFmt.moneyCell(r.realised_pnl, { quote: unit.quote }) + '</td>' +
-      '<td class="num">' + tbFmt.moneyCell(r.fees_paid, { quote: unit.quote }) + '</td>' +
-      '</tr>';
+      '<td class="num">' + positionMarkCell(r) + '</td>' +
+      '<td class="num">' + positionMoneyCell(r, 'value', 'value_display') + '</td>' +
+      '<td class="num ' + pnlClass(r.unrealised) + '">' + positionMoneyCell(r, 'unrealised', 'unrealised_display') + '</td>' +
+      '<td class="num ' + pnlClass(r.realised_pnl) + '">' + tbFmt.moneyCell(r.realised_pnl, { quote: r.fee_ccy }) + '</td>';
+    return posExpander.rowHtml(r.instrument, cells, 7);
   }
 
   async function loadPositions() {
@@ -684,18 +741,22 @@
       data = await api('GET', '/api/positions?group_by=strategy');
     } catch (e) {
       document.getElementById('positions-body').innerHTML =
-        '<tr class="empty"><td colspan="6">' + escapeHtml(e.message) + '</td></tr>';
+        '<tr class="empty"><td colspan="7">' + escapeHtml(e.message) + '</td></tr>';
       return;
     }
     const g = (data || []).find(function (x) { return x.group === STRATEGY; });
     const rows = g ? g.rows : [];
+    // Re-index before rendering — see the overview page's identical comment.
+    const byInstrument = Object.create(null);
+    rows.forEach(function (r) { byInstrument[r.instrument] = r; });
+    _positionsByInstrument = byInstrument;
     const body = document.getElementById('positions-body');
     const guard = tbRefreshGuard('detail-positions', body, rows);
     if (guard === 'skip-silent') return;
     stampUpdated('positions-updated');
     if (guard === 'skip-stamp') return;
     if (!rows.length) {
-      body.innerHTML = '<tr class="empty"><td colspan="6">No open positions.</td></tr>';
+      body.innerHTML = '<tr class="empty"><td colspan="7">No open positions.</td></tr>';
       return;
     }
     body.innerHTML = rows.map(positionRowHtml).join('');
