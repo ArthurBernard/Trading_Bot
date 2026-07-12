@@ -80,7 +80,7 @@ in tooltips. No toggle in this epic.
 
 ## Leaf checklist
 
-- [ ] 01 positions-tables — feat/ui-positions-tables — medium
+- [x] 01 positions-tables — feat/ui-positions-tables — medium (#215)
 - [ ] 02 orders-fills-tables — feat/ui-orders-fills — high
 - [ ] 03 bar-timing-chip — feat/ui-bar-timing — medium
 - [ ] 04 timezone-and-empty-states — feat/ui-tz-empty-states — low

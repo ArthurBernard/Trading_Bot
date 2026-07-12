@@ -8,6 +8,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Positions tables read asset-first, with a value.** Overview + strategy
+  detail: Asset | Qty | Avg entry | Price *(as-of)* | Value | Unrealised |
+  Realised (net) — values prefer the configured display currency, marks
+  always show their freshness (relative as-of, absolute + source in the
+  tooltip). Click a row for the native pair, cumulative fees, the
+  gross-vs-fees realised breakdown and the mark provenance: the shared
+  **expandable-row helper** lands in `base.html` (keyboard-accessible,
+  expanded state survives the SSE/poll rebuilds). (#215)
 - **`GET /api/balances` + `last_asof_ts` documentation + the epic contract
   sweep (closes the `api-completeness` epic).** Per running unit, the
   broker's balances as exact Decimal strings (stopped units absent; a broker
