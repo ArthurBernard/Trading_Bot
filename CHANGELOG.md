@@ -8,6 +8,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Daemon logs are real logs** — the daemon path writes `logs/daemon.log`
+  through a midnight-rotating handler (14-day retention) with ISO-8601 local
+  timestamps carrying the numeric tz offset; level/dir/retention configurable
+  via the manifest's new optional `logging:` section
+  (`application/log_setup.py`); tick errors now log their traceback
+  (previously invisible — no handler existed). Interactive CLI output
+  unchanged. (#226)
+
 ### Changed
 
 ### Fixed

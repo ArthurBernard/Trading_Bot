@@ -183,6 +183,11 @@ engine code: **real-key live enablement** (validate Kraken private endpoints +
 venue-level idempotency against a real-key sandbox, then flip `live_enabled`) — the one
 maintainer step in [`07-roadmap.md`](07-roadmap.md).
 
+- **`daemon-logging` in flight (1/3)**: the logging spine landed (rotated,
+  tz-offset-timestamped `logs/daemon.log`, manifest `logging:` section, tick
+  tracebacks). Next: the per-unit event trail (leaf 02), tick-timing metrics
+  (leaf 03). Plan: `plans/daemon-logging/`.
+
 ## Known gaps / deferred
 
 - ~~**Final project name**~~ — **decided**: kept as `trading_bot` (with `dccd` /

@@ -1,7 +1,7 @@
 ---
 plan: daemon-logging
 kind: global
-status: planning
+status: executing
 roadmap: "3b. [ ] **Daemon observability — structured logs** (surfaced by the 2026-07-14 health audit; prereq for #4's systemd alerting + soak evidence): timestamped rotated `logs/daemon.log`, per-unit evaluation/order/skip trail, tick-duration metrics on `/api/health` (additive). Plan: `plans/daemon-logging/`."
 release_on_done: true
 ---
@@ -53,7 +53,7 @@ What the audit measured (the evidence this epic answers):
 
 ## Leaf checklist
 
-- [ ] 01 log-setup — `feat/daemon-log-setup` — medium
+- [x] 01 log-setup — `feat/daemon-log-setup` — medium
 - [ ] 02 unit-event-trail — `feat/daemon-unit-event-logs` — medium
 - [ ] 03 tick-timing-metrics — `feat/tick-timing-metrics` — medium
 

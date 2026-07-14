@@ -6,6 +6,22 @@ rejected approaches as tombstones.
 
 ---
 
+### 2026-07-14 Daemon logging spine: root handlers, offset timestamps (PR #226)  [accepted]
+- **Choice**: the daemon's logging config lives in `application/log_setup.py`
+  and wires the **root** logger with two owned, tagged handlers (midnight
+  `TimedRotatingFileHandler` + stderr stream); third-party namespaces
+  (`apscheduler`/`uvicorn`/`httpx`/`websockets`) are capped at WARNING;
+  timestamps are **local ISO-8601 with the numeric UTC offset**.
+- **Why**: one spine, N emitters — the runner/router/feed module loggers
+  (some already emitting into the void) flow into the rotated file without
+  knowing it exists; the owned-handler tag makes re-configuration idempotent
+  (no double-writes under tests or embedding); the explicit offset kills the
+  UTC-vs-CEST ambiguity that burned the 2026-07-14 audit.
+- **Rejected alternatives**: UTC-only timestamps (the operator reads local
+  time; the offset carries both); per-module handlers (drift + duplication);
+  wiring in `interfaces/cli` (the seam is application-level composition,
+  reusable by a future systemd entrypoint).
+
 ### 2026-07-12 The venue oracle is an accounting identity; fees carry their asset (PR #223)  [accepted]
 - **Choice**: on a real venue the canary asserts the **identity** — our
   fills == venue-reported fills, per-asset balance deltas == the fills math
