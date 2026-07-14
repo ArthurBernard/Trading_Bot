@@ -384,6 +384,7 @@ def test_api_strategies_display_fields_and_contract_regression() -> None:
         "open_orders",
         "last_eval_ts",
         "last_asof_ts",
+        "last_step_duration_ms",
         "allocation",
         "contributed",
         "unrealised",

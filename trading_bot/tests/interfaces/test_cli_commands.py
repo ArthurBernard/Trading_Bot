@@ -842,3 +842,228 @@ async def test_daemon_starts_ticks_and_stops_cleanly(
     task.cancel()
     with contextlib.suppress(asyncio.CancelledError):
         await task
+
+
+# --- tick-timing metrics (leaf 03) ----------------------------------------- #
+
+
+def test_tick_metrics_record_counts_durations_and_overruns() -> None:
+    """`_TickMetrics.record` folds durations in, counts ticks, flags interval overruns.
+
+    All fields start `None`/`0`; each `record` stamps the last duration/wall-clock
+    and bumps `ticks_total`; a duration over the interval flags an overrun and
+    bumps `ticks_overrun`, returning `True` (a fast tick returns `False`).
+    """
+    from trading_bot.interfaces.cli.main import _TickMetrics
+
+    m = _TickMetrics()
+    # None / 0 before any tick.
+    assert m.last_tick_duration_ms is None
+    assert m.last_tick_ts is None
+    assert m.ticks_total == 0
+    assert m.ticks_overrun == 0
+
+    # A fast tick under the 60 s interval: recorded, not an overrun.
+    assert m.record(duration_ms=2_000, now_ms=1_000, interval_seconds=60.0) is False
+    assert m.last_tick_duration_ms == 2_000
+    assert m.last_tick_ts == 1_000
+    assert m.ticks_total == 1
+    assert m.ticks_overrun == 0
+
+    # A second, slow tick over the interval: recorded, flagged, counted.
+    assert m.record(duration_ms=61_000, now_ms=2_000, interval_seconds=60.0) is True
+    assert m.last_tick_duration_ms == 61_000
+    assert m.last_tick_ts == 2_000
+    assert m.ticks_total == 2  # after two ticks
+    assert m.ticks_overrun == 1
+
+
+def test_tick_metrics_record_cron_trigger_never_overruns() -> None:
+    """A cron trigger (``interval_seconds=None``) records but never flags an overrun.
+
+    An "overrun" against a fixed interval is undefined for a cron schedule, so
+    the duration + counters still advance while `ticks_overrun` stays `0`.
+    """
+    from trading_bot.interfaces.cli.main import _TickMetrics
+
+    m = _TickMetrics()
+    assert m.record(duration_ms=10_000_000, now_ms=5, interval_seconds=None) is False
+    assert m.last_tick_duration_ms == 10_000_000
+    assert m.ticks_total == 1
+    assert m.ticks_overrun == 0
+
+
+async def test_daemon_add_job_pins_scheduler_semantics(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+) -> None:
+    """`_run_daemon` schedules the tick with explicit coalesce / max_instances / grace.
+
+    Spies on `AsyncIOScheduler.add_job` to prove the daemon pins the semantics the
+    leaf requires: `coalesce=True`, `max_instances=1`, and a `misfire_grace_time`
+    equal to the configured interval (so a late tick still runs instead of being
+    silently skipped by APScheduler's 1 s default grace).
+    """
+    import asyncio
+    import contextlib
+
+    import apscheduler.schedulers.asyncio as aio_sched
+
+    from trading_bot.application.config import AppConfig
+    from trading_bot.interfaces.cli.main import _run_daemon
+
+    captured: dict[str, object] = {}
+    called = asyncio.Event()
+    original_add_job = aio_sched.AsyncIOScheduler.add_job
+
+    def _spy_add_job(self, func, trigger=None, *args, **kwargs):  # type: ignore[no-untyped-def]
+        captured["kwargs"] = dict(kwargs)
+        job = original_add_job(self, func, trigger, *args, **kwargs)
+        called.set()
+        return job
+
+    monkeypatch.setattr(aio_sched.AsyncIOScheduler, "add_job", _spy_add_job)
+
+    cfg = AppConfig.model_validate({"logging": {"dir": str(tmp_path / "logs")}})
+    task = asyncio.create_task(_run_daemon(cfg, interval=60.0, cron=None))
+    try:
+        await asyncio.wait_for(called.wait(), timeout=5.0)
+    finally:
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+
+    kwargs = captured["kwargs"]
+    assert kwargs["coalesce"] is True
+    assert kwargs["max_instances"] == 1
+    # Derived from the interval (a positive int), so `== 60` and `== the interval`.
+    assert kwargs["misfire_grace_time"] == 60
+    assert kwargs["misfire_grace_time"] == int(60.0)
+
+
+async def test_daemon_tick_heartbeat_carries_duration_and_counts(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    tmp_path: pathlib.Path,
+) -> None:
+    """Each daemon tick logs its duration in the heartbeat and advances the counters.
+
+    Drives the real daemon over a fake `step_all` (reports two strategies stepped
+    so the heartbeat fires); captures the daemon's own `_TickMetrics` instance to
+    prove its rolling counters advance with the ticks, and reads the heartbeat log
+    line to prove it now carries `in <s.mmm>s` (the leaf-01 line + leaf-03
+    duration).
+    """
+    import asyncio
+    import contextlib
+    import logging
+    import re
+
+    from trading_bot.application.config import AppConfig
+    from trading_bot.application.supervisor import StrategySupervisor
+    from trading_bot.interfaces.cli.main import _run_daemon
+
+    created: list[cli_main._TickMetrics] = []
+    real_cls = cli_main._TickMetrics
+
+    def _capturing_factory() -> cli_main._TickMetrics:
+        instance = real_cls()
+        created.append(instance)
+        return instance
+
+    monkeypatch.setattr(cli_main, "_TickMetrics", _capturing_factory)
+
+    async def _fake_step_all(self: StrategySupervisor) -> int:
+        return 2  # pretend two strategies stepped -> the heartbeat logs
+
+    monkeypatch.setattr(StrategySupervisor, "step_all", _fake_step_all)
+
+    def _heartbeats() -> list[str]:
+        return [
+            r.getMessage()
+            for r in caplog.records
+            if "daemon tick: stepped" in r.getMessage()
+        ]
+
+    caplog.set_level(logging.INFO, logger="trading_bot.daemon")
+    cfg = AppConfig.model_validate({"logging": {"dir": str(tmp_path / "logs")}})
+    task = asyncio.create_task(_run_daemon(cfg, interval=0.01, cron=None))
+    try:
+        # Bounded poll for two ticks' worth of heartbeats (no fixed sleep race).
+        for _ in range(500):
+            if len(_heartbeats()) >= 2:
+                break
+            await asyncio.sleep(0.01)
+        heartbeats = _heartbeats()
+    finally:
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+
+    assert len(heartbeats) >= 2
+    # The heartbeat carries the tick's measured duration: `in <s.mmm>s`.
+    assert re.search(
+        r"daemon tick: stepped 2 strategy\(ies\) in \d+\.\d{3}s", heartbeats[0]
+    )
+    # The daemon's own rolling counters advanced with the ticks.
+    assert created[0].ticks_total >= 2
+    assert isinstance(created[0].last_tick_duration_ms, int)
+    assert created[0].last_tick_duration_ms >= 0
+
+
+async def test_daemon_tick_overrun_warns_and_counts(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    tmp_path: pathlib.Path,
+) -> None:
+    """A tick slower than the interval increments `ticks_overrun` and logs a WARN.
+
+    A stubbed `step_all` that sleeps longer than the (tiny) interval forces an
+    overrun: the daemon's `ticks_overrun` counter advances and it emits the
+    `daemon tick overrun: <s.mmm>s > <interval>s` WARNING.
+    """
+    import asyncio
+    import contextlib
+    import logging
+    import re
+
+    from trading_bot.application.config import AppConfig
+    from trading_bot.application.supervisor import StrategySupervisor
+    from trading_bot.interfaces.cli.main import _run_daemon
+
+    created: list[cli_main._TickMetrics] = []
+    real_cls = cli_main._TickMetrics
+
+    def _capturing_factory() -> cli_main._TickMetrics:
+        instance = real_cls()
+        created.append(instance)
+        return instance
+
+    monkeypatch.setattr(cli_main, "_TickMetrics", _capturing_factory)
+
+    async def _slow_step_all(self: StrategySupervisor) -> int:
+        await asyncio.sleep(0.03)  # > the 0.01 s interval -> overrun
+        return 1
+
+    monkeypatch.setattr(StrategySupervisor, "step_all", _slow_step_all)
+
+    caplog.set_level(logging.INFO, logger="trading_bot.daemon")
+    cfg = AppConfig.model_validate({"logging": {"dir": str(tmp_path / "logs")}})
+    task = asyncio.create_task(_run_daemon(cfg, interval=0.01, cron=None))
+    try:
+        for _ in range(500):
+            if created and created[0].ticks_overrun >= 1:
+                break
+            await asyncio.sleep(0.01)
+    finally:
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+
+    assert created[0].ticks_overrun >= 1
+    warns = [
+        r.getMessage()
+        for r in caplog.records
+        if "daemon tick overrun" in r.getMessage()
+    ]
+    assert warns
+    assert re.search(r"daemon tick overrun: \d+\.\d{3}s > 0\.01s", warns[0])

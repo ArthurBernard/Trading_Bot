@@ -162,8 +162,9 @@ def test_control_wrapper_detail_page_has_the_control_surface() -> None:
 def test_control_wrapper_health_is_the_dashboard_shape() -> None:
     """The wrapper's `/api/health` is the unified dashboard's shape (mode + read_only).
 
-    `create_control_app` wires no `schedule_info` hook, so the cadence fields stay
-    `null` — same scheduler-agnostic default as the plain `dashboard` command.
+    `create_control_app` wires no `schedule_info` hook, so the cadence + tick-timing
+    fields stay `null`/`0` — same scheduler-agnostic default as the plain
+    `dashboard` command.
     """
     body = _client().get("/api/health").json()
     assert body == {
@@ -173,6 +174,10 @@ def test_control_wrapper_health_is_the_dashboard_shape() -> None:
         "read_only": False,
         "next_tick_ts": None,
         "tick": None,
+        "last_tick_duration_ms": None,
+        "last_tick_ts": None,
+        "ticks_total": 0,
+        "ticks_overrun": 0,
         "worst": "ok",
         "unhealthy": 0,
     }
