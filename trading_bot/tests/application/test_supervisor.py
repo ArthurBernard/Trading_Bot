@@ -133,6 +133,30 @@ async def test_start_step_stop_lifecycle() -> None:
     assert await sup.step("btc-ma") is None
 
 
+async def test_step_records_last_step_duration_ms() -> None:
+    """`step` times the unit's evaluation onto its status (`None` before any step).
+
+    Leaf 03 tick-timing: the per-unit step duration is `None` on a fresh /
+    never-stepped unit, and after one `step` the status carries a non-negative
+    int (milliseconds). It survives `stop` (like the cached accounting report),
+    so a stopped unit still reports the last duration it measured.
+    """
+    pytest.importorskip("fynance")  # ma_crossover evaluates fynance.sma
+    sup = _supervisor()
+
+    # Never stepped -> None.
+    assert sup.status("btc-ma")[0].last_step_duration_ms is None
+
+    await sup.start("btc-ma")
+    await sup.step("btc-ma")
+    duration = sup.status("btc-ma")[0].last_step_duration_ms
+    assert isinstance(duration, int) and duration >= 0
+
+    # Survives stop (the measured duration is retained, like `accounting`).
+    await sup.stop("btc-ma")
+    assert sup.status("btc-ma")[0].last_step_duration_ms == duration
+
+
 async def test_set_mode_paper_testnet_roundtrip() -> None:
     """paper ↔ testnet switch needs no confirmation and updates the unit's mode."""
     sup = _supervisor()

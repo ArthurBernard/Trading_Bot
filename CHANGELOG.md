@@ -25,6 +25,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   start/stop/step-error transitions logged. Anti-spam pinned: an idle tick
   (no new bar) adds zero per-unit lines — a unit's inactivity is now
   explained by the log. (#227)
+- **Tick timing measured and pinned (closes the `daemon-logging` epic)** —
+  every tick's duration is logged on the heartbeat (`in <s.mmm>s`, WARN on
+  interval overrun) and per-unit step durations captured; the tick job's
+  APScheduler semantics are now explicit (`coalesce=True`, `max_instances=1`,
+  `misfire_grace_time=interval` — the 1 s default grace silently skipped late
+  ticks, the measured source of the audit's ~74 s-vs-60 s cadence shortfall);
+  additive API fields: `/api/health` `last_tick_duration_ms` / `last_tick_ts` /
+  `ticks_total` / `ticks_overrun`, `/api/strategies` `last_step_duration_ms`.
+  Real-data check: steady-state ticks ~2 s, first tick (data load) ~46 s —
+  the duration hypothesis refuted, the misfire one confirmed as the fix. (#228)
 
 ### Changed
 

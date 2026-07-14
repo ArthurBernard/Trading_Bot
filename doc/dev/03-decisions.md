@@ -6,6 +6,27 @@ rejected approaches as tombstones.
 
 ---
 
+### 2026-07-14 Tick scheduler semantics pinned; timing is a health signal (PR #228)  [accepted]
+- **Choice**: the daemon tick job runs with explicit `coalesce=True`,
+  `max_instances=1`, `misfire_grace_time=interval` (cron triggers: fixed
+  30 s); every tick's duration is measured (heartbeat `in <s.mmm>s`, WARN on
+  interval overrun) and exposed additively on `/api/health`
+  (`last_tick_duration_ms`/`last_tick_ts`/`ticks_total`/`ticks_overrun`) and
+  `/api/strategies` (`last_step_duration_ms`). Per-unit duration lives on
+  the API field only, measured in the supervisor's `step` `finally` (counted
+  even when the step raises).
+- **Why**: APScheduler's **1 s default misfire grace silently skips** a tick
+  that fires late — the measured cause of the audit's ~74 s realised cadence
+  vs the 60 s nominal (real-data check: steady-state ticks ~2 s, first tick
+  ~46 s data load — duration never exceeds the interval, so skips, not
+  overruns, explain the shortfall). `max_instances=1` guarantees two ticks
+  never race one engine.
+- **Rejected alternatives**: raising the tick interval (hides the problem);
+  gathering units concurrently inside a tick (the per-unit lock serializes
+  anyway; complexity without cadence benefit); putting per-unit duration on
+  the leaf-02 rebalance line (emitted inside the runner, before the outer
+  step timing exists).
+
 ### 2026-07-14 Unit event trail: runner-attributed lines, bus and log are two sinks (PR #227)  [accepted]
 - **Choice**: order-lifecycle log lines live in the **runner** (per-unit, sees
   the router's outcome and the unit name) — not the shared router; the new

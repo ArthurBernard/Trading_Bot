@@ -238,10 +238,11 @@ def test_active_tab_is_highlighted() -> None:
 
 
 def test_health_shape_and_values() -> None:
-    """`GET /api/health` returns the health shape; `next_tick_ts`/`tick` null by default.
+    """`GET /api/health` returns the health shape; cadence fields null/0 by default.
 
     With no `schedule_info` hook (the plain `dashboard` command has no scheduler),
-    the cadence fields stay `null` — a scheduler-agnostic health payload.
+    the cadence + tick-timing fields stay `null`/`0` — a scheduler-agnostic
+    health payload.
     """
     resp = _client().get("/api/health")
     assert resp.status_code == 200
@@ -253,20 +254,35 @@ def test_health_shape_and_values() -> None:
         "read_only": False,
         "next_tick_ts": None,
         "tick": None,
+        "last_tick_duration_ms": None,
+        "last_tick_ts": None,
+        "ticks_total": 0,
+        "ticks_overrun": 0,
         "worst": "ok",
         "unhealthy": 0,
     }
 
 
 def test_health_schedule_info_hook_surfaces_cadence() -> None:
-    """A `schedule_info` hook's `next_tick_ts` / `tick` surface on `/api/health`."""
+    """A `schedule_info` hook's cadence + tick-timing fields surface on `/api/health`."""
     app = create_dashboard_app(
         _supervisor(),
-        schedule_info=lambda: {"next_tick_ts": 1_700_000_000_000, "tick": "every 60s"},
+        schedule_info=lambda: {
+            "next_tick_ts": 1_700_000_000_000,
+            "tick": "every 60s",
+            "last_tick_duration_ms": 2100,
+            "last_tick_ts": 1_699_999_940_000,
+            "ticks_total": 42,
+            "ticks_overrun": 1,
+        },
     )
     body = TestClient(app).get("/api/health").json()
     assert body["next_tick_ts"] == 1_700_000_000_000
     assert body["tick"] == "every 60s"
+    assert body["last_tick_duration_ms"] == 2100
+    assert body["last_tick_ts"] == 1_699_999_940_000
+    assert body["ticks_total"] == 42
+    assert body["ticks_overrun"] == 1
 
 
 def test_health_schedule_info_hook_that_raises_degrades_to_nulls() -> None:
@@ -281,6 +297,11 @@ def test_health_schedule_info_hook_that_raises_degrades_to_nulls() -> None:
     body = resp.json()
     assert body["next_tick_ts"] is None
     assert body["tick"] is None
+    # The tick-timing fields degrade to their no-hook defaults too, never 500.
+    assert body["last_tick_duration_ms"] is None
+    assert body["last_tick_ts"] is None
+    assert body["ticks_total"] == 0
+    assert body["ticks_overrun"] == 0
 
 
 async def test_api_health_worst_and_count() -> None:
@@ -336,6 +357,11 @@ async def test_api_health_worst_and_count() -> None:
     assert body["read_only"] is False
     assert body["next_tick_ts"] is None
     assert body["tick"] is None
+    # Tick-timing fields: no scheduler hook here → null/0 defaults, unchanged.
+    assert body["last_tick_duration_ms"] is None
+    assert body["last_tick_ts"] is None
+    assert body["ticks_total"] == 0
+    assert body["ticks_overrun"] == 0
     # Both units running: worst is the warn one; one unhealthy unit.
     assert body["worst"] == "warn"
     assert body["unhealthy"] == 1
@@ -1311,6 +1337,7 @@ async def test_api_completeness_contract_sweep(tmp_path) -> None:  # noqa: ANN00
         "open_orders",
         "last_eval_ts",
         "last_asof_ts",
+        "last_step_duration_ms",
         "allocation",
         "contributed",
         "unrealised",
@@ -1405,6 +1432,10 @@ async def test_api_completeness_contract_sweep(tmp_path) -> None:  # noqa: ANN00
         "read_only",
         "next_tick_ts",
         "tick",
+        "last_tick_duration_ms",
+        "last_tick_ts",
+        "ticks_total",
+        "ticks_overrun",
         "worst",
         "unhealthy",
     }
@@ -2048,22 +2079,25 @@ def test_api_strategies_carries_health() -> None:
 
 
 async def test_strategies_endpoint_last_eval_and_asof_ts() -> None:
-    """`GET /api/strategies` carries `last_eval_ts`/`last_asof_ts`, set after a tick.
+    """`GET /api/strategies` carries eval/asof/step-duration fields, set after a tick.
 
-    Both are `None` before the unit has ever ticked via its `*_latest` path
-    (incl. a never-started unit — PR #168's diagnostic fields). Driving one
-    tick through the supervisor's `step_all` (the daemon's own path) stamps
-    both: `last_eval_ts` is the wall-clock of the attempt, `last_asof_ts` the
-    as-of of the data actually evaluated.
+    `last_eval_ts` / `last_asof_ts` / `last_step_duration_ms` are all `None`
+    before the unit has ever ticked via its `*_latest` path (incl. a
+    never-started unit — PR #168's diagnostic fields + leaf 03's step duration).
+    Driving one tick through the supervisor's `step_all` (the daemon's own path)
+    stamps them: `last_eval_ts` is the wall-clock of the attempt, `last_asof_ts`
+    the as-of of the data actually evaluated, `last_step_duration_ms` how long
+    the evaluation took (a non-negative int).
     """
     pytest.importorskip("fynance")  # ma_crossover evaluates fynance.sma
     sup = StrategySupervisor(_config(), dccd_client=_FakeStartClient())
     client = TestClient(create_dashboard_app(sup))
 
-    # Never started/ticked -> both null.
+    # Never started/ticked -> all null.
     [before] = client.get("/api/strategies").json()
     assert before["last_eval_ts"] is None
     assert before["last_asof_ts"] is None
+    assert before["last_step_duration_ms"] is None
 
     await sup.start("btc-ma")
     assert await sup.step_all() == 1  # the one running unit stepped once
@@ -2071,6 +2105,10 @@ async def test_strategies_endpoint_last_eval_and_asof_ts() -> None:
     [after] = client.get("/api/strategies").json()
     assert isinstance(after["last_eval_ts"], int) and after["last_eval_ts"] > 0
     assert isinstance(after["last_asof_ts"], int) and after["last_asof_ts"] > 0
+    assert (
+        isinstance(after["last_step_duration_ms"], int)
+        and after["last_step_duration_ms"] >= 0
+    )
 
 
 def test_set_mode_testnet_then_paper() -> None:

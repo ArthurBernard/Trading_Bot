@@ -1163,7 +1163,9 @@ def _status_dict(status: StrategyStatus, config: AppConfig) -> dict[str, Any]:
 
     ``last_eval_ts`` / ``last_asof_ts`` are already integer epoch ms (or
     ``None``) on the domain side — no stringification needed, unlike the money
-    fields.
+    fields. ``last_step_duration_ms`` (the unit's most-recent step duration in
+    ms, ``None`` before its first step) is likewise a bare int — an additive
+    tick-timing field (leaf 03), never displacing a pre-existing one.
 
     ``display_currency`` (resolved for the unit's ``exchange``) +
     ``total_value_display`` / ``unrealised_display`` (converted from the
@@ -1186,6 +1188,7 @@ def _status_dict(status: StrategyStatus, config: AppConfig) -> dict[str, Any]:
         "open_orders": status.open_orders,
         "last_eval_ts": status.last_eval_ts,
         "last_asof_ts": status.last_asof_ts,
+        "last_step_duration_ms": status.last_step_duration_ms,
         "allocation": _money_str(status.allocation),
         "contributed": _money_str(status.contributed),
         "unrealised": _money_str(status.unrealised),
@@ -1738,12 +1741,15 @@ def create_dashboard_app(
         written. Typically ``lambda: supervisor.manifest().to_yaml(path)``.
     schedule_info : Callable[[], dict] or None, optional
         A hook returning ``{"next_tick_ts": <epoch ms int or None>, "tick": <str
-        or None>}`` — the daemon's scheduler cadence, surfaced on ``/api/health``.
+        or None>, "last_tick_duration_ms": <int or None>, "last_tick_ts": <int
+        or None>, "ticks_total": <int>, "ticks_overrun": <int>}`` — the daemon's
+        scheduler cadence + tick-timing metrics, surfaced on ``/api/health``.
         Keeps this app **scheduler-agnostic**: only the daemon (``_run_daemon``)
         has an ``apscheduler`` job to report, so it injects this hook; the plain
-        ``dashboard`` command (no scheduler) passes ``None`` and both fields stay
-        ``null``. The hook is called under a ``try``/``except`` — a raising or
-        absent hook degrades to ``null``/``null``, never breaking health.
+        ``dashboard`` command (no scheduler) passes ``None`` and the cadence
+        fields stay ``null``/``0``. The hook is called under a ``try``/``except``
+        — a raising or absent hook degrades to those same defaults, never
+        breaking health.
 
     Returns
     -------
@@ -1849,7 +1855,10 @@ def create_dashboard_app(
         from the ``schedule_info`` hook when one was injected (the daemon's
         cadence); both stay ``null`` with no hook, and a hook that raises
         degrades to ``null``/``null`` too — health must never 500 because the
-        scheduler hiccuped.
+        scheduler hiccuped. The same hook feeds the additive tick-timing fields
+        ``last_tick_duration_ms`` / ``last_tick_ts`` (``null`` before the first
+        tick / no hook) and ``ticks_total`` / ``ticks_overrun`` (``0`` before the
+        first tick / no hook) — the realised-vs-nominal cadence, in numbers.
 
         ``worst`` is the worst per-unit :attr:`~trading_bot.application.
         supervisor.StrategyStatus.health` among **running** units
@@ -1861,15 +1870,31 @@ def create_dashboard_app(
         sup = _sup(request)
         next_tick_ts: int | None = None
         tick: str | None = None
+        # Additive tick-timing fields (leaf 03), fed by the same daemon hook: the
+        # last tick's duration + wall-clock, and the running / overrun tick counts.
+        # `None`/`0` with no hook (the scheduler-agnostic `dashboard` command) or a
+        # hook that raises — health degrades, never 500s.
+        last_tick_duration_ms: int | None = None
+        last_tick_ts: int | None = None
+        ticks_total = 0
+        ticks_overrun = 0
         hook = request.app.state.schedule_info
         if hook is not None:
             try:
                 info = hook() or {}
                 next_tick_ts = info.get("next_tick_ts")
                 tick = info.get("tick")
+                last_tick_duration_ms = info.get("last_tick_duration_ms")
+                last_tick_ts = info.get("last_tick_ts")
+                ticks_total = info.get("ticks_total", 0)
+                ticks_overrun = info.get("ticks_overrun", 0)
             except Exception:  # noqa: BLE001 - health must degrade, never 500
                 next_tick_ts = None
                 tick = None
+                last_tick_duration_ms = None
+                last_tick_ts = None
+                ticks_total = 0
+                ticks_overrun = 0
         statuses = sup.status()
         worst = _worst_health(s.health for s in statuses if s.running)
         unhealthy = sum(1 for s in statuses if s.health != "ok")
@@ -1880,6 +1905,10 @@ def create_dashboard_app(
             "read_only": request.app.state.read_only,
             "next_tick_ts": next_tick_ts,
             "tick": tick,
+            "last_tick_duration_ms": last_tick_duration_ms,
+            "last_tick_ts": last_tick_ts,
+            "ticks_total": ticks_total,
+            "ticks_overrun": ticks_overrun,
             "worst": worst,
             "unhealthy": unhealthy,
         }

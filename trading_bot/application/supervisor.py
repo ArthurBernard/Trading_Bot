@@ -167,6 +167,14 @@ class StrategyStatus:
         .last_asof_ms` / :attr:`~trading_bot.application.portfolio_runner
         .PortfolioRunner.last_asof_ms`), i.e. "the data this strategy last
         computed on". ``None`` before the first completed evaluation.
+    last_step_duration_ms : int or None
+        Wall-clock duration (**milliseconds**) of the unit's most recent
+        :meth:`StrategySupervisor.step` — the time its runner spent evaluating
+        one tick (data drain + signal + any routing), measured with a monotonic
+        clock. ``None`` before the unit has ever been stepped. Recorded on every
+        step (even one that raised), so a dashboard can spot a unit whose
+        evaluation is creeping toward the tick interval (the tick-timing health
+        signal — see ``doc/dev/plans/daemon-logging/03-tick-timing-metrics.md``).
     allocation : Money or None
         The unit's **genesis** capital — its declared ``allocation`` (or a
         portfolio's ``allocation``/``capital``). ``None`` for a single-instrument
@@ -218,6 +226,7 @@ class StrategyStatus:
     open_orders: int
     last_eval_ts: int | None = None
     last_asof_ts: int | None = None
+    last_step_duration_ms: int | None = None
     allocation: Money | None = None
     contributed: Money | None = None
     unrealised: Money | None = None
@@ -504,6 +513,12 @@ class _Unit:
     #: are cleared by :meth:`StrategySupervisor._teardown`) so a stopped unit still
     #: reports its last-known state.
     accounting: _AccountingState | None = None
+    #: Wall-clock duration (ms) of this unit's most recent :meth:`StrategySupervisor
+    #: .step` — the time its runner spent on one evaluation. ``None`` before the
+    #: unit has ever been stepped; recorded on every step (incl. one that raised),
+    #: and (like :attr:`accounting`) it survives ``stop`` so a stopped unit still
+    #: reports the last duration it measured.
+    last_step_duration_ms: int | None = None
 
 
 class StrategySupervisor:
@@ -1525,6 +1540,15 @@ class StrategySupervisor:
             if not unit.running or unit.runner is None:
                 return None
             runner = unit.runner
+        # Time the runner's evaluation (data drain + signal + any routing) with a
+        # monotonic clock, and stamp it on the unit's runtime state in a `finally`
+        # so a slow-and-then-raising step is still measured (the duration is a
+        # health signal, not a success signal). Per-unit duration lives ONLY on
+        # this field, not the leaf-02 rebalance-summary line: that line is emitted
+        # from *inside* the runner, before this outer step timing exists, so
+        # threading the total back into it would mean the summary timing itself —
+        # the runner is deliberately not contorted for it (leaf 03, step 3).
+        started = time.monotonic()
         try:
             if isinstance(runner, StrategyRunner):
                 result: Order | object | None = await runner.step_latest()
@@ -1538,6 +1562,8 @@ class StrategySupervisor:
             # never steady-state — this is not an anti-spam concern.
             logger.exception("unit=%s step error", name)
             raise
+        finally:
+            unit.last_step_duration_ms = int((time.monotonic() - started) * 1000)
         if result is None:
             # Evaluated nothing this tick (freshness gate skip / no new bar): a
             # DEBUG line only, so a steady-state INFO log stays free of per-unit
@@ -1626,6 +1652,7 @@ class StrategySupervisor:
             open_orders=open_orders,
             last_eval_ts=last_eval_ts,
             last_asof_ts=last_asof_ts,
+            last_step_duration_ms=unit.last_step_duration_ms,
             allocation=allocation,
             contributed=contributed,
             unrealised=unrealised,
