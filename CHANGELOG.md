@@ -8,6 +8,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+### Changed
+
+### Fixed
+
+### Deprecated
+
+### Removed
+
+## [0.15.0] - 2026-07-14
+
+### Added
+
 - **Daemon logs are real logs** — the daemon path writes `logs/daemon.log`
   through a midnight-rotating handler (14-day retention) with ISO-8601 local
   timestamps carrying the numeric tz offset; level/dir/retention configurable
