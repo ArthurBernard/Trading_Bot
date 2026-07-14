@@ -120,6 +120,17 @@ and `CHANGELOG.md` for what shipped.
 - **E1–E11 + the multi-asset/portfolio unit** shipped; the pre-production safety
   hardening (audit) is wired in (see *Where things stand*). `CHANGELOG.md` + git log are
   authoritative for what shipped per release.
+- **`daemon-logging` (2026-07-14, PRs #226–#228)**: the daemon is auditable
+  from its log alone — rotated, tz-offset-timestamped `logs/daemon.log`
+  (manifest `logging:` section), per-unit rebalance summaries + round-up/skip
+  `LegDecision.reason`s + order/fill lines (a unit's inactivity is now
+  explained by the log), tick durations on the heartbeat + additive
+  `/api/health`//`api/strategies` timing fields. Root-caused the 2026-07-14
+  audit's ~74 s-vs-60 s cadence shortfall: APScheduler's 1 s default misfire
+  grace silently skipped late ticks (steady-state ticks measure ~2 s; first
+  tick ~46 s data load) — the job now runs `coalesce=True`, `max_instances=1`,
+  `misfire_grace_time=interval`. The legacy unrotated log gets archived at the
+  post-release daemon restart.
 - **`paper-integrity` (2026-07-11, PRs #190–#194)**: paper ids unique across
   engine lifetimes, fills reach the tracked order + store row (`OrderFillSync`,
   startup healing), reconcile persists orphan-closes, restart/replay E2E.
@@ -183,12 +194,6 @@ engine code: **real-key live enablement** (validate Kraken private endpoints +
 venue-level idempotency against a real-key sandbox, then flip `live_enabled`) — the one
 maintainer step in [`07-roadmap.md`](07-roadmap.md).
 
-- **`daemon-logging` in flight (2/3)**: the logging spine (rotated,
-  tz-offset-timestamped `logs/daemon.log`, manifest `logging:` section, tick
-  tracebacks) and the per-unit event trail (rebalance summaries, skip
-  reasons, order/fill lines — a unit's inactivity is now explained by the
-  log) have landed. Next: tick-timing metrics (leaf 03). Plan:
-  `plans/daemon-logging/`.
 
 ## Known gaps / deferred
 
