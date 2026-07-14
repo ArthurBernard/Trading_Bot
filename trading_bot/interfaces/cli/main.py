@@ -47,6 +47,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import dataclasses
+import logging
 import math
 import os
 import pathlib
@@ -71,6 +72,7 @@ from trading_bot.application.canary import (
 from trading_bot.application.config import AppConfig, BrokerConfig, StrategyConfig
 from trading_bot.application.data_feed import BARS_SCHEMA, InMemoryFeed
 from trading_bot.application.instrument_specs import InstrumentSpecResolver
+from trading_bot.application.log_setup import configure_daemon_logging
 from trading_bot.application.performance_service import PerformanceService
 from trading_bot.application.run_app import run_app
 from trading_bot.application.service_factory import Engine, build_engine
@@ -104,6 +106,11 @@ app = typer.Typer(
 
 #: The shared rich console every command prints through.
 _console = Console()
+
+#: The daemon's lifecycle/tick logger. Only the daemon path (``start [--serve]``)
+#: emits through it, after :func:`~trading_bot.application.log_setup.configure_daemon_logging`
+#: has wired the root handlers; interactive commands print to ``_console`` instead.
+_daemon_logger = logging.getLogger("trading_bot.daemon")
 
 #: Default synthetic-feed length (bars) when no ``--bars`` file is given — long
 #: enough for the default 10/30 MA windows to warm up and cross at least once.
@@ -1265,6 +1272,11 @@ async def _run_daemon(
 
     from trading_bot.application.supervisor import StrategySupervisor
 
+    # Wire the durable logging spine before anything logs: the daemon runs
+    # headless for days, so its lifecycle/tick lines (and any WARNING from the
+    # runners/router) must land in the rotated file, not just fly past on stderr.
+    configure_daemon_logging(config.logging)
+
     supervisor = StrategySupervisor(config, dccd_client=dccd_client)  # type: ignore[arg-type]
     await supervisor.start_all()
 
@@ -1272,11 +1284,11 @@ async def _run_daemon(
         try:
             stepped = await supervisor.step_all()
             if stepped:
-                _console.print(
-                    f"[dim]daemon tick: stepped {stepped} strategy(ies)[/dim]"
-                )
+                # Daemon-only noise: to the log file, not the console.
+                _daemon_logger.info("daemon tick: stepped %d strategy(ies)", stepped)
         except Exception as exc:  # noqa: BLE001 - never let a tick kill the daemon
-            _console.print(f"[red]daemon tick error:[/red] {exc}")
+            # `exception` captures the traceback into the file (invisible before).
+            _daemon_logger.exception("daemon tick error: %s", exc)
 
     trigger = (
         CronTrigger.from_crontab(cron)
@@ -1286,10 +1298,17 @@ async def _run_daemon(
     scheduler = AsyncIOScheduler()
     job = scheduler.add_job(_tick, trigger)
     scheduler.start()
+    _tick_desc = cron or f"every {interval:g}s"
+    _daemon_logger.info(
+        "daemon started (mode=%s): %d strateg(ies), tick=%s",
+        config.mode,
+        len(supervisor.names()),
+        _tick_desc,
+    )
     _console.print(
         f"[green]daemon started[/green] (mode={config.mode}): "
         f"{len(supervisor.names())} strateg(ies), "
-        f"tick={cron or f'every {interval:g}s'}"
+        f"tick={_tick_desc}"
     )
 
     def _schedule_info() -> dict[str, Any]:
@@ -1397,6 +1416,7 @@ async def _run_daemon(
     finally:
         scheduler.shutdown(wait=False)
         await supervisor.shutdown()
+        _daemon_logger.info("daemon stopped (all strategies shut down)")
         _console.print("[green]daemon stopped[/green] (all strategies shut down)")
 
 

@@ -26,7 +26,7 @@ from trading_bot.application import (
     StorageConfig,
     StrategyConfig,
 )
-from trading_bot.application.config import PortfolioStrategyConfig
+from trading_bot.application.config import LoggingConfig, PortfolioStrategyConfig
 
 #: The shipped runnable paper config (resolved from the repo root).
 EXAMPLE_CONFIG = (
@@ -860,3 +860,89 @@ def test_ui_config_loopback_without_token_is_allowed() -> None:
         cfg = AppConfig.model_validate({"mode": "paper", "ui": {"host": host}})
         assert cfg.ui.host == host
         assert cfg.ui.token is None
+
+
+# --- LoggingConfig (daemon logging spine — level/dir/retention) ------------ #
+
+
+def test_logging_config_defaults() -> None:
+    """A bare ``LoggingConfig`` is INFO / ``logs`` / 14-day retention."""
+    cfg = LoggingConfig()
+    assert cfg.level == "INFO"
+    assert cfg.dir == pathlib.Path("logs")
+    assert cfg.retention_days == 14
+
+
+def test_app_config_logging_defaults_when_section_absent() -> None:
+    """A manifest with no ``logging:`` section keeps the defaults (additive)."""
+    cfg = AppConfig.model_validate({"mode": "paper"})
+    assert isinstance(cfg.logging, LoggingConfig)
+    assert cfg.logging.level == "INFO"
+    assert cfg.logging.dir == pathlib.Path("logs")
+    assert cfg.logging.retention_days == 14
+
+
+def test_logging_level_is_upper_cased_case_insensitively() -> None:
+    """A lower-case ``level`` validates and is stored upper-case."""
+    cfg = AppConfig.model_validate({"logging": {"level": "debug"}})
+    assert cfg.logging.level == "DEBUG"
+
+
+def test_logging_invalid_level_rejected() -> None:
+    """A ``level`` that is not a standard log-level name is rejected."""
+    with pytest.raises(ValidationError):
+        AppConfig.model_validate({"logging": {"level": "verbose"}})
+
+
+def test_logging_retention_days_zero_rejected() -> None:
+    """``retention_days`` must be ``>= 1`` — zero is rejected."""
+    with pytest.raises(ValidationError):
+        AppConfig.model_validate({"logging": {"retention_days": 0}})
+
+
+def test_logging_retention_days_negative_rejected() -> None:
+    """A negative ``retention_days`` is rejected."""
+    with pytest.raises(ValidationError):
+        AppConfig.model_validate({"logging": {"retention_days": -1}})
+
+
+def test_logging_section_parses_from_yaml(tmp_path) -> None:  # noqa: ANN001
+    """A ``logging:`` section parses (level upper-cased, dir/retention set)."""
+    path = tmp_path / "with-logging.yml"
+    path.write_text(
+        textwrap.dedent(
+            """\
+            mode: paper
+            logging:
+              level: debug
+              dir: /var/log/trading_bot
+              retention_days: 30
+            """
+        )
+    )
+    cfg = AppConfig.from_yaml(path)
+    assert cfg.logging.level == "DEBUG"
+    assert cfg.logging.dir == pathlib.Path("/var/log/trading_bot")
+    assert cfg.logging.retention_days == 30
+
+
+def test_logging_absent_yaml_section_yields_defaults(tmp_path) -> None:  # noqa: ANN001
+    """A YAML manifest without ``logging:`` yields the default LoggingConfig."""
+    path = tmp_path / "no-logging.yml"
+    path.write_text("mode: paper\n")
+    cfg = AppConfig.from_yaml(path)
+    assert cfg.logging.level == "INFO"
+    assert cfg.logging.dir == pathlib.Path("logs")
+    assert cfg.logging.retention_days == 14
+
+
+def test_logging_section_round_trips_through_yaml(tmp_path) -> None:  # noqa: ANN001
+    """The ``logging:`` section survives a ``to_yaml``/``from_yaml`` round-trip."""
+    cfg = AppConfig.model_validate(
+        {"mode": "paper", "logging": {"level": "warning", "retention_days": 7}}
+    )
+    path = tmp_path / "m.yaml"
+    cfg.to_yaml(path)
+    reloaded = AppConfig.from_yaml(path)
+    assert reloaded.logging.level == "WARNING"
+    assert reloaded.logging.retention_days == 7

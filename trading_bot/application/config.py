@@ -58,6 +58,7 @@ downstream consumes a validated :class:`AppConfig`.
 
 from __future__ import annotations
 
+import logging
 import os
 import pathlib
 from decimal import Decimal
@@ -77,6 +78,7 @@ __all__ = [
     "StrategyConfig",
     "PortfolioStrategyConfig",
     "RiskConfig",
+    "LoggingConfig",
     "AppConfig",
 ]
 
@@ -671,6 +673,54 @@ class UIConfig(BaseModel):
         return self
 
 
+class LoggingConfig(BaseModel):
+    """How the **daemon** logs — level, destination directory, retention.
+
+    The daemon path (``trading-bot start [--serve]``) routes its lifecycle and
+    per-tick lines through the standard-library :mod:`logging` root logger,
+    wired by :func:`~trading_bot.application.log_setup.configure_daemon_logging`
+    to a midnight-rotated ``daemon.log`` (plus ``stderr``, so systemd/journal
+    still sees output). This model is the manifest's optional ``logging:``
+    section that tunes that wiring; interactive CLI commands (``status`` /
+    ``kpi`` / ``canary`` / ...) keep their rich-console output and ignore it.
+    The section is **additive** — a manifest with no ``logging:`` key keeps
+    every default below.
+
+    Parameters
+    ----------
+    level : str, optional
+        Root log level, validated case-insensitively against the standard
+        library's level names (:func:`logging.getLevelNamesMapping` — ``DEBUG``
+        / ``INFO`` / ``WARNING`` / ``ERROR`` / ``CRITICAL`` and their aliases)
+        and stored **upper-case**. Defaults to ``"INFO"`` — the engine's own
+        story, with the noisy third-party namespaces capped at ``WARNING`` by
+        the setup.
+    dir : pathlib.Path, optional
+        Directory the rotated ``daemon.log`` (and its dated backups) is written
+        to. A relative path (the default ``Path("logs")``) resolves against the
+        working directory the daemon runs from, like the other manifest paths;
+        it is created if missing.
+    retention_days : int, optional
+        Number of dated backups the midnight rotation keeps (``backupCount``);
+        older files are pruned. Must be ``>= 1``. Defaults to ``14``.
+
+    """
+
+    level: str = "INFO"
+    dir: pathlib.Path = pathlib.Path("logs")
+    retention_days: int = Field(default=14, ge=1)
+
+    @field_validator("level")
+    @classmethod
+    def _valid_level(cls, v: str) -> str:
+        """Accept any standard level name case-insensitively; store it upper-case."""
+        upper = v.strip().upper()
+        if upper not in logging.getLevelNamesMapping():
+            valid = ", ".join(sorted(logging.getLevelNamesMapping()))
+            raise ValueError(f"level {v!r} is not a valid log level (one of: {valid})")
+        return upper
+
+
 class AppConfig(BaseModel):
     """Top-level engine configuration — brokers, strategies and risk.
 
@@ -757,6 +807,11 @@ class AppConfig(BaseModel):
     storage : StorageConfig, optional
         Where state is persisted (SQLite) and where the bars feed reads data
         from (dccd dir). Defaults to all-unset (each layer's own default).
+    logging : LoggingConfig, optional
+        How the **daemon** path logs (level / directory / retention) — consumed
+        by :func:`~trading_bot.application.log_setup.configure_daemon_logging`.
+        Additive: a manifest with no ``logging:`` section keeps the defaults
+        (INFO, ``logs/``, 14 days). Interactive CLI commands ignore it.
 
     Examples
     --------
@@ -787,6 +842,7 @@ class AppConfig(BaseModel):
     risk: RiskConfig = Field(default_factory=RiskConfig)
     storage: StorageConfig = Field(default_factory=StorageConfig)
     ui: UIConfig = Field(default_factory=UIConfig)
+    logging: LoggingConfig = Field(default_factory=LoggingConfig)
 
     @field_validator("display_currency")
     @classmethod
