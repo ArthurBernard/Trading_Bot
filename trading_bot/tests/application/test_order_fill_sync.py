@@ -26,7 +26,11 @@ Async tests run un-decorated (``asyncio_mode = "auto"``).
 from __future__ import annotations
 
 # Built-in
+import logging
 import pathlib
+
+# Third-party
+import pytest
 
 # Local
 from trading_bot.application.events import EventBus, FillEvent, OrderEvent
@@ -197,6 +201,79 @@ async def test_no_event_loop() -> None:
     # after the drain. An unguarded re-emit would recurse unboundedly here.
     assert len(events) == 2
     assert all(e.order.client_order_id == "cid-1" for e in events)
+
+
+# --- leaf 02: per-fill INFO trail (module logger) --------------------------- #
+
+_FILL_SYNC_LOGGER = "trading_bot.application.order_fill_sync"
+
+
+async def test_applied_fill_logs_unit_prefixed_pinned_line(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A unit-named sync logs the pinned ``unit=<name> fill ...`` line incl fee_asset.
+
+    A partial submit leaves the order tracked & fillable; a controlled follow-up
+    fill (explicit ``fee_asset``) then applies on the live path and logs one INFO
+    line: ``unit=u1 fill cid=… <signed qty> @ <price> fee=<fee> <fee_asset>``.
+    """
+    bus = EventBus()
+    broker = PaperBroker(
+        event_bus=bus,
+        fill_model="partial",
+        partial_chunks=2,
+        partial_fill_ratio=money("0.5"),
+    )
+    router = OrderRouter(broker, bus)
+    OrderFillSync(router, bus, unit_name="u1")
+
+    with caplog.at_level(logging.INFO, logger=_FILL_SYNC_LOGGER):
+        order = _order(qty="2")
+        await router.submit(order)  # → PARTIALLY_FILLED, tracked & fillable
+        assert order.status is OrderStatus.PARTIALLY_FILLED
+        caplog.clear()  # drop the paper partial-fill lines; keep only ours
+        bus.emit(
+            FillEvent(
+                Fill(
+                    fill_id="F-EXPLICIT",
+                    client_order_id="cid-1",
+                    instrument=BTC_USD,
+                    side=OrderSide.BUY,
+                    qty=money("1"),
+                    price=money("30100"),
+                    fee=money("0.5"),
+                    fee_asset="BNB",
+                    ts=1_700_000_000_100,
+                )
+            )
+        )
+
+    lines = [r.getMessage() for r in caplog.records if r.name == _FILL_SYNC_LOGGER]
+    fill_lines = [m for m in lines if m.startswith("unit=u1 fill cid=cid-1")]
+    assert len(fill_lines) == 1
+    assert "@ 30100" in fill_lines[0]
+    assert "fee=0.5 BNB" in fill_lines[0]  # the explicit fee_asset, not the quote
+
+
+async def test_applied_fill_logs_without_prefix_when_no_unit_name(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A ``unit_name=None`` sync logs the same line without the ``unit=`` prefix.
+
+    Fee asset defaults to the instrument's quote currency (``USD``) when the fill
+    carries none.
+    """
+    _bus, _broker, router, _sync = _wire()  # default sync: unit_name=None
+
+    with caplog.at_level(logging.INFO, logger=_FILL_SYNC_LOGGER):
+        await router.submit(_order())  # paper immediate fill → applied
+
+    lines = [r.getMessage() for r in caplog.records if r.name == _FILL_SYNC_LOGGER]
+    fill_lines = [m for m in lines if m.startswith("fill cid=cid-1")]
+    assert len(fill_lines) == 1
+    assert "unit=" not in fill_lines[0]  # no prefix when unit_name is None
+    assert "@ 30000" in fill_lines[0]
+    assert fill_lines[0].endswith("USD")  # fee_asset None → quote currency
 
 
 # --- restart healing: replay ------------------------------------------------ #

@@ -15,6 +15,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`application/log_setup.py`); tick errors now log their traceback
   (previously invisible — no handler existed). Interactive CLI output
   unchanged. (#226)
+- **Per-unit daemon log trail** — every evaluated rebalance logs one
+  grep-stable summary (`unit=… rebalance asof=… legs/submitted/round_up/
+  skipped/on_target`, counters partitioning the universe); round-up/skip leg
+  decisions log their full `LegDecision.reason` (the exact Decimals and the
+  binding venue minimum) at INFO; order submits (cid, side, qty, px,
+  venue id) at INFO and refusals at WARN; each applied fill logs
+  cid/qty/price/fee/fee-asset (`OrderFillSync.unit_name`, additive); unit
+  start/stop/step-error transitions logged. Anti-spam pinned: an idle tick
+  (no new bar) adds zero per-unit lines — a unit's inactivity is now
+  explained by the log. (#227)
 
 ### Changed
 

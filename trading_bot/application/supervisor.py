@@ -36,6 +36,7 @@ through the engines it builds (reconcile on start; the runners' router/broker).
 from __future__ import annotations
 
 import asyncio
+import logging
 import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
@@ -108,6 +109,8 @@ KpiLevel = Literal["strategy", "exchange", "total"]
 _KIND = Literal["strategy", "portfolio"]
 
 _ZERO: Money = money("0")
+
+logger = logging.getLogger(__name__)
 
 #: The accounting checker's cache TTL, in milliseconds (see ``_accounting_of``).
 #: The dashboard polls every 10 s; a 60 s window means the checker recomputes
@@ -850,6 +853,13 @@ class StrategySupervisor:
             unit.runner = pruns[0]
         unit.engine = engine
         unit.running = True
+        logger.info(
+            "unit=%s started mode=%s exchange=%s kind=%s",
+            unit.name,
+            unit.mode,
+            unit.exchange,
+            unit.kind,
+        )
 
     @staticmethod
     def _replay_paper_book(engine: Engine) -> None:
@@ -1025,7 +1035,14 @@ class StrategySupervisor:
         (drop the runner + engine, flip ``running`` off); the store is drained first
         by :meth:`_drain_store` (async paths) or a direct blocking close
         (:meth:`remove_unit`) so no enqueued write is lost.
+
+        Logs one INFO transition line **only when the unit was actually running**
+        — the single teardown path covers ``stop`` / ``set_mode`` restart /
+        ``remove_unit``, and an idempotent stop of an already-stopped unit stays
+        silent (no phantom transition).
         """
+        if unit.running:
+            logger.info("unit=%s stopped", unit.name)
         unit.running = False
         unit.runner = None
         unit.engine = None
@@ -1508,10 +1525,25 @@ class StrategySupervisor:
             if not unit.running or unit.runner is None:
                 return None
             runner = unit.runner
-        if isinstance(runner, StrategyRunner):
-            return await runner.step_latest()
-        assert isinstance(runner, PortfolioRunner)
-        return await runner.rebalance_latest()
+        try:
+            if isinstance(runner, StrategyRunner):
+                result: Order | object | None = await runner.step_latest()
+            else:
+                assert isinstance(runner, PortfolioRunner)
+                result = await runner.rebalance_latest()
+        except Exception:
+            # A unit's evaluation blew up: attribute the traceback to this unit
+            # (the CLI tick's own catch only knows "a tick failed"), then re-raise
+            # so the daemon's outer safety net still sees it. A step error is rare,
+            # never steady-state — this is not an anti-spam concern.
+            logger.exception("unit=%s step error", name)
+            raise
+        if result is None:
+            # Evaluated nothing this tick (freshness gate skip / no new bar): a
+            # DEBUG line only, so a steady-state INFO log stays free of per-unit
+            # idle chatter (leaf 02 anti-spam).
+            logger.debug("unit=%s step evaluated nothing (no new bar)", name)
+        return result
 
     async def start_all(self) -> None:
         """Start every managed unit (the daemon's boot — each in its config mode)."""

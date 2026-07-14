@@ -54,7 +54,7 @@ What the audit measured (the evidence this epic answers):
 ## Leaf checklist
 
 - [x] 01 log-setup — `feat/daemon-log-setup` — medium
-- [ ] 02 unit-event-trail — `feat/daemon-unit-event-logs` — medium
+- [x] 02 unit-event-trail — `feat/daemon-unit-event-logs` — medium
 - [ ] 03 tick-timing-metrics — `feat/tick-timing-metrics` — medium
 
 ## Dependencies
