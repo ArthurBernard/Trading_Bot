@@ -86,6 +86,8 @@ order — none started yet, each is a `/pick-task` candidate:
    risk-limit visibility incl. daily-loss usage); `last_error` on
    `/api/strategies` (a stopped unit is indistinguishable from a crashed one).
 
+3b. [ ] **Daemon observability — structured logs** (surfaced by the 2026-07-14 health audit; prereq for #4's systemd alerting + soak evidence): timestamped rotated `logs/daemon.log`, per-unit evaluation/order/skip trail, tick-duration metrics on `/api/health` (additive). Plan: `plans/daemon-logging/`.
+
 4. [ ] **Ops readiness** (not engine code): daemon under **systemd** (restart
    policy + an alert when the process dies — today it is a `nohup` from a
    terminal session); a **multi-week paper soak** on the real-data books
