@@ -1,7 +1,7 @@
 ---
 plan: daemon-logging/01-log-setup
 kind: leaf
-status: planned
+status: executing
 complexity: medium
 depends: []
 parallel: false
