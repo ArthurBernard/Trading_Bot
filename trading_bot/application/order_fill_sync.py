@@ -123,6 +123,13 @@ class OrderFillSync:
         :class:`~trading_bot.domain.order.Order` aggregates to update.
     bus : EventBus
         The shared bus to listen on and re-emit updated orders onto.
+    unit_name : str or None, optional
+        The managed unit this sync belongs to, threaded from
+        :func:`~trading_bot.application.service_factory.build_engine` for a
+        single-unit slice. When given, every applied-fill INFO line is prefixed
+        ``unit=<name> ``; when ``None`` (the whole-system / multi-unit path, the
+        default — keeps the historic signature working) the same line is logged
+        without the prefix (starting at ``fill cid=…``).
 
     Examples
     --------
@@ -136,9 +143,12 @@ class OrderFillSync:
 
     """
 
-    def __init__(self, router: OrderRouter, bus: EventBus) -> None:
+    def __init__(
+        self, router: OrderRouter, bus: EventBus, *, unit_name: str | None = None
+    ) -> None:
         self._router = router
         self._bus = bus
+        self._unit_name = unit_name
         # Fill-id dedup: every fill this component has consumed — applied, or
         # deliberately skipped (untracked/terminal on replay) — so a re-emitted
         # event or a replayed history never double-applies. Fills are the PnL
@@ -302,4 +312,21 @@ class OrderFillSync:
                 exc,
             )
             return False
+        # One INFO per applied fill — the execution the log's fill line reports
+        # (signed qty, price, fee) is exactly what reached the tracked order, so a
+        # reader can tie the daemon log to the store's fills table. The fee is
+        # denominated in ``fee_asset`` when the venue set one, else the quote
+        # currency. Prefixed ``unit=<name> `` when this sync knows its unit; the
+        # same line without the prefix otherwise (see the ``unit_name`` param).
+        fee_ccy = fill.fee_asset or fill.instrument.symbol.quote
+        prefix = f"unit={self._unit_name} " if self._unit_name is not None else ""
+        logger.info(
+            "%sfill cid=%s %s @ %s fee=%s %s",
+            prefix,
+            fill.client_order_id,
+            fill.signed_qty,
+            fill.price,
+            fill.fee,
+            fee_ccy,
+        )
         return True

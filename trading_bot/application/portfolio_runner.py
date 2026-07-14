@@ -118,6 +118,7 @@ import logging
 import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field, replace
+from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
 from trading_bot.application.events import EventBus, LogEvent
@@ -167,6 +168,21 @@ def _now_ms() -> int:
     diagnostic, never consulted by the freshness gate itself.
     """
     return int(time.time() * 1000)
+
+
+def _asof_iso(asof_ms: int) -> str:
+    """Render an epoch-ms as-of as ISO-8601 UTC (e.g. ``2026-07-14T00:00:00+00:00``).
+
+    The grep-stable timestamp the per-unit rebalance-summary log line carries — a
+    bar's as-of, not wall-clock — so a reader can tie the summary back to the exact
+    bar the tick evaluated.
+    """
+    return datetime.fromtimestamp(asof_ms / 1000, tz=timezone.utc).isoformat()
+
+
+def _order_px(order: Order) -> str:
+    """The order's price for a log line: its limit price, or ``mkt`` for a market order."""
+    return "mkt" if order.limit_price is None else str(order.limit_price)
 
 
 @dataclass(frozen=True, slots=True)
@@ -526,7 +542,15 @@ class PortfolioRunner:
         )
         signal_by_symbol = {sig.instrument.symbol: sig for sig in signals}
 
-        submitted = 0
+        # Per-outcome counters for the pinned rebalance-summary line. The four
+        # visible counters plus the (invisible) failure count partition the
+        # universe exactly: every coin is on-target, skipped, round-up, submitted
+        # or failed. ``submitted`` on the returned result stays the number of legs
+        # that actually routed (plain submits + round-ups), unchanged.
+        n_submit = 0
+        n_round_up = 0
+        n_skip = 0
+        n_on_target = 0
         failures: list[RebalanceFailure] = []
         # Route in universe order for a deterministic per-tick leg sequence.
         for symbol in self._strategy.universe:
@@ -538,20 +562,23 @@ class PortfolioRunner:
             if delta == 0:
                 # Already on target (incl. a flat target against a flat position):
                 # no leg.
+                n_on_target += 1
                 continue
 
+            action = "submit"
             if self._spec_resolver is not None:
                 # Venue-minimum order preparation (see the module docstring):
                 # resolve the venue spec (cached after the first tick), run the
                 # pure policy, and act on its decision. The order below still
                 # carries the BARE instrument — the resolved spec shapes the
                 # quantity only, never the tracker/risk keying.
-                delta = await self._prepare_delta(
+                delta, action = await self._prepare_delta(
                     symbol, delta, position.net_qty, prices[symbol], step
                 )
                 if delta == 0:
                     # The policy skipped the leg (dust / capped below the
                     # minimum / quantized to zero); already logged.
+                    n_skip += 1
                     continue
 
             order = self._build_order(symbol, instrument, delta, prices[symbol], step)
@@ -561,6 +588,16 @@ class PortfolioRunner:
                 # Per-leg failure: record it and continue the other legs (the
                 # rebalance is not all-or-nothing — see the module docstring).
                 failures.append(RebalanceFailure(symbol=symbol, error=exc))
+                logger.warning(
+                    "unit=%s order refused cid=%s %s %s %s @ %s reason=%s",
+                    self._strategy.name,
+                    order.client_order_id,
+                    order.side.value,
+                    order.qty,
+                    symbol,
+                    _order_px(order),
+                    f"{type(exc).__name__}: {exc}",
+                )
                 if self._bus is not None:
                     self._bus.emit(
                         LogEvent(
@@ -574,7 +611,20 @@ class PortfolioRunner:
                     )
                 continue
 
-            submitted += 1
+            if action == "round_up":
+                n_round_up += 1
+            else:
+                n_submit += 1
+            logger.info(
+                "unit=%s order submitted cid=%s %s %s %s @ %s venue_id=%s",
+                self._strategy.name,
+                routed.client_order_id,
+                routed.side.value,
+                routed.qty,
+                symbol,
+                _order_px(routed),
+                routed.venue_order_id,
+            )
             if self._bus is not None:
                 self._bus.emit(
                     LogEvent(
@@ -587,7 +637,24 @@ class PortfolioRunner:
                     )
                 )
 
-        return RebalanceResult(submitted=submitted, failures=failures)
+        # One INFO summary per *evaluated* rebalance (a new bar was consumed,
+        # whether or not orders resulted): the unit's story in a single grep-stable
+        # line. Idle daemon ticks never reach here — the freshness gate in
+        # `rebalance_latest` returns before calling `rebalance`, so a steady-state
+        # tick that consumes no new bar adds zero INFO lines (leaf 02 anti-spam).
+        logger.info(
+            "unit=%s rebalance asof=%s legs=%d submitted=%d round_up=%d "
+            "skipped=%d on_target=%d",
+            self._strategy.name,
+            _asof_iso(asof),
+            len(self._strategy.universe),
+            n_submit,
+            n_round_up,
+            n_skip,
+            n_on_target,
+        )
+
+        return RebalanceResult(submitted=n_submit + n_round_up, failures=failures)
 
     async def rebalance_latest(self) -> RebalanceResult | None:
         """Rebalance the book over the feed's **latest** cross-section — for a daemon.
@@ -728,28 +795,33 @@ class PortfolioRunner:
         position_qty: Money,
         close: Money,
         step: int,
-    ) -> Money:
-        """Run one leg through the venue-minimum policy; return the final delta.
+    ) -> tuple[Money, str]:
+        """Run one leg through the venue-minimum policy; return ``(delta, action)``.
 
         Resolves the venue spec for ``(exchange, symbol)`` (cached by the
         resolver after the first tick), applies
         :func:`~trading_bot.application.order_prep.prepare_leg` to the signed
         ``delta`` and acts on the decision:
 
-        * ``skip`` → emits one info :class:`LogEvent` with the policy's reason
-          and returns ``0`` (the caller routes nothing — the residual is
-          recomputed naturally on the next rebalance);
-        * ``round_up`` → emits one info :class:`LogEvent` and returns the
-          bumped quantity on the original delta's side;
+        * ``skip`` → logs one INFO leg-decision line (module logger) + one info
+          :class:`LogEvent`, and returns ``(0, "skip")`` (the caller routes
+          nothing — the residual is recomputed naturally on the next rebalance);
+        * ``round_up`` → logs one INFO leg-decision line + one info
+          :class:`LogEvent`, and returns the bumped quantity on the original
+          delta's side with ``"round_up"``;
         * ``submit`` → returns the (lot-quantized, possibly sell-capped)
-          quantity on the original delta's side.
+          quantity on the original delta's side with ``"submit"`` (a plain
+          submit is *not* logged here — the summary line already tells that
+          story, so there is no double INFO per order).
 
-        A degraded resolver (a venue metadata fetch failed and fell back to a
-        bare instrument) additionally emits ONE warning :class:`LogEvent` per
-        runner lifetime; the leg itself degrades to the permissive path via the
-        bare spec. Never raises on venue-metadata trouble — the resolver
-        swallows fetch failures by contract, so a leg can never abort the
-        rebalance from here.
+        The returned ``action`` (``"submit"`` / ``"round_up"`` / ``"skip"``) lets
+        :meth:`rebalance` bucket the leg into the summary counters. A degraded
+        resolver (a venue metadata fetch failed and fell back to a bare
+        instrument) additionally emits ONE warning :class:`LogEvent` per runner
+        lifetime; the leg itself degrades to the permissive path via the bare
+        spec. Never raises on venue-metadata trouble — the resolver swallows
+        fetch failures by contract, so a leg can never abort the rebalance from
+        here.
         """
         assert self._spec_resolver is not None and self._exchange is not None
         spec = await self._spec_resolver.resolve(self._exchange, symbol)
@@ -778,6 +850,12 @@ class PortfolioRunner:
             price=close,
         )
         if decision.action == "skip":
+            logger.info(
+                "unit=%s leg %s skip: %s",
+                self._strategy.name,
+                symbol,
+                decision.reason,
+            )
             if self._bus is not None:
                 self._bus.emit(
                     LogEvent(
@@ -788,20 +866,28 @@ class PortfolioRunner:
                         level="info",
                     )
                 )
-            return _ZERO
-        if decision.action == "round_up" and self._bus is not None:
-            self._bus.emit(
-                LogEvent(
-                    message=(
-                        f"{self._strategy.name} step {step}: leg {symbol} "
-                        f"rounded up to the venue minimum — {decision.reason}"
-                    ),
-                    level="info",
-                )
+            return _ZERO, "skip"
+        if decision.action == "round_up":
+            logger.info(
+                "unit=%s leg %s round_up: %s",
+                self._strategy.name,
+                symbol,
+                decision.reason,
             )
+            if self._bus is not None:
+                self._bus.emit(
+                    LogEvent(
+                        message=(
+                            f"{self._strategy.name} step {step}: leg {symbol} "
+                            f"rounded up to the venue minimum — {decision.reason}"
+                        ),
+                        level="info",
+                    )
+                )
         # The policy returns the final ABSOLUTE quantity; it rides the original
         # delta's side (the policy never flips a leg's direction).
-        return decision.qty if delta > 0 else -decision.qty
+        final = decision.qty if delta > 0 else -decision.qty
+        return final, decision.action
 
     def _build_order(
         self,

@@ -36,6 +36,7 @@ through the engines it builds (reconcile on start; the runners' router/broker).
 from __future__ import annotations
 
 import asyncio
+import logging
 import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
@@ -109,6 +110,8 @@ _KIND = Literal["strategy", "portfolio"]
 
 _ZERO: Money = money("0")
 
+logger = logging.getLogger(__name__)
+
 #: The accounting checker's cache TTL, in milliseconds (see ``_accounting_of``).
 #: The dashboard polls every 10 s; a 60 s window means the checker recomputes
 #: at most once a minute per unit, and only while something is actually
@@ -164,6 +167,14 @@ class StrategyStatus:
         .last_asof_ms` / :attr:`~trading_bot.application.portfolio_runner
         .PortfolioRunner.last_asof_ms`), i.e. "the data this strategy last
         computed on". ``None`` before the first completed evaluation.
+    last_step_duration_ms : int or None
+        Wall-clock duration (**milliseconds**) of the unit's most recent
+        :meth:`StrategySupervisor.step` — the time its runner spent evaluating
+        one tick (data drain + signal + any routing), measured with a monotonic
+        clock. ``None`` before the unit has ever been stepped. Recorded on every
+        step (even one that raised), so a dashboard can spot a unit whose
+        evaluation is creeping toward the tick interval (the tick-timing health
+        signal — see ``doc/dev/plans/daemon-logging/03-tick-timing-metrics.md``).
     allocation : Money or None
         The unit's **genesis** capital — its declared ``allocation`` (or a
         portfolio's ``allocation``/``capital``). ``None`` for a single-instrument
@@ -215,6 +226,7 @@ class StrategyStatus:
     open_orders: int
     last_eval_ts: int | None = None
     last_asof_ts: int | None = None
+    last_step_duration_ms: int | None = None
     allocation: Money | None = None
     contributed: Money | None = None
     unrealised: Money | None = None
@@ -501,6 +513,12 @@ class _Unit:
     #: are cleared by :meth:`StrategySupervisor._teardown`) so a stopped unit still
     #: reports its last-known state.
     accounting: _AccountingState | None = None
+    #: Wall-clock duration (ms) of this unit's most recent :meth:`StrategySupervisor
+    #: .step` — the time its runner spent on one evaluation. ``None`` before the
+    #: unit has ever been stepped; recorded on every step (incl. one that raised),
+    #: and (like :attr:`accounting`) it survives ``stop`` so a stopped unit still
+    #: reports the last duration it measured.
+    last_step_duration_ms: int | None = None
 
 
 class StrategySupervisor:
@@ -850,6 +868,13 @@ class StrategySupervisor:
             unit.runner = pruns[0]
         unit.engine = engine
         unit.running = True
+        logger.info(
+            "unit=%s started mode=%s exchange=%s kind=%s",
+            unit.name,
+            unit.mode,
+            unit.exchange,
+            unit.kind,
+        )
 
     @staticmethod
     def _replay_paper_book(engine: Engine) -> None:
@@ -1025,7 +1050,14 @@ class StrategySupervisor:
         (drop the runner + engine, flip ``running`` off); the store is drained first
         by :meth:`_drain_store` (async paths) or a direct blocking close
         (:meth:`remove_unit`) so no enqueued write is lost.
+
+        Logs one INFO transition line **only when the unit was actually running**
+        — the single teardown path covers ``stop`` / ``set_mode`` restart /
+        ``remove_unit``, and an idempotent stop of an already-stopped unit stays
+        silent (no phantom transition).
         """
+        if unit.running:
+            logger.info("unit=%s stopped", unit.name)
         unit.running = False
         unit.runner = None
         unit.engine = None
@@ -1508,10 +1540,36 @@ class StrategySupervisor:
             if not unit.running or unit.runner is None:
                 return None
             runner = unit.runner
-        if isinstance(runner, StrategyRunner):
-            return await runner.step_latest()
-        assert isinstance(runner, PortfolioRunner)
-        return await runner.rebalance_latest()
+        # Time the runner's evaluation (data drain + signal + any routing) with a
+        # monotonic clock, and stamp it on the unit's runtime state in a `finally`
+        # so a slow-and-then-raising step is still measured (the duration is a
+        # health signal, not a success signal). Per-unit duration lives ONLY on
+        # this field, not the leaf-02 rebalance-summary line: that line is emitted
+        # from *inside* the runner, before this outer step timing exists, so
+        # threading the total back into it would mean the summary timing itself —
+        # the runner is deliberately not contorted for it (leaf 03, step 3).
+        started = time.monotonic()
+        try:
+            if isinstance(runner, StrategyRunner):
+                result: Order | object | None = await runner.step_latest()
+            else:
+                assert isinstance(runner, PortfolioRunner)
+                result = await runner.rebalance_latest()
+        except Exception:
+            # A unit's evaluation blew up: attribute the traceback to this unit
+            # (the CLI tick's own catch only knows "a tick failed"), then re-raise
+            # so the daemon's outer safety net still sees it. A step error is rare,
+            # never steady-state — this is not an anti-spam concern.
+            logger.exception("unit=%s step error", name)
+            raise
+        finally:
+            unit.last_step_duration_ms = int((time.monotonic() - started) * 1000)
+        if result is None:
+            # Evaluated nothing this tick (freshness gate skip / no new bar): a
+            # DEBUG line only, so a steady-state INFO log stays free of per-unit
+            # idle chatter (leaf 02 anti-spam).
+            logger.debug("unit=%s step evaluated nothing (no new bar)", name)
+        return result
 
     async def start_all(self) -> None:
         """Start every managed unit (the daemon's boot — each in its config mode)."""
@@ -1594,6 +1652,7 @@ class StrategySupervisor:
             open_orders=open_orders,
             last_eval_ts=last_eval_ts,
             last_asof_ts=last_asof_ts,
+            last_step_duration_ms=unit.last_step_duration_ms,
             allocation=allocation,
             contributed=contributed,
             unrealised=unrealised,

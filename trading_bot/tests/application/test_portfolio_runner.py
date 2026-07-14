@@ -27,11 +27,14 @@ Async tests run un-decorated (``asyncio_mode = "auto"``).
 from __future__ import annotations
 
 import asyncio
+import logging
+import re
 import time
 from collections.abc import Mapping
 from decimal import Decimal
 
 import polars as pl
+import pytest
 
 from trading_bot.application import (
     EventBus,
@@ -1264,3 +1267,97 @@ async def test_no_mark_cache_is_a_legacy_noop() -> None:
 
     assert result.submitted == 2
     assert result.failed == 0
+
+
+# --- leaf 02: per-unit event-trail logging (module loggers) ----------------- #
+
+_RUNNER_LOGGER = "trading_bot.application.portfolio_runner"
+
+
+async def test_mixed_rebalance_logs_summary_skip_and_submit_lines(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A mixed rebalance logs the summary, the skip's reason, and the submit's cid.
+
+    BTC (weight 1e-5 → 0.00002 BTC ≈ 1 USDT) is skipped below the 5-USDT notional
+    minimum; ETH (weight 0.5) submits. The pinned INFO lines land through the module
+    logger: the summary with correct counters (which sum to ``legs``), the skip line
+    carrying the ``LegDecision.reason``, and the submit line naming the cid.
+    """
+    weights = {BTC: money("0.00001"), ETH: money("0.5")}
+    router, tracker, bus, _broker = _engine()
+    resolver = _FakeResolver({BTC: _BTC_SPEC, ETH: _ETH_SPEC})
+    runner = PortfolioRunner(
+        _strategy(_weights_signal(weights)),
+        _ListFeed([], asof=1_700),
+        router,
+        tracker,
+        event_bus=bus,
+        spec_resolver=resolver,
+        exchange="binance",
+    )
+
+    with caplog.at_level(logging.INFO, logger=_RUNNER_LOGGER):
+        result = await runner.rebalance(_frames())
+
+    assert result.submitted == 1
+    msgs = [r.getMessage() for r in caplog.records if r.name == _RUNNER_LOGGER]
+
+    # The one summary line, with the exact pinned counters.
+    summary = [m for m in msgs if " rebalance asof=" in m]
+    assert len(summary) == 1
+    assert summary[0].startswith("unit=book rebalance asof=")
+    m = re.search(
+        r"legs=(\d+) submitted=(\d+) round_up=(\d+) skipped=(\d+) on_target=(\d+)",
+        summary[0],
+    )
+    assert m is not None
+    legs, sub, ru, sk, ot = (int(g) for g in m.groups())
+    assert (sub, ru, sk, ot) == (1, 0, 1, 0)
+    assert sub + ru + sk + ot == legs  # the four counters partition the universe
+
+    # The skip line carries the LegDecision.reason (Decimals + the binding min).
+    skips = [m for m in msgs if "leg BTC/USDT skip:" in m]
+    assert len(skips) == 1
+    assert "venue minimum" in skips[0]
+
+    # The submit line names the leg's deterministic cid.
+    submits = [m for m in msgs if m.startswith("unit=book order submitted")]
+    assert len(submits) == 1
+    assert "cid=book-ETH/USDT-0" in submits[0]
+
+
+async def test_idle_gated_tick_adds_no_unit_info_lines(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A freshness-gate-skipped tick adds zero unit INFO lines (leaf 02 anti-spam).
+
+    The first tick evaluates (genesis) and logs its summary; a second tick over an
+    unchanged store is skipped by the freshness gate before ``rebalance`` runs — so
+    it must add **no** INFO line from the runner at all.
+    """
+    client = _counting_client([100.0], [50.0])  # a single common day only
+    feed = _portfolio_feed_over(client)
+    strat = _strategy(_weights_signal({BTC: money("0.5"), ETH: money("-0.25")}))
+    router, tracker, bus, _broker = _engine()
+    runner = PortfolioRunner(strat, feed, router, tracker, event_bus=bus)
+
+    with caplog.at_level(logging.INFO, logger=_RUNNER_LOGGER):
+        first = await runner.rebalance_latest()
+        assert first is not None  # first-ever tick evaluates
+        assert any(
+            " rebalance asof=" in r.getMessage()
+            for r in caplog.records
+            if r.name == _RUNNER_LOGGER
+        )
+
+        caplog.clear()
+        second = await runner.rebalance_latest()
+        assert second is None  # the gate skipped this tick
+
+    idle_info = [
+        r
+        for r in caplog.records
+        if r.name == _RUNNER_LOGGER and r.levelno >= logging.INFO
+    ]
+    assert idle_info == []

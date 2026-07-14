@@ -16,6 +16,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 
+## [0.15.0] - 2026-07-14
+
+### Added
+
+- **Daemon logs are real logs** — the daemon path writes `logs/daemon.log`
+  through a midnight-rotating handler (14-day retention) with ISO-8601 local
+  timestamps carrying the numeric tz offset; level/dir/retention configurable
+  via the manifest's new optional `logging:` section
+  (`application/log_setup.py`); tick errors now log their traceback
+  (previously invisible — no handler existed). Interactive CLI output
+  unchanged. (#226)
+- **Per-unit daemon log trail** — every evaluated rebalance logs one
+  grep-stable summary (`unit=… rebalance asof=… legs/submitted/round_up/
+  skipped/on_target`, counters partitioning the universe); round-up/skip leg
+  decisions log their full `LegDecision.reason` (the exact Decimals and the
+  binding venue minimum) at INFO; order submits (cid, side, qty, px,
+  venue id) at INFO and refusals at WARN; each applied fill logs
+  cid/qty/price/fee/fee-asset (`OrderFillSync.unit_name`, additive); unit
+  start/stop/step-error transitions logged. Anti-spam pinned: an idle tick
+  (no new bar) adds zero per-unit lines — a unit's inactivity is now
+  explained by the log. (#227)
+- **Tick timing measured and pinned (closes the `daemon-logging` epic)** —
+  every tick's duration is logged on the heartbeat (`in <s.mmm>s`, WARN on
+  interval overrun) and per-unit step durations captured; the tick job's
+  APScheduler semantics are now explicit (`coalesce=True`, `max_instances=1`,
+  `misfire_grace_time=interval` — the 1 s default grace silently skipped late
+  ticks, the measured source of the audit's ~74 s-vs-60 s cadence shortfall);
+  additive API fields: `/api/health` `last_tick_duration_ms` / `last_tick_ts` /
+  `ticks_total` / `ticks_overrun`, `/api/strategies` `last_step_duration_ms`.
+  Real-data check: steady-state ticks ~2 s, first tick (data load) ~46 s —
+  the duration hypothesis refuted, the misfire one confirmed as the fix. (#228)
+
+### Changed
+
+### Fixed
+
+### Deprecated
+
+### Removed
+
 ## [0.14.0] - 2026-07-12
 
 ### Added

@@ -256,8 +256,11 @@ def build_engine(
     # confirmed fill to the router's *tracked* Order, so every filled order
     # freezes at OPEN/0 in the store and UI. Constructed right after the router
     # (it subscribes itself to the bus on construction), before the store
-    # attaches, so its re-emitted OrderEvent is what the store persists.
-    fill_sync = OrderFillSync(router, bus)
+    # attaches, so its re-emitted OrderEvent is what the store persists. Threaded
+    # the unit name (when this config is a single-unit slice — the supervisor's
+    # shape) so each applied-fill INFO line names its unit; None on the
+    # whole-system / multi-unit path (the line drops the ``unit=`` prefix).
+    fill_sync = OrderFillSync(router, bus, unit_name=_unit_name_of(config))
 
     store: SqliteStore | None = None
     if db_path is not None:
@@ -334,6 +337,27 @@ def genesis_v0(config: AppConfig) -> Money:
             else portfolio.capital
         )
     return config.starting_capital
+
+
+def _unit_name_of(config: AppConfig) -> str | None:
+    """The logical unit name of a single-unit slice, else ``None``.
+
+    Mirrors :func:`genesis_v0`'s single-unit detection: when ``config`` declares
+    exactly one strategy (and no portfolio) or exactly one portfolio (and no
+    strategy) — the shape the
+    :class:`~trading_bot.application.supervisor.StrategySupervisor` builds every
+    unit's engine from — the unit's name is returned. A multi-unit or empty config
+    (the whole-system :func:`~trading_bot.application.run_app.run_app` path)
+    yields ``None``, so its :class:`~trading_bot.application.order_fill_sync.
+    OrderFillSync` fill lines carry no unit prefix.
+    """
+    strategies = config.strategies
+    portfolios = config.portfolios
+    if len(strategies) == 1 and not portfolios:
+        return strategies[0].name
+    if len(portfolios) == 1 and not strategies:
+        return portfolios[0].name
+    return None
 
 
 def _build_broker(config: AppConfig, bus: EventBus) -> Broker:

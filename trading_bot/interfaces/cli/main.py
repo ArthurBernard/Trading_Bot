@@ -47,12 +47,14 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import dataclasses
+import logging
 import math
 import os
 import pathlib
 import signal
 import sys
 import tempfile
+import time
 from collections.abc import Callable
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any
@@ -71,6 +73,7 @@ from trading_bot.application.canary import (
 from trading_bot.application.config import AppConfig, BrokerConfig, StrategyConfig
 from trading_bot.application.data_feed import BARS_SCHEMA, InMemoryFeed
 from trading_bot.application.instrument_specs import InstrumentSpecResolver
+from trading_bot.application.log_setup import configure_daemon_logging
 from trading_bot.application.performance_service import PerformanceService
 from trading_bot.application.run_app import run_app
 from trading_bot.application.service_factory import Engine, build_engine
@@ -104,6 +107,11 @@ app = typer.Typer(
 
 #: The shared rich console every command prints through.
 _console = Console()
+
+#: The daemon's lifecycle/tick logger. Only the daemon path (``start [--serve]``)
+#: emits through it, after :func:`~trading_bot.application.log_setup.configure_daemon_logging`
+#: has wired the root handlers; interactive commands print to ``_console`` instead.
+_daemon_logger = logging.getLogger("trading_bot.daemon")
 
 #: Default synthetic-feed length (bars) when no ``--bars`` file is given — long
 #: enough for the default 10/30 MA windows to warm up and cross at least once.
@@ -1210,6 +1218,69 @@ def serve(
 # --- start (daemon) -------------------------------------------------------- #
 
 
+@dataclasses.dataclass
+class _TickMetrics:
+    """The daemon's rolling per-tick timing counters (``_run_daemon`` closure state).
+
+    Owned by the daemon (not the served app): the plain ``dashboard`` command has
+    no scheduler and so no metrics, exactly like ``next_tick_ts``. A single
+    instance lives in :func:`_run_daemon`; each ``_tick`` folds its measured
+    duration in via :meth:`record`, and :func:`_run_daemon`'s ``_schedule_info``
+    hook reads the fields out onto ``/api/health``.
+
+    Attributes
+    ----------
+    last_tick_duration_ms : int or None
+        Wall-clock duration (ms) of the most recent tick's ``step_all``. ``None``
+        before the first tick.
+    last_tick_ts : int or None
+        Epoch-ms wall-clock time the most recent tick finished. ``None`` before
+        the first tick.
+    ticks_total : int
+        How many ticks have run since the daemon started (a tick that raised in
+        ``step_all`` still counts — it did fire). ``0`` before the first tick.
+    ticks_overrun : int
+        How many of those ticks ran **longer than the configured interval**
+        (never incremented for a cron trigger, where an interval overrun is not
+        defined). ``0`` before the first tick / when no tick has overrun.
+    """
+
+    last_tick_duration_ms: int | None = None
+    last_tick_ts: int | None = None
+    ticks_total: int = 0
+    ticks_overrun: int = 0
+
+    def record(
+        self, *, duration_ms: int, now_ms: int, interval_seconds: float | None
+    ) -> bool:
+        """Fold one completed tick's timing in; return whether it overran the interval.
+
+        Parameters
+        ----------
+        duration_ms : int
+            The tick's measured wall-clock duration in milliseconds.
+        now_ms : int
+            Epoch-ms wall-clock time the tick finished.
+        interval_seconds : float or None
+            The configured interval in seconds; ``None`` for a cron trigger, where
+            an "overrun" against a fixed interval is undefined — the duration and
+            counters are still recorded, but ``ticks_overrun`` never increments.
+
+        Returns
+        -------
+        bool
+            ``True`` when the tick overran (``duration_ms`` exceeds
+            ``interval_seconds``), else ``False``.
+        """
+        self.last_tick_duration_ms = duration_ms
+        self.last_tick_ts = now_ms
+        self.ticks_total += 1
+        overran = interval_seconds is not None and duration_ms > interval_seconds * 1000
+        if overran:
+            self.ticks_overrun += 1
+        return overran
+
+
 async def _run_daemon(
     config: AppConfig,
     *,
@@ -1265,18 +1336,56 @@ async def _run_daemon(
 
     from trading_bot.application.supervisor import StrategySupervisor
 
+    # Wire the durable logging spine before anything logs: the daemon runs
+    # headless for days, so its lifecycle/tick lines (and any WARNING from the
+    # runners/router) must land in the rotated file, not just fly past on stderr.
+    configure_daemon_logging(config.logging)
+
     supervisor = StrategySupervisor(config, dccd_client=dccd_client)  # type: ignore[arg-type]
     await supervisor.start_all()
 
+    # The tick-timing counters (health signal, exposed on `/api/health` via the
+    # `_schedule_info` hook below). An interval trigger has a well-defined overrun
+    # threshold (the interval); a cron trigger does not, so its overrun check is
+    # disabled (`interval_seconds = None`) while duration/counters still record.
+    metrics = _TickMetrics()
+    interval_seconds: float | None = None if cron is not None else interval
+
     async def _tick() -> None:
+        started = time.monotonic()
+        stepped = 0
         try:
             stepped = await supervisor.step_all()
-            if stepped:
-                _console.print(
-                    f"[dim]daemon tick: stepped {stepped} strategy(ies)[/dim]"
-                )
         except Exception as exc:  # noqa: BLE001 - never let a tick kill the daemon
-            _console.print(f"[red]daemon tick error:[/red] {exc}")
+            # `exception` captures the traceback into the file (invisible before).
+            _daemon_logger.exception("daemon tick error: %s", exc)
+        # Measure every tick — even one that raised (the duration is a health
+        # signal, not a success signal); the errored tick still counts as a tick.
+        duration_ms = int((time.monotonic() - started) * 1000)
+        overran = metrics.record(
+            duration_ms=duration_ms,
+            now_ms=int(time.time() * 1000),
+            interval_seconds=interval_seconds,
+        )
+        duration_s = duration_ms / 1000
+        if stepped:
+            # Daemon-only noise: to the log file, not the console. The leaf-01
+            # heartbeat now carries the tick's duration.
+            _daemon_logger.info(
+                "daemon tick: stepped %d strategy(ies) in %.3fs", stepped, duration_s
+            )
+        if overran:
+            # An interval tick that outran its interval: the next tick would have
+            # queued behind it — `max_instances=1` + `coalesce=True` collapse the
+            # backlog into one run, but the operator should know the cadence is
+            # slipping (the 74 s-vs-60 s health question this leaf answers).
+            _daemon_logger.warning(
+                "daemon tick overrun: %.3fs > %gs "
+                "(evaluation outran the tick interval; the backlog coalesces "
+                "under max_instances=1)",
+                duration_s,
+                interval_seconds,
+            )
 
     trigger = (
         CronTrigger.from_crontab(cron)
@@ -1284,26 +1393,62 @@ async def _run_daemon(
         else IntervalTrigger(seconds=interval)
     )
     scheduler = AsyncIOScheduler()
-    job = scheduler.add_job(_tick, trigger)
+    # Pin the tick's overlap/misfire semantics explicitly (previously all
+    # APScheduler defaults):
+    #   max_instances=1     — two ticks must never race one engine;
+    #   coalesce=True       — a backlog of missed runs collapses into a single run;
+    #   misfire_grace_time  — how late a tick may still run. APScheduler's default
+    #                         grace is 1 s, so a tick even ~1 s late is silently
+    #                         *skipped* (the presumed source of the ~74 s-vs-60 s
+    #                         shortfall a health audit measured); grant the whole
+    #                         interval instead so a late tick still runs. A cron
+    #                         trigger has no fixed interval to derive a grace from,
+    #                         so use a fixed, sensible 30 s. APScheduler requires a
+    #                         positive int, so floor the interval at 1 s.
+    misfire_grace_time = 30 if cron is not None else max(1, int(interval))
+    job = scheduler.add_job(
+        _tick,
+        trigger,
+        coalesce=True,
+        max_instances=1,
+        misfire_grace_time=misfire_grace_time,
+    )
     scheduler.start()
+    _tick_desc = cron or f"every {interval:g}s"
+    _daemon_logger.info(
+        "daemon started (mode=%s): %d strateg(ies), tick=%s",
+        config.mode,
+        len(supervisor.names()),
+        _tick_desc,
+    )
     _console.print(
         f"[green]daemon started[/green] (mode={config.mode}): "
         f"{len(supervisor.names())} strateg(ies), "
-        f"tick={cron or f'every {interval:g}s'}"
+        f"tick={_tick_desc}"
     )
 
     def _schedule_info() -> dict[str, Any]:
-        """The scheduler's cadence, for the dashboard's ``/api/health`` hook.
+        """The scheduler's cadence + tick-timing metrics, for the ``/api/health`` hook.
 
         ``next_run_time`` is a tz-aware ``datetime`` (or ``None`` between ticks /
         once exhausted); converted to epoch **ms** for JSON. ``tick`` is the same
-        human trigger description the startup banner above prints.
+        human trigger description the startup banner above prints. The four
+        ``*_tick_*`` / ``ticks_*`` keys are the live :class:`_TickMetrics` counters
+        (``None``/``0`` before the first tick) — additive fields on
+        ``/api/health`` proving the realised cadence against the nominal one.
         """
         next_run = job.next_run_time
         next_tick_ts = (
             int(next_run.timestamp() * 1000) if next_run is not None else None
         )
-        return {"next_tick_ts": next_tick_ts, "tick": cron or f"every {interval:g}s"}
+        return {
+            "next_tick_ts": next_tick_ts,
+            "tick": cron or f"every {interval:g}s",
+            "last_tick_duration_ms": metrics.last_tick_duration_ms,
+            "last_tick_ts": metrics.last_tick_ts,
+            "ticks_total": metrics.ticks_total,
+            "ticks_overrun": metrics.ticks_overrun,
+        }
 
     try:
         if serve:
@@ -1397,6 +1542,7 @@ async def _run_daemon(
     finally:
         scheduler.shutdown(wait=False)
         await supervisor.shutdown()
+        _daemon_logger.info("daemon stopped (all strategies shut down)")
         _console.print("[green]daemon stopped[/green] (all strategies shut down)")
 
 

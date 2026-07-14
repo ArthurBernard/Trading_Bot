@@ -10,6 +10,7 @@ needs an explicit confirmation). Async tests run un-decorated (``asyncio_mode =
 from __future__ import annotations
 
 import asyncio
+import logging
 
 import polars as pl
 import pytest
@@ -130,6 +131,30 @@ async def test_start_step_stop_lifecycle() -> None:
     assert status.running is False
     # Stopped → nothing to step.
     assert await sup.step("btc-ma") is None
+
+
+async def test_step_records_last_step_duration_ms() -> None:
+    """`step` times the unit's evaluation onto its status (`None` before any step).
+
+    Leaf 03 tick-timing: the per-unit step duration is `None` on a fresh /
+    never-stepped unit, and after one `step` the status carries a non-negative
+    int (milliseconds). It survives `stop` (like the cached accounting report),
+    so a stopped unit still reports the last duration it measured.
+    """
+    pytest.importorskip("fynance")  # ma_crossover evaluates fynance.sma
+    sup = _supervisor()
+
+    # Never stepped -> None.
+    assert sup.status("btc-ma")[0].last_step_duration_ms is None
+
+    await sup.start("btc-ma")
+    await sup.step("btc-ma")
+    duration = sup.status("btc-ma")[0].last_step_duration_ms
+    assert isinstance(duration, int) and duration >= 0
+
+    # Survives stop (the measured duration is retained, like `accounting`).
+    await sup.stop("btc-ma")
+    assert sup.status("btc-ma")[0].last_step_duration_ms == duration
 
 
 async def test_set_mode_paper_testnet_roundtrip() -> None:
@@ -2282,3 +2307,63 @@ async def test_kill_switch_folds_to_error(tmp_path) -> None:  # noqa: ANN001
     status = sup.status("btc-ma")[0]
     assert status.health == "error"
     assert status.health_detail == ("daily loss limit breached",)
+
+
+# --- leaf 02: unit state-transition + step-error logging (module logger) ---- #
+
+_SUP_LOGGER = "trading_bot.application.supervisor"
+
+
+class _RaisingRunner(StrategyRunner):
+    """A ``StrategyRunner`` whose ``step_latest`` always raises (installed directly).
+
+    Bypasses the real ``__init__`` (no engine wiring) like ``_BarrierRunner``, so a
+    test can drop it onto a unit's ``runner`` and drive ``step`` into its error path
+    without a real engine / fynance signal.
+    """
+
+    def __init__(self) -> None:
+        # Deliberately do NOT call super().__init__ — no engine to wire here.
+        pass
+
+    async def step_latest(self):  # type: ignore[override]  # noqa: ANN201
+        raise RuntimeError("boom")
+
+
+async def test_step_error_logs_error_with_traceback(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A unit whose ``step`` raises logs one ERROR (with traceback) and re-raises."""
+    sup = _supervisor()
+    unit = sup._units["btc-ma"]  # noqa: SLF001
+    unit.running = True
+    unit.runner = _RaisingRunner()
+
+    with caplog.at_level(logging.ERROR, logger=_SUP_LOGGER):
+        with pytest.raises(RuntimeError, match="boom"):
+            await sup.step("btc-ma")
+
+    errors = [
+        r
+        for r in caplog.records
+        if r.name == _SUP_LOGGER and r.levelno >= logging.ERROR
+    ]
+    assert len(errors) == 1
+    assert "unit=btc-ma step error" in errors[0].getMessage()
+    assert errors[0].exc_info is not None  # logger.exception captured the traceback
+
+
+async def test_start_and_stop_log_unit_transitions(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Starting and stopping a unit each log one INFO transition line."""
+    pytest.importorskip("fynance")  # start builds a real engine (ma_crossover)
+    sup = _supervisor()
+
+    with caplog.at_level(logging.INFO, logger=_SUP_LOGGER):
+        await sup.start("btc-ma")
+        await sup.stop("btc-ma")
+
+    msgs = [r.getMessage() for r in caplog.records if r.name == _SUP_LOGGER]
+    assert any(m.startswith("unit=btc-ma started mode=paper") for m in msgs)
+    assert "unit=btc-ma stopped" in msgs
