@@ -6,6 +6,24 @@ rejected approaches as tombstones.
 
 ---
 
+### 2026-07-14 Unit event trail: runner-attributed lines, bus and log are two sinks (PR #227)  [accepted]
+- **Choice**: order-lifecycle log lines live in the **runner** (per-unit, sees
+  the router's outcome and the unit name) — not the shared router; the new
+  module-logger INFO/WARN lines are emitted **alongside** the existing
+  EventBus `LogEvent`s, not instead (the bus feeds the SSE dashboard, the
+  logger feeds `daemon.log` — two sinks, two audiences). `OrderFillSync`
+  gains an additive `unit_name` for fill attribution; supervisor step errors
+  are logged with traceback then **re-raised** (attribution without
+  swallowing the CLI tick's safety net).
+- **Why**: threading unit identity through the shared router would touch its
+  signature for a logging concern; the runner already owns the name and the
+  outcome. Replacing the bus emits would have silently unplugged the
+  dashboard's live log feed.
+- **Rejected alternatives**: per-unit `LoggerAdapter` injected into the
+  router (signature churn); replacing `LogEvent`s with logging (breaks SSE);
+  logging every idle tick per unit (2 units × 1440 min/day of noise — the
+  anti-spam rule is pinned in the plan).
+
 ### 2026-07-14 Daemon logging spine: root handlers, offset timestamps (PR #226)  [accepted]
 - **Choice**: the daemon's logging config lives in `application/log_setup.py`
   and wires the **root** logger with two owned, tagged handlers (midnight
