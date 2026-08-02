@@ -41,6 +41,7 @@ __all__ = [
     "AmbiguousRequestError",
     "HTTPError",
     "ResponseTooLargeError",
+    "redact_url",
 ]
 
 logger = logging.getLogger(__name__)
@@ -130,10 +131,21 @@ def _redact_url(url: str) -> str:
         (key, _REDACTED if key.lower() in _SENSITIVE_QUERY_KEYS else value)
         for key, value in pairs
     ]
-    # quote_via=quote keeps ``<redacted>`` readable rather than percent-encoding
-    # the angle brackets, so the marker is easy to grep for in logs.
+    # quote_via=quote (not the default quote_plus) re-encodes values path-style;
+    # the marker's angle brackets still percent-encode, so it reaches a log line
+    # as ``%3Credacted%3E`` — grep for ``redacted`` to find every masked value.
     new_query = urllib.parse.urlencode(redacted, quote_via=urllib.parse.quote)
     return urllib.parse.urlunsplit(split._replace(query=new_query))
+
+
+#: Public alias of :func:`_redact_url` for the other layers that must scrub a URL
+#: before it reaches a log. Sharing the one implementation — rather than
+#: re-deriving a key set per layer — is what makes a URL redacted *identically*
+#: wherever it could be logged: same :data:`_SENSITIVE_QUERY_KEYS`, same
+#: ``<redacted>`` marker, so one grep finds every masked value. Used by
+#: :mod:`trading_bot.application.log_setup` to scrub uvicorn's access log (the
+#: dashboard's ``?token=`` script auth would otherwise be written verbatim).
+redact_url = _redact_url
 
 
 def _redact_exc(exc: BaseException) -> str:

@@ -73,7 +73,10 @@ from trading_bot.application.canary import (
 from trading_bot.application.config import AppConfig, BrokerConfig, StrategyConfig
 from trading_bot.application.data_feed import BARS_SCHEMA, InMemoryFeed
 from trading_bot.application.instrument_specs import InstrumentSpecResolver
-from trading_bot.application.log_setup import configure_daemon_logging
+from trading_bot.application.log_setup import (
+    configure_daemon_logging,
+    install_access_log_redaction,
+)
 from trading_bot.application.performance_service import PerformanceService
 from trading_bot.application.run_app import run_app
 from trading_bot.application.service_factory import Engine, build_engine
@@ -1207,6 +1210,9 @@ def serve(
         f"[green]serving dashboard[/green] (read-only, mode={config.mode}) on "
         f"http://{host}:{port}  —  use 'trading-bot dashboard' for the full control UI"
     )
+    # Scrub uvicorn's access log first: it writes the request target verbatim, so
+    # a `?token=…` script-auth call would otherwise print the token in the clear.
+    install_access_log_redaction()
     uvicorn.run(
         application,
         host=host,
@@ -1474,6 +1480,10 @@ async def _run_daemon(
             )
             if auth_token:
                 _console.print("[dim]control dashboard auth: token login enabled[/dim]")
+            # Scrub uvicorn's access log before it can emit a line: it writes the
+            # request target verbatim, so a `?token=…` script-auth call would
+            # otherwise write this daemon's auth token to the journal.
+            install_access_log_redaction()
             server = uvicorn.Server(
                 uvicorn.Config(
                     api,
@@ -1856,6 +1866,9 @@ def dashboard(
         f"{', read-only' if read_only else ''}) on http://{host}:{port}"
         "  —  Ctrl-C to stop"
     )
+    # Scrub uvicorn's access log first: it writes the request target verbatim, so
+    # a `?token=…` script-auth call would otherwise print the token in the clear.
+    install_access_log_redaction()
     try:
         # uvicorn owns SIGINT: Ctrl-C returns from run() cleanly the first time.
         uvicorn.run(

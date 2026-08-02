@@ -27,7 +27,11 @@ anything else (pytest, an embedding host, ...).
 
 Secrets discipline: the formatter adds nothing beyond time / level / logger name
 / message — no request bodies, no credentials. Callers stay responsible for never
-passing a credential-adjacent value into a log record.
+passing a credential-adjacent value into a log record — with one exception this
+module handles itself: uvicorn's *access* logger writes the request URL verbatim,
+so the dashboard's documented ``?token=`` script auth would land in the journal on
+every request. :func:`install_access_log_redaction` scrubs it at the source (see
+:class:`AccessLogRedactionFilter`).
 """
 
 from __future__ import annotations
@@ -40,11 +44,15 @@ from logging.handlers import TimedRotatingFileHandler
 
 # Local
 from trading_bot.application.config import LoggingConfig
+from trading_bot.transport.http import redact_url
 
 __all__ = [
     "configure_daemon_logging",
+    "install_access_log_redaction",
+    "AccessLogRedactionFilter",
     "OWNED_HANDLER_ATTR",
     "NOISY_NAMESPACES",
+    "ACCESS_LOG_NAMESPACES",
 ]
 
 #: Attribute stamped ``True`` on every handler this module installs, so a re-call
@@ -62,6 +70,13 @@ NOISY_NAMESPACES: tuple[str, ...] = (
     "httpx",
     "websockets",
 )
+
+#: The uvicorn logger namespaces whose records can carry a request URL — and so a
+#: query-string secret. ``uvicorn.access`` writes one line per request (the leak
+#: that motivated this); ``uvicorn.error`` carries the lifecycle/exception lines,
+#: which quote the URL on a failed request. Both are scrubbed by
+#: :func:`install_access_log_redaction`.
+ACCESS_LOG_NAMESPACES: tuple[str, ...] = ("uvicorn.access", "uvicorn.error")
 
 #: The shared log-line layout: ISO timestamp, padded level, logger name, message.
 _LOG_FORMAT = "%(asctime)s %(levelname)-8s %(name)s — %(message)s"
@@ -146,3 +161,86 @@ def configure_daemon_logging(cfg: LoggingConfig) -> None:
 
     for namespace in NOISY_NAMESPACES:
         logging.getLogger(namespace).setLevel(logging.WARNING)
+
+
+class AccessLogRedactionFilter(logging.Filter):
+    """Scrub query-string secrets out of uvicorn's request log lines.
+
+    uvicorn's access logger formats one record per request as
+    ``'%s - "%s %s HTTP/%s" %d'`` with the **raw request target** among its
+    ``args`` — so the dashboard's documented ``?token=…`` script auth is written
+    verbatim to stderr/journald on every request. This filter rewrites the record
+    in place before any handler formats it, applying
+    :func:`~trading_bot.transport.http.redact_url` to ``record.msg`` and to every
+    string in ``record.args``; the value of a sensitive parameter (``token``,
+    ``signature``, ``api_key`` / ``apiKey``, ``nonce``, case-insensitively)
+    becomes ``<redacted>``.
+
+    Reusing the transport's scrubber is deliberate: one key set, one marker, so a
+    URL is masked identically wherever it could reach a log. That function is a
+    no-op on a string with no query part, so the record's other args (the client
+    address, ``GET``, the HTTP version, the status code) pass through untouched,
+    as does a query carrying nothing sensitive (``?symbol=BTCUSDT``).
+
+    Never drops a record: :meth:`filter` always returns ``True``. It is a
+    *sanitiser*, not a gate — a suppressed access line would cost observability,
+    which is not the trade being made here.
+    """
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        """Redact *record* in place; always keep it.
+
+        Parameters
+        ----------
+        record : logging.LogRecord
+            The record about to be handled. Mutated in place — filters run once
+            per record before formatting, so every handler downstream (file,
+            stderr, journald) sees the scrubbed version.
+
+        Returns
+        -------
+        bool
+            Always ``True`` — the record is sanitised, never suppressed.
+        """
+        if isinstance(record.msg, str):
+            record.msg = redact_url(record.msg)
+        # Only tuple args are positional `%s` substitutions worth scrubbing; a
+        # mapping-style `record.args` (`%(key)s` formatting) is left alone rather
+        # than rebuilt — uvicorn never uses it, and mutating an unknown mapping
+        # shape risks corrupting a third-party record.
+        if isinstance(record.args, tuple):
+            record.args = tuple(
+                redact_url(arg) if isinstance(arg, str) else arg for arg in record.args
+            )
+        return True
+
+
+def install_access_log_redaction() -> None:
+    """Attach one :class:`AccessLogRedactionFilter` to each uvicorn log namespace.
+
+    Call this **before** handing control to uvicorn (``uvicorn.run`` /
+    ``Server.serve``) on every serving path, so no request line can be emitted
+    unscrubbed. The filters go on the *loggers* named in
+    :data:`ACCESS_LOG_NAMESPACES`, not on handlers, and that placement is
+    load-bearing: uvicorn configures logging at startup with
+    :func:`logging.config.dictConfig` (its ``LOGGING_CONFIG``), which replaces a
+    configured logger's **handlers** but leaves filters attached
+    programmatically to the logger itself in place. A handler-level filter would
+    be discarded with the handler it sat on; a logger-level one survives, and
+    runs once per record before any handler formats it.
+
+    Idempotent: a namespace that already carries a filter of this class is left
+    alone, so repeated calls in one process (three CLI serving commands, or a
+    test suite invoking them many times) never stack duplicate filters on the
+    process-global uvicorn loggers.
+
+    Returns
+    -------
+    None
+
+    """
+    for namespace in ACCESS_LOG_NAMESPACES:
+        logger = logging.getLogger(namespace)
+        if any(isinstance(f, AccessLogRedactionFilter) for f in logger.filters):
+            continue
+        logger.addFilter(AccessLogRedactionFilter())

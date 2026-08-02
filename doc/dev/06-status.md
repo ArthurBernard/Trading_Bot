@@ -1,6 +1,6 @@
 # 06 — Status
 
-_Last updated: 2026-07-10_
+_Last updated: 2026-08-02_
 
 ## Where things stand
 
@@ -193,6 +193,12 @@ The engine is feature-complete and the safety machinery is wired. What remains i
 engine code: **real-key live enablement** (validate Kraken private endpoints +
 venue-level idempotency against a real-key sandbox, then flip `live_enabled`) — the one
 maintainer step in [`07-roadmap.md`](07-roadmap.md).
+
+Ops: the dashboard daemon runs under **systemd** on the ops machine since
+2026-08-02 (`deploy/trading-bot.service` installed + enabled; crash-restart and
+clean SIGTERM verified; access log redacts `?token=`). Still open from
+road-to-1.0 #4: an alert when the process dies, backups of the trading stores,
+and the multi-week paper soak (running since 2026-07-10).
 
 
 ## Known gaps / deferred
