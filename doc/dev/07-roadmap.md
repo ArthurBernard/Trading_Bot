@@ -125,6 +125,15 @@ engine bugs and a set of API/UX gaps. **All six epics shipped 2026-07-11/12**
    vehicle for road-to-1.0 #1 (PRs #221–#223; found `Fill.fee_asset` and the
    Binance HTTP-400 mapping along the way).
 
+## Hardening follow-up (2026-08-02)
+
+- [ ] **Access-log token redaction** — uvicorn's access log writes request URLs
+  verbatim, so the documented `?token=` script auth leaks the dashboard token
+  into journald/log files (observed during the 2026-08-02 systemd deploy; the
+  token was rotated). Redact sensitive query values (`token`, `signature`,
+  `api_key`, `nonce` — the `transport/http.py` key set) at every uvicorn launch
+  site (invariant: secrets never logged).
+
 ## Not gating 1.0 (post-1.0 candidates)
 
 - [ ] **Binance USDT-M futures adapter** — *unless* chosen as the first live
