@@ -6,6 +6,27 @@ rejected approaches as tombstones.
 
 ---
 
+### 2026-08-02 Access-log redaction: reuse the transport scrubber, filter at logger level (PR #232)  [accepted]
+- **Choice**: scrub uvicorn's request log by attaching a mutating
+  `logging.Filter` (`AccessLogRedactionFilter`, in `application/log_setup.py`)
+  to the `uvicorn.access` + `uvicorn.error` **loggers** before every uvicorn
+  launch (`serve`, `start --serve`, `dashboard`), reusing the transport's
+  existing URL scrubber via a public alias (`transport/http.py:redact_url` —
+  same key set `token`/`signature`/`api_key`/`nonce`, same `<redacted>`
+  marker). Install is idempotent; the filter sanitises, never suppresses.
+- **Why**: uvicorn's access logger writes the raw request target, so the
+  documented `?token=` script auth wrote the real dashboard token to journald
+  on the 2026-08-02 systemd deploy (invariant: secrets never logged; token
+  rotated). Logger-level placement is load-bearing: uvicorn's startup
+  `dictConfig` replaces the loggers' *handlers* but leaves
+  programmatically-attached logger *filters* in place (locked by a test), so
+  the scrub survives uvicorn's own logging setup at all three sites.
+- **Rejected alternatives**: forking uvicorn's `LOGGING_CONFIG` dict per launch
+  site (three copies to keep in sync with upstream); duplicating the key set at
+  the interface layer (two lists to drift apart — one implementation means one
+  grep finds every masked value); handler-level filters (discarded with the
+  handler when `dictConfig` runs).
+
 ### 2026-07-14 Tick scheduler semantics pinned; timing is a health signal (PR #228)  [accepted]
 - **Choice**: the daemon tick job runs with explicit `coalesce=True`,
   `max_instances=1`, `misfire_grace_time=interval` (cron triggers: fixed

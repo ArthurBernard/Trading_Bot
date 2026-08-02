@@ -86,9 +86,10 @@ order — none started yet, each is a `/pick-task` candidate:
    risk-limit visibility incl. daily-loss usage); `last_error` on
    `/api/strategies` (a stopped unit is indistinguishable from a crashed one).
 
-4. [ ] **Ops readiness** (not engine code): daemon under **systemd** (restart
-   policy + an alert when the process dies — today it is a `nohup` from a
-   terminal session); a **multi-week paper soak** on the real-data books
+4. [ ] **Ops readiness** (not engine code): daemon under **systemd** — **done
+   2026-08-02** on the ops machine (`deploy/trading-bot.service` installed +
+   enabled, crash-restart verified); still missing an **alert** when the
+   process dies; a **multi-week paper soak** on the real-data books
    (running since 2026-07-10, capital 100/strategy — KPIs and equity curves as
    evidence); **backup of the trading stores** (`var/dashboard/*.sqlite` — the
    dccd data has its hourly rclone sync, the books have nothing).

@@ -20,6 +20,7 @@ import asyncio
 import json
 import logging
 import time
+from collections.abc import Iterator
 from decimal import Decimal
 
 # Third-party
@@ -30,6 +31,10 @@ from typer.testing import CliRunner
 from trading_bot.application.accounting import Violation
 from trading_bot.application.config import AppConfig
 from trading_bot.application.events import FillEvent, LogEvent, OrderEvent
+from trading_bot.application.log_setup import (
+    ACCESS_LOG_NAMESPACES,
+    AccessLogRedactionFilter,
+)
 from trading_bot.application.supervisor import StrategySupervisor
 from trading_bot.domain.fill import Fill
 from trading_bot.domain.instrument import Instrument, Symbol
@@ -3861,3 +3866,81 @@ def test_graceful_shutdown_cancellation_filter_installs_once_per_process() -> No
         isinstance(f, _SuppressGracefulShutdownCancellation) for f in target.filters
     )
     assert after == max(before, 1)
+
+
+# --- CLI: every serving path installs the access-log scrubber --------------- #
+
+
+@pytest.fixture
+def clean_access_log_filters() -> Iterator[None]:
+    """Strip any :class:`AccessLogRedactionFilter` a test installs, on teardown.
+
+    The uvicorn loggers are process-global, so a filter left attached would keep
+    rewriting records for the rest of the suite. Only filters of that class are
+    removed — the dashboard's own ``uvicorn.error`` carve-out filter is left alone.
+    """
+    yield
+    for namespace in ACCESS_LOG_NAMESPACES:
+        logger = logging.getLogger(namespace)
+        logger.filters = [
+            f for f in logger.filters if not isinstance(f, AccessLogRedactionFilter)
+        ]
+
+
+def _access_filters() -> list[logging.Filter]:
+    """The redaction filters currently attached to the ``uvicorn.access`` logger."""
+    return [
+        f
+        for f in logging.getLogger("uvicorn.access").filters
+        if isinstance(f, AccessLogRedactionFilter)
+    ]
+
+
+def test_dashboard_installs_the_access_log_redaction(
+    monkeypatch: pytest.MonkeyPatch, clean_access_log_filters: None
+) -> None:
+    """`dashboard` scrubs uvicorn's access log before serving.
+
+    The dashboard documents a ``?token=`` query parameter for script auth, and
+    uvicorn's access logger writes the request target verbatim — so the token
+    must be redacted at the logger, installed *before* control reaches uvicorn
+    (patched out here, which is exactly why the assertion can be made at all).
+    """
+    import uvicorn
+
+    monkeypatch.setattr(uvicorn, "run", lambda app, **kw: None)
+
+    result = runner.invoke(cli_app, ["dashboard", "--port", "9138"])
+
+    assert result.exit_code == 0, result.output
+    assert len(_access_filters()) == 1
+
+
+def test_serve_installs_the_access_log_redaction(
+    monkeypatch: pytest.MonkeyPatch, clean_access_log_filters: None
+) -> None:
+    """The read-only `serve` alias scrubs the access log too — same leak, same fix."""
+    import uvicorn
+
+    monkeypatch.setattr(uvicorn, "run", lambda app, **kw: None)
+
+    result = runner.invoke(cli_app, ["serve", "--port", "9152"])
+
+    assert result.exit_code == 0, result.output
+    assert len(_access_filters()) == 1
+
+
+def test_start_serve_installs_the_access_log_redaction(
+    monkeypatch: pytest.MonkeyPatch, clean_access_log_filters: None
+) -> None:
+    """`start --serve` — the long-lived daemon, the path that actually leaked.
+
+    This is the systemd unit's code path: its access lines go to journald, where a
+    token would sit in the logs indefinitely.
+    """
+    _patch_serve_stack(monkeypatch)
+
+    result = runner.invoke(cli_app, ["start", "--serve", "--interval", "0.05"])
+
+    assert result.exit_code == 0, result.output
+    assert len(_access_filters()) == 1
