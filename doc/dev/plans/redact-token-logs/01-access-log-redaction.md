@@ -1,7 +1,7 @@
 ---
 plan: redact-token-logs/01-access-log-redaction
 kind: leaf
-status: planned
+status: executing
 complexity: medium
 depends: []
 parallel: false
