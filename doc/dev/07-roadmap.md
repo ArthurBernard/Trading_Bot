@@ -86,9 +86,10 @@ order — none started yet, each is a `/pick-task` candidate:
    risk-limit visibility incl. daily-loss usage); `last_error` on
    `/api/strategies` (a stopped unit is indistinguishable from a crashed one).
 
-4. [ ] **Ops readiness** (not engine code): daemon under **systemd** (restart
-   policy + an alert when the process dies — today it is a `nohup` from a
-   terminal session); a **multi-week paper soak** on the real-data books
+4. [ ] **Ops readiness** (not engine code): daemon under **systemd** — **done
+   2026-08-02** on the ops machine (`deploy/trading-bot.service` installed +
+   enabled, crash-restart verified); still missing an **alert** when the
+   process dies; a **multi-week paper soak** on the real-data books
    (running since 2026-07-10, capital 100/strategy — KPIs and equity curves as
    evidence); **backup of the trading stores** (`var/dashboard/*.sqlite` — the
    dccd data has its hourly rclone sync, the books have nothing).
@@ -124,15 +125,6 @@ engine bugs and a set of API/UX gaps. **All six epics shipped 2026-07-11/12**
    16/16 on real Binance testnet**; the live canary is the named validation
    vehicle for road-to-1.0 #1 (PRs #221–#223; found `Fill.fee_asset` and the
    Binance HTTP-400 mapping along the way).
-
-## Hardening follow-up (2026-08-02)
-
-- [ ] **Access-log token redaction** — uvicorn's access log writes request URLs
-  verbatim, so the documented `?token=` script auth leaks the dashboard token
-  into journald/log files (observed during the 2026-08-02 systemd deploy; the
-  token was rotated). Redact sensitive query values (`token`, `signature`,
-  `api_key`, `nonce` — the `transport/http.py` key set) at every uvicorn launch
-  site (invariant: secrets never logged).
 
 ## Not gating 1.0 (post-1.0 candidates)
 
