@@ -12,16 +12,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+### Deprecated
+
+### Removed
+
+## [0.15.1] - 2026-08-02
+
+### Fixed
+
 - **The access log never prints secrets** — a redaction filter on the uvicorn
   `access`/`error` loggers masks sensitive query values (`token`, `signature`,
   `api_key`, `nonce` — the `transport/http.py` key set, public as `redact_url`)
   at all three serving commands (`serve`, `start --serve`, `dashboard`), so the
   documented `?token=` script auth can no longer write the dashboard token to
   journald/log files. (#232)
-
-### Deprecated
-
-### Removed
 
 ## [0.15.0] - 2026-07-14
 
