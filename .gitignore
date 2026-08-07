@@ -70,3 +70,9 @@ strategies/*
 !strategies/README.md
 !strategies/example/
 !strategies/another_example/
+
+# Claude Code workflow — local-only state (shared workflow.json / settings.json
+# and hooks ARE committed; per-machine overrides are not)
+.claude/settings.local.json
+.claude/scheduled_tasks.lock
+.claude/worktrees/
